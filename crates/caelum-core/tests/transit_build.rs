@@ -1817,7 +1817,7 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
 }
 
 #[test]
-fn connected_metro_line_creates_vehicle() {
+fn connected_metro_line_creation_is_fleet_free() {
     let mut engine = GameEngine::new();
     track_line(&mut engine, 4, 2, 12);
     engine.dispatch(GameIntent::AddMetroStation {
@@ -1826,6 +1826,7 @@ fn connected_metro_line_creates_vehicle() {
     engine.dispatch(GameIntent::AddMetroStation {
         point: (12, 4).into(),
     });
+    let before = engine.snapshot();
     let created = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Metro,
         pattern: ServicePattern::Loop,
@@ -1833,11 +1834,11 @@ fn connected_metro_line_creates_vehicle() {
     });
 
     assert!(created.applied);
-    assert_eq!(
-        created.snapshot.transit.metro_lines[0].vehicle_ids,
-        vec!["vehicle-001"]
-    );
-    assert_eq!(created.snapshot.transit.vehicles[0].capacity, 90);
+    assert!(created.snapshot.transit.metro_lines[0]
+        .vehicle_ids
+        .is_empty());
+    assert!(created.snapshot.transit.vehicles.is_empty());
+    assert_eq!(created.snapshot.budget, before.budget);
 }
 
 #[test]

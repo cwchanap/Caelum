@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use crate::cost_policy::{CostPolicy, CostedMutation};
+use crate::cost_policy::CostedMutation;
 use crate::engine::RoutingContext;
 use crate::ids::next_entity_id;
 use crate::model::{
@@ -11,7 +11,6 @@ use crate::network::resolve_route_legs;
 use crate::platforms::{apply_route_platform_delta, assign_added_waypoint_platforms};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::route_lifecycle::{self, rebase_edited_route_vehicles_and_riders};
-use crate::transit::{initial_vehicle, vehicle_cost};
 use crate::transit_nodes::{garbage_collect_missing_nodes, validate_present_compatible_node};
 
 #[derive(Clone)]
@@ -44,25 +43,9 @@ pub(crate) fn create_route_costed(
     validate_waypoints(state, mode, &waypoint_ids, None, None)?;
     let legs = resolve_route_legs(state, context, mode, &waypoint_ids, pattern);
     require_all_connected(&legs, None)?;
-    let initial_vehicle_cost = if mode == TransitMode::Metro {
-        vehicle_cost(TransitMode::Metro)
-    } else {
-        0
-    };
-    let authorized = CostPolicy::from_snapshot(state)
-        .quote(initial_vehicle_cost, state.budget)
-        .authorize()?;
-
     let mut candidate = state.clone();
     let route_id = next_route_id(&candidate, mode)?;
     assign_added_waypoint_platforms(&mut candidate, mode, &route_id, &waypoint_ids)?;
-    let mut vehicle_ids = Vec::new();
-    let mut initial_vehicle_to_insert = None;
-    if mode == TransitMode::Metro {
-        let vehicle = initial_vehicle(&candidate, mode, &route_id);
-        vehicle_ids.push(vehicle.id.clone());
-        initial_vehicle_to_insert = Some(vehicle);
-    }
     insert_route(
         &mut candidate,
         mode,
@@ -70,13 +53,9 @@ pub(crate) fn create_route_costed(
         pattern,
         waypoint_ids,
         legs,
-        vehicle_ids,
+        Vec::new(),
     )?;
-    if let Some(vehicle) = initial_vehicle_to_insert {
-        candidate.transit.vehicles.push(vehicle);
-    }
-    authorized.apply_to(&mut candidate.budget)?;
-    Ok(CostedMutation::new(candidate))
+    Ok(CostedMutation::free(candidate))
 }
 
 pub fn update_route(

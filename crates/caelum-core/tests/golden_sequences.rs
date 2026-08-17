@@ -237,9 +237,17 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
     });
-    assert!(created.applied, "connected route should create its vehicle");
+    assert!(created.applied, "connected metro line should create");
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".to_string(),
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        assigned.applied,
+        "metro fixture vehicle should apply: {assigned:?}"
+    );
 
-    let mut state = created.snapshot;
+    let mut state = assigned.snapshot;
     state.paused = false;
 
     // Sanity: the densest boundary really is the 0.625s vehicle stop arrival, so
@@ -290,8 +298,16 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
             pattern: ServicePattern::Loop,
             waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
         });
-        assert!(created.applied, "connected route should create its vehicle");
-        let mut state = created.snapshot;
+        assert!(created.applied, "connected metro line should create");
+        let assigned = engine.dispatch(GameIntent::AssignVehicle {
+            mode: "metro".to_string(),
+            line_id: "metro-001".to_string(),
+        });
+        assert!(
+            assigned.applied,
+            "metro fixture vehicle should apply: {assigned:?}"
+        );
+        let mut state = assigned.snapshot;
         state.paused = false;
         state
     };
@@ -413,6 +429,130 @@ fn deployed_bus_fleet_is_granularity_independent() {
         assert!(
             (large_vehicle.step_progress - stepped_vehicle.step_progress).abs() < 1e-9,
             "vehicle {} diverged: large={} stepped={}",
+            large_vehicle.id,
+            large_vehicle.step_progress,
+            stepped_vehicle.step_progress
+        );
+    }
+}
+
+/// A deployed, time-spaced Metro line used by the granularity regression.
+/// The serpentine track is long enough that the authoritative 60s floor requires
+/// multiple trains, so every deployed cursor participates in the comparison.
+fn deployed_metro_snapshot() -> caelum_core::GameSnapshot {
+    let mut engine = GameEngine::new();
+    engine.set_budget_for_test(1_000_000);
+
+    for y in (2..=16).step_by(2) {
+        let columns: Vec<i32> = if y % 4 == 2 {
+            (2..=12).collect()
+        } else {
+            (2..=12).rev().collect()
+        };
+        for x in columns {
+            let result = engine.dispatch(GameIntent::LayTrack {
+                point: (x, y).into(),
+            });
+            assert!(result.applied, "serpentine track should apply: {result:?}");
+        }
+        if y < 16 {
+            let x = if y % 4 == 2 { 12 } else { 2 };
+            let result = engine.dispatch(GameIntent::LayTrack {
+                point: (x, y + 1).into(),
+            });
+            assert!(
+                result.applied,
+                "serpentine connector should apply: {result:?}"
+            );
+        }
+    }
+    for point in [(2, 2), (12, 16)] {
+        let result = engine.dispatch(GameIntent::AddMetroStation {
+            point: point.into(),
+        });
+        assert!(
+            result.applied,
+            "serpentine station should apply: {result:?}"
+        );
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(
+        created.applied,
+        "serpentine metro line should create: {created:?}"
+    );
+    let targeted = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "metro-001".to_string(),
+        target_headway_seconds: 60,
+    });
+    assert!(
+        targeted.applied,
+        "serpentine target should apply: {targeted:?}"
+    );
+    let required = targeted.snapshot.transit.metro_lines[0]
+        .service_metrics
+        .as_ref()
+        .and_then(|metrics| metrics.required_fleet)
+        .expect("serpentine line should have required fleet");
+    assert!(
+        required > 1,
+        "granularity fixture must deploy multiple trains"
+    );
+    engine.set_budget_for_test(
+        i32::try_from(required)
+            .unwrap()
+            .checked_mul(transit::METRO_COST)
+            .unwrap(),
+    );
+    let deployed = engine.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        deployed.applied,
+        "serpentine fleet should deploy: {deployed:?}"
+    );
+    let mut state = deployed.snapshot;
+    state.paused = false;
+    state
+}
+
+#[test]
+fn deployed_metro_fleet_is_granularity_independent() {
+    let start = deployed_metro_snapshot();
+    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
+    let large = tick_trips(&start, &topology, 200.0);
+    let leg_count = start.transit.metro_lines[0].legs.len();
+
+    let mut stepped = start;
+    for _ in 0..200 {
+        stepped = tick_trips(&stepped, &topology, 1.0);
+    }
+
+    assert!((large.time - stepped.time).abs() < 1e-6);
+    assert_eq!(
+        large.transit.metro_lines[0].vehicle_ids,
+        stepped.transit.metro_lines[0].vehicle_ids
+    );
+    assert_eq!(large.transit.vehicles.len(), stepped.transit.vehicles.len());
+    for (large_vehicle, stepped_vehicle) in
+        large.transit.vehicles.iter().zip(&stepped.transit.vehicles)
+    {
+        assert_eq!(large_vehicle.id, stepped_vehicle.id);
+        assert_eq!(large_vehicle.line_id, stepped_vehicle.line_id);
+        assert_eq!(
+            large_vehicle.itinerary_index % leg_count,
+            stepped_vehicle.itinerary_index % leg_count
+        );
+        assert_eq!(
+            large_vehicle.path_step_index,
+            stepped_vehicle.path_step_index
+        );
+        assert!(
+            (large_vehicle.step_progress - stepped_vehicle.step_progress).abs() < 1e-9,
+            "train {} diverged: large={} stepped={}",
             large_vehicle.id,
             large_vehicle.step_progress,
             stepped_vehicle.step_progress

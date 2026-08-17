@@ -788,9 +788,8 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
     "Broken",
   );
 
-  // Top up the budget: 2 stations (50k) + 1 metro vehicle (50k) + track
-  // exhausted most of the 120k starting budget, leaving <25k — not enough
-  // for the 25k station rebuild.
+  // Top up the budget for the station rebuild; Metro line creation is
+  // fleet-free, so only the two stations and track consumed the starting budget.
   await debugSetBudget(page, 120_000);
 
   await selectBuildLeaf(page, "transit", "metroStation");

@@ -608,9 +608,7 @@ describe("route selectors", () => {
     );
   });
 
-  it("blocks Save when unaffordable with a cost hint", () => {
-    // Bus creation is fleet-free (zero creation cost); keep the affordability
-    // gate coverage on the Metro draft, which still buys one vehicle.
+  it("allows Save for a free Metro creation", () => {
     const state = { ...twoStations(), budget: 1_000 };
     const ui = {
       ...createUiState(),
@@ -621,14 +619,14 @@ describe("route selectors", () => {
         generation: 1,
         previewPending: false,
         preview: {
-          ...routePreview(["station-001", "station-002"], false),
-          initialVehicleCost: COSTS.metro,
+          ...routePreview(["station-001", "station-002"]),
+          initialVehicleCost: 0,
         },
       },
     };
     const draft = selectShellState(state, ui).routeDraft;
-    expect(draft?.canSave).toBe(false);
-    expect(draft?.previewMessage).toBe("Need $50,000.");
+    expect(draft?.canSave).toBe(true);
+    expect(draft?.previewMessage).toBe("Connected");
   });
 
   it("offers Reload after a stale edit rejection", () => {

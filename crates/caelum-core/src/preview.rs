@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cost_policy::CostPolicy;
 use crate::engine::{dispatch_context, RoutingContext};
 use crate::model::{
     GameSnapshot, Heading, MovementKind, Point, RoadStructure, RouteLegPath, RouteLegStatus,
@@ -125,20 +124,14 @@ pub fn preview_route(
     context: RoutingContext<'_>,
     request: RoutePreviewRequest,
 ) -> RoutePreviewResponse {
-    let initial_vehicle_cost = if request.route_id.is_none() && request.mode == TransitMode::Metro {
-        crate::transit::vehicle_cost(TransitMode::Metro)
-    } else {
-        0
-    };
-    let quote = CostPolicy::from_snapshot(snapshot).quote(initial_vehicle_cost, snapshot.budget);
-    let affordable = quote.affordable();
+    let initial_vehicle_cost = 0;
     let missing_waypoint_ids = missing_waypoint_ids(snapshot, &request);
     let mut response = RoutePreviewResponse {
         generation: request.generation,
         legs: Vec::new(),
         total_travel_seconds: 0.0,
         initial_vehicle_cost,
-        affordable,
+        affordable: true,
         turn_summary: TurnSummary::default(),
         missing_waypoint_ids,
         warnings: Vec::new(),
@@ -238,24 +231,6 @@ pub fn preview_route(
         .sum();
     response.turn_summary = summarize_turns(&response.legs);
 
-    if !affordable {
-        if response.rejection.is_none() {
-            let mut rejection = GameplayRejection::budget(initial_vehicle_cost, snapshot.budget);
-            rejection.context.expected_revision = request.expected_revision;
-            response.rejection = Some(rejection);
-        } else {
-            // A disconnected leg already blocks creation; surface the cost as a
-            // warning instead of dropping it, so the player sees both problems.
-            response.warnings.push(GameplayWarning {
-                code: WarningCode::InsufficientBudget,
-                context: RejectionContext {
-                    required_budget: Some(initial_vehicle_cost),
-                    available_budget: Some(snapshot.budget),
-                    ..RejectionContext::default()
-                },
-            });
-        }
-    }
     response
 }
 

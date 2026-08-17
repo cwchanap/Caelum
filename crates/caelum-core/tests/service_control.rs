@@ -1,8 +1,8 @@
-//! Bus service metric derivation and publication (HPA-624 Task 2).
+//! Transit service metric derivation and publication (HPA-624 Task 2).
 //!
 //! Rust owns all service timing and fleet math. These integration tests lock
 //! the public contract: `GameEngine::snapshot()` publishes derived
-//! `service_metrics` for bus routes, `snapshot_for_save()` keeps persisted
+//! `service_metrics` for bus routes and Metro lines, `snapshot_for_save()` keeps persisted
 //! saves free of them, incoming `serviceMetrics` never becomes authority, and
 //! a structurally operational bus route with zero vehicles is not a passenger
 //! service until a vehicle is assigned.
@@ -13,7 +13,7 @@
 
 use caelum_core::model::{EconomyPreset, Point, TransitMode};
 use caelum_core::traffic::RoadFlow;
-use caelum_core::transit::BUS_COST;
+use caelum_core::transit::{BUS_COST, METRO_COST};
 use caelum_core::{router, GameEngine, GameIntent, RejectionCode, RoadPreset, SnapshotLoadError};
 
 /// Network used by a connected loop bus route with no assigned vehicles.
@@ -43,8 +43,8 @@ fn bus_route_engine() -> GameEngine {
     engine
 }
 
-/// Connected metro line with the implicit first train still present.
-fn metro_line_engine() -> GameEngine {
+/// Connected metro network with no line or assigned vehicles.
+fn metro_network_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     let track = engine.dispatch(GameIntent::LayTrackLine {
         points: (2..=12).map(|x| Point { x, y: 4 }).collect(),
@@ -54,6 +54,12 @@ fn metro_line_engine() -> GameEngine {
         let station = engine.dispatch(GameIntent::AddMetroStation { point });
         assert!(station.applied, "fixture station should apply: {station:?}");
     }
+    engine
+}
+
+/// Connected metro line with no assigned vehicles.
+fn metro_line_engine() -> GameEngine {
+    let mut engine = metro_network_engine();
     let line = engine.dispatch(GameIntent::CreateRoute {
         mode: TransitMode::Metro,
         pattern: caelum_core::model::ServicePattern::Loop,
@@ -87,6 +93,24 @@ fn bus_route_creation_is_fleet_free_and_budget_free() {
     assert!(created.applied, "fixture route should apply: {created:?}");
 
     assert!(created.snapshot.transit.routes[0].vehicle_ids.is_empty());
+    assert!(created.snapshot.transit.vehicles.is_empty());
+    assert_eq!(created.snapshot.budget, before.budget);
+}
+
+#[test]
+fn metro_line_creation_is_fleet_free_and_budget_free() {
+    let mut engine = metro_network_engine();
+    let before = engine.snapshot();
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: caelum_core::model::ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(created.applied, "fixture line should apply: {created:?}");
+
+    assert!(created.snapshot.transit.metro_lines[0]
+        .vehicle_ids
+        .is_empty());
     assert!(created.snapshot.transit.vehicles.is_empty());
     assert_eq!(created.snapshot.budget, before.budget);
 }
@@ -297,6 +321,75 @@ fn deployment_rejects_existing_fleet_before_target_or_route_state() {
 }
 
 #[test]
+fn metro_deployment_uses_line_id_and_metro_cost_atomically() {
+    let mut setup = metro_line_engine();
+    let targeted = setup.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "metro-001".to_string(),
+        target_headway_seconds: 60,
+    });
+    assert!(targeted.applied, "metro target should apply: {targeted:?}");
+    let required = targeted.snapshot.transit.metro_lines[0]
+        .service_metrics
+        .as_ref()
+        .and_then(|metrics| metrics.required_fleet)
+        .expect("targeted metro line should expose required fleet");
+    let total_cost = i32::try_from(required)
+        .expect("fixture fleet fits i32")
+        .checked_mul(METRO_COST)
+        .expect("fixture fleet cost fits i32");
+    let configured = setup.snapshot_for_save();
+
+    let mut exact = GameEngine::from_snapshot(configured.clone()).expect("exact fixture loads");
+    exact.set_budget_for_test(total_cost);
+    let deployed = exact.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "metro-001".to_string(),
+    });
+    assert!(deployed.applied, "exact budget should deploy: {deployed:?}");
+    assert_eq!(
+        deployed.snapshot.transit.metro_lines[0].vehicle_ids.len(),
+        required
+    );
+    assert_eq!(deployed.snapshot.transit.vehicles.len(), required);
+    assert_eq!(deployed.snapshot.budget, 0);
+
+    let mut short = GameEngine::from_snapshot(configured.clone()).expect("short fixture loads");
+    short.set_budget_for_test(total_cost - 1);
+    let before = short.snapshot();
+    let rejected = short.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "metro-001".to_string(),
+    });
+    assert_eq!(
+        rejected.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::InsufficientBudget),
+    );
+    assert!(rejected.snapshot.transit.metro_lines[0]
+        .vehicle_ids
+        .is_empty());
+    assert!(rejected.snapshot.transit.vehicles.is_empty());
+    assert_eq!(rejected.snapshot.budget, before.budget);
+
+    let mut creative_state = configured;
+    creative_state.rules.economy_preset = EconomyPreset::Creative;
+    creative_state.budget = 7;
+    let mut creative = GameEngine::from_snapshot(creative_state).expect("creative fixture loads");
+    let creative_budget = creative.snapshot().budget;
+    let creative_result = creative.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "metro-001".to_string(),
+    });
+    assert!(
+        creative_result.applied,
+        "creative deploy should be free: {creative_result:?}"
+    );
+    assert_eq!(
+        creative_result.snapshot.transit.metro_lines[0]
+            .vehicle_ids
+            .len(),
+        required
+    );
+    assert_eq!(creative_result.snapshot.budget, creative_budget);
+}
+
+#[test]
 fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     let mut exact = bus_route_engine();
     assert!(
@@ -433,18 +526,15 @@ fn engine_snapshot_publishes_metro_service_metrics() {
         .expect("snapshot() publishes metro service metrics");
 
     assert!(metrics.round_trip_seconds > 0.0);
-    assert_eq!(metrics.assigned_fleet, 1);
+    assert_eq!(metrics.assigned_fleet, 0);
     assert_eq!(metrics.required_fleet, None);
     assert_eq!(metrics.estimated_deployment_cost, None);
-    assert_eq!(
-        metrics.nominal_headway_seconds,
-        Some(metrics.round_trip_seconds)
-    );
+    assert_eq!(metrics.nominal_headway_seconds, None);
 
     let value = serde_json::to_value(&snapshot).expect("snapshot serializes");
     let line_json = &value["transit"]["metroLines"][0];
     assert!(line_json.get("serviceMetrics").is_some(), "{line_json}");
-    assert_eq!(line_json["serviceMetrics"]["assignedFleet"], 1);
+    assert_eq!(line_json["serviceMetrics"]["assignedFleet"], 0);
 }
 
 #[test]

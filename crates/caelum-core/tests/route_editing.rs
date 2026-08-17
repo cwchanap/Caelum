@@ -984,7 +984,7 @@ fn identical_update_leaves_structural_revision_unchanged() {
 
 #[test]
 fn update_applies_platform_delta_and_one_revision_increment() {
-    let mut engine = editable_metro_engine(&[2, 6, 10], METRO_COST * 2);
+    let mut engine = editable_metro_engine(&[2, 6, 10], 0);
     create_route(
         &mut engine,
         TransitMode::Metro,
@@ -1076,7 +1076,7 @@ fn only_structural_mutations_increment_revision() {
 
 #[test]
 fn exhausted_platform_revision_rejects_without_reassigning_the_platform() {
-    let mut engine = editable_metro_engine(&[2, 10], METRO_COST * 2);
+    let mut engine = editable_metro_engine(&[2, 10], 0);
     create_route(
         &mut engine,
         TransitMode::Metro,
