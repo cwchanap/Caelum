@@ -725,6 +725,7 @@ function applyIntent(
       revision: 0,
       legs: [],
       pathBroken: false,
+      targetHeadwaySeconds: null,
     };
     return {
       ...snapshot,
