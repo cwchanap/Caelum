@@ -140,14 +140,6 @@ describe("routeFailureGuidance", () => {
 describe("warningMessage", () => {
   const baseContext = gameplayRejectionContext();
 
-  it("formats insufficientBudget", () => {
-    const warning: GameplayWarning = {
-      code: "insufficientBudget",
-      context: { requiredBudget: 500, availableBudget: 200 },
-    };
-    expect(warningMessage(warning)).toBe("Need $500; only $200 available.");
-  });
-
   it("formats existingBrokenLeg", () => {
     const warning: GameplayWarning = {
       code: "existingBrokenLeg",

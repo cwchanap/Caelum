@@ -253,8 +253,7 @@ export type WarningCode =
   | "skippedTiles"
   | "existingBrokenLeg"
   | "routeWillReroute"
-  | "routeWillBreak"
-  | "insufficientBudget";
+  | "routeWillBreak";
 
 export interface GameplayWarning {
   code: WarningCode;
@@ -265,8 +264,6 @@ export interface RoutePreviewResponse {
   generation: number;
   legs: RouteLegPath[];
   totalTravelSeconds: number;
-  initialVehicleCost: number;
-  affordable: boolean;
   turnSummary: TurnSummary;
   missingWaypointIds: string[];
   warnings: GameplayWarning[];

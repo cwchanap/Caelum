@@ -1623,7 +1623,6 @@ fn preview_contract_serializes_with_camel_case_tags_and_explicit_nulls() {
     let route_value = serde_json::to_value(route_response).unwrap();
     assert_eq!(route_value["generation"], json!(61));
     assert_eq!(route_value["rejection"], json!(null));
-    assert_eq!(route_value["initialVehicleCost"], json!(0));
     assert!(route_value.get("total_travel_seconds").is_none());
 
     let road_response = engine.preview_road_mutation(RoadMutationPreviewRequest {

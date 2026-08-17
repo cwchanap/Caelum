@@ -148,8 +148,6 @@ export function previewBackendStubs(): Pick<
         generation: request.generation,
         legs: [],
         totalTravelSeconds: 0,
-        initialVehicleCost: 0,
-        affordable: true,
         turnSummary: {
           straight: 0,
           rightTurn: 0,
