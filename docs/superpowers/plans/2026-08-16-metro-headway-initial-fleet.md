@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make Metro use the same pre-deployment headway and deterministic initial-fleet loop as Bus, so both route types are fleet-free at creation while Rust remains the only authority for service timing, fleet count, cost, and placement.
+**Goal:** Make Metro use the same pre-deployment headway and deterministic initial-fleet loop as Bus, so both route types are fleet-free at creation while Rust remains the only authority for service timing, fleet count, cost, placement, and restore validity.
 
-**Architecture:** Promote HPA-624's Bus-only service helpers into one small mode-aware `service_control` module because Bus and Metro now provide two concrete consumers. Keep the persisted model flat: one nullable target on `Route` and `MetroLine`, with serialize-only derived `ServiceMetrics`. Replace Bus-specific product intents/runtime methods with one mode-aware command pair, remove route-preview vehicle affordability once neither mode buys a vehicle at creation, and reuse one Lines-row setup UI for both modes. Do not introduce a persisted `ServicePlan`, scheduler, fleet manager, timetable, route trait hierarchy, or post-deployment fleet controls.
+**Architecture:** Promote HPA-624's Bus-only service helpers into one small mode-aware `service_control` module because Bus and Metro now provide two concrete consumers. Keep the persisted model flat: one nullable target on `Route` and `MetroLine`, with serialize-only derived `ServiceMetrics`. Extend the existing restore-time 60-second floor to Metro, replace Bus-specific product intents/runtime methods with one mode-aware command pair, remove route-preview vehicle affordability once neither mode buys a vehicle at creation, and reuse one Lines-row setup UI for both modes. Do not introduce a persisted `ServicePlan`, scheduler, fleet manager, timetable, route trait hierarchy, or post-deployment fleet controls.
 
 **Tech Stack:** Rust (`caelum-core`, serde), Svelte 5 + TypeScript, existing WASM/Tauri `GameBackend.dispatch`, Vitest, Playwright, Bun, IndexedDB, native Tauri application-data persistence.
 
@@ -14,6 +14,7 @@
 - Preserve HPA-624 Bus behavior while generalizing only seams with two real consumers.
 - New Bus and Metro routes both start with zero fleet and zero vehicle purchase at route creation.
 - Persist one required-nullable `targetHeadwaySeconds` on each route type; derived `serviceMetrics` is never save authority.
+- Persisted non-null Bus and Metro targets below `60s` are invalid restore state and must be rejected using `SnapshotField::RouteTargetHeadway`.
 - Direct schema/storage break to v8; no migration, fallback namespace, compatibility alias, or dual reader.
 - Minimum target headway is `60s` for both modes; no arbitrary upper bound.
 - Target headway is pre-deployment setup only; once any vehicle exists, do not edit the target in HPA-626.
@@ -24,7 +25,9 @@
 - Initial deployment is one-shot, zero-fleet only, and atomic through existing `CostPolicy`.
 - Keep existing low-level `AssignVehicle`; add no player plus-one vehicle control.
 - Preserve existing structural route-edit rebase; do not resize/re-space after edits.
-- Delete route-preview `initialVehicleCost` / `affordable` once Metro stops purchasing at create time.
+- Geometry-only Metro tests that lose the implicit train should expect `No fleet`; do not add `AssignVehicle` only to preserve an old `Running` assertion.
+- Delete route-preview `initialVehicleCost` / `affordable` and route-only `WarningCode::InsufficientBudget` once Metro stops purchasing at create time.
+- Preserve road-preview `RejectionCode::InsufficientBudget`; road/roundabout budget handling is outside HPA-626.
 - TypeScript performs no service timing, congestion, required-fleet, or placement math.
 - No service bands, closed periods, stop timetables, actual-departure history, holding/bunching, fleet top-up/withdrawal/reassignment, depots, maintenance, route visibility framework, or generic service-plan/scheduler abstraction.
 
@@ -33,7 +36,7 @@
 **Rename**
 
 - `crates/caelum-core/src/bus_service.rs` -> `crates/caelum-core/src/service_control.rs` — shared Bus/Metro target validation, metrics, fleet math, placement, and deployment.
-- `crates/caelum-core/tests/bus_service.rs` -> `crates/caelum-core/tests/service_control.rs` — preserve Bus regressions and add Metro vectors.
+- `crates/caelum-core/tests/bus_service.rs` -> `crates/caelum-core/tests/service_control.rs` — preserve Bus regressions, including restore-floor coverage, and add Metro vectors.
 
 **Modify — Rust core**
 
@@ -41,36 +44,38 @@
 - `crates/caelum-core/src/lib.rs` — register `service_control` instead of `bus_service`.
 - `crates/caelum-core/src/engine.rs` — generic snapshot metric population and generic service intent dispatch; v8 documentation.
 - `crates/caelum-core/src/intent.rs` — replace Bus-specific product intents with `SetServiceTargetHeadway` and `DeployInitialFleet`.
-- `crates/caelum-core/src/route_editor.rs` — remove Metro's implicit first vehicle/cost; both route types insert empty fleet.
-- `crates/caelum-core/src/preview.rs` — delete now-dead route creation vehicle-affordability output and warning path.
+- `crates/caelum-core/src/route_editor.rs` — Task 1 adds the new Metro fields to the production `MetroLine` constructor without changing behavior; Task 3 removes Metro's implicit first vehicle/cost so both route types insert empty fleet.
+- `crates/caelum-core/src/preview.rs` — delete now-dead route creation vehicle-affordability output and route-only budget warning path while preserving road-preview budget rejections.
 - `crates/caelum-core/src/router.rs` — zero-fleet passenger gate for both Bus and Metro.
-- `crates/caelum-core/src/persistence/entities.rs` — clear derived metrics from both route collections.
-- `crates/caelum-core/src/transit.rs` — keep `vehicle_step_seconds`, `initial_vehicle`, mode costs, and low-level `AssignVehicle` as shared seams.
+- `crates/caelum-core/src/persistence/entities.rs` — clear derived metrics from both route collections and apply the existing 60-second restore floor to Metro.
+- `crates/caelum-core/src/transit.rs` — keep `vehicle_step_seconds`, `initial_vehicle`, `vehicle_cost`, and low-level `AssignVehicle` as shared seams.
 - `crates/caelum-core/tests/model_wire_format.rs`, `route_preview.rs`, `transit_build.rs`, `transit_router.rs`, `economy_cost_policy.rs`, `golden_sequences.rs`, `route_editing.rs`, `shuttle_service.rs`, and Metro-dependent fixtures found by the explicit inventory in Task 3.
 
 **Modify — TypeScript/UI/hosts**
 
 - `src/domain/types.ts` — v8; generic `ServiceMetrics`; Metro target/metrics fields.
-- `src/runtime/backend/types.ts` — raw Metro metrics/target; generic service intents; reduced `RoutePreviewResponse`.
+- `src/runtime/backend/types.ts` — raw Metro metrics/target; generic service intents; reduced `RoutePreviewResponse` and warning vocabulary.
 - `src/runtime/snapshotView.ts` — normalize derived metrics/targets for both route collections.
 - `src/runtime/types.ts` — generic runtime service methods and `ShellServiceState`.
 - `src/runtime/createGameRuntime.ts` — dispatch mode-aware service intents.
 - `src/runtime/runtimeSelectors.ts` — mode-neutral no-fleet/service-row presentation; remove route-draft affordability branch.
-- `src/runtime/rejectionMessages.ts` — keep shared service-control rejection copy; remove no-longer-reachable preview-budget presentation only where unused.
+- `src/runtime/rejectionMessages.ts` — keep shared service-control rejection copy; remove only route-preview warning presentation that becomes unreachable.
 - `src/components/hud/panels/LinesPanel.svelte`, `src/App.svelte`, `src/styles.css` — reuse the existing setup/display UI for both modes.
 - `src/persistence/indexedDbCitySaveStore.ts`, `src-tauri/src/city_store.rs` — direct v8 namespaces.
 - `docs/architecture.md` — active v8 persistence/service-control description.
-- `tests/runtime/*`, `tests/ui/*`, `tests/e2e/routes.spec.ts`, and existing fixtures affected by the wire/preview changes.
+- `tests/runtime/*`, `tests/ui/*`, `tests/e2e/routes.spec.ts`, and existing fixtures affected by the wire/preview/status changes.
 
 ---
 
-### Task 1: Make the v8 Metro service wire/storage break without changing creation behavior
+### Task 1: Make the v8 Metro service wire/storage break and copy the restore invariant without changing creation behavior
 
 **Files:**
 - Modify: `crates/caelum-core/src/model.rs`
 - Modify: `crates/caelum-core/src/engine.rs` documentation only
 - Modify: `crates/caelum-core/src/persistence/entities.rs`
+- Modify: `crates/caelum-core/src/route_editor.rs` only to initialize the new `MetroLine` fields; keep the implicit train in this task
 - Modify: `crates/caelum-core/src/bus_service.rs` only for the `ServiceMetrics` type rename
+- Modify: `crates/caelum-core/tests/bus_service.rs` — add Metro restore-floor regressions before the Task 2 rename
 - Modify: `crates/caelum-core/tests/model_wire_format.rs`
 - Modify: direct Rust `MetroLine { ... }` / `Route { ... }` fixtures found by compile
 - Modify: `src/domain/types.ts`
@@ -110,9 +115,9 @@ pub target_headway_seconds: Option<u32>,
 pub service_metrics: Option<ServiceMetrics>,
 ```
 
-Task 1 does **not** remove Metro's implicit train yet. Product behavior stays green while the required Metro wire key/storage namespace changes.
+Task 1 does **not** remove Metro's implicit train yet. Product behavior stays green while the required Metro wire key/storage namespace and restore invariant move to v8.
 
-- [ ] **Step 1: Write failing v8 and required-nullable Metro tests**
+- [ ] **Step 1: Write failing v8 and required-nullable Metro wire tests**
 
 In `model_wire_format.rs`, extend the existing v7 Bus contract checks:
 
@@ -137,15 +142,53 @@ assert_eq!(decoded.transit.metro_lines[0].service_metrics, None);
 
 Keep the equivalent Bus assertions green under the renamed `ServiceMetrics` type.
 
-- [ ] **Step 2: Run the focused contract test and confirm the old v7 model fails**
+- [ ] **Step 2: Write failing Metro restore-floor tests beside the existing Bus tests**
+
+Copy the intent of `snapshot_restore_rejects_bus_headway_below_floor` and `snapshot_restore_accepts_bus_headway_at_floor`, but create a real Metro line fixture and mutate its target.
+
+Below the floor:
+
+```rust
+let mut state = metro_route_engine().snapshot();
+state.transit.metro_lines[0].target_headway_seconds = Some(59);
+let error = GameEngine::from_snapshot(state).expect_err("sub-floor Metro headway must fail");
+```
+
+Assert the diagnostic contains:
+
+```text
+code = invalidNumericValue
+context.entity.kind = metroLine
+context.field = routeTargetHeadway
+context.reason.kind = outOfRange
+context.reason.details.minimum = 60
+context.reason.details.actual = 59
+```
+
+At the floor:
+
+```rust
+let mut state = metro_route_engine().snapshot();
+state.transit.metro_lines[0].target_headway_seconds = Some(60);
+let restored = GameEngine::from_snapshot(state).expect("60-second Metro target loads");
+assert_eq!(
+    restored.snapshot().transit.metro_lines[0].target_headway_seconds,
+    Some(60),
+);
+```
+
+Do not add a Metro-specific `SnapshotField` or persistence error.
+
+- [ ] **Step 3: Run the focused contract/restore tests and confirm the old v7 model fails**
 
 ```bash
 cargo test -p caelum-core --test model_wire_format
+cargo test -p caelum-core --test bus_service snapshot_restore
 ```
 
-Expected before implementation: schema assertion and required Metro field assertions fail.
+Expected before implementation: schema/field assertions fail and the sub-floor Metro restore is incorrectly accepted.
 
-- [ ] **Step 3: Update the Rust model and all direct literals**
+- [ ] **Step 4: Update the Rust model and every production/direct literal**
 
 Set:
 
@@ -159,7 +202,7 @@ Rename only the Rust type identifier:
 BusServiceMetrics -> ServiceMetrics
 ```
 
-Add to every current `MetroLine` constructor/literal:
+Add to every current `MetroLine` constructor/literal, including the production `insert_route` branch in `route_editor.rs`:
 
 ```rust
 target_headway_seconds: None,
@@ -168,9 +211,30 @@ service_metrics: None,
 
 Do not add a serde default to `target_headway_seconds`.
 
-`Route` keeps the exact same wire keys/behavior and changes only its metrics type name.
+`Route` keeps the exact same wire keys/behavior and changes only its metrics type name. Keep Task 1's existing Metro first-vehicle quote/insertion untouched.
 
-- [ ] **Step 4: Clear derived metrics for both collections during persistence normalization**
+- [ ] **Step 5: Apply the existing restore floor to Metro and clear derived metrics for both collections**
+
+Keep Bus validation unchanged. Immediately after the Metro `validate_route_shape` call, apply the same numeric rule:
+
+```rust
+if let Some(target) = line.target_headway_seconds {
+    let floor = crate::bus_service::MIN_BUS_HEADWAY_SECONDS;
+    if target < floor {
+        return Err(PersistenceError::InvalidNumericValue {
+            entity: Some(entity_ref(EntityKind::MetroLine, &line.id)),
+            field: SnapshotField::RouteTargetHeadway,
+            reason: NumericError::OutOfRange {
+                minimum: f64::from(floor),
+                maximum: f64::MAX,
+                actual: f64::from(target),
+            },
+        });
+    }
+}
+```
+
+This deliberately points at the HPA-624 constant while the module still has its Bus name. Task 2 must retarget this reference to `service_control::MIN_HEADWAY_SECONDS` during the rename. Do not introduce a persistence-only constant or generic validation framework.
 
 In the existing derived-field normalization path:
 
@@ -185,7 +249,7 @@ for line in &mut snapshot.transit.metro_lines {
 
 Do not derive any metrics in persistence.
 
-- [ ] **Step 5: Update canonical/raw TypeScript snapshot shapes**
+- [ ] **Step 6: Update canonical/raw TypeScript snapshot shapes**
 
 In `src/domain/types.ts`:
 
@@ -223,7 +287,7 @@ targetHeadwaySeconds: line.targetHeadwaySeconds ?? null,
 
 No service math belongs in normalization.
 
-- [ ] **Step 6: Move active storage namespaces directly to v8**
+- [ ] **Step 7: Move active storage namespaces directly to v8**
 
 Use:
 
@@ -249,19 +313,20 @@ rg -n 'schema[- ]?v?7|schema.?7|cities-v7|caelum-city-saves-v7|SNAPSHOT_SCHEMA_V
 
 Every match in those active paths must become v8. Historical `docs/superpowers/specs` and `docs/superpowers/plans` are intentionally excluded.
 
-- [ ] **Step 7: Run contract/storage checks**
+- [ ] **Step 8: Run contract/storage checks**
 
 ```bash
 cargo test -p caelum-core --no-run
 cargo test -p caelum-core --test model_wire_format
+cargo test -p caelum-core --test bus_service snapshot_restore
 bun run check
 bun run test:unit -- tests/runtime/snapshotView.test.ts tests/runtime/persistence/indexedDbCitySaveStore.test.ts
 cargo test -p caelum_lib city_store
 ```
 
-Expected: PASS with Metro creation behavior still unchanged.
+Expected: PASS with Metro creation behavior still unchanged and 59-second Metro targets rejected on restore.
 
-- [ ] **Step 8: Commit**
+- [ ] **Step 9: Commit**
 
 ```bash
 git add crates/caelum-core src src-tauri tests docs/architecture.md
@@ -277,6 +342,7 @@ git commit -m "feat: add metro service v8 contract"
 - Rename: `crates/caelum-core/tests/bus_service.rs` -> `crates/caelum-core/tests/service_control.rs`
 - Modify: `crates/caelum-core/src/lib.rs`
 - Modify: `crates/caelum-core/src/engine.rs`
+- Modify: `crates/caelum-core/src/persistence/entities.rs` — retarget the Bus/Metro restore-floor constant reference to the renamed shared module
 - Modify: `crates/caelum-core/src/router.rs`
 - Modify: `crates/caelum-core/src/transit.rs` only if visibility/import cleanup is required; do not duplicate timing
 - Modify: `crates/caelum-core/tests/transit_router.rs`
@@ -324,7 +390,7 @@ fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u32) -> usize
 
 During Task 2, existing `SetBusTargetHeadway` / `DeployBusFleet` engine intents may continue to call these helpers with `TransitMode::Bus`. Product command names are changed atomically in Task 3.
 
-- [ ] **Step 1: Preserve the Bus regression suite under the renamed test/module**
+- [ ] **Step 1: Preserve the Bus and new Metro restore regressions under the renamed test/module**
 
 Use `git mv` rather than copy/delete:
 
@@ -333,7 +399,19 @@ git mv crates/caelum-core/src/bus_service.rs crates/caelum-core/src/service_cont
 git mv crates/caelum-core/tests/bus_service.rs crates/caelum-core/tests/service_control.rs
 ```
 
-Change imports/module registration from `bus_service` to `service_control` without changing assertions yet.
+Rename:
+
+```rust
+MIN_BUS_HEADWAY_SECONDS -> MIN_HEADWAY_SECONDS
+```
+
+Change imports/module registration from `bus_service` to `service_control`. In `persistence/entities.rs`, both Bus and Metro restore checks must end at:
+
+```rust
+let floor = crate::service_control::MIN_HEADWAY_SECONDS;
+```
+
+Do not change the restore assertions while renaming them into `service_control.rs`.
 
 - [ ] **Step 2: Add failing Metro timing tests to `service_control.rs` tests**
 
@@ -385,7 +463,7 @@ assert!((cursor.step_progress - (100.0 / 300.0)).abs() < 1e-9);
 cargo test -p caelum-core --test service_control --test transit_router
 ```
 
-Expected before implementation: Metro metric/placement/eligibility assertions fail.
+Expected before implementation: Metro metric/placement/eligibility assertions fail; existing Bus/Metro restore-floor tests remain green after the rename.
 
 - [ ] **Step 5: Generalize cycle and cursor walking over shared legs + mode**
 
@@ -485,7 +563,7 @@ cargo test -p caelum-core --test service_control --test transit_router --test pe
 cargo test -p caelum-core --no-run
 ```
 
-Expected: PASS. Metro creation still owns its initial train until Task 3.
+Expected: PASS. Metro creation still owns its initial train until Task 3, and both restore-floor checks now use `service_control::MIN_HEADWAY_SECONDS`.
 
 - [ ] **Step 11: Commit**
 
@@ -496,7 +574,7 @@ git commit -m "refactor: share transit service control math"
 
 ---
 
-### Task 3: Add mode-aware service commands, make Metro creation fleet-free, and delete route-preview vehicle affordability
+### Task 3: Add mode-aware service commands, make Metro creation fleet-free, delete route-preview vehicle affordability, and inventory status retargets
 
 **Files:**
 - Modify: `crates/caelum-core/src/intent.rs`
@@ -581,23 +659,37 @@ pub struct RoutePreviewResponse {
 }
 ```
 
-- [ ] **Step 1: Inventory every Metro fixture and obsolete preview-cost assertion before changing creation**
+- [ ] **Step 1: Inventory every Metro fixture, status assertion, and obsolete preview-cost assertion before changing creation**
 
-Run:
+Run the service/preview inventory:
 
 ```bash
-rg -n 'TransitMode::Metro|mode: "metro"|mode: TransitMode::Metro|METRO_COST|initial_vehicle_cost|initialVehicleCost|\.affordable|InsufficientBudget|SetBusTargetHeadway|DeployBusFleet|setBusTargetHeadway|deployBusFleet' \
+rg -n 'TransitMode::Metro|mode: "metro"|mode: TransitMode::Metro|METRO_COST|initial_vehicle_cost|initialVehicleCost|\.affordable|WarningCode::InsufficientBudget|SetBusTargetHeadway|DeployBusFleet|setBusTargetHeadway|deployBusFleet' \
   crates/caelum-core src tests
+```
+
+Then explicitly inventory Metro UI/status assumptions that can be wrong once the implicit train disappears:
+
+```bash
+rg -n 'primary: "running"|toHaveText\([[:space:]]*"Running"|route-status-|busService: null|vehicleIds: \[\]' \
+  tests/runtime/runtimeSelectors.test.ts tests/ui/linesPanel.test.ts tests/e2e/routes.spec.ts tests/helpers/gameState.ts
 ```
 
 Classify each match using these exact rules:
 
 ```text
 Metro test needs moving/routable service -> add explicit AssignVehicle or use target+deploy when service-control behavior is under test
-Metro test only needs route geometry -> keep zero fleet
+Metro test only needs route geometry/repair -> keep zero fleet; expected service status becomes No fleet once Task 4 makes status mode-neutral
+Metro status currently says Running only because CreateRoute inserted a train -> retarget the assertion; do not add a train to preserve the old label
 route-preview vehicle-cost assertion -> delete/replace with geometry-only assertion
 Bus product command -> rename to generic command with mode=Bus
 ```
+
+Known retargets to keep visible in the inventory:
+
+- `tests/runtime/runtimeSelectors.test.ts`: the existing empty-fleet Metro row currently expects `running` and `busService: null`; Task 4 must change it to `noFleet` plus generic service state.
+- `tests/ui/linesPanel.test.ts`: the existing Metro row currently asserts no service block; Task 4 must move it onto the shared service shape/markup.
+- `tests/e2e/routes.spec.ts`: the station-rebuild geometry flow currently expects `Running` after repair because creation supplied the implicit train; Task 5 must expect `No fleet` unless that test explicitly deploys service (it should not).
 
 Do not preserve old product intent aliases.
 
@@ -692,7 +784,7 @@ vehicle_ids: Vec::new(),
 
 for both `Route` and `MetroLine`.
 
-Metro line construction also initializes:
+The Metro constructor already owns the Task 1 fields:
 
 ```rust
 target_headway_seconds: None,
@@ -709,10 +801,9 @@ From Rust route preview remove:
 initial_vehicle_cost
 affordable
 route CostPolicy quote
-route-preview InsufficientBudget warning injection
+WarningCode::InsufficientBudget
+route-preview insufficient-budget warning injection
 ```
-
-If `WarningCode::InsufficientBudget` has no remaining producer after this removal, delete that enum value and its TypeScript mirror/message branch.
 
 Delete the Metro-specific cost tests in `route_preview.rs` and replace them with one explicit regression:
 
@@ -725,6 +816,8 @@ assert!(!response.legs.is_empty());
 ```
 
 This proves route geometry preview no longer depends on fleet-purchase budget.
+
+Do **not** delete or bypass ordinary `RejectionCode::InsufficientBudget` handling. `rejected_road_preview` still uses it to surface attempted road/roundabout cost.
 
 - [ ] **Step 8: Update TypeScript wire/runtime command names in the same task**
 
@@ -749,7 +842,7 @@ The existing Bus setup branch calls them with `route.mode`, which is `"bus"` the
 
 - [ ] **Step 9: Remove TypeScript route-draft affordability presentation**
 
-Reduce `RoutePreviewResponse` in `backend/types.ts` to the Rust geometry-only shape.
+Reduce `RoutePreviewResponse` in `backend/types.ts` to the Rust geometry-only shape and remove the route-preview-only `"insufficientBudget"` warning member if it is still represented there.
 
 Delete from `routeDraftPreviewMessage`:
 
@@ -764,11 +857,11 @@ if (!preview.affordable) {
 
 Do not replace it with a fake zero-cost check.
 
-Update route-preview fixtures/tests so no object contains `initialVehicleCost` or `affordable`.
+Update route-preview fixtures/tests so no object contains `initialVehicleCost` or `affordable`. Keep ordinary gameplay `insufficientBudget` rejection handling elsewhere unchanged.
 
-- [ ] **Step 10: Migrate Metro fixtures that truly require live service**
+- [ ] **Step 10: Migrate Metro fixtures that truly require live service; record geometry-only status retargets for Tasks 4/5**
 
-For tests unrelated to headway/deployment, keep the simplest existing low-level seam:
+For tests unrelated to headway/deployment that genuinely require a moving/routable train, keep the simplest existing low-level seam:
 
 ```rust
 let assigned = engine.dispatch(GameIntent::AssignVehicle {
@@ -778,7 +871,9 @@ let assigned = engine.dispatch(GameIntent::AssignVehicle {
 assert!(assigned.applied, "fixture train should apply: {assigned:?}");
 ```
 
-Use target+deploy only in HPA-626 service-control tests. This keeps unrelated routing/editing tests focused on their own behavior.
+Use target+deploy only in HPA-626 service-control tests.
+
+For UI/E2E cases whose subject is route geometry, repair, or selection, **do not** add `AssignVehicle`. Keep the route zero-fleet and retarget their `Running`/no-service expectations in Task 4 or Task 5 when the mode-neutral presentation lands.
 
 - [ ] **Step 11: Preserve deterministic deployment across simulation granularity**
 
@@ -794,7 +889,7 @@ bun run test:unit -- tests/runtime/gameRuntime.test.ts tests/runtime/runtimeSele
 bun run check
 ```
 
-Expected: Bus startup remains green; Metro is fleet-free and deployable; old preview affordability is gone; UI still exposes setup only on Bus until Task 4.
+Expected: Bus startup remains green; Metro is fleet-free and deployable; old preview affordability is gone. Metro UI may still show its pre-Task-4 presentation, but no test should have been patched with an artificial train solely to preserve `Running`.
 
 - [ ] **Step 13: Commit**
 
@@ -843,7 +938,7 @@ Status remains:
 primary: "running" | "paused" | "broken" | "noFleet";
 ```
 
-- [ ] **Step 1: Write failing selector tests for Metro service rows**
+- [ ] **Step 1: Write failing selector tests and retarget the existing empty-fleet Metro assertion**
 
 Construct canonical Bus and Metro rows with identical derived service values and assert both select:
 
@@ -857,15 +952,39 @@ Construct canonical Bus and Metro rows with identical derived service values and
 }
 ```
 
-An active connected Metro line with `vehicleIds: []` must produce:
+The existing `addTestMetroLine` helper already produces `vehicleIds: []`. Update the current selector expectation from:
 
 ```ts
-status.primary === "noFleet"
+status: { primary: "running", pausedAfterRepair: false },
+busService: null,
 ```
 
-After adding two vehicle IDs and a Rust-derived nominal headway, it must produce `running` and `nominalHeadwaySeconds` unchanged from the snapshot.
+to the new zero-fleet model:
 
-- [ ] **Step 2: Write failing LinesPanel tests for Metro setup and deployed display**
+```ts
+status: { primary: "noFleet", pausedAfterRepair: false },
+service: {
+  targetHeadwaySeconds: null,
+  roundTripSeconds: null,
+  assignedFleet: 0,
+  requiredFleet: null,
+  nominalHeadwaySeconds: null,
+},
+```
+
+Do not add a vehicle to this fixture: this test is selecting shell state, not proving live train movement.
+
+After adding two vehicle IDs and a Rust-derived nominal headway in a separate service-present fixture, assert `running` and `nominalHeadwaySeconds` unchanged from the snapshot.
+
+- [ ] **Step 2: Write failing LinesPanel tests for Metro setup/deployed display and remove the old no-service-block assumption**
+
+The existing Metro row test currently asserts:
+
+```ts
+expect(screen.queryByTestId("route-service-line-metro-001")).toBeNull();
+```
+
+That assertion becomes obsolete when every supported line has `service`. Replace it with explicit Metro coverage.
 
 Before deployment assert the Metro row renders:
 
@@ -888,7 +1007,7 @@ Fleet
 
 and no headway input / Set / Deploy button.
 
-Keep the existing Bus assertions and use `buses` for its required count.
+Keep the existing Bus assertions and use `buses` for its required count. Broken/paused precedence remains independent from whether the shared service block exists.
 
 - [ ] **Step 3: Run focused selector/UI tests and confirm Metro currently lacks service state**
 
@@ -1015,7 +1134,7 @@ bun run check
 bun run lint:svelte
 ```
 
-Expected: PASS for both route modes.
+Expected: PASS for both route modes, with empty-fleet Metro represented as `No fleet` rather than `Running`.
 
 - [ ] **Step 10: Commit**
 
@@ -1026,7 +1145,7 @@ git commit -m "feat: configure metro service from lines panel"
 
 ---
 
-### Task 5: Prove the real Metro setup loop and run full regression verification
+### Task 5: Prove the real Metro setup loop, retarget the geometry E2E, and run full regression verification
 
 **Files:**
 - Modify: `tests/e2e/routes.spec.ts`
@@ -1036,9 +1155,29 @@ git commit -m "feat: configure metro service from lines panel"
 - Verifies the browser/WASM player composition using the same Svelte runtime and Rust rules used by the desktop host.
 - Owns final regression proof, not new product features.
 
-- [ ] **Step 1: Add one real Metro Target -> Deploy E2E**
+- [ ] **Step 1: Retarget the existing Metro repair E2E to the zero-fleet model**
 
-Reuse the existing Metro route-building helpers in `routes.spec.ts` rather than creating a second E2E abstraction.
+Reuse the existing station-rebuild flow in `routes.spec.ts`. It is a geometry/repair test, not a service-start test.
+
+After the broken station is rebuilt, change the old expectation:
+
+```text
+Running
+```
+
+to:
+
+```text
+No fleet
+```
+
+because the repaired line is active + connected + zero-fleet after HPA-626. Do not add `AssignVehicle` or deploy service just to preserve the old label.
+
+Also update the stale budget comment in that flow: route creation no longer spends `METRO_COST`, so describe only the costs the test actually incurs.
+
+- [ ] **Step 2: Add one real Metro Target -> Deploy E2E using the existing Metro layout/build helpers**
+
+Reuse the same Metro track/station construction helpers/patterns already present in `routes.spec.ts`; do not create a second E2E abstraction.
 
 The test sequence is exactly:
 
@@ -1058,17 +1197,17 @@ Resume
 assert simulation clock advances
 ```
 
-Do not wait for commuters, inspect train pixels, or reproduce metric formulas in Playwright. Rust tests own timing/placement correctness.
+Do not click Deploy until the `No fleet` state and zero `vehicleIds` are observed. Do not wait for commuters, inspect train pixels, or reproduce metric formulas in Playwright. Rust tests own timing/placement correctness.
 
-- [ ] **Step 2: Run focused route E2E**
+- [ ] **Step 3: Run focused route E2E**
 
 ```bash
 bun run test:e2e -- tests/e2e/routes.spec.ts
 ```
 
-Expected: both existing Bus setup coverage and the new Metro setup flow pass.
+Expected: the geometry repair ends at `No fleet`, existing Bus setup coverage stays green, and the new Metro Set -> Deploy flow passes.
 
-- [ ] **Step 3: Run complete Rust/TypeScript/build-quality verification**
+- [ ] **Step 4: Run complete Rust/TypeScript/build-quality verification**
 
 ```bash
 cargo test --workspace
@@ -1080,7 +1219,7 @@ bun run lint
 
 Expected: all pass.
 
-- [ ] **Step 4: Run the full E2E suite once**
+- [ ] **Step 5: Run the full E2E suite once**
 
 ```bash
 bun run test:e2e
@@ -1088,7 +1227,7 @@ bun run test:e2e
 
 Expected: existing route editing, persistence, traffic, Bus startup, Metro startup, and sandbox creation flows pass.
 
-- [ ] **Step 5: Verify the direct v8 break has no active v7 leftovers**
+- [ ] **Step 6: Verify the direct v8 break has no active v7 leftovers**
 
 ```bash
 rg -n 'schema[- ]?v?7|schema.?7|cities-v7|caelum-city-saves-v7|SNAPSHOT_SCHEMA_VERSION.?=.?7' \
@@ -1097,7 +1236,7 @@ rg -n 'schema[- ]?v?7|schema.?7|cities-v7|caelum-city-saves-v7|SNAPSHOT_SCHEMA_V
 
 Expected: no active matches. Historical specs/plans are intentionally outside this inventory.
 
-- [ ] **Step 6: Verify old Bus-only product/public names are gone**
+- [ ] **Step 7: Verify old Bus-only product/public names are gone**
 
 ```bash
 rg -n 'BusServiceMetrics|busService|ShellBusServiceState|SetBusTargetHeadway|DeployBusFleet|setBusTargetHeadway|deployBusFleet' \
@@ -1106,16 +1245,42 @@ rg -n 'BusServiceMetrics|busService|ShellBusServiceState|SetBusTargetHeadway|Dep
 
 Expected: no active implementation/test matches. Historical docs are excluded.
 
-- [ ] **Step 7: Verify dead route-preview vehicle affordability is gone**
+- [ ] **Step 8: Verify dead route-preview vehicle affordability is gone without scanning road budget rejections**
+
+Use the narrow Rust scan:
 
 ```bash
-rg -n 'initial_vehicle_cost|initialVehicleCost|\.affordable|InsufficientBudget' \
-  crates/caelum-core/src/preview.rs crates/caelum-core/tests/route_preview.rs src/runtime tests/runtime tests/ui
+rg -n 'initial_vehicle_cost|WarningCode::InsufficientBudget' \
+  crates/caelum-core/src/preview.rs crates/caelum-core/tests/route_preview.rs
 ```
 
-Expected: no route-preview affordability matches. `InsufficientBudget` may still exist as the normal gameplay rejection code elsewhere; only preview-warning/preview-presentation usage must be absent.
+Use the narrow TypeScript/presentation scan:
 
-- [ ] **Step 8: Verify scope stayed lean**
+```bash
+rg -n 'initialVehicleCost|\.affordable' \
+  src/runtime/backend/types.ts src/runtime/runtimeSelectors.ts tests/runtime tests/ui
+```
+
+Expected: no matches.
+
+Do **not** grep generic `InsufficientBudget` as a cleanup condition. `RejectionCode::InsufficientBudget` is still intentionally used by road-mutation preview and ordinary gameplay budget handling.
+
+- [ ] **Step 9: Verify the shared restore floor survived the module rename**
+
+```bash
+rg -n 'MIN_BUS_HEADWAY_SECONDS|service_control::MIN_HEADWAY_SECONDS|RouteTargetHeadway' \
+  crates/caelum-core/src/persistence/entities.rs crates/caelum-core/tests/service_control.rs
+```
+
+Expected:
+
+```text
+no MIN_BUS_HEADWAY_SECONDS references
+Bus and Metro validation reference service_control::MIN_HEADWAY_SECONDS
+Bus and Metro restore tests cover RouteTargetHeadway at 59/60 seconds
+```
+
+- [ ] **Step 10: Verify scope stayed lean**
 
 Final diff must not introduce any of these concepts/files:
 
@@ -1144,9 +1309,10 @@ existing low-level AssignVehicle support
 Bus congestion-aware cycle timing
 Metro fixed track timing
 one-shot atomic CostPolicy deployment
+road-preview RejectionCode::InsufficientBudget behavior
 ```
 
-- [ ] **Step 9: Commit E2E/final regression fixes**
+- [ ] **Step 11: Commit E2E/final regression fixes**
 
 ```bash
 git add tests/e2e/routes.spec.ts
@@ -1155,11 +1321,13 @@ git commit -m "test: cover metro service startup loop"
 
 ## Plan self-review
 
-- **Spec coverage:** Every HPA-626 acceptance item maps to Tasks 1–5: v8 authority/storage, shared Rust timing and output, Metro zero-fleet creation/deployment/cost/routing, dead preview cleanup, shared UI, and real composition proof.
+- **Spec coverage:** Every HPA-626 acceptance item maps to Tasks 1–5: v8 authority/storage and Metro restore floor, shared Rust timing/output, Metro zero-fleet creation/deployment/cost/routing, dead preview cleanup, shared UI, and real composition proof.
+- **Restore invariant:** The existing Bus 60-second persisted-target floor is copied to Metro in Task 1 with `EntityKind::MetroLine` + `SnapshotField::RouteTargetHeadway`, then retargeted to `service_control::MIN_HEADWAY_SECONDS` in Task 2. No new persistence concept is added.
 - **Second-consumer rule:** Only HPA-624 seams with two concrete consumers are generalized. No `ServicePlan`, scheduler, trait hierarchy, or fleet manager is added.
-- **Authority:** Rust alone owns current cycle time, required fleet, deployment count/cost, passenger eligibility, and deterministic cursor placement. TypeScript only normalizes, formats, and dispatches.
-- **Creation consistency:** The implicit Metro train is removed only in Task 3 alongside the replacement mode-aware Set -> Deploy command path and the Metro fixture migration; there is no knowingly red intermediate product state.
-- **Preview cleanup:** `initialVehicleCost` / `affordable` are deleted when their last real consumer disappears rather than kept as zero-valued compatibility baggage.
-- **Bus regression:** Existing HPA-624 Bus vectors, deployment rules, and Lines flow remain first-class tests through the generalization.
+- **Authority:** Rust alone owns current cycle time, required fleet, deployment count/cost, passenger eligibility, deterministic cursor placement, and persisted-target validity. TypeScript only normalizes, formats, and dispatches.
+- **Creation consistency:** The implicit Metro train is removed only in Task 3 alongside the replacement mode-aware Set -> Deploy command path and the Metro fixture inventory; there is no knowingly red intermediate product state.
+- **Status retargeting:** Empty-fleet Metro geometry/repair tests become `No fleet`; `AssignVehicle` is reserved for tests that actually require live/routable service rather than being used to hide the new product model.
+- **Preview cleanup:** `initialVehicleCost` / `affordable` and route-only `WarningCode::InsufficientBudget` are deleted when their last real consumer disappears. Final scans deliberately do not target ordinary `RejectionCode::InsufficientBudget`, preserving road-preview budget behavior.
+- **Bus regression:** Existing HPA-624 Bus vectors, deployment rules, restore floor, and Lines flow remain first-class tests through the generalization.
 - **Metro behavior:** Metro timing uses the same `vehicle_step_seconds` seam; `RoadFlow` has no effect on Metro because track-step timing already ignores it.
 - **YAGNI/KISS:** No post-deployment fleet management, service bands, actual-headway history, holding/bunching, route visibility framework, compatibility path, or new infrastructure layer enters HPA-626.
