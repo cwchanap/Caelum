@@ -1,7 +1,7 @@
 # HPA-628 Post-Deployment Fleet Top-Up Design
 
-**Linear:** HPA-628  
-**Parent:** HPA-334  
+**Linear:** HPA-628
+**Parent:** HPA-334
 **Depends on:** HPA-626, now merged on `main`
 
 ## Goal
