@@ -287,7 +287,18 @@ pub(crate) fn add_service_vehicle(
     let round_trip_seconds = round_trip_seconds(legs, mode, &flow)
         .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
     let required_fleet = required_fleet(round_trip_seconds, target_headway_seconds);
-    if top_up_offer(active, legs, mode, assigned_fleet, Some(required_fleet)).is_none() {
+    // Match populate_snapshot_metrics: a paused service publishes no top-up
+    // offer, so a paused dispatch must be a free no-op rather than charging
+    // the player for a vehicle the UI never offered.
+    if top_up_offer(
+        active && !state.paused,
+        legs,
+        mode,
+        assigned_fleet,
+        Some(required_fleet),
+    )
+    .is_none()
+    {
         return Ok(CostedMutation::free(state.clone()));
     }
 
