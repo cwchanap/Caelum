@@ -29,6 +29,7 @@ const SIMPLE_ROUTE_STOPS = [
   { x: 7, y: 3 },
   { x: 11, y: 3 },
 ] as const;
+const FARTHER_ROUTE_STOP = { x: 19, y: 12 } as const;
 const DRAFT_ROUTE_STOPS = SIMPLE_ROUTE_STOPS.slice(0, 2);
 const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
@@ -546,7 +547,7 @@ test("finishing a bus route leaves the fleet unassigned", async ({ page }) => {
   ).toEqual([]);
 });
 
-test("starts a bus service by setting a target headway and deploying the fleet", async ({
+test("starts a bus service and recovers fleet after a route edit", async ({
   page,
 }) => {
   await createDefaultCity(page);
@@ -554,14 +555,19 @@ test("starts a bus service by setting a target headway and deploying the fleet",
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toBeVisible();
 
-  // Road + three roadside bus stops beside it.
+  // A long connected road with a branch to a farther existing stop.
   await selectBuildLeaf(page, "roads", "road-twoWay");
-  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 20, y: 4 });
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 20, y: 4 }, { x: 20, y: 13 });
   await selectBuildLeaf(page, "transit", "busStop");
-  for (const stop of SIMPLE_ROUTE_STOPS) {
+  for (const stop of [...SIMPLE_ROUTE_STOPS, FARTHER_ROUTE_STOP]) {
     await clickMapTile(canvas, stop);
   }
-  await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
+  await expectRoadsideStopAnchors(page, [
+    ...SIMPLE_ROUTE_STOPS,
+    FARTHER_ROUTE_STOP,
+  ]);
 
   // Draft + finish a route over all three stops (fleet-free creation).
   await openCommandDestination(page, "lines");
@@ -595,7 +601,7 @@ test("starts a bus service by setting a target headway and deploying the fleet",
   await expect(
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
   ).toHaveText("—");
-  await page.getByTestId("route-headway-route-001").fill("6");
+  await page.getByTestId("route-headway-route-001").fill("1");
   await page.getByTestId("route-headway-set-route-001").click();
   await expect
     .poll(async () => {
@@ -603,12 +609,12 @@ test("starts a bus service by setting a target headway and deploying the fleet",
         (candidate) => candidate.id === "route-001",
       );
       return (
-        route?.targetHeadwaySeconds === 360 &&
+        route?.targetHeadwaySeconds === 60 &&
         route?.serviceMetrics?.requiredFleet != null
       );
     })
     .toBe(true);
-  await expect(service).toContainText("6.0 min");
+  await expect(service).toContainText("1.0 min");
 
   // Required N is the Rust-derived row value (informational estimate). The
   // Deploy button does not promise a specific count: on Tauri a tick in flight
@@ -664,7 +670,7 @@ test("starts a bus service by setting a target headway and deploying the fleet",
   // Post-deployment UI shows Target/Nominal/Fleet with the set/derived values and no setup controls.
   await expect(
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText("6.0 min");
+  ).toHaveText("1.0 min");
   await expect(
     service.getByText("Nominal").locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
@@ -681,8 +687,111 @@ test("starts a bus service by setting a target headway and deploying the fleet",
     page.getByRole("button", { name: /Deploy/, exact: true }),
   ).toHaveCount(0);
 
-  // Resume the paused sim and confirm the clock advances.
+  const deployedSnapshot = await runtimeSnapshot(page);
+  const deployedRoute = deployedSnapshot.state.transit.routes.find(
+    (route) => route.id === "route-001",
+  );
+  if (deployedRoute === undefined) {
+    throw new Error("Deployed bus route is missing from the runtime snapshot");
+  }
+  const initialBudget = deployedSnapshot.state.budget;
+  const initialAssigned = deployedRoute.vehicleIds.length;
+  expect(initialAssigned).toBeGreaterThan(0);
+
+  // Resume before editing so the live Rust metrics can publish a top-up offer.
   await page.getByRole("button", { name: "Resume" }).click();
+
+  await page.getByRole("button", { name: /Edit Bus 1/ }).click();
+  await page.getByTestId("route-waypoint-2").click();
+  await page.getByRole("button", { name: "Insert after" }).click();
+  await clickMapTile(canvas, FARTHER_ROUTE_STOP);
+  await expect(page.getByTestId("route-preview-status")).toHaveText(
+    /connected/i,
+  );
+  await page.getByRole("button", { name: "Save route" }).click();
+
+  // Let the Rust snapshot establish a real post-edit shortfall. The test does
+  // not reproduce the required-fleet calculation or assume its size.
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      const required = route?.serviceMetrics?.requiredFleet;
+      return (
+        route !== undefined &&
+        required !== null &&
+        required !== undefined &&
+        required > route.vehicleIds.length
+      );
+    })
+    .toBe(true);
+
+  const postEditSnapshot = await runtimeSnapshot(page);
+  const postEditRoute = postEditSnapshot.state.transit.routes.find(
+    (route) => route.id === "route-001",
+  );
+  if (postEditRoute === undefined || postEditRoute.serviceMetrics === null) {
+    throw new Error("Post-edit service metrics are missing from the runtime");
+  }
+  const postEditAssigned = postEditRoute.vehicleIds.length;
+  const postEditRequired = postEditRoute.serviceMetrics.requiredFleet;
+  const postEditNominal = postEditRoute.serviceMetrics.nominalHeadwaySeconds;
+  const nextVehicleCost = postEditRoute.serviceMetrics.nextVehicleCost ?? null;
+  const postEditBudget = postEditSnapshot.state.budget;
+  expect(postEditAssigned).toBe(initialAssigned);
+  expect(postEditBudget).toBe(initialBudget);
+  expect(postEditRequired).not.toBeNull();
+  expect(postEditRequired).toBeGreaterThan(postEditAssigned);
+  expect(postEditNominal).not.toBeNull();
+  expect(nextVehicleCost).not.toBeNull();
+  if (postEditNominal === null || nextVehicleCost === null) {
+    throw new Error("Rust did not publish a complete top-up offer");
+  }
+
+  const addVehicleButton = page.getByTestId(
+    `route-add-vehicle-${postEditRoute.id}`,
+  );
+  await expect(addVehicleButton).toBeVisible();
+  await addVehicleButton.click();
+
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      const route = snapshot.state.transit.routes.find(
+        (candidate) => candidate.id === postEditRoute.id,
+      );
+      const nominal = route?.serviceMetrics?.nominalHeadwaySeconds ?? null;
+      return (
+        route !== undefined &&
+        route.vehicleIds.length === postEditAssigned + 1 &&
+        snapshot.state.budget === postEditBudget - nextVehicleCost &&
+        nominal !== null &&
+        nominal < postEditNominal
+      );
+    })
+    .toBe(true);
+  const postAddSnapshot = await runtimeSnapshot(page);
+  const postAddRoute = postAddSnapshot.state.transit.routes.find(
+    (route) => route.id === postEditRoute.id,
+  );
+  if (postAddRoute === undefined || postAddRoute.serviceMetrics === null) {
+    throw new Error("Post-add service metrics are missing from the runtime");
+  }
+  expect(postAddRoute.vehicleIds.length).toBe(postEditAssigned + 1);
+  expect(postAddSnapshot.state.budget).toBe(postEditBudget - nextVehicleCost);
+  expect(postAddRoute.serviceMetrics.nominalHeadwaySeconds).toBeLessThan(
+    postEditNominal,
+  );
+  const postAddNextVehicleCost =
+    postAddRoute.serviceMetrics.nextVehicleCost ?? null;
+  await openCommandDestination(page, "lines");
+  if (postAddNextVehicleCost === null) {
+    await expect(addVehicleButton).toHaveCount(0);
+  } else {
+    await expect(addVehicleButton).toBeVisible();
+  }
+
   const timeReadout = page.getByTestId("topbar").locator(".readout", {
     hasText: "Time",
   });
