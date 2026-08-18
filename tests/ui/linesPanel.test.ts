@@ -481,8 +481,8 @@ describe("LinesPanel line workspace", () => {
           service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
-            assignedFleet: 2,
-            requiredFleet: 4,
+            assignedFleet: 0,
+            requiredFleet: 99,
             estimatedDeploymentCost: null,
             nextVehicleCost: 12_500,
             nominalHeadwaySeconds: 450,
@@ -499,7 +499,7 @@ describe("LinesPanel line workspace", () => {
     expect(add).toBeVisible();
     expect(
       screen.getByTestId("route-service-route-bus-top-up"),
-    ).toHaveTextContent("Fleet 2");
+    ).toHaveTextContent("Required");
 
     await fireEvent.click(add);
     expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
