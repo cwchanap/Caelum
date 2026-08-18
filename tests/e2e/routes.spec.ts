@@ -694,6 +694,16 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   if (deployedRoute === undefined) {
     throw new Error("Deployed bus route is missing from the runtime snapshot");
   }
+  const fartherStop = deployedSnapshot.state.transit.stops.find(
+    (stop) =>
+      stop.status === "present" &&
+      stop.position.x === FARTHER_ROUTE_STOP.x &&
+      stop.position.y === FARTHER_ROUTE_STOP.y,
+  );
+  if (fartherStop === undefined) {
+    throw new Error("Farther bus stop is missing from the runtime snapshot");
+  }
+  const initialRouteRevision = deployedRoute.revision;
   const initialBudget = deployedSnapshot.state.budget;
   const initialAssigned = deployedRoute.vehicleIds.length;
   expect(initialAssigned).toBeGreaterThan(0);
@@ -709,6 +719,21 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     /connected/i,
   );
   await page.getByRole("button", { name: "Save route" }).click();
+
+  // Save dispatch is asynchronous. First prove the runtime committed the
+  // edited route, including its farther stop, before reading service metrics.
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === deployedRoute.id,
+      );
+      return (
+        route !== undefined &&
+        route.revision > initialRouteRevision &&
+        route.stopIds.includes(fartherStop.id)
+      );
+    })
+    .toBe(true);
 
   // Let the Rust snapshot establish a real post-edit shortfall. The test does
   // not reproduce the required-fleet calculation or assume its size.
