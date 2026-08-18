@@ -43,6 +43,7 @@
       targetHeadwaySeconds: number,
     ) => void;
     onDeployInitialFleet: (routeId: string) => void;
+    onAddServiceVehicle: (routeId: string) => void;
   }
 
   let {
@@ -69,6 +70,7 @@
     onEditRoute,
     onSetServiceTargetHeadway,
     onDeployInitialFleet,
+    onAddServiceVehicle,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
@@ -433,6 +435,16 @@
                         >{route.service.assignedFleet}</span
                       >
                     </div>
+                    {#if route.service.nextVehicleCost !== null}
+                      <button
+                        type="button"
+                        class="route-toggle"
+                        data-testid={`route-add-vehicle-${route.id}`}
+                        onclick={() => onAddServiceVehicle(route.id)}
+                      >
+                        {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
+                      </button>
+                    {/if}
                   </div>
                 {/if}
                 <div class="route-item-controls">

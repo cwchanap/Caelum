@@ -30,6 +30,7 @@ function callbacks() {
     onEditRoute: vi.fn(),
     onSetServiceTargetHeadway: vi.fn(),
     onDeployInitialFleet: vi.fn(),
+    onAddServiceVehicle: vi.fn(),
   };
 }
 
@@ -50,6 +51,7 @@ function routeFixtures(): ShellRouteListState {
         assignedFleet: 0,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
       failures: [],
@@ -69,6 +71,7 @@ function routeFixtures(): ShellRouteListState {
         assignedFleet: 0,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
       failures: [
@@ -240,6 +243,7 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
+            nextVehicleCost: null,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -299,6 +303,7 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 2,
             estimatedDeploymentCost: 240_000,
+            nextVehicleCost: null,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -352,6 +357,7 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            nextVehicleCost: null,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -371,6 +377,7 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            nextVehicleCost: null,
             nominalHeadwaySeconds: null,
           },
           failures: [],
@@ -407,6 +414,7 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 3,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            nextVehicleCost: null,
             nominalHeadwaySeconds: 348,
           },
           failures: [],
@@ -426,6 +434,7 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 2,
             requiredFleet: 2,
             estimatedDeploymentCost: null,
+            nextVehicleCost: null,
             nominalHeadwaySeconds: 300,
           },
           failures: [],
@@ -455,6 +464,114 @@ describe("LinesPanel line workspace", () => {
     expect(metroService).toHaveTextContent("Fleet");
     expect(metroService.textContent).not.toContain("Required");
     expect(screen.queryByTestId("route-headway-line-metro-001")).toBeNull();
+  });
+
+  it("offers a Rust-priced bus top-up and dispatches it once", async () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-top-up",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            estimatedDeploymentCost: null,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const add = screen.getByRole("button", {
+      name: "Add bus · $12,500",
+    });
+    expect(add).toBeVisible();
+    expect(
+      screen.getByTestId("route-service-route-bus-top-up"),
+    ).toHaveTextContent("Fleet 2");
+
+    await fireEvent.click(add);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledWith("route-bus-top-up");
+  });
+
+  it("labels a Metro top-up as a train", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "line-metro-top-up",
+          name: "North Metro",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "metro",
+          stopCount: 4,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 300,
+            roundTripSeconds: 720,
+            assignedFleet: 1,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            nextVehicleCost: 80_000,
+            nominalHeadwaySeconds: 720,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.getByRole("button", { name: "Add train · $80,000" }),
+    ).toBeVisible();
+  });
+
+  it("hides the top-up when Rust provides no offer regardless of fleet values", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-no-offer",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 99,
+            estimatedDeploymentCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 450,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.queryByTestId("route-add-vehicle-route-bus-no-offer"),
+    ).toBeNull();
+    expect(
+      screen.getByTestId("route-service-route-bus-no-offer"),
+    ).toHaveTextContent("Fleet 2");
+    expect(props.onAddServiceVehicle).not.toHaveBeenCalled();
   });
 
   it("focuses the Lines list after a draft is canceled", async () => {

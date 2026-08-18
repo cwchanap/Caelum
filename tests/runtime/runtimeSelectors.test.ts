@@ -882,6 +882,7 @@ describe("route selectors", () => {
           assignedFleet: 0,
           requiredFleet: null,
           estimatedDeploymentCost: null,
+          nextVehicleCost: null,
           nominalHeadwaySeconds: null,
         },
         failures: [],
@@ -901,6 +902,7 @@ describe("route selectors", () => {
           assignedFleet: 0,
           requiredFleet: null,
           estimatedDeploymentCost: null,
+          nextVehicleCost: null,
           nominalHeadwaySeconds: null,
         },
         failures: [],
@@ -937,6 +939,7 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -953,6 +956,7 @@ describe("route selectors", () => {
         roundTripSeconds: null,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -1009,6 +1013,7 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: 2,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -1036,6 +1041,7 @@ describe("route selectors", () => {
         assignedFleet: 2,
         requiredFleet: 2,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: 300,
       },
     });
@@ -1053,6 +1059,7 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -1089,6 +1096,7 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: 3,
         estimatedDeploymentCost: 150_000,
+        nextVehicleCost: null,
         nominalHeadwaySeconds: null,
       },
     });
@@ -1126,6 +1134,7 @@ describe("route selectors", () => {
         assignedFleet: 2,
         nominalHeadwaySeconds: 300,
         estimatedDeploymentCost: 150_000,
+        nextVehicleCost: null,
       },
     });
   });
@@ -1151,7 +1160,7 @@ describe("route selectors", () => {
             assignedFleet: 1,
             requiredFleet: 5,
             estimatedDeploymentCost: null,
-            nextVehicleCost: null,
+            nextVehicleCost: 42_000,
             nominalHeadwaySeconds: 600,
           },
         })),
@@ -1164,6 +1173,7 @@ describe("route selectors", () => {
         assignedFleet: 1,
         requiredFleet: 5,
         estimatedDeploymentCost: null,
+        nextVehicleCost: 42_000,
         nominalHeadwaySeconds: 600,
       },
     });

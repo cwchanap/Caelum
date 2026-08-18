@@ -152,6 +152,7 @@ export interface ShellServiceState {
   assignedFleet: number;
   requiredFleet: number | null;
   estimatedDeploymentCost: number | null;
+  nextVehicleCost: number | null;
   nominalHeadwaySeconds: number | null;
 }
 
