@@ -731,6 +731,54 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
 }
 
 #[test]
+fn add_service_vehicle_is_a_free_no_op_while_paused() {
+    let mut engine = shortfall_bus_engine();
+    let before = engine.snapshot();
+    assert_eq!(
+        before.transit.routes[0]
+            .service_metrics
+            .as_ref()
+            .expect("shortfall route has metrics")
+            .next_vehicle_cost,
+        Some(BUS_COST),
+        "unpaused shortfall must publish a top-up offer"
+    );
+    let paused = engine.dispatch(GameIntent::SetPaused { paused: true });
+    assert!(paused.applied, "pause should apply: {paused:?}");
+    assert_eq!(
+        engine.snapshot().transit.routes[0]
+            .service_metrics
+            .as_ref()
+            .expect("paused route has metrics")
+            .next_vehicle_cost,
+        None,
+        "paused service must not publish a top-up offer"
+    );
+
+    let result = engine.dispatch(GameIntent::AddServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(!result.applied, "paused top-up must be a no-op: {result:?}");
+    assert!(
+        result.rejection.is_none(),
+        "paused top-up must not reject: {result:?}"
+    );
+    assert_eq!(
+        result.snapshot.budget, before.budget,
+        "paused top-up is free"
+    );
+    assert_eq!(
+        result.snapshot.transit.vehicles.len(),
+        before.transit.vehicles.len(),
+        "paused top-up appends no vehicle"
+    );
+    assert_eq!(
+        result.snapshot.transit.routes[0].vehicle_ids.len(),
+        before.transit.routes[0].vehicle_ids.len()
+    );
+}
+
+#[test]
 fn add_service_vehicle_is_free_in_creative_mode() {
     let mut state = shortfall_bus_engine().snapshot_for_save();
     state.rules.economy_preset = EconomyPreset::Creative;
