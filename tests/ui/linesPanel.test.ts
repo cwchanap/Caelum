@@ -396,7 +396,7 @@ describe("LinesPanel line workspace", () => {
     expect(screen.getByText("Broken")).toBeVisible();
   });
 
-  it("shows only Target/Nominal/Fleet after deployment and no setup controls", async () => {
+  it("shows Target/Nominal/Fleet requirements after deployment and no setup controls", async () => {
     const props = panelProps({
       routes: [
         {
@@ -411,7 +411,7 @@ describe("LinesPanel line workspace", () => {
           service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
-            assignedFleet: 3,
+            assignedFleet: 2,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
             nextVehicleCost: null,
@@ -449,8 +449,7 @@ describe("LinesPanel line workspace", () => {
     expect(service).toHaveTextContent("Nominal");
     expect(service).toHaveTextContent("5.8 min");
     expect(service).toHaveTextContent("Fleet");
-    expect(service).toHaveTextContent("3");
-    expect(service.textContent).not.toContain("Required");
+    expect(service).toHaveTextContent("2 / 3 required");
     expect(service.textContent).not.toContain("assigned");
     expect(screen.queryByTestId("route-headway-route-bus-002")).toBeNull();
     expect(screen.queryByRole("button", { name: "Set" })).toBeNull();
@@ -462,7 +461,7 @@ describe("LinesPanel line workspace", () => {
     expect(metroService).toHaveTextContent("Target");
     expect(metroService).toHaveTextContent("Nominal");
     expect(metroService).toHaveTextContent("Fleet");
-    expect(metroService.textContent).not.toContain("Required");
+    expect(metroService).toHaveTextContent("2 / 2 required");
     expect(screen.queryByTestId("route-headway-line-metro-001")).toBeNull();
   });
 
