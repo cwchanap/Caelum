@@ -214,6 +214,7 @@ describe("normalizeRustSnapshot", () => {
               assignedFleet: 2,
               requiredFleet: 2,
               estimatedDeploymentCost: null,
+              nextVehicleCost: null,
               nominalHeadwaySeconds: 300,
             },
           },
@@ -226,6 +227,7 @@ describe("normalizeRustSnapshot", () => {
       assignedFleet: 2,
       requiredFleet: 2,
       estimatedDeploymentCost: null,
+      nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
     });
   });
