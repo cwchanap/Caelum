@@ -519,6 +519,7 @@ function selectServiceState(route: Route | MetroLine): ShellServiceState {
     requiredFleet: route.serviceMetrics?.requiredFleet ?? null,
     estimatedDeploymentCost:
       route.serviceMetrics?.estimatedDeploymentCost ?? null,
+    nextVehicleCost: route.serviceMetrics?.nextVehicleCost ?? null,
     nominalHeadwaySeconds: route.serviceMetrics?.nominalHeadwaySeconds ?? null,
   };
 }

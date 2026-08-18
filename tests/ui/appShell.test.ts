@@ -1139,6 +1139,43 @@ describe("App command shell", () => {
     expect(runtime.deployInitialFleet).toHaveBeenCalledWith("route-001");
   });
 
+  it("adds a service vehicle from the Rust-priced Lines offer", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          vehicleIds: ["vehicle-001", "vehicle-002"],
+          targetHeadwaySeconds: 360,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            estimatedDeploymentCost: null,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+          },
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Add bus · $12,500" }),
+    );
+
+    expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(runtime.addServiceVehicle).toHaveBeenCalledWith("route-001");
+  });
+
   it("sets a Metro target headway and deploys a fleet from the Lines panel", async () => {
     let state = createTestGameState();
     state = withTracks(state, pointsOnRow(2, 7, 15));

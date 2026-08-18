@@ -388,6 +388,12 @@
     }
   }
 
+  function handleAddServiceVehicle(lineId: string): void {
+    if (runtime !== null) {
+      void applyRuntimeResult(() => runtime.addServiceVehicle(lineId));
+    }
+  }
+
   function handleDeleteRoute(routeId: string): void {
     if (runtime !== null) {
       void applyRuntimeResult(() => runtime.deleteRoute(routeId));
@@ -702,6 +708,7 @@
             onEditRoute={handleStartRouteEdit}
             onSetServiceTargetHeadway={handleSetServiceTargetHeadway}
             onDeployInitialFleet={handleDeployInitialFleet}
+            onAddServiceVehicle={handleAddServiceVehicle}
           />
         </CommandPanel>
       {:else if snapshot.ui.activeCommandDestination === "data"}
