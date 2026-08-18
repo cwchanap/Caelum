@@ -435,17 +435,17 @@
                         >{route.service.assignedFleet}</span
                       >
                     </div>
-                    {#if route.service.nextVehicleCost !== null}
-                      <button
-                        type="button"
-                        class="route-toggle"
-                        data-testid={`route-add-vehicle-${route.id}`}
-                        onclick={() => onAddServiceVehicle(route.id)}
-                      >
-                        {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
-                      </button>
-                    {/if}
                   </div>
+                {/if}
+                {#if route.service.nextVehicleCost !== null}
+                  <button
+                    type="button"
+                    class="route-toggle"
+                    data-testid={`route-add-vehicle-${route.id}`}
+                    onclick={() => onAddServiceVehicle(route.id)}
+                  >
+                    {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
+                  </button>
                 {/if}
                 <div class="route-item-controls">
                   <button
