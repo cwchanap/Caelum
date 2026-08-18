@@ -666,6 +666,14 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   expect(deployed.vehicles.every((vehicle) => vehicle.mode === "bus")).toBe(
     true,
   );
+  const postDeploySnapshot = await runtimeSnapshot(page);
+  const postDeployRoute = postDeploySnapshot.state.transit.routes.find(
+    (route) => route.id === "route-001",
+  );
+  const postDeployRequired = postDeployRoute?.serviceMetrics?.requiredFleet;
+  if (postDeployRequired === null || postDeployRequired === undefined) {
+    throw new Error("Post-deploy Rust required fleet is missing");
+  }
 
   // Post-deployment UI shows Target/Nominal/Fleet with the set/derived values and no setup controls.
   await expect(
@@ -676,8 +684,8 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   ).toHaveText(/^\d+\.\d min$/);
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText(String(deployedFleet));
-  await expect(service.getByText("Required")).toHaveCount(0);
+  ).toHaveText(`${deployedFleet} / ${postDeployRequired} required`);
+  await expect(service.getByText("Required", { exact: true })).toHaveCount(0);
   await expect(service.getByText("No fleet")).toHaveCount(0);
   await expect(page.getByTestId("route-headway-route-001")).toHaveCount(0);
   await expect(
@@ -1035,10 +1043,18 @@ test("starts a Metro service by setting a target headway and deploying the fleet
   await expect(
     service.getByText("Nominal").locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
+  const postDeploySnapshot = await runtimeSnapshot(page);
+  const postDeployLine = postDeploySnapshot.state.transit.metroLines.find(
+    (line) => line.id === lineId,
+  );
+  const postDeployRequired = postDeployLine?.serviceMetrics?.requiredFleet;
+  if (postDeployRequired === null || postDeployRequired === undefined) {
+    throw new Error("Post-deploy Rust required fleet is missing");
+  }
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText(String(vehicleIds.length));
-  await expect(service.getByText("Required")).toHaveCount(0);
+  ).toHaveText(`${vehicleIds.length} / ${postDeployRequired} required`);
+  await expect(service.getByText("Required", { exact: true })).toHaveCount(0);
   await expect(service.getByText("Est. deploy cost")).toHaveCount(0);
   await expect(page.getByTestId(`route-headway-${lineId}`)).toHaveCount(0);
   await expect(
