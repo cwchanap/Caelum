@@ -855,6 +855,7 @@ pub struct ServiceMetrics {
     pub assigned_fleet: usize,
     pub required_fleet: Option<usize>,
     pub estimated_deployment_cost: Option<i32>,
+    pub next_vehicle_cost: Option<i32>,
     pub nominal_headway_seconds: Option<f64>,
 }
 

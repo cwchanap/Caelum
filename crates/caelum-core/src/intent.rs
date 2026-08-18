@@ -35,6 +35,9 @@ pub enum GameIntent {
     DeployInitialFleet {
         line_id: String,
     },
+    AddServiceVehicle {
+        line_id: String,
+    },
     LayRoad {
         point: Point,
     },

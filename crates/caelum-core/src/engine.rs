@@ -403,6 +403,9 @@ impl GameEngine {
             GameIntent::DeployInitialFleet { line_id } => self.commit_result(
                 crate::service_control::deploy_initial_fleet(&self.snapshot, &line_id),
             ),
+            GameIntent::AddServiceVehicle { line_id } => self.commit_result(
+                crate::service_control::add_service_vehicle(&self.snapshot, &line_id),
+            ),
             GameIntent::LayRoad { point } => self.commit_network_mutation(
                 road::apply_road_mutation(&self.snapshot, &RoadMutation::LayRoad { point })
                     .map(NetworkCandidate::from_road),

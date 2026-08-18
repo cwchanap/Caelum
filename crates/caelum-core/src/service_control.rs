@@ -7,12 +7,14 @@
 //! `service_metrics = None`, and save normalization clears the field so
 //! persisted saves never carry a derived cache.
 
+use std::cmp::Ordering;
+
 use crate::cost_policy::{CostPolicy, CostedMutation};
-use crate::model::{GameSnapshot, RouteLegPath, ServiceMetrics, TransitMode};
+use crate::model::{GameSnapshot, RouteLegPath, ServiceMetrics, TransitMode, Vehicle};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::route_lifecycle::is_route_operational;
 use crate::traffic::RoadFlow;
-use crate::transit::{initial_vehicle, vehicle_cost, vehicle_step_seconds};
+use crate::transit::{append_vehicle_costed, initial_vehicle, vehicle_cost, vehicle_step_seconds};
 
 /// Authoritative floor for `target_headway_seconds` on a transit route.
 pub const MIN_HEADWAY_SECONDS: u32 = 60;
@@ -47,6 +49,23 @@ fn service_mode(state: &GameSnapshot, line_id: &str) -> Option<TransitMode> {
     } else {
         None
     }
+}
+
+/// Return the nominal price for one additional vehicle only when a currently
+/// usable service has a live fleet shortfall.
+fn top_up_offer(
+    active: bool,
+    legs: &[RouteLegPath],
+    mode: TransitMode,
+    assigned_fleet: usize,
+    required_fleet: Option<usize>,
+) -> Option<i32> {
+    if !active || !is_route_operational(active, legs) || assigned_fleet == 0 {
+        return None;
+    }
+    required_fleet
+        .filter(|required| assigned_fleet < *required)
+        .map(|_| vehicle_cost(mode))
 }
 
 /// Set the pre-deployment target for a transit line without changing its
@@ -206,10 +225,97 @@ pub(crate) fn deploy_initial_fleet(
     Ok(CostedMutation::new(candidate))
 }
 
+/// Buy one vehicle for an already deployed service when its live timing now
+/// requires a larger fleet. Existing vehicles retain their exact cursors and
+/// passenger state; only the appended vehicle is placed in the largest cycle
+/// gap.
+pub(crate) fn add_service_vehicle(
+    state: &GameSnapshot,
+    line_id: &str,
+) -> GameplayResult<CostedMutation> {
+    let mode = service_mode(state, line_id)
+        .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, line_id))?;
+    let (active, legs, assigned_fleet, target_headway_seconds) = if mode == TransitMode::Bus {
+        let route = state
+            .transit
+            .routes
+            .iter()
+            .find(|route| route.id == line_id)
+            .expect("route was found before service-mode lookup");
+        (
+            route.active,
+            route.legs.as_slice(),
+            route.vehicle_ids.len(),
+            route.target_headway_seconds,
+        )
+    } else {
+        let line = state
+            .transit
+            .metro_lines
+            .iter()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before service-mode lookup");
+        (
+            line.active,
+            line.legs.as_slice(),
+            line.vehicle_ids.len(),
+            line.target_headway_seconds,
+        )
+    };
+
+    // A top-up is only meaningful after an initial fleet and target exist.
+    // These no-op cases intentionally precede service-state validation so an
+    // unconfigured line remains inert rather than becoming a paid action.
+    if assigned_fleet == 0 || target_headway_seconds.is_none() {
+        return Ok(CostedMutation::free(state.clone()));
+    }
+    // Product top-up validates service state before entering the shared paid
+    // append helper, whose legacy AssignVehicle ordering authorizes first.
+    if !active {
+        return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
+    }
+    if !is_route_operational(active, legs) {
+        return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
+    }
+    let target_headway_seconds = target_headway_seconds
+        .expect("target presence was checked before service-state validation");
+    if target_headway_seconds < MIN_HEADWAY_SECONDS {
+        return Err(route_rejection(RejectionCode::InvalidHeadway, line_id));
+    }
+
+    let flow = crate::traffic::derive_road_flow(state);
+    let round_trip_seconds = round_trip_seconds(legs, mode, &flow)
+        .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
+    let required_fleet = required_fleet(round_trip_seconds, target_headway_seconds);
+    if top_up_offer(active, legs, mode, assigned_fleet, Some(required_fleet)).is_none() {
+        return Ok(CostedMutation::free(state.clone()));
+    }
+
+    let existing_offsets: Vec<f64> = state
+        .transit
+        .vehicles
+        .iter()
+        .filter(|vehicle| vehicle.line_id == line_id && vehicle.mode == mode)
+        .map(|vehicle| vehicle_cycle_offset(vehicle, legs, mode, &flow))
+        .collect::<Option<Vec<_>>>()
+        .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
+    let offset = largest_gap_midpoint(&existing_offsets, round_trip_seconds)
+        .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
+    let cursor = resolve_service_cursor(legs, mode, &flow, offset)
+        .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
+    let mut vehicle = initial_vehicle(state, mode, line_id);
+    vehicle.itinerary_index = cursor.itinerary_index;
+    vehicle.path_step_index = cursor.path_step_index;
+    vehicle.step_progress = cursor.step_progress;
+
+    append_vehicle_costed(state, vehicle)
+}
+
 /// Derive service metrics for either transit mode. Returns `None` when no
 /// positive cycle time is derivable (any leg missing `current_path`, or a
 /// walk that sums to zero).
 fn metrics(
+    active: bool,
     legs: &[RouteLegPath],
     mode: TransitMode,
     flow: &RoadFlow,
@@ -226,11 +332,13 @@ fn metrics(
     } else {
         None
     };
+    let next_vehicle_cost = top_up_offer(active, legs, mode, assigned_fleet, required_fleet);
     Some(ServiceMetrics {
         round_trip_seconds,
         assigned_fleet,
         required_fleet,
         estimated_deployment_cost,
+        next_vehicle_cost,
         // Zero fleet means no passenger service: nominal headway is unavailable.
         nominal_headway_seconds: (assigned_fleet > 0)
             .then(|| round_trip_seconds / assigned_fleet as f64),
@@ -248,6 +356,7 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
     let flow = crate::traffic::derive_road_flow(snapshot);
     for route in &mut snapshot.transit.routes {
         route.service_metrics = metrics(
+            route.active && !snapshot.paused,
             &route.legs,
             TransitMode::Bus,
             &flow,
@@ -257,6 +366,7 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
     }
     for line in &mut snapshot.transit.metro_lines {
         line.service_metrics = metrics(
+            line.active && !snapshot.paused,
             &line.legs,
             TransitMode::Metro,
             &flow,
@@ -264,6 +374,98 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
             line.target_headway_seconds,
         );
     }
+}
+
+/// Map a vehicle's current cursor to elapsed seconds from the start of its
+/// cyclic itinerary using the same live per-step timing as vehicle movement.
+/// Empty terminal reversals occupy their accumulated leg-start offset.
+fn vehicle_cycle_offset(
+    vehicle: &Vehicle,
+    legs: &[RouteLegPath],
+    mode: TransitMode,
+    flow: &RoadFlow,
+) -> Option<f64> {
+    if legs.is_empty()
+        || !vehicle.step_progress.is_finite()
+        || !(0.0..=1.0).contains(&vehicle.step_progress)
+    {
+        return None;
+    }
+    let itinerary_index = vehicle.itinerary_index % legs.len();
+    let mut offset = 0.0;
+    for (index, leg) in legs.iter().enumerate() {
+        let path = leg.current_path.as_ref()?;
+        if index < itinerary_index {
+            for step in path.step_refs() {
+                let seconds = vehicle_step_seconds(flow, mode, step);
+                if seconds.is_finite() && seconds > 0.0 {
+                    offset += seconds;
+                }
+            }
+            continue;
+        }
+        if index != itinerary_index {
+            break;
+        }
+        if path.step_count() == 0 {
+            if vehicle.path_step_index != 0 {
+                return None;
+            }
+            return offset.is_finite().then_some(offset);
+        }
+        if vehicle.path_step_index >= path.step_count() || vehicle.step_progress < 0.0 {
+            return None;
+        }
+        for step_index in 0..vehicle.path_step_index {
+            let step = path.step(step_index)?;
+            let seconds = vehicle_step_seconds(flow, mode, step);
+            if seconds.is_finite() && seconds > 0.0 {
+                offset += seconds;
+            }
+        }
+        let current_step = path.step(vehicle.path_step_index)?;
+        let current_seconds = vehicle_step_seconds(flow, mode, current_step);
+        if current_seconds.is_finite() && current_seconds > 0.0 {
+            offset += current_seconds * vehicle.step_progress;
+        }
+        return offset.is_finite().then_some(offset);
+    }
+    None
+}
+
+/// Choose the midpoint of the largest cyclic gap between existing vehicle
+/// offsets. The sorted earliest gap start wins exact ties.
+fn largest_gap_midpoint(offsets: &[f64], round_trip_seconds: f64) -> Option<f64> {
+    if !round_trip_seconds.is_finite() || round_trip_seconds <= 0.0 {
+        return None;
+    }
+    let mut sorted: Vec<f64> = offsets
+        .iter()
+        .copied()
+        .filter(|offset| offset.is_finite())
+        .map(|offset| offset.rem_euclid(round_trip_seconds))
+        .collect();
+    if sorted.is_empty() {
+        return None;
+    }
+    sorted.sort_by(|left, right| left.partial_cmp(right).unwrap_or(Ordering::Equal));
+
+    let mut best_start = sorted[0];
+    let mut best_gap = 0.0;
+    for index in 0..sorted.len() {
+        let start = sorted[index];
+        let end = if index + 1 < sorted.len() {
+            sorted[index + 1]
+        } else {
+            sorted[0] + round_trip_seconds
+        };
+        let gap = end - start;
+        if gap > best_gap || (gap == best_gap && start < best_start) {
+            best_start = start;
+            best_gap = gap;
+        }
+    }
+    Some((best_start + best_gap / 2.0).rem_euclid(round_trip_seconds))
 }
 
 fn resolve_service_cursor(
@@ -278,6 +480,16 @@ fn resolve_service_cursor(
     let mut remaining = offset_seconds;
     for (itinerary_index, leg) in legs.iter().enumerate() {
         let path = leg.current_path.as_ref()?;
+        if path.step_count() == 0 {
+            if remaining <= 1e-9 {
+                return Some(ServiceCursor {
+                    itinerary_index,
+                    path_step_index: 0,
+                    step_progress: 0.0,
+                });
+            }
+            continue;
+        }
         for path_step_index in 0..path.step_count() {
             let Some(step) = path.step(path_step_index) else {
                 continue;
@@ -319,14 +531,17 @@ fn round_trip_seconds(legs: &[RouteLegPath], mode: TransitMode, flow: &RoadFlow)
 
 #[cfg(test)]
 mod tests {
-    use super::{metrics, required_fleet, resolve_service_cursor, ServiceCursor};
+    use super::{
+        largest_gap_midpoint, metrics, required_fleet, resolve_service_cursor,
+        vehicle_cycle_offset, ServiceCursor,
+    };
     use crate::model::{
         Heading, MovementKind, PathGeometry, Point, RoadPathStep, Route, RouteLegKind,
         RouteLegPath, RouteLegStatus, ServiceDirection, ServicePattern, TrackPathStep, TransitMode,
-        TransitPath, TripPosition,
+        TransitPath, TripPosition, Vehicle,
     };
     use crate::traffic::RoadFlow;
-    use crate::transit::METRO_COST;
+    use crate::transit::{BUS_COST, METRO_COST};
     use std::collections::BTreeMap;
 
     fn step(position: (i32, i32), movement: MovementKind, travel_seconds: f64) -> RoadPathStep {
@@ -419,6 +634,75 @@ mod tests {
         assert_eq!(required_fleet(1.0, 300), 1, "fleet never rounds to zero");
     }
 
+    fn test_vehicle(itinerary_index: usize, path_step_index: usize) -> Vehicle {
+        Vehicle {
+            id: "vehicle-test".to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index,
+            path_step_index,
+            step_progress: 0.0,
+            parked_position: None,
+        }
+    }
+
+    #[test]
+    fn evenly_spaced_vehicle_offsets_choose_the_first_equal_gap_midpoint() {
+        assert_eq!(largest_gap_midpoint(&[25.0, 75.0], 100.0), Some(50.0));
+    }
+
+    #[test]
+    fn one_vehicle_chooses_half_cycle() {
+        assert_eq!(largest_gap_midpoint(&[0.0], 100.0), Some(50.0));
+    }
+
+    #[test]
+    fn wrap_around_gap_participates_in_largest_gap() {
+        assert_eq!(largest_gap_midpoint(&[10.0, 20.0, 30.0], 100.0), Some(70.0));
+    }
+
+    #[test]
+    fn equal_gap_tie_breaking_keeps_the_earliest_gap_start() {
+        assert_eq!(
+            largest_gap_midpoint(&[0.0, 20.0, 40.0, 60.0, 80.0], 100.0),
+            Some(10.0)
+        );
+    }
+
+    #[test]
+    fn vehicle_offset_handles_a_zero_step_terminal_reversal_at_leg_start() {
+        let legs = vec![
+            leg(
+                RouteLegKind::Service,
+                ServiceDirection::Outbound,
+                "stop-001",
+                "stop-002",
+                road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
+            ),
+            leg(
+                RouteLegKind::TerminalReversal,
+                ServiceDirection::Outbound,
+                "stop-002",
+                "stop-002",
+                road_path(Vec::new(), 999.0),
+            ),
+            leg(
+                RouteLegKind::Service,
+                ServiceDirection::Return,
+                "stop-002",
+                "stop-001",
+                road_path(vec![step((12, 5), MovementKind::Straight, 50.0)], 50.0),
+            ),
+        ];
+        let vehicle = test_vehicle(1, 0);
+        assert_eq!(
+            vehicle_cycle_offset(&vehicle, &legs, TransitMode::Bus, &RoadFlow::new()),
+            Some(100.0)
+        );
+    }
+
     #[test]
     fn metro_round_trip_uses_current_track_steps_and_ignores_road_flow() {
         let route = route_with_legs(vec![leg(
@@ -436,6 +720,7 @@ mod tests {
         heavy.insert(Point::from((3, 4)), 8u16);
 
         let metrics = metrics(
+            true,
             &route.legs,
             TransitMode::Metro,
             &heavy,
@@ -458,6 +743,7 @@ mod tests {
         )]);
 
         let metrics = metrics(
+            true,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -489,6 +775,7 @@ mod tests {
         route.target_headway_seconds = Some(300);
 
         let metrics = metrics(
+            true,
             &route.legs,
             TransitMode::Metro,
             &RoadFlow::new(),
@@ -501,6 +788,31 @@ mod tests {
         assert_eq!(metrics.assigned_fleet, 0);
         assert_eq!(metrics.nominal_headway_seconds, None);
         assert_eq!(metrics.estimated_deployment_cost, Some(3 * METRO_COST));
+        assert_eq!(metrics.next_vehicle_cost, None);
+    }
+
+    #[test]
+    fn metro_shortfall_metric_publishes_metro_price() {
+        let mut route = route_with_legs(vec![leg(
+            RouteLegKind::Service,
+            ServiceDirection::Outbound,
+            "station-001",
+            "station-002",
+            track_path(vec![track_step((2, 4), 601.0)], 601.0),
+        )]);
+        route.vehicle_ids = vec!["vehicle-001".to_string()];
+        route.target_headway_seconds = Some(300);
+        let metrics = metrics(
+            true,
+            &route.legs,
+            TransitMode::Metro,
+            &RoadFlow::new(),
+            route.vehicle_ids.len(),
+            route.target_headway_seconds,
+        )
+        .expect("connected metro line has metrics");
+        assert_eq!(metrics.required_fleet, Some(3));
+        assert_eq!(metrics.next_vehicle_cost, Some(METRO_COST));
     }
 
     #[test]
@@ -516,6 +828,7 @@ mod tests {
         route.target_headway_seconds = Some(300);
 
         let metrics = metrics(
+            true,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -526,6 +839,91 @@ mod tests {
         assert_eq!(metrics.nominal_headway_seconds, Some(300.0));
         assert_eq!(metrics.required_fleet, Some(2));
         assert_eq!(metrics.assigned_fleet, 2);
+        assert_eq!(metrics.next_vehicle_cost, None);
+    }
+
+    #[test]
+    fn active_shortfall_metric_publishes_one_vehicle_price_but_pause_hides_it() {
+        let mut route = route_with_legs(vec![leg(
+            RouteLegKind::Service,
+            ServiceDirection::Outbound,
+            "stop-001",
+            "stop-002",
+            road_path(vec![step((2, 5), MovementKind::Straight, 600.0)], 600.0),
+        )]);
+        route.vehicle_ids = vec!["vehicle-001".to_string()];
+        route.target_headway_seconds = Some(300);
+
+        let active = metrics(
+            true,
+            &route.legs,
+            TransitMode::Bus,
+            &RoadFlow::new(),
+            route.vehicle_ids.len(),
+            route.target_headway_seconds,
+        )
+        .expect("active route has metrics");
+        assert_eq!(active.required_fleet, Some(2));
+        assert_eq!(active.next_vehicle_cost, Some(BUS_COST));
+
+        let mut broken_legs = route.legs.clone();
+        broken_legs[0].status = RouteLegStatus::NetworkDisconnected;
+        let broken = metrics(
+            true,
+            &broken_legs,
+            TransitMode::Bus,
+            &RoadFlow::new(),
+            route.vehicle_ids.len(),
+            route.target_headway_seconds,
+        )
+        .expect("broken route still has timing metrics");
+        assert_eq!(broken.next_vehicle_cost, None);
+
+        let paused = metrics(
+            false,
+            &route.legs,
+            TransitMode::Bus,
+            &RoadFlow::new(),
+            route.vehicle_ids.len(),
+            route.target_headway_seconds,
+        )
+        .expect("paused route still has timing metrics");
+        assert_eq!(paused.required_fleet, Some(2));
+        assert_eq!(paused.next_vehicle_cost, None);
+    }
+
+    #[test]
+    fn top_up_offer_requires_an_operational_deployed_shortfall() {
+        let route = route_with_legs(vec![leg(
+            RouteLegKind::Service,
+            ServiceDirection::Outbound,
+            "stop-001",
+            "stop-002",
+            road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
+        )]);
+        assert_eq!(
+            super::top_up_offer(true, &route.legs, TransitMode::Bus, 1, Some(2)),
+            Some(BUS_COST)
+        );
+        assert_eq!(
+            super::top_up_offer(true, &route.legs, TransitMode::Bus, 2, Some(2)),
+            None
+        );
+        assert_eq!(
+            super::top_up_offer(true, &route.legs, TransitMode::Bus, 0, Some(2)),
+            None
+        );
+        assert_eq!(
+            super::top_up_offer(false, &route.legs, TransitMode::Bus, 1, Some(2)),
+            None
+        );
+
+        let mut broken = route.legs.clone();
+        broken[0].status = RouteLegStatus::NetworkDisconnected;
+        assert_eq!(
+            super::top_up_offer(true, &broken, TransitMode::Bus, 1, Some(2)),
+            None
+        );
     }
 
     /// Shared shuttle vector: the same cyclic walk covers loop and shuttle
@@ -572,6 +970,7 @@ mod tests {
         ]);
 
         let free_flow = metrics(
+            true,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -585,6 +984,7 @@ mod tests {
         let mut congested = BTreeMap::new();
         congested.insert(outbound_point, 8u16);
         let congested = metrics(
+            true,
             &route.legs,
             TransitMode::Bus,
             &congested,
@@ -715,6 +1115,7 @@ mod tests {
 
         assert_eq!(
             metrics(
+                true,
                 &route.legs,
                 TransitMode::Bus,
                 &RoadFlow::new(),

@@ -374,6 +374,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
         assigned_fleet: 2,
         required_fleet: Some(3),
         estimated_deployment_cost: None,
+        next_vehicle_cost: None,
         nominal_headway_seconds: Some(300.0),
     });
     let value = serde_json::to_value(&derived).unwrap();
@@ -384,6 +385,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
             "assignedFleet": 2,
             "requiredFleet": 3,
             "estimatedDeploymentCost": null,
+            "nextVehicleCost": null,
             "nominalHeadwaySeconds": 300.0
         })
     );
@@ -938,6 +940,22 @@ fn line_intents_use_camel_case_wire_names() {
 }
 
 #[test]
+fn add_service_vehicle_intent_is_line_id_only() {
+    let value = serde_json::to_value(GameIntent::AddServiceVehicle {
+        line_id: "route-001".to_string(),
+    })
+    .expect("top-up intent serializes");
+    assert_eq!(
+        value,
+        json!({
+            "type": "addServiceVehicle",
+            "lineId": "route-001"
+        })
+    );
+    assert!(value.get("mode").is_none());
+}
+
+#[test]
 fn all_game_intent_variants_use_camel_case_wire_names() {
     // Pin the `type` tag and the camelCase field names for every `GameIntent`
     // variant. The wire contract is shared with the TS host adapters; a
@@ -987,6 +1005,13 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
                 line_id: "route-001".to_string(),
             },
             "deployInitialFleet",
+            vec![("lineId", json!("route-001"))],
+        ),
+        (
+            GameIntent::AddServiceVehicle {
+                line_id: "route-001".to_string(),
+            },
+            "addServiceVehicle",
             vec![("lineId", json!("route-001"))],
         ),
         (
@@ -1173,6 +1198,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::AssignVehicle { .. } => "assignVehicle",
             GameIntent::SetServiceTargetHeadway { .. } => "setServiceTargetHeadway",
             GameIntent::DeployInitialFleet { .. } => "deployInitialFleet",
+            GameIntent::AddServiceVehicle { .. } => "addServiceVehicle",
             GameIntent::LayRoad { .. } => "layRoad",
             GameIntent::LayRoadLine { .. } => "layRoadLine",
             GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",
