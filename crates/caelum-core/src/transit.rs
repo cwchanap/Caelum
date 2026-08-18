@@ -398,7 +398,7 @@ pub(crate) fn assign_vehicle_costed(
 ) -> GameplayResult<CostedMutation> {
     // `mode` arrives as a string from `GameIntent::AssignVehicle`; validate and lift it to
     // the typed enum once at this boundary so everything downstream is compiler-checked.
-    let transit_mode = match mode {
+    let mode = match mode {
         "bus" => TransitMode::Bus,
         "metro" => TransitMode::Metro,
         _ => {
@@ -408,45 +408,63 @@ pub(crate) fn assign_vehicle_costed(
             ));
         }
     };
+
+    let vehicle = initial_vehicle(state, mode, line_id);
+    append_vehicle_costed(state, vehicle)
+}
+
+pub(crate) fn append_vehicle_costed(
+    state: &GameSnapshot,
+    vehicle: Vehicle,
+) -> GameplayResult<CostedMutation> {
+    let mode = vehicle.mode;
+    let line_id = vehicle.line_id.clone();
+    let vehicle_id = vehicle.id.clone();
+
+    // Preserve current AssignVehicle ordering: authorize before route lookup.
     let authorized = CostPolicy::from_snapshot(state)
-        .quote(vehicle_cost(transit_mode), state.budget)
+        .quote(vehicle_cost(mode), state.budget)
         .authorize()?;
 
-    let vehicle = initial_vehicle(state, transit_mode, line_id);
     let mut next = state.clone();
 
-    if transit_mode == TransitMode::Bus {
-        let Some(route) = next
-            .transit
-            .routes
-            .iter_mut()
-            .find(|route| route.id == line_id)
-        else {
-            return Err(route_rejection(RejectionCode::RouteNotFound, line_id));
-        };
-        if !route.active {
-            return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
+    match mode {
+        TransitMode::Bus => {
+            let route = next
+                .transit
+                .routes
+                .iter_mut()
+                .find(|route| route.id == line_id)
+                .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, &line_id))?;
+            if !route.active {
+                return Err(route_rejection(RejectionCode::InactiveRoute, &line_id));
+            }
+            if !is_route_operational(route.active, &route.legs) {
+                return Err(route_rejection(RejectionCode::DisconnectedLeg, &line_id));
+            }
+            route.vehicle_ids.push(vehicle_id);
         }
-        if !is_route_operational(route.active, &route.legs) {
-            return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
+        TransitMode::Metro => {
+            let line = next
+                .transit
+                .metro_lines
+                .iter_mut()
+                .find(|line| line.id == line_id)
+                .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, &line_id))?;
+            if !line.active {
+                return Err(route_rejection(RejectionCode::InactiveRoute, &line_id));
+            }
+            if !is_route_operational(line.active, &line.legs) {
+                return Err(route_rejection(RejectionCode::DisconnectedLeg, &line_id));
+            }
+            line.vehicle_ids.push(vehicle_id);
         }
-        route.vehicle_ids.push(vehicle.id.clone());
-    } else {
-        let Some(line) = next
-            .transit
-            .metro_lines
-            .iter_mut()
-            .find(|line| line.id == line_id)
-        else {
-            return Err(route_rejection(RejectionCode::RouteNotFound, line_id));
-        };
-        if !line.active {
-            return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
+        TransitMode::Walk => {
+            return Err(route_rejection(
+                RejectionCode::IncompatibleRouteNode,
+                &line_id,
+            ));
         }
-        if !is_route_operational(line.active, &line.legs) {
-            return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
-        }
-        line.vehicle_ids.push(vehicle.id.clone());
     }
 
     next.transit.vehicles.push(vehicle);
@@ -1816,6 +1834,8 @@ fn point_key(point: &Point) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::GameEngine;
+    use crate::intent::GameIntent;
     use crate::intent::RoadPreset;
     use crate::model::{
         BusStopKind, Heading, MovementKind, PathGeometry, RoadPathStep, Route, RouteLegKind,
@@ -1825,6 +1845,36 @@ mod tests {
     use crate::road::{apply_road_mutation, RoadMutation};
     use crate::state::create_initial_snapshot;
     use crate::stop_access::resolve_stop_access;
+
+    #[test]
+    fn append_vehicle_costed_adds_typed_bus_and_charges_once() {
+        let mut engine = GameEngine::new();
+        let laid = engine.dispatch(GameIntent::LayRoadLine {
+            points: (2..=10).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(laid.applied, "fixture road should apply: {laid:?}");
+        for point in [Point { x: 2, y: 4 }, Point { x: 10, y: 4 }] {
+            let added = engine.dispatch(GameIntent::AddBusStop { point });
+            assert!(added.applied, "fixture stop should apply: {added:?}");
+        }
+        let created = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        });
+        assert!(created.applied, "fixture route should apply: {created:?}");
+
+        let snapshot = engine.snapshot();
+        let vehicle = initial_vehicle(&snapshot, TransitMode::Bus, "route-001");
+        let next = append_vehicle_costed(&snapshot, vehicle.clone())
+            .expect("typed bus append should succeed")
+            .into_snapshot();
+
+        assert_eq!(next.budget, snapshot.budget - BUS_COST);
+        assert_eq!(next.transit.routes[0].vehicle_ids, vec!["vehicle-001"]);
+        assert_eq!(next.transit.vehicles, vec![vehicle]);
+    }
 
     #[test]
     fn dedicated_and_building_catalog_transit_node_prices_match() {
