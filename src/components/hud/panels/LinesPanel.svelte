@@ -432,7 +432,9 @@
                     <div class="route-service-row">
                       <span class="route-service-label">Fleet</span>
                       <span class="route-service-value"
-                        >{route.service.assignedFleet}</span
+                        >{route.service.requiredFleet === null
+                          ? route.service.assignedFleet
+                          : `${route.service.assignedFleet} / ${route.service.requiredFleet} required`}</span
                       >
                     </div>
                   </div>
