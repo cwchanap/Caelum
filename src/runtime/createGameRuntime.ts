@@ -1673,6 +1673,10 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "deployInitialFleet", lineId });
     },
+    addServiceVehicle(lineId) {
+      if (dead) return Promise.resolve(getSnapshot());
+      return enqueueDispatch({ type: "addServiceVehicle", lineId });
+    },
     toggleRouteActive(routeId) {
       if (dead) return Promise.resolve(getSnapshot());
       const route =

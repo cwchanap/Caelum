@@ -198,6 +198,7 @@ export type GameIntent =
       targetHeadwaySeconds: number;
     }
   | { type: "deployInitialFleet"; lineId: string }
+  | { type: "addServiceVehicle"; lineId: string }
   | {
       type: "assignRouteToPlatform";
       nodeId: string;

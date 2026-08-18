@@ -298,6 +298,7 @@ export interface RuntimeController {
     targetHeadwaySeconds: number,
   ) => RuntimeCommandResult;
   deployInitialFleet: (lineId: string) => RuntimeCommandResult;
+  addServiceVehicle: (lineId: string) => RuntimeCommandResult;
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;

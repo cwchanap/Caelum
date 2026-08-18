@@ -630,6 +630,7 @@ function applyIntent(
       assignedFleet: 2,
       requiredFleet: 2,
       estimatedDeploymentCost: null,
+      nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
     };
     return {
@@ -4376,6 +4377,7 @@ describe("route creation and management", () => {
       assignedFleet: 2,
       requiredFleet: 2,
       estimatedDeploymentCost: null,
+      nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
     });
   });
@@ -4414,6 +4416,32 @@ describe("route creation and management", () => {
       lineId: "metro-001",
     });
     expect(deployIntent).not.toHaveProperty("mode");
+  });
+
+  it("dispatches a line-only service vehicle top-up intent", async () => {
+    const initial = snapshotWithMetroLine();
+    const backend = backendSpy(initial);
+    const dispatch = vi.fn(
+      async (_intent: GameIntent): Promise<DispatchResult> => ({
+        snapshot: initial,
+        applied: false,
+        rejection: null,
+      }),
+    );
+    backend.dispatch = dispatch;
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    await runtime.addServiceVehicle("metro-001");
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "addServiceVehicle",
+      lineId: "metro-001",
+    });
+    const intent = dispatch.mock.calls[0]?.[0];
+    expect(intent).not.toHaveProperty("mode");
   });
 
   it("surfaces a headwayNotSet rejection from deployInitialFleet with player copy", async () => {
