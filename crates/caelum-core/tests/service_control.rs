@@ -1402,6 +1402,58 @@ fn snapshot_restore_rejects_current_leg_wait_above_trip_wide_elapsed_wait() {
 }
 
 #[test]
+fn snapshot_restore_accepts_current_leg_wait_within_floating_point_tolerance() {
+    // The engine accumulates `current_leg_wait_seconds` via `+= wait_seconds`
+    // while `elapsed_wait` is derived as `WAIT_PATIENCE_SECONDS -
+    // patience_remaining` (accumulated via `-=`). These are different
+    // floating-point operation sequences and are not bit-identical: two
+    // fractional waits of 0.1 then 0.2 produce
+    // `current_leg_wait_seconds = 0.30000000000000004` but
+    // `elapsed_wait = 0.29999999999998...`. A strict `>` comparison would
+    // reject a snapshot the engine itself produced and saved, making a valid
+    // city unloadable after save. The persistence boundary must tolerate
+    // normal floating-point error while still rejecting large mismatches.
+    let w1 = 0.1_f64;
+    let w2 = 0.2_f64;
+    let current_leg_wait_seconds = w1 + w2;
+    let patience_remaining = 240.0 - w1 - w2;
+    // Sanity-check the fixture reproduces the floating-point divergence the
+    // strict comparison would reject, so this test is meaningful.
+    let elapsed_wait = 240.0 - patience_remaining;
+    assert!(
+        current_leg_wait_seconds > elapsed_wait,
+        "fixture should reproduce f64 divergence: {current_leg_wait_seconds} vs {elapsed_wait}"
+    );
+
+    let engine = bus_route_engine();
+    let waiting_point = Point { x: 2, y: 4 };
+    let mut state = engine.snapshot();
+    state.sims.push(waiting_sim("sim-fp-wait", waiting_point));
+    let mut trip = waiting_transit_trip(
+        "fp-wait",
+        "route-001",
+        TransitMode::Bus,
+        waiting_point,
+        Point { x: 12, y: 4 },
+        patience_remaining,
+    );
+    trip.current_leg_wait_seconds = current_leg_wait_seconds;
+    state.active_trips.push(trip);
+    let restored = GameEngine::from_snapshot(state)
+        .expect("engine-produced fractional-wait snapshot should restore within f64 tolerance");
+    let restored_snapshot = restored.snapshot();
+    let restored_trip = restored_snapshot
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == "fp-wait")
+        .expect("restored trip should be present");
+    assert_eq!(
+        restored_trip.current_leg_wait_seconds,
+        current_leg_wait_seconds
+    );
+}
+
+#[test]
 fn snapshot_for_save_omits_derived_service_metrics() {
     let engine = bus_route_engine();
     let mut state = engine.snapshot();
