@@ -4,24 +4,34 @@
 
 **Goal:** Show a live Bus/Metro route-health warning for platform-servable riders at risk of going unserved, and point to the existing HPA-628 Add bus / Add train action only when Rust already exposes a valid fleet-shortfall offer.
 
-**Architecture:** Extend the existing Rust waiting/platform/service-control seams instead of adding diagnostics infrastructure. Consolidate elapsed-wait derivation in `trips`, expose one platform-eligible waiter aggregate from `platforms`, derive two runtime-only `ServiceMetrics` fields once per output snapshot in `service_control`, forward them through the existing TypeScript selector, and render one warning in the Lines row.
+**Architecture:** Extend the existing Rust waiting/platform/service-control seams instead of adding diagnostics infrastructure. Consolidate elapsed-wait derivation in `trips`, add one persisted per-leg wait counter on `ActiveTrip` (schema v9) that route health consumes instead of the trip-wide elapsed wait, expose one platform-eligible waiter aggregate from `platforms` (capacity-filtered), derive two runtime-only `ServiceMetrics` fields once per output snapshot in `service_control`, forward them through the existing TypeScript selector, and render one warning in the Lines row.
 
 **Tech Stack:** Rust `caelum-core`, serde wire contracts, TypeScript runtime, Svelte 5, Vitest/Testing Library, existing Playwright regression suite.
 
 **Spec:** `docs/superpowers/specs/2026-08-18-long-wait-route-health-design.md`
 
+## Corrective addendum (commit `13f967d`)
+
+The task steps below were written before implementation. The original shape derived route health from the trip-wide `elapsed_wait_seconds` and promised no schema bump. A corrective commit changed two things after the initial implementation:
+
+1. **Per-leg wait.** `waiting_health_by_line` now consumes a new persisted `ActiveTrip.current_leg_wait_seconds` counter (reset on every `current_leg_index` advance, accumulated per waiting stint) instead of the trip-wide `elapsed_wait_seconds`. Without this, a transfer rider carried a previous line's delay into the next line's health metric. The counter is persisted canonical state under schema v9 (snapshot schema bumped from v8 to v9; old development city records cleared, not migrated), and the persistence boundary validates it as finite, non-negative, and no greater than the trip-wide elapsed wait.
+2. **Platform capacity.** `platform_waiters_by_line` is now filtered through `on_platform_trip_ids`, so a shared platform whose capacity is already filled by earlier-patience waiters cannot inflate route health for a line the overflow rider cannot board.
+
+The Global Constraints, file map, and verification notes below reflect this corrected shape. The per-task code snippets that still show `elapsed_wait_seconds` for route health or an `ActiveTrip` literal without `current_leg_wait_seconds` are historical; treat the Global Constraints and file map as authoritative where they diverge.
+
 ## Global Constraints
 
-- Add exactly two required derived fields: `waitingAtRiskCount` and `longestWaitSeconds`.
-- A rider is eligible only when the existing platform logic says the `Waiting` trip is physically on a present platform serving its current non-walk line.
-- Extract `trips::elapsed_wait_seconds(&ActiveTrip)` and use it at the existing wait-metric sites plus HPA-643.
-- A targeted eligible waiter is at risk when `elapsed_wait_seconds(trip) > target_headway_seconds` **or** `trip.patience_remaining <= MIN_HEADWAY_SECONDS`.
+- Add exactly two required derived `ServiceMetrics` fields: `waitingAtRiskCount` and `longestWaitSeconds`.
+- Add one persisted `ActiveTrip.current_leg_wait_seconds` counter so route health measures only the current leg's waiting stint, not the trip-wide elapsed wait that includes previous lines.
+- A rider is eligible only when the existing platform logic says the `Waiting` trip is physically on a present platform serving its current non-walk line **and** the platform still has boarding capacity for that rider (filter `platform_waiters_by_line` through `on_platform_trip_ids`).
+- Extract `trips::elapsed_wait_seconds(&ActiveTrip)` and use it at the existing wait-metric sites. Route health uses the new `trips::current_leg_wait_seconds(&ActiveTrip)` instead, so a transfer rider does not carry a previous line's delay into the next line's health.
+- A targeted eligible waiter is at risk when `current_leg_wait_seconds(trip) > target_headway_seconds` **or** `trip.patience_remaining <= MIN_HEADWAY_SECONDS`.
 - Lines without `targetHeadwaySeconds` publish neutral `waitingAtRiskCount == 0` / `longestWaitSeconds == null`.
 - Do not cap target headway or change `WAIT_PATIENCE_SECONDS` in this slice.
 - Scan active trips through the platform waiter aggregation once; do not scan every active trip once per route.
 - Reuse platform eligibility through an aggregate; keep `waiting_line_id` private to `platforms.rs`.
 - Bus and Metro use the same `service_control` publication path.
-- `ServiceMetrics` remains runtime output only: no schema bump, migration, serde defaults, compatibility alias, persistence field, or history buffer.
+- `ServiceMetrics` remains runtime output only: no serde defaults, compatibility alias, persistence field, or history buffer. The backing `ActiveTrip.current_leg_wait_seconds` is **persisted canonical state**: snapshot schema bumps from v8 to v9, old development city records are cleared (not migrated), and the persistence boundary validates the counter as finite, non-negative, and no greater than the trip-wide `elapsed_wait_seconds`.
 - TypeScript forwards Rust values only. It must not reproduce the risk formula, target comparison, platform eligibility, or fleet-offer predicate.
 - HPA-643 adds no gameplay intent or runtime controller command.
 - The existing HPA-628 `nextVehicleCost` remains the only signal that Add bus / Add train is currently offered.
@@ -61,18 +71,22 @@ Expected: PASS before HPA-643 edits.
 
 ### Rust production
 
-- `crates/caelum-core/src/trips.rs` — add the shared elapsed-wait helper and replace the existing raw formula copies.
-- `crates/caelum-core/src/platforms.rs` — refactor the existing platform waiter scan and expose platform-eligible waiters grouped by current line; keep `waiting_line_id` private.
-- `crates/caelum-core/src/model.rs` — add the two required derived `ServiceMetrics` fields.
-- `crates/caelum-core/src/service_control.rs` — derive per-line risk/longest-wait from the platform waiter aggregate and publish it for Bus/Metro.
+- `crates/caelum-core/src/trips.rs` — add the shared elapsed-wait helper, replace the existing raw formula copies, add the `current_leg_wait_seconds` read helper, reset the counter on leg advance, and accumulate the waiting delta per leg.
+- `crates/caelum-core/src/platforms.rs` — refactor the existing platform waiter scan, expose platform-eligible waiters grouped by current line, and filter the grouped waiters through `on_platform_trip_ids` so shared-platform capacity overflow cannot inflate route health; keep `waiting_line_id` private.
+- `crates/caelum-core/src/model.rs` — add the two required derived `ServiceMetrics` fields, add the persisted `ActiveTrip.current_leg_wait_seconds` field, and bump `SNAPSHOT_SCHEMA_VERSION` from 8 to 9.
+- `crates/caelum-core/src/service_control.rs` — derive per-line risk/longest-wait from the platform waiter aggregate using `current_leg_wait_seconds` and publish it for Bus/Metro.
+- `crates/caelum-core/src/persistence/trips.rs` — validate `current_leg_wait_seconds` as finite, non-negative, and no greater than the trip-wide `elapsed_wait_seconds`.
+- `crates/caelum-core/src/persistence/error.rs` — add the `SnapshotField::TripCurrentLegWaitSeconds` variant.
+- `crates/caelum-core/src/transit.rs` / `crates/caelum-core/src/stop_access.rs` — reset `current_leg_wait_seconds` at the transfer/boarding/alighting transitions that advance `current_leg_index`.
 
 ### Rust tests
 
-- `crates/caelum-core/src/trips.rs` test module — lock elapsed-wait helper semantics.
-- `crates/caelum-core/src/platforms.rs` test module — lock platform eligibility/grouping without widening the function to `pub`.
+- `crates/caelum-core/src/trips.rs` test module — lock elapsed-wait helper semantics and `current_leg_wait_seconds` independence from the trip-wide patience budget.
+- `crates/caelum-core/src/platforms.rs` test module — lock platform eligibility/grouping and shared-platform capacity overflow exclusion without widening the function to `pub`.
 - `crates/caelum-core/src/service_control.rs` test module — lock risk thresholds, line scoping, null-target neutrality, and longest wait.
-- `crates/caelum-core/tests/service_control.rs` — lock Bus/Metro output, persistence, HPA-628 coexistence, and every direct `ServiceMetrics` literal in this file.
+- `crates/caelum-core/tests/service_control.rs` — lock Bus/Metro output, persistence, HPA-628 coexistence, every direct `ServiceMetrics` literal in this file, and one restore rejection test for an impossible persisted `current_leg_wait_seconds`.
 - `crates/caelum-core/tests/model_wire_format.rs` — update direct literals and the exact camelCase `serviceMetrics` JSON object.
+- Every direct `ActiveTrip { ... }` test fixture across `crates/caelum-core/tests/` and the in-line test modules — set `current_leg_wait_seconds` for the new required persisted field.
 
 ### TypeScript production
 
@@ -1007,15 +1021,16 @@ git diff origin/main...HEAD -- \
 Expected production shape:
 
 ```text
-1 shared elapsed-wait helper
-1 shared platform-eligible waiter aggregate
+1 shared elapsed-wait helper (trip-metric sites)
+1 persisted per-leg wait counter on ActiveTrip (schema v9) + read helper
+1 shared platform-eligible waiter aggregate (capacity-filtered)
 2 required derived ServiceMetrics fields
 1 private per-line risk aggregation
 TypeScript projection only
 1 existing-row warning
 ```
 
-If the diff adds a new intent, persistence/history field, generic finding type, headway maximum, passenger-patience change, arbitrary fleet-growth rule, dashboard component, or second pause state, remove that scope before review.
+The persisted `ActiveTrip.current_leg_wait_seconds` field and schema v9 bump are the intended exception to the original "no persistence field / no schema bump" framing (see the corrective addendum). Anything else — a new intent, history buffer, generic finding type, headway maximum, passenger-patience change, arbitrary fleet-growth rule, dashboard component, or second pause state — is out of scope and should be removed before review.
 
 - [ ] **Step 6: Record actual verification in the draft PR**
 

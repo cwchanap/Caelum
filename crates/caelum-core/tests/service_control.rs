@@ -1352,6 +1352,56 @@ fn snapshot_restore_accepts_metro_headway_at_floor() {
 }
 
 #[test]
+fn snapshot_restore_rejects_current_leg_wait_above_trip_wide_elapsed_wait() {
+    // `current_leg_wait_seconds` is persisted canonical state under schema v9
+    // and feeds route-health derivation. It resets to zero on every leg
+    // advance while the trip-wide patience budget is cumulative, so a per-leg
+    // value above the trip-wide elapsed wait is an impossible state the
+    // runtime cannot produce and would publish a false long-wait warning on
+    // restore. `patience_remaining == 239` means `elapsed_wait == 1`, so a
+    // persisted `current_leg_wait_seconds == 200` is well above the bound.
+    let engine = bus_route_engine();
+    let waiting_point = Point { x: 2, y: 4 };
+    let mut state = engine.snapshot();
+    state.sims.push(waiting_sim("sim-leg-wait", waiting_point));
+    let mut trip = waiting_transit_trip(
+        "leg-wait",
+        "route-001",
+        TransitMode::Bus,
+        waiting_point,
+        Point { x: 12, y: 4 },
+        239.0,
+    );
+    trip.current_leg_wait_seconds = 200.0;
+    state.active_trips.push(trip);
+    let error = match GameEngine::from_snapshot(state) {
+        Ok(_) => panic!("impossible current-leg wait should be rejected on restore"),
+        Err(error) => error,
+    };
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = error else {
+        panic!("expected an invalid snapshot diagnostic, got {error:?}");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidNumericValue"));
+    assert_eq!(
+        value["context"]["field"],
+        serde_json::json!("tripCurrentLegWaitSeconds")
+    );
+    assert_eq!(
+        value["context"]["reason"]["kind"],
+        serde_json::json!("outOfRange")
+    );
+    assert_eq!(value["context"]["reason"]["details"]["minimum"], 0.0);
+    assert_eq!(value["context"]["reason"]["details"]["maximum"], 1.0);
+    assert_eq!(value["context"]["reason"]["details"]["actual"], 200.0);
+    assert_eq!(
+        value["context"]["entity"]["kind"],
+        serde_json::json!("activeTrip")
+    );
+}
+
+#[test]
 fn snapshot_for_save_omits_derived_service_metrics() {
     let engine = bus_route_engine();
     let mut state = engine.snapshot();

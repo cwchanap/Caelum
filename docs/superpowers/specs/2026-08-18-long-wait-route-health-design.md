@@ -10,7 +10,7 @@ Deliver the first Phase 5 operational-health slice with one live passenger sympt
 
 > When riders who are actually waiting on a platform are taking too long to receive service, show the problem on that Bus or Metro line. If Rust also exposes the existing HPA-628 fleet-shortfall offer, point to the existing Add bus / Add train action as the bounded recovery.
 
-Keep this as two runtime-derived fields on the existing `ServiceMetrics` seam. Do not add a findings engine, history store, new gameplay intent, second pause model, or dashboard.
+Keep the route-health output as two runtime-derived fields on the existing `ServiceMetrics` seam, backed by one persisted per-leg wait counter on `ActiveTrip` so a transfer rider does not carry a previous line's delay into the next line's health. Do not add a findings engine, history store, new gameplay intent, second pause model, or dashboard.
 
 ## Verified baseline and reuse
 
@@ -42,7 +42,7 @@ Instead, make the route-health count explicitly about riders **at risk of going 
 A platform-servable waiter is at risk when either:
 
 ```rust
-elapsed_wait_seconds(trip) > target_headway_seconds
+current_leg_wait_seconds(trip) > target_headway_seconds
 ```
 
 or:
@@ -51,7 +51,7 @@ or:
 trip.patience_remaining <= f64::from(MIN_HEADWAY_SECONDS)
 ```
 
-`MIN_HEADWAY_SECONDS` is already 60 seconds. Reusing that existing service interval gives the player one minimum-headway-sized warning window before patience expiry without inventing another tuning constant.
+`current_leg_wait_seconds` is the wait accumulated on the current transit leg's waiting stint only, so a rider who already waited on a previous line does not carry that delay into the current line's health. `MIN_HEADWAY_SECONDS` is already 60 seconds. Reusing that existing service interval gives the player one minimum-headway-sized warning window before patience expiry without inventing another tuning constant.
 
 Consequences:
 
@@ -80,7 +80,27 @@ pub(crate) fn elapsed_wait_seconds(trip: &ActiveTrip) -> f64 {
 }
 ```
 
-Use it at the existing trip-metric/boundary call sites and from service health. This is consolidation of an existing semantic invariant, not a new abstraction layer.
+Use it at the existing trip-metric/boundary call sites. This is consolidation of an existing semantic invariant, not a new abstraction layer. Route health does **not** consume `elapsed_wait_seconds`: a transfer rider's trip-wide elapsed wait includes time spent waiting on a previous line, which would misattribute that delay to the current line. Route health uses the per-leg counter below instead.
+
+## Per-leg wait authority and persisted state
+
+Route health must measure only the wait accumulated on the current transit leg's waiting stint, so a rider who waited on a previous line does not carry that delay into the next line's health. Add one persisted counter to `ActiveTrip`:
+
+```rust
+pub current_leg_wait_seconds: f64,
+```
+
+with a read helper:
+
+```rust
+pub(crate) fn current_leg_wait_seconds(trip: &ActiveTrip) -> f64 {
+    trip.current_leg_wait_seconds.max(0.0)
+}
+```
+
+The runtime resets `current_leg_wait_seconds` to zero whenever `current_leg_index` advances (on transfer/boarding/alighting transitions), and accumulates the waiting delta while a leg is in its `Waiting` stint. It is distinct from the trip-wide `patience_remaining` budget, which drives abandonment and is never reset on transfer.
+
+Because this counter feeds route-health derivation on restore, it is persisted canonical snapshot state, not runtime-derived output. The snapshot schema bumps from v8 to v9 to carry it; per the project breaking-change rule, old development city records are cleared rather than migrated. The persistence boundary validates it as finite, non-negative, and no greater than the trip-wide `elapsed_wait_seconds` (the per-leg counter resets on every leg advance while the trip-wide budget is cumulative, so a per-leg value above the trip-wide total is an impossible state the runtime cannot produce).
 
 ## Count only platform-servable waiters
 
@@ -105,6 +125,8 @@ AND current position|line resolves to a present serving platform
 ```
 
 Do not expose `waiting_line_id` just so another module can recreate the scan.
+
+`platform_waiters_by_line` must also respect platform capacity: a shared platform whose capacity is already filled by earlier-patience waiters cannot board an overflow rider for that line, so the overflow rider cannot be served by that line at that platform and must not inflate its route health. Filter the grouped waiters through `on_platform_trip_ids` so only riders the platform/boarding seam can actually board contribute to per-line health.
 
 ## Chosen data contract
 
@@ -158,7 +180,7 @@ The helper:
 1. gets `platform_waiters_by_line(state)` once;
 2. builds/reads the current target for each real Bus/Metro line;
 3. skips lines with no target;
-4. uses `trips::elapsed_wait_seconds` for every eligible waiter;
+4. uses `trips::current_leg_wait_seconds` for every eligible waiter;
 5. records the maximum wait;
 6. increments the at-risk count when the rider is past target or has at most `MIN_HEADWAY_SECONDS` patience remaining.
 
@@ -166,16 +188,16 @@ The helper:
 
 This is O(active trips + eligible waiters + lines), not O(lines × active trips), and avoids a mutable/immutable borrow conflict.
 
-## Runtime-only and non-authoritative
+## Runtime-only output, persisted per-leg input
 
-The two fields follow the existing `ServiceMetrics` rules exactly:
+The two `ServiceMetrics` fields follow the existing `ServiceMetrics` rules exactly:
 
 - computed only for output snapshots;
 - ignored from incoming route/Metro `serviceMetrics`;
 - removed by save normalization;
-- no schema bump;
-- no migration or compatibility adapter;
 - never trusted to authorize `AddServiceVehicle`.
+
+The backing `ActiveTrip.current_leg_wait_seconds` is **not** runtime-derived output. It is persisted canonical snapshot state under schema v9, restored as authority and trusted by route-health derivation, with the persistence boundary validating it as finite, non-negative, and no greater than the trip-wide elapsed wait. The schema bump is a development breaking change: old development city records are cleared, not migrated, and no compatibility adapter or `serde(default)` is added.
 
 The existing HPA-628 mutation recomputes its own live requirement.
 
@@ -224,8 +246,10 @@ Global simulation pause does not need a second route-status field. Existing Rust
 Lock the reusable primitives rather than duplicating a large matrix:
 
 - `elapsed_wait_seconds` returns the expected wait from patience and is used by existing trip logic;
+- `current_leg_wait_seconds` is independent of the trip-wide patience budget (reset on leg advance, accumulated per waiting stint);
 - a Waiting trip on a real serving platform appears in `platform_waiters_by_line`;
 - a Waiting trip with the same route-plan line but no matching present platform does not appear;
+- a Waiting trip on a shared platform whose capacity is already filled does not appear for that line;
 - non-Waiting trips do not appear.
 
 Existing platform ordering/capacity tests remain unchanged.
@@ -273,6 +297,8 @@ for neutral fixtures.
 
 Prove output uses camelCase and `snapshot_for_save()` still omits `serviceMetrics` entirely.
 
+`ActiveTrip.current_leg_wait_seconds` is persisted canonical state under schema v9. Update every direct `ActiveTrip { ... }` literal (including test fixtures) to set it, and add one restore rejection test proving `GameEngine::from_snapshot` rejects an impossible persisted value (e.g. `current_leg_wait_seconds` above the trip-wide `elapsed_wait_seconds`) with an `invalidNumericValue` / `tripCurrentLegWaitSeconds` / `outOfRange` diagnostic.
+
 ### TypeScript projection and UI
 
 The real required-field fixture fallout is concentrated in tests that construct non-null `ServiceMetrics` / `ShellServiceState`:
@@ -303,11 +329,15 @@ A strict “past target” diagnostic is unreachable for targets at/above curren
 
 ### Eligibility must match boarding
 
-Counting route-plan-declared waiters without platform resolution would create warnings that the suggested vehicle action cannot address. Health therefore consumes the same platform eligibility scan as boarding.
+Counting route-plan-declared waiters without platform resolution would create warnings that the suggested vehicle action cannot address. Health therefore consumes the same platform eligibility scan as boarding, including platform capacity: a shared platform whose capacity is already filled cannot board an overflow rider for that line, so the overflow rider must not inflate that line's health.
+
+### Per-leg wait is persisted and trusted on restore
+
+`current_leg_wait_seconds` is canonical snapshot state under schema v9, not runtime-derived output, so a forged save could publish a false long-wait/past-target warning on restore. The persistence boundary validates it as finite, non-negative, and no greater than the trip-wide elapsed wait; the schema bump clears old development city records rather than migrating them.
 
 ### Required-field blast radius
 
-The new `ServiceMetrics` fields intentionally break stale non-null literals. Fix the actual literals and exact wire expectations; do not weaken the production type with defaults or optional fields.
+The new `ServiceMetrics` fields and the persisted `ActiveTrip.current_leg_wait_seconds` field intentionally break stale non-null literals. Fix the actual literals and exact wire expectations; do not weaken the production type with defaults or optional fields.
 
 ## Non-goals
 

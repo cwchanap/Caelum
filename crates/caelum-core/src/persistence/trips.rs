@@ -51,6 +51,31 @@ pub(super) fn validate_trips(
             0.0,
             trips::WAIT_PATIENCE_SECONDS,
         )?;
+        // `current_leg_wait_seconds` is persisted canonical state under
+        // schema v9 and feeds route-health derivation, so the persistence
+        // boundary validates it like the equivalent `patience_remaining`
+        // budget. It must be finite, non-negative, and no greater than the
+        // trip-wide elapsed wait: the per-leg counter resets to zero on
+        // every leg advance while the trip-wide budget is cumulative, so a
+        // per-leg value above the trip-wide total is an impossible state the
+        // runtime cannot produce and would publish a false long-wait warning.
+        let elapsed_wait = trips::elapsed_wait_seconds(trip);
+        super::finite_non_negative(
+            Some(entity.clone()),
+            SnapshotField::TripCurrentLegWaitSeconds,
+            trip.current_leg_wait_seconds,
+        )?;
+        if trip.current_leg_wait_seconds > elapsed_wait {
+            return Err(PersistenceError::InvalidNumericValue {
+                entity: Some(entity.clone()),
+                field: SnapshotField::TripCurrentLegWaitSeconds,
+                reason: NumericError::OutOfRange {
+                    minimum: 0.0,
+                    maximum: elapsed_wait,
+                    actual: trip.current_leg_wait_seconds,
+                },
+            });
+        }
         validate_world_position(snapshot, trip, entity.clone())?;
         validate_private_car_trip(snapshot, trip, entity.clone())?;
         validate_route_plan(snapshot, trip, entity.clone())?;

@@ -214,6 +214,7 @@ pub enum SnapshotField {
     TripPosition,
     TripDeadline,
     TripPatience,
+    TripCurrentLegWaitSeconds,
     TripRoutePlan,
     TripPrivateCar,
     TripPrivateCarArrivalTime,
