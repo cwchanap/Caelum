@@ -438,6 +438,23 @@
                       >
                     </div>
                   </div>
+                  {#if route.status.primary === "running" && route.service.waitingAtRiskCount > 0}
+                    <p
+                      class="route-status-note"
+                      data-testid={`route-health-${route.id}`}
+                    >
+                      {route.service.waitingAtRiskCount}
+                      {route.service.waitingAtRiskCount === 1
+                        ? "rider"
+                        : "riders"}
+                      at risk · longest {formatHeadway(
+                        route.service.longestWaitSeconds,
+                      )}{#if route.service.nextVehicleCost !== null}. Add {route.mode ===
+                        "metro"
+                          ? "train"
+                          : "bus"} to recover.{/if}
+                    </p>
+                  {/if}
                 {/if}
                 {#if route.service.nextVehicleCost !== null}
                   <button
