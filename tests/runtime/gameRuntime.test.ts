@@ -632,6 +632,8 @@ function applyIntent(
       estimatedDeploymentCost: null,
       nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
+      waitingAtRiskCount: 0,
+      longestWaitSeconds: null,
     };
     return {
       ...snapshot,
@@ -4379,6 +4381,8 @@ describe("route creation and management", () => {
       estimatedDeploymentCost: null,
       nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
+      waitingAtRiskCount: 0,
+      longestWaitSeconds: null,
     });
   });
 

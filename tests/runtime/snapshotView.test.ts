@@ -216,6 +216,8 @@ describe("normalizeRustSnapshot", () => {
               estimatedDeploymentCost: null,
               nextVehicleCost: null,
               nominalHeadwaySeconds: 300,
+              waitingAtRiskCount: 3,
+              longestWaitSeconds: 110,
             },
           },
         ],
@@ -229,6 +231,12 @@ describe("normalizeRustSnapshot", () => {
       estimatedDeploymentCost: null,
       nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
+      waitingAtRiskCount: 3,
+      longestWaitSeconds: 110,
+    });
+    expect(normalized.transit.routes[0].serviceMetrics).toMatchObject({
+      waitingAtRiskCount: 3,
+      longestWaitSeconds: 110,
     });
   });
 });
