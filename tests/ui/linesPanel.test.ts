@@ -367,8 +367,8 @@ describe("LinesPanel line workspace", () => {
             estimatedDeploymentCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            waitingAtRiskCount: 1,
+            longestWaitSeconds: 150,
           },
           failures: [],
         },
@@ -406,6 +406,7 @@ describe("LinesPanel line workspace", () => {
     }
     expect(screen.getByText("Paused")).toBeVisible();
     expect(screen.getByText("Broken")).toBeVisible();
+    expect(screen.queryByTestId("route-health-route-bus-paused")).toBeNull();
   });
 
   it("shows Target/Nominal/Fleet requirements after deployment and no setup controls", async () => {
@@ -467,6 +468,7 @@ describe("LinesPanel line workspace", () => {
     expect(service).toHaveTextContent("Fleet");
     expect(service).toHaveTextContent("2 / 3 required");
     expect(service.textContent).not.toContain("assigned");
+    expect(screen.queryByTestId("route-health-route-bus-002")).toBeNull();
     expect(screen.queryByTestId("route-headway-route-bus-002")).toBeNull();
     expect(screen.queryByRole("button", { name: "Set" })).toBeNull();
     expect(screen.queryByRole("button", { name: /Deploy/ })).toBeNull();
@@ -496,13 +498,13 @@ describe("LinesPanel line workspace", () => {
           service: {
             targetHeadwaySeconds: 360,
             roundTripSeconds: 900,
-            assignedFleet: 0,
+            assignedFleet: 1,
             requiredFleet: 99,
             estimatedDeploymentCost: null,
             nextVehicleCost: 12_500,
             nominalHeadwaySeconds: 450,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            waitingAtRiskCount: 2,
+            longestWaitSeconds: 192,
           },
           failures: [],
         },
@@ -510,13 +512,17 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
+    const health = screen.getByTestId("route-health-route-bus-top-up");
+    expect(health).toHaveTextContent("2 riders at risk");
+    expect(health).toHaveTextContent("longest 3.2 min");
+    expect(health).toHaveTextContent("Add bus to recover");
     const add = screen.getByRole("button", {
       name: "Add bus · $12,500",
     });
     expect(add).toBeVisible();
     expect(
       screen.getByTestId("route-service-route-bus-top-up"),
-    ).toHaveTextContent("Required");
+    ).toHaveTextContent("Fleet");
 
     await fireEvent.click(add);
     expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
@@ -543,8 +549,8 @@ describe("LinesPanel line workspace", () => {
             estimatedDeploymentCost: null,
             nextVehicleCost: 80_000,
             nominalHeadwaySeconds: 720,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            waitingAtRiskCount: 1,
+            longestWaitSeconds: 150,
           },
           failures: [],
         },
@@ -552,6 +558,9 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
+    expect(
+      screen.getByTestId("route-health-line-metro-top-up"),
+    ).toHaveTextContent("Add train to recover");
     expect(
       screen.getByRole("button", { name: "Add train · $80,000" }),
     ).toBeVisible();
@@ -577,8 +586,8 @@ describe("LinesPanel line workspace", () => {
             estimatedDeploymentCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: 450,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            waitingAtRiskCount: 1,
+            longestWaitSeconds: 150,
           },
           failures: [],
         },
@@ -586,6 +595,10 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
+    const health = screen.getByTestId("route-health-route-bus-no-offer");
+    expect(health).toHaveTextContent("1 rider at risk");
+    expect(health).toHaveTextContent("longest 2.5 min");
+    expect(health).not.toHaveTextContent("recover");
     expect(
       screen.queryByTestId("route-add-vehicle-route-bus-no-offer"),
     ).toBeNull();
