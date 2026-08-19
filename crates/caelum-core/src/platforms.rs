@@ -156,30 +156,34 @@ pub fn on_platform_trip_ids(state: &GameSnapshot) -> HashSet<String> {
     on_platform
 }
 
-pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<String>> {
+fn platform_waiter_candidates(state: &GameSnapshot) -> Vec<(&ActiveTrip, String, String)> {
     let index = platform_index(state);
+    state
+        .active_trips
+        .iter()
+        .filter_map(|trip| {
+            if trip.status != TripStatus::Waiting {
+                return None;
+            }
+            let line_id = waiting_line_id(trip)?;
+            let key = format!(
+                "{}|{}",
+                position_key(
+                    trip.position.x.round() as i32,
+                    trip.position.y.round() as i32,
+                ),
+                line_id,
+            );
+            let platform_id = index.get(&key)?.clone();
+            Some((trip, line_id.to_string(), platform_id))
+        })
+        .collect()
+}
+
+pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<String>> {
     let mut groups: HashMap<String, Vec<&ActiveTrip>> = HashMap::new();
-
-    for trip in &state.active_trips {
-        if trip.status != TripStatus::Waiting {
-            continue;
-        }
-
-        let Some(line_id) = waiting_line_id(trip) else {
-            continue;
-        };
-        let key = format!(
-            "{}|{}",
-            position_key(
-                trip.position.x.round() as i32,
-                trip.position.y.round() as i32
-            ),
-            line_id
-        );
-        let Some(platform_id) = index.get(&key) else {
-            continue;
-        };
-        groups.entry(platform_id.clone()).or_default().push(trip);
+    for (trip, _, platform_id) in platform_waiter_candidates(state) {
+        groups.entry(platform_id).or_default().push(trip);
     }
 
     let mut ordered = HashMap::new();
@@ -194,8 +198,18 @@ pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<S
             trips.into_iter().map(|trip| trip.id.clone()).collect(),
         );
     }
-
     ordered
+}
+
+#[allow(dead_code, clippy::needless_lifetimes)]
+pub(crate) fn platform_waiters_by_line<'a>(
+    state: &'a GameSnapshot,
+) -> HashMap<String, Vec<&'a ActiveTrip>> {
+    let mut groups: HashMap<String, Vec<&ActiveTrip>> = HashMap::new();
+    for (trip, line_id, _) in platform_waiter_candidates(state) {
+        groups.entry(line_id).or_default().push(trip);
+    }
+    groups
 }
 
 fn build_platforms(node_id: &str, count: usize, capacity: u16) -> Vec<Platform> {
@@ -280,4 +294,69 @@ fn platform_capacities(state: &GameSnapshot) -> HashMap<String, u16> {
 
 fn position_key(x: i32, y: i32) -> String {
     format!("{x},{y}")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Point, RoutePlan, ServiceDirection, Stop, TransitNodeStatus, TripPurpose};
+    use crate::state::create_initial_snapshot;
+
+    fn waiting_trip(id: &str, position: Point, status: TripStatus) -> ActiveTrip {
+        ActiveTrip {
+            id: id.to_string(),
+            sim_id: format!("sim-{id}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: position,
+            destination: Point::from((0, 0)),
+            position: position.into(),
+            status,
+            deadline: 9_999.0,
+            route_plan: Some(RoutePlan {
+                estimated_seconds: 100.0,
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: position,
+                    to: Point::from((0, 0)),
+                    line_id: Some("route-001".to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
+                }],
+            }),
+            current_leg_index: 0,
+            patience_remaining: 100.0,
+            private_car_trip: None,
+        }
+    }
+
+    #[test]
+    fn platform_waiters_by_line_requires_real_serving_platform() {
+        let mut snapshot = create_initial_snapshot();
+        snapshot.transit.stops.push(Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: Point::from((5, 5)),
+            platforms: vec![Platform {
+                id: "stop-001-p0".to_string(),
+                label: "A".to_string(),
+                capacity: 50,
+                route_ids: vec!["route-001".to_string()],
+            }],
+            road_access: None,
+        });
+        snapshot.active_trips = vec![
+            waiting_trip("boardable", Point::from((5, 5)), TripStatus::Waiting),
+            waiting_trip("unboardable", Point::from((6, 5)), TripStatus::Waiting),
+            waiting_trip("riding", Point::from((5, 5)), TripStatus::Riding),
+        ];
+
+        let grouped = platform_waiters_by_line(&snapshot);
+        let ids = grouped["route-001"]
+            .iter()
+            .map(|trip| trip.id.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(ids, vec!["boardable"]);
+    }
 }

@@ -16,6 +16,11 @@ use crate::traffic;
 use crate::transit;
 
 pub const WAIT_PATIENCE_SECONDS: f64 = 240.0;
+
+pub(crate) fn elapsed_wait_seconds(trip: &ActiveTrip) -> f64 {
+    (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0)
+}
+
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
 
@@ -826,7 +831,7 @@ fn track_aggregate_wait_boundary(
 
     let current_wait_seconds: f64 = waiting_trips
         .iter()
-        .map(|trip| (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0))
+        .map(|trip| elapsed_wait_seconds(trip))
         .sum();
     let average_wait_seconds = current_wait_seconds / f64::from(waiting_trips.len() as u32);
     let seconds_to_threshold = max_average_wait - average_wait_seconds;
@@ -915,10 +920,10 @@ fn track_waiting_terminal_boundaries(
 ) {
     // Break at the average-wait loss threshold so a coarse substep doesn't span
     // from below the active average-wait threshold all the way to patience
-    // expiry without sampling the metric. A trip that has waited
-    // `WAIT_PATIENCE_SECONDS - patience_remaining` seconds crosses the threshold
-    // after `patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait)`
-    // more seconds. A tiny `EPSILON` offset lands the sample strictly above the
+    // expiry without sampling the metric. The shared elapsed-wait helper
+    // determines each trip's current wait; the threshold is crossed after
+    // `patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait)` more
+    // seconds. A tiny `EPSILON` offset lands the sample strictly above the
     // threshold because the loss gate uses `>` not `>=`.
     if let Some(max_average_wait) = max_average_wait {
         let seconds_to_threshold =
@@ -1287,22 +1292,22 @@ fn tick_trip(
 
     let terminal_wait_seconds =
         waiting_terminal_elapsed_seconds(&next_trip, delta_seconds, tick_start_time, state.time);
-    let elapsed_wait_seconds = terminal_wait_seconds.unwrap_or(delta_seconds);
+    let wait_seconds = terminal_wait_seconds.unwrap_or(delta_seconds);
     next_trip.status = TripStatus::Waiting;
-    next_trip.patience_remaining = (next_trip.patience_remaining - elapsed_wait_seconds).max(0.0);
+    next_trip.patience_remaining = (next_trip.patience_remaining - wait_seconds).max(0.0);
 
     if terminal_wait_seconds.is_some() {
-        let outcome_wait_seconds = (WAIT_PATIENCE_SECONDS - next_trip.patience_remaining).max(0.0);
+        let outcome_wait_seconds = elapsed_wait_seconds(&next_trip);
         return TripTickResult {
             trip: mark_unserved(next_trip),
             completed_trips: 0,
             late_trips: 0,
             unserved_trips: 1,
-            wait_seconds: elapsed_wait_seconds,
+            wait_seconds,
             outcome: Some(trip_outcome(
                 TripOutcomeKind::Unserved,
                 outcome_wait_seconds,
-                tick_start_time + elapsed_wait_seconds,
+                tick_start_time + wait_seconds,
             )),
         };
     }
@@ -1411,7 +1416,7 @@ fn update_metrics(
     let current_wait_seconds: f64 = trips
         .iter()
         .filter(|trip| trip.status == TripStatus::Waiting)
-        .map(|trip| (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0))
+        .map(elapsed_wait_seconds)
         .sum();
 
     let mut trip_outcomes = metrics
@@ -1639,6 +1644,16 @@ mod tests {
                 arrival_time: 101.25,
             }),
         }
+    }
+
+    #[test]
+    fn elapsed_wait_seconds_uses_shared_patience_authority() {
+        let mut trip = trip_with_private_car_payload();
+        trip.patience_remaining = WAIT_PATIENCE_SECONDS - 90.0;
+        assert_eq!(elapsed_wait_seconds(&trip), 90.0);
+
+        trip.patience_remaining = WAIT_PATIENCE_SECONDS;
+        assert_eq!(elapsed_wait_seconds(&trip), 0.0);
     }
 
     #[test]
