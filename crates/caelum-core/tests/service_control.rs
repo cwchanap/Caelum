@@ -12,8 +12,8 @@
 //! functions they lock.
 
 use caelum_core::model::{
-    ActiveTrip, EconomyPreset, Point, PrivateCarTrip, Sim, TransitMode, TransitPath, TripPosition,
-    TripPurpose, TripStatus, WorkerProfile,
+    ActiveTrip, EconomyPreset, Point, PrivateCarTrip, RouteLeg, RoutePlan, ServiceDirection, Sim,
+    TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, WorkerProfile,
 };
 use caelum_core::traffic::RoadFlow;
 use caelum_core::transit::{BUS_CAPACITY, BUS_COST, METRO_CAPACITY, METRO_COST};
@@ -145,6 +145,57 @@ fn free_flow_cycle_seconds(engine: &GameEngine) -> f64 {
         .flat_map(|path| path.step_refs())
         .map(|step| step.travel_seconds())
         .sum()
+}
+
+fn waiting_sim(id: &str, position: Point) -> Sim {
+    Sim {
+        id: id.to_string(),
+        home: position,
+        position,
+        worker_profile: WorkerProfile::Worker,
+        shift_template: None,
+        workplace: None,
+        commute_day: 0,
+        outbound_resolved_today: false,
+        outbound_arrived_today: false,
+        return_resolved_today: false,
+        returned_home_today: false,
+    }
+}
+
+fn waiting_transit_trip(
+    id: &str,
+    line_id: &str,
+    mode: TransitMode,
+    position: Point,
+    destination: Point,
+    patience_remaining: f64,
+) -> ActiveTrip {
+    ActiveTrip {
+        id: id.to_string(),
+        sim_id: format!("sim-{id}"),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: position,
+        destination,
+        position: position.into(),
+        status: TripStatus::Waiting,
+        deadline: 9_999.0,
+        route_plan: Some(RoutePlan {
+            estimated_seconds: 100.0,
+            legs: vec![RouteLeg {
+                mode,
+                from: position,
+                to: destination,
+                line_id: Some(line_id.to_string()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
+            }],
+        }),
+        current_leg_index: 0,
+        patience_remaining,
+        private_car_trip: None,
+    }
 }
 
 #[test]
@@ -648,17 +699,36 @@ fn shortfall_bus_engine() -> GameEngine {
 
 #[test]
 fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet() {
-    let mut engine = shortfall_bus_engine();
-    let before = engine.snapshot();
-    let metrics = before.transit.routes[0]
+    let waiting_point = Point { x: 2, y: 4 };
+    let destination = Point { x: 27, y: 4 };
+    let mut state = shortfall_bus_engine().snapshot_for_save();
+    state.paused = true;
+    state.sims.push(waiting_sim("sim-waiting", waiting_point));
+    state.active_trips.push(waiting_transit_trip(
+        "waiting",
+        "route-001",
+        TransitMode::Bus,
+        waiting_point,
+        destination,
+        59.0,
+    ));
+    let mut engine = GameEngine::from_snapshot(state).expect("shortfall waiter loads");
+    let resumed = engine.dispatch(GameIntent::SetPaused { paused: false });
+    assert!(resumed.applied, "resume should apply: {resumed:?}");
+
+    let snapshot = engine.snapshot();
+    let metrics = snapshot.transit.routes[0]
         .service_metrics
         .as_ref()
         .expect("slowed route has metrics");
+    assert_eq!(metrics.waiting_at_risk_count, 1);
+    assert!(metrics.longest_wait_seconds.is_some());
+    assert_eq!(metrics.next_vehicle_cost, Some(BUS_COST));
     assert!(
         metrics.required_fleet.expect("target is set") > metrics.assigned_fleet,
         "slowed cycle should create a shortfall: {metrics:?}"
     );
-    assert_eq!(metrics.next_vehicle_cost, Some(BUS_COST));
+    let before = snapshot;
     let wire_before = serde_json::to_value(&before).expect("shortfall response serializes");
     assert_eq!(
         wire_before["transit"]["routes"][0]["serviceMetrics"]["nextVehicleCost"],
@@ -1073,6 +1143,8 @@ fn engine_snapshot_publishes_metro_service_metrics() {
     assert_eq!(metrics.estimated_deployment_cost, None);
     assert_eq!(metrics.next_vehicle_cost, None);
     assert_eq!(metrics.nominal_headway_seconds, None);
+    assert_eq!(metrics.waiting_at_risk_count, 0);
+    assert_eq!(metrics.longest_wait_seconds, None);
 
     let value = serde_json::to_value(&snapshot).expect("snapshot serializes");
     let line_json = &value["transit"]["metroLines"][0];
@@ -1112,12 +1184,75 @@ fn engine_snapshot_publishes_bus_service_metrics() {
     );
     assert_eq!(metrics.nominal_headway_seconds, Some(cycle));
     assert_eq!(metrics.next_vehicle_cost, None);
+    assert_eq!(metrics.waiting_at_risk_count, 0);
+    assert_eq!(metrics.longest_wait_seconds, None);
 
     // Hosts receive the derived metrics on the wire.
     let value = serde_json::to_value(&snapshot).expect("snapshot serializes");
     let route_json = &value["transit"]["routes"][0];
     assert!(route_json.get("serviceMetrics").is_some(), "{route_json}");
     assert_eq!(route_json["serviceMetrics"]["assignedFleet"], 1);
+}
+
+#[test]
+fn engine_snapshot_publishes_waiting_health_for_bus_and_metro() {
+    let mut bus = bus_route_engine();
+    assert!(
+        bus.dispatch(GameIntent::AssignVehicle {
+            mode: "bus".to_string(),
+            line_id: "route-001".to_string(),
+        })
+        .applied
+    );
+    let bus_waiting_point = Point { x: 2, y: 4 };
+    let mut bus_state = bus.snapshot_for_save();
+    bus_state.transit.routes[0].target_headway_seconds = Some(60);
+    bus_state
+        .sims
+        .push(waiting_sim("sim-bus-health", bus_waiting_point));
+    bus_state.active_trips.push(waiting_transit_trip(
+        "bus-health",
+        "route-001",
+        TransitMode::Bus,
+        bus_waiting_point,
+        Point { x: 12, y: 4 },
+        150.0,
+    ));
+    let bus = GameEngine::from_snapshot(bus_state).expect("targeted bus waiter loads");
+    let value = serde_json::to_value(bus.snapshot()).expect("bus snapshot serializes");
+    assert_eq!(
+        value["transit"]["routes"][0]["serviceMetrics"]["waitingAtRiskCount"],
+        1
+    );
+    assert_eq!(
+        value["transit"]["routes"][0]["serviceMetrics"]["longestWaitSeconds"],
+        90.0
+    );
+
+    let metro_waiting_point = Point { x: 2, y: 4 };
+    let mut metro_state = metro_line_engine().snapshot_for_save();
+    metro_state.transit.metro_lines[0].target_headway_seconds = Some(60);
+    metro_state
+        .sims
+        .push(waiting_sim("sim-metro-health", metro_waiting_point));
+    metro_state.active_trips.push(waiting_transit_trip(
+        "metro-health",
+        "metro-001",
+        TransitMode::Metro,
+        metro_waiting_point,
+        Point { x: 12, y: 4 },
+        150.0,
+    ));
+    let metro = GameEngine::from_snapshot(metro_state).expect("targeted metro waiter loads");
+    let value = serde_json::to_value(metro.snapshot()).expect("metro snapshot serializes");
+    assert_eq!(
+        value["transit"]["metroLines"][0]["serviceMetrics"]["waitingAtRiskCount"],
+        1
+    );
+    assert_eq!(
+        value["transit"]["metroLines"][0]["serviceMetrics"]["longestWaitSeconds"],
+        90.0
+    );
 }
 
 #[test]
@@ -1217,7 +1352,27 @@ fn snapshot_for_save_omits_derived_service_metrics() {
     let engine = bus_route_engine();
     let mut state = engine.snapshot();
     state.transit.routes[0].target_headway_seconds = Some(60);
+    let waiting_point = Point { x: 2, y: 4 };
+    state
+        .sims
+        .push(waiting_sim("sim-save-health", waiting_point));
+    state.active_trips.push(waiting_transit_trip(
+        "save-health",
+        "route-001",
+        TransitMode::Bus,
+        waiting_point,
+        Point { x: 12, y: 4 },
+        150.0,
+    ));
     let engine = GameEngine::from_snapshot(state).expect("targeted state loads");
+    assert_eq!(
+        engine.snapshot().transit.routes[0]
+            .service_metrics
+            .as_ref()
+            .expect("derived metrics publish before save")
+            .waiting_at_risk_count,
+        1
+    );
 
     let save = engine.snapshot_for_save();
     assert!(
@@ -1283,6 +1438,8 @@ fn incoming_service_metrics_never_become_authority() {
         estimated_deployment_cost: Some(99),
         next_vehicle_cost: Some(99),
         nominal_headway_seconds: Some(1.0),
+        waiting_at_risk_count: 0,
+        longest_wait_seconds: None,
     });
     let restored = GameEngine::from_snapshot(forged).expect("forged state loads");
     let save = restored.snapshot_for_save();
