@@ -32,7 +32,7 @@ pub(crate) fn current_leg_wait_seconds(trip: &ActiveTrip) -> f64 {
 }
 
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
-const EPSILON: f64 = 0.000_001;
+pub(crate) const EPSILON: f64 = 0.000_001;
 
 fn plan_route(
     state: &GameSnapshot,

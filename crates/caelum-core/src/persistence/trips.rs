@@ -59,13 +59,25 @@ pub(super) fn validate_trips(
         // every leg advance while the trip-wide budget is cumulative, so a
         // per-leg value above the trip-wide total is an impossible state the
         // runtime cannot produce and would publish a false long-wait warning.
+        //
+        // The comparison is tolerant to normal floating-point error: the
+        // engine accumulates `current_leg_wait_seconds` via `+= wait_seconds`
+        // while `elapsed_wait` is derived as `WAIT_PATIENCE_SECONDS -
+        // patience_remaining` (accumulated via `-=`). These are different
+        // operation sequences and are not bit-identical — e.g. waits of 0.1
+        // then 0.2 produce `current_leg_wait_seconds = 0.30000000000000004`
+        // but `elapsed_wait = 0.29999999999998...`. A strict `>` would reject
+        // a snapshot the engine itself produced and saved, making a valid
+        // city unloadable. Reject only when the per-leg wait exceeds the
+        // cumulative elapsed by more than a simulation-scale epsilon; the
+        // large-mismatch case (e.g. 200 vs 1) is still rejected.
         let elapsed_wait = trips::elapsed_wait_seconds(trip);
         super::finite_non_negative(
             Some(entity.clone()),
             SnapshotField::TripCurrentLegWaitSeconds,
             trip.current_leg_wait_seconds,
         )?;
-        if trip.current_leg_wait_seconds > elapsed_wait {
+        if trip.current_leg_wait_seconds > elapsed_wait + trips::EPSILON {
             return Err(PersistenceError::InvalidNumericValue {
                 entity: Some(entity.clone()),
                 field: SnapshotField::TripCurrentLegWaitSeconds,
