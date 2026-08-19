@@ -205,8 +205,17 @@ pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<S
 pub(crate) fn platform_waiters_by_line<'a>(
     state: &'a GameSnapshot,
 ) -> HashMap<String, Vec<&'a ActiveTrip>> {
+    // Apply the same platform-capacity admission as `on_platform_trip_ids`:
+    // `platform_waiter_candidates` returns every Waiting trip on a serving
+    // platform, but only the first `capacity` riders (by patience/id ordering)
+    // can actually board. Overflow riders on a shared, full platform cannot
+    // board any line there, so they must not inflate route health.
+    let on_platform = on_platform_trip_ids(state);
     let mut groups: HashMap<String, Vec<&ActiveTrip>> = HashMap::new();
     for (trip, line_id, _) in platform_waiter_candidates(state) {
+        if !on_platform.contains(&trip.id) {
+            continue;
+        }
         groups.entry(line_id).or_default().push(trip);
     }
     groups
@@ -326,6 +335,41 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 100.0,
+            current_leg_wait_seconds: 0.0,
+            private_car_trip: None,
+        }
+    }
+
+    fn waiting_trip_for_line(
+        id: &str,
+        position: Point,
+        line_id: &str,
+        patience_remaining: f64,
+    ) -> ActiveTrip {
+        ActiveTrip {
+            id: id.to_string(),
+            sim_id: format!("sim-{id}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: position,
+            destination: Point::from((0, 0)),
+            position: position.into(),
+            status: TripStatus::Waiting,
+            deadline: 9_999.0,
+            route_plan: Some(RoutePlan {
+                estimated_seconds: 100.0,
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: position,
+                    to: Point::from((0, 0)),
+                    line_id: Some(line_id.to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
+                }],
+            }),
+            current_leg_index: 0,
+            patience_remaining,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         }
     }
@@ -358,5 +402,54 @@ mod tests {
             .map(|trip| trip.id.as_str())
             .collect::<Vec<_>>();
         assert_eq!(ids, vec!["boardable"]);
+    }
+
+    #[test]
+    fn platform_waiters_by_line_excludes_capacity_overflow_on_shared_platform() {
+        // A shared platform with capacity 2 serves both route-001 and
+        // route-002. Four Waiting trips compete for two admission slots.
+        // `on_platform_trip_ids` admits the two with the lowest patience
+        // (most urgent); the other two cannot board any line at this
+        // platform and must not appear in per-line health aggregation.
+        let mut snapshot = create_initial_snapshot();
+        snapshot.transit.stops.push(Stop {
+            id: "stop-shared".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: Point::from((5, 5)),
+            platforms: vec![Platform {
+                id: "stop-shared-p0".to_string(),
+                label: "A".to_string(),
+                capacity: 2,
+                route_ids: vec!["route-001".to_string(), "route-002".to_string()],
+            }],
+            road_access: None,
+        });
+        snapshot.active_trips = vec![
+            waiting_trip_for_line("a1", Point::from((5, 5)), "route-001", 100.0),
+            waiting_trip_for_line("a2", Point::from((5, 5)), "route-001", 50.0),
+            waiting_trip_for_line("a3", Point::from((5, 5)), "route-001", 10.0),
+            waiting_trip_for_line("b1", Point::from((5, 5)), "route-002", 1.0),
+        ];
+
+        let on_platform = on_platform_trip_ids(&snapshot);
+        // Capacity 2, sorted by patience asc: b1 (1), a3 (10) admitted.
+        assert!(on_platform.contains("b1"));
+        assert!(on_platform.contains("a3"));
+        assert!(!on_platform.contains("a1"));
+        assert!(!on_platform.contains("a2"));
+
+        let grouped = platform_waiters_by_line(&snapshot);
+        let route_001_ids: Vec<&str> = grouped
+            .get("route-001")
+            .map(|trips| trips.iter().map(|t| t.id.as_str()).collect())
+            .unwrap_or_default();
+        let route_002_ids: Vec<&str> = grouped
+            .get("route-002")
+            .map(|trips| trips.iter().map(|t| t.id.as_str()).collect())
+            .unwrap_or_default();
+        // Only admitted riders appear; overflow riders a1/a2 are excluded.
+        assert_eq!(route_001_ids, vec!["a3"]);
+        assert_eq!(route_002_ids, vec!["b1"]);
     }
 }

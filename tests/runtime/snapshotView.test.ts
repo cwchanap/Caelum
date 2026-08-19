@@ -133,6 +133,7 @@ function createNullishWireSnapshot(
         },
         currentLegIndex: 0,
         patienceRemaining: 120,
+        currentLegWaitSeconds: 0,
         privateCarTrip: none,
       },
       {
@@ -147,6 +148,7 @@ function createNullishWireSnapshot(
         routePlan: none,
         currentLegIndex: 0,
         patienceRemaining: 120,
+        currentLegWaitSeconds: 0,
         privateCarTrip: none,
       },
     ],

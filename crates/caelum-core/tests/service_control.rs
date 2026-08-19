@@ -194,6 +194,9 @@ fn waiting_transit_trip(
         }),
         current_leg_index: 0,
         patience_remaining,
+        // Single-leg fixture: current-leg wait equals total elapsed wait
+        // (WAIT_PATIENCE_SECONDS - patience_remaining). Mirrors trips.rs.
+        current_leg_wait_seconds: (240.0 - patience_remaining).max(0.0),
         private_car_trip: None,
     }
 }
@@ -685,6 +688,7 @@ fn shortfall_bus_engine() -> GameEngine {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 30.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: Some(PrivateCarTrip {
                 path: traffic_path.clone(),
                 arrival_time: 100.0,

@@ -177,6 +177,7 @@ fn moving_vehicle_with_rider_fixture() -> BrokenServiceFixture {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     });
 
@@ -252,6 +253,7 @@ fn route_with_alternate_path_and_rider() -> AlternateRouteFixture {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     });
 
@@ -512,6 +514,7 @@ fn mutations_while_already_broken_do_not_repeat_break_side_effects() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     });
     let before_parking = vehicle(&broken, &fixture.vehicle_id)

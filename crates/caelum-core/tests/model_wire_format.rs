@@ -251,11 +251,11 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
-    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 8);
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 9);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(8)
+        json!(9)
     );
 }
 
@@ -399,7 +399,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(8));
+    assert_eq!(value["schemaVersion"], json!(9));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
@@ -611,6 +611,7 @@ fn driving_trip_serializes_private_car_payload_with_road_path() {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: Some(PrivateCarTrip {
             path: road_path,
             arrival_time: 101.25,
@@ -697,6 +698,7 @@ fn active_trip_with(status: TripStatus, purpose: TripPurpose) -> ActiveTrip {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 0.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }

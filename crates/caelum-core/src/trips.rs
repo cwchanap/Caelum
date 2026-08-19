@@ -21,6 +21,16 @@ pub(crate) fn elapsed_wait_seconds(trip: &ActiveTrip) -> f64 {
     (WAIT_PATIENCE_SECONDS - trip.patience_remaining).max(0.0)
 }
 
+/// Wait accumulated on the current transit leg's waiting stint only. Unlike
+/// [`elapsed_wait_seconds`], this resets to zero whenever `current_leg_index`
+/// advances, so a rider who waited on a previous line does not carry that
+/// wait into the current line's route health. Used by service-health
+/// aggregation; trip-wide abandonment still uses the cumulative
+/// `patience_remaining` budget.
+pub(crate) fn current_leg_wait_seconds(trip: &ActiveTrip) -> f64 {
+    trip.current_leg_wait_seconds.max(0.0)
+}
+
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 const EPSILON: f64 = 0.000_001;
 
@@ -1060,6 +1070,7 @@ fn build_trip(
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: WAIT_PATIENCE_SECONDS,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }
@@ -1152,6 +1163,7 @@ fn tick_trip(
         next_trip.status = TripStatus::Idle;
         next_trip.route_plan = None;
         next_trip.current_leg_index = 0;
+        next_trip.current_leg_wait_seconds = 0.0;
         route_plan = None;
     }
 
@@ -1175,6 +1187,7 @@ fn tick_trip(
 
         next_trip.route_plan = Some(planned_route.clone());
         next_trip.current_leg_index = 0;
+        next_trip.current_leg_wait_seconds = 0.0;
         next_trip.status = status_after_leg(&planned_route, 0);
         route_plan = Some(planned_route);
     }
@@ -1235,6 +1248,7 @@ fn tick_trip(
         })
     {
         next_trip.current_leg_index += 1;
+        next_trip.current_leg_wait_seconds = 0.0;
     }
     if next_trip.current_leg_index != original_leg_index {
         next_trip.status = status_after_leg(&route_plan, next_trip.current_leg_index);
@@ -1271,6 +1285,7 @@ fn tick_trip(
         );
         if same_position_and_point(&next_trip.position, &leg.to) {
             next_trip.current_leg_index += 1;
+            next_trip.current_leg_wait_seconds = 0.0;
             next_trip.status = status_after_leg(&route_plan, next_trip.current_leg_index);
         } else {
             next_trip.status = TripStatus::Walking;
@@ -1295,6 +1310,8 @@ fn tick_trip(
     let wait_seconds = terminal_wait_seconds.unwrap_or(delta_seconds);
     next_trip.status = TripStatus::Waiting;
     next_trip.patience_remaining = (next_trip.patience_remaining - wait_seconds).max(0.0);
+    next_trip.current_leg_wait_seconds =
+        (next_trip.current_leg_wait_seconds + wait_seconds).max(0.0);
 
     if terminal_wait_seconds.is_some() {
         let outcome_wait_seconds = elapsed_wait_seconds(&next_trip);
@@ -1636,6 +1653,7 @@ mod tests {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: Some(PrivateCarTrip {
                 path: TransitPath::Road {
                     steps: Vec::new(),
@@ -1654,6 +1672,20 @@ mod tests {
 
         trip.patience_remaining = WAIT_PATIENCE_SECONDS;
         assert_eq!(elapsed_wait_seconds(&trip), 0.0);
+    }
+
+    #[test]
+    fn current_leg_wait_seconds_is_independent_of_trip_wide_patience() {
+        let mut trip = trip_with_private_car_payload();
+        // Trip-wide patience consumed 130 s, but only 1 s waited on the current
+        // leg (e.g. after transferring from a previous line).
+        trip.patience_remaining = WAIT_PATIENCE_SECONDS - 130.0;
+        trip.current_leg_wait_seconds = 1.0;
+        assert_eq!(current_leg_wait_seconds(&trip), 1.0);
+        assert_eq!(elapsed_wait_seconds(&trip), 130.0);
+
+        trip.current_leg_wait_seconds = 0.0;
+        assert_eq!(current_leg_wait_seconds(&trip), 0.0);
     }
 
     #[test]

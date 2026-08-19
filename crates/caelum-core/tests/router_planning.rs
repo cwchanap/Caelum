@@ -397,6 +397,7 @@ fn bus_route_plan_eta_reflects_current_car_flow_without_rebuilding_path() {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: Some(PrivateCarTrip {
                 path: path.clone(),
                 arrival_time: 900.0,

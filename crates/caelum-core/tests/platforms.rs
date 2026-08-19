@@ -28,6 +28,7 @@ fn waiting_trip(id: &str, position: Point, line_id: &str, patience_remaining: f6
         }),
         current_leg_index: 0,
         patience_remaining,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }

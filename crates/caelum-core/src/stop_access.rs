@@ -894,6 +894,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         let planless_trip = ActiveTrip {
@@ -908,6 +909,7 @@ mod tests {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         snapshot.active_trips = vec![riding_trip, planless_trip];
@@ -997,6 +999,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         // A bus passenger waiting at the same coordinate for the bus route.
@@ -1023,6 +1026,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         snapshot.active_trips = vec![metro_passenger, bus_passenger];
@@ -1105,6 +1109,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         snapshot.active_trips = vec![trip];
@@ -1228,6 +1233,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         snapshot.active_trips = vec![trip];
@@ -1352,6 +1358,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: None,
         };
         snapshot.active_trips = vec![trip];

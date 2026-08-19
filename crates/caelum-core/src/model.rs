@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 8;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 9;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -967,6 +967,12 @@ pub struct ActiveTrip {
     pub route_plan: Option<RoutePlan>,
     pub current_leg_index: usize,
     pub patience_remaining: f64,
+    /// Wait accumulated on the current transit leg's waiting stint. Reset to
+    /// zero whenever `current_leg_index` advances, so a rider who waited on a
+    /// previous line does not carry that wait into the current line's route
+    /// health. Distinct from the trip-wide `patience_remaining` budget, which
+    /// drives abandonment and is never reset on transfer.
+    pub current_leg_wait_seconds: f64,
     pub private_car_trip: Option<PrivateCarTrip>,
 }
 

@@ -17,7 +17,7 @@ use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, Rejecti
 use crate::route_lifecycle::is_route_operational;
 use crate::traffic::RoadFlow;
 use crate::transit::{append_vehicle_costed, initial_vehicle, vehicle_cost, vehicle_step_seconds};
-use crate::trips::elapsed_wait_seconds;
+use crate::trips::current_leg_wait_seconds;
 
 /// Authoritative floor for `target_headway_seconds` on a transit route.
 pub const MIN_HEADWAY_SECONDS: u32 = 60;
@@ -51,7 +51,7 @@ fn waiting_health_by_line(state: &GameSnapshot) -> HashMap<String, WaitingHealth
         };
         let mut line_health = WaitingHealth::default();
         for trip in waiters {
-            let wait_seconds = elapsed_wait_seconds(trip);
+            let wait_seconds = current_leg_wait_seconds(trip);
             line_health.longest_wait_seconds = Some(
                 line_health
                     .longest_wait_seconds
@@ -736,6 +736,7 @@ mod tests {
             }),
             current_leg_index: 0,
             patience_remaining: 240.0 - wait_seconds,
+            current_leg_wait_seconds: wait_seconds,
             private_car_trip: None,
         }
     }
@@ -803,6 +804,92 @@ mod tests {
             })
         );
         assert_eq!(health.get("route-none"), None);
+    }
+
+    #[test]
+    fn waiting_health_does_not_inherit_previous_line_wait_across_transfer() {
+        // A rider waited 130 s on route-A, transferred to route-B (target 120 s),
+        // and has waited 1 s on route-B so far. The trip-wide patience budget
+        // has consumed 131 s (patience_remaining = 109), but the current-leg
+        // wait is only 1 s. Route-B's health must reflect only the 1 s waited
+        // on B, not the cumulative 131 s — otherwise B would inherit A's delay
+        // and report a past-target rider / 131 s longest wait.
+        let mut route_a = route_with_legs(Vec::new());
+        route_a.id = "route-A".into();
+        route_a.target_headway_seconds = Some(60);
+
+        let mut route_b = route_with_legs(Vec::new());
+        route_b.id = "route-B".into();
+        route_b.target_headway_seconds = Some(120);
+
+        let mut snapshot = crate::state::create_initial_snapshot();
+        snapshot.transit.routes = vec![route_a, route_b];
+        snapshot.transit.stations.clear();
+        snapshot.transit.stops = vec![platform_stop("stop-b", Point::from((6, 6)), "route-B")];
+
+        let transfer_position = Point::from((6, 6));
+        let transfer_trip = ActiveTrip {
+            id: "transfer-rider".to_string(),
+            sim_id: "sim-transfer".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: Point::from((5, 5)),
+            destination: Point::from((0, 0)),
+            position: transfer_position.into(),
+            status: TripStatus::Waiting,
+            deadline: 9_999.0,
+            route_plan: Some(RoutePlan {
+                estimated_seconds: 300.0,
+                legs: vec![
+                    RouteLeg {
+                        mode: TransitMode::Bus,
+                        from: Point::from((5, 5)),
+                        to: transfer_position,
+                        line_id: Some("route-A".to_string()),
+                        service_direction: Some(ServiceDirection::Loop),
+                        board_itinerary_index: Some(0),
+                        alight_itinerary_index: Some(0),
+                    },
+                    RouteLeg {
+                        mode: TransitMode::Walk,
+                        from: transfer_position,
+                        to: transfer_position,
+                        line_id: None,
+                        service_direction: None,
+                        board_itinerary_index: None,
+                        alight_itinerary_index: None,
+                    },
+                    RouteLeg {
+                        mode: TransitMode::Bus,
+                        from: transfer_position,
+                        to: Point::from((0, 0)),
+                        line_id: Some("route-B".to_string()),
+                        service_direction: Some(ServiceDirection::Loop),
+                        board_itinerary_index: Some(0),
+                        alight_itinerary_index: Some(0),
+                    },
+                ],
+            }),
+            current_leg_index: 2,
+            // 130 s on A + 1 s on B = 131 s total wait → patience = 109.
+            patience_remaining: 109.0,
+            // Only 1 s waited on the current leg (route-B).
+            current_leg_wait_seconds: 1.0,
+            private_car_trip: None,
+        };
+        snapshot.active_trips = vec![transfer_trip];
+
+        let health = waiting_health_by_line(&snapshot);
+
+        // Route-B must not inherit route-A's 130 s wait.
+        assert_eq!(
+            health.get("route-B"),
+            Some(&WaitingHealth {
+                waiting_at_risk_count: 0,
+                longest_wait_seconds: Some(1.0),
+            })
+        );
+        // Route-A has no current waiters (the trip is past it).
+        assert_eq!(health.get("route-A"), None);
     }
 
     #[test]
