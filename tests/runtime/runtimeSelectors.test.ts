@@ -884,6 +884,8 @@ describe("route selectors", () => {
           estimatedDeploymentCost: null,
           nextVehicleCost: null,
           nominalHeadwaySeconds: null,
+          waitingAtRiskCount: 0,
+          longestWaitSeconds: null,
         },
         failures: [],
       },
@@ -904,6 +906,8 @@ describe("route selectors", () => {
           estimatedDeploymentCost: null,
           nextVehicleCost: null,
           nominalHeadwaySeconds: null,
+          waitingAtRiskCount: 0,
+          longestWaitSeconds: null,
         },
         failures: [],
       },
@@ -941,6 +945,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -958,6 +964,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -1002,6 +1010,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
       300,
     );
@@ -1015,6 +1025,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -1028,6 +1040,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: 300,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
       300,
     );
@@ -1043,6 +1057,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: 300,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -1061,6 +1077,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -1082,6 +1100,8 @@ describe("route selectors", () => {
             estimatedDeploymentCost: 150_000,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
           },
         })),
       },
@@ -1098,6 +1118,8 @@ describe("route selectors", () => {
         estimatedDeploymentCost: 150_000,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -1119,6 +1141,8 @@ describe("route selectors", () => {
             estimatedDeploymentCost: 150_000,
             nextVehicleCost: null,
             nominalHeadwaySeconds: 300,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
           },
         })),
       },
@@ -1135,6 +1159,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: 300,
         estimatedDeploymentCost: 150_000,
         nextVehicleCost: null,
+        waitingAtRiskCount: 0,
+        longestWaitSeconds: null,
       },
     });
   });
@@ -1162,21 +1188,26 @@ describe("route selectors", () => {
             estimatedDeploymentCost: null,
             nextVehicleCost: 42_000,
             nominalHeadwaySeconds: 600,
+            waitingAtRiskCount: 2,
+            longestWaitSeconds: 95,
           },
         })),
       },
     };
-    expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
-      service: {
-        targetHeadwaySeconds: 120,
-        roundTripSeconds: 600,
-        assignedFleet: 1,
-        requiredFleet: 5,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: 42_000,
-        nominalHeadwaySeconds: 600,
-      },
+    const service = selectShellState(state, createUiState()).routes[0].service;
+    expect(service).toMatchObject({
+      targetHeadwaySeconds: 120,
+      roundTripSeconds: 600,
+      assignedFleet: 1,
+      requiredFleet: 5,
+      estimatedDeploymentCost: null,
+      nextVehicleCost: 42_000,
+      nominalHeadwaySeconds: 600,
+      waitingAtRiskCount: 2,
+      longestWaitSeconds: 95,
     });
+    expect(service.waitingAtRiskCount).toBe(2);
+    expect(service.longestWaitSeconds).toBe(95);
   });
 
   it("prioritizes Broken while preserving paused-after-repair state", () => {

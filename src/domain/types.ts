@@ -320,6 +320,8 @@ export interface ServiceMetrics {
   estimatedDeploymentCost: number | null;
   nextVehicleCost: number | null;
   nominalHeadwaySeconds: number | null;
+  waitingAtRiskCount: number;
+  longestWaitSeconds: number | null;
 }
 
 export interface Route {
