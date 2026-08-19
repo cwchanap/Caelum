@@ -45,6 +45,7 @@ fn driving_car(id: usize, path: TransitPath) -> ActiveTrip {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: Some(PrivateCarTrip {
             path,
             arrival_time: 100.0,
@@ -346,6 +347,7 @@ fn bus_route_vehicle_carries_commute_trip() {
         }),
         current_leg_index: 0,
         patience_remaining: 30.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     });
 

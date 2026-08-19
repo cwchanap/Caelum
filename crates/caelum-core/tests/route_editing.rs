@@ -1187,6 +1187,7 @@ fn riding_trip(route_id: &str, passenger_id: &str) -> ActiveTrip {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }
@@ -1226,6 +1227,7 @@ fn trip_with_future_route_leg(route_id: &str) -> ActiveTrip {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }

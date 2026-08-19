@@ -1,5 +1,5 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 8 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 9 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
@@ -405,6 +405,7 @@ export interface ActiveTrip {
   routePlan: RoutePlan | null;
   currentLegIndex: number;
   patienceRemaining: number;
+  currentLegWaitSeconds: number;
   privateCarTrip: PrivateCarTrip | null;
 }
 

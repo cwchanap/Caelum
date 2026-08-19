@@ -53,6 +53,7 @@ fn driving_trip() -> ActiveTrip {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: Some(PrivateCarTrip {
             path: driving_path(),
             arrival_time: 101.25,

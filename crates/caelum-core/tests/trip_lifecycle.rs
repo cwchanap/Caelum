@@ -42,6 +42,7 @@ fn trip(id: &str, status: TripStatus, position: TripPosition, destination: Point
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }
@@ -300,6 +301,7 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: Some(PrivateCarTrip {
                 path: bus_path.clone(),
                 arrival_time: departure_time + 100.0,
@@ -354,6 +356,7 @@ fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: Some(PrivateCarTrip {
             path: bus_path.clone(),
             arrival_time,
@@ -396,6 +399,7 @@ fn staggered_car_arrival_fixture() -> (GameSnapshot, RoadTopology) {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: Some(PrivateCarTrip {
                 path: candidate.path.clone(),
                 arrival_time: state.time + offset,
@@ -418,6 +422,7 @@ fn driving_trip_without_payload() -> ActiveTrip {
         route_plan: None,
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }
 }
@@ -498,6 +503,7 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
             route_plan: None,
             current_leg_index: 0,
             patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
             private_car_trip: Some(PrivateCarTrip {
                 path: free_flow.path.clone(),
                 arrival_time: seed_arrival_time,
@@ -1209,6 +1215,7 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         route_plan: Some(bus_plan((2, 4).into(), (12, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
@@ -1285,6 +1292,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         )),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
@@ -1367,6 +1375,7 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
         )),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     // Vehicle starts at the boarding stop with a free seat.
@@ -1444,6 +1453,7 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         route_plan: Some(bus_plan((2, 4).into(), (5, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
@@ -1499,6 +1509,7 @@ fn cursor_resets_progress_at_path_step_boundary() {
         route_plan: Some(bus_plan((2, 4).into(), (7, 4).into(), "route-001")),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
@@ -1544,6 +1555,7 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         route_plan: Some(walk_plan(workplace, workplace, 0.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1643,6 +1655,7 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
         )),
         current_leg_index: 0,
         patience_remaining: 1.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1694,6 +1707,7 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
         route_plan: Some(bus_plan(workplace, Point { x: 7, y: 8 }, "route-001")),
         current_leg_index: 0,
         patience_remaining: 1.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1821,6 +1835,7 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
         route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home, 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1895,6 +1910,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
         route_plan: Some(walk_plan(Point { x: 3, y: 3 }, home, 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1975,6 +1991,7 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
         route_plan: Some(walk_plan((8, 3).into(), (9, 3).into(), 20.0)),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 

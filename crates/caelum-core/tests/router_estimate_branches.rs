@@ -48,6 +48,7 @@ fn bus_leg_trip_fixture() -> caelum_core::GameSnapshot {
         route_plan: Some(plan),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     snapshot.trip_sequence_day = 0;

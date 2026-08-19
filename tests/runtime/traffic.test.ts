@@ -36,6 +36,7 @@ function drivingTrip(id: string, positions: Point[]): ActiveTrip {
     routePlan: null,
     currentLegIndex: 0,
     patienceRemaining: 100,
+    currentLegWaitSeconds: 0,
     privateCarTrip: {
       path: {
         kind: "road",
@@ -73,6 +74,7 @@ describe("selectTrafficFlow", () => {
     const waitingTrip = {
       ...drivingTrip("waiting", [{ x: 1, y: 0 }]),
       status: "waiting" as const,
+      currentLegWaitSeconds: 0,
       privateCarTrip: null,
     };
 

@@ -1077,6 +1077,7 @@ fn cleanup_removed_destination_references(
         trip.route_plan = None;
         trip.private_car_trip = None;
         trip.current_leg_index = 0;
+        trip.current_leg_wait_seconds = 0.0;
         trip.destination = replacement;
         // Refresh the trip timers: retargeting starts a fresh trip (plan nulled,
         // status reset to idle), so the patience/deadline window must reset too.
@@ -1239,6 +1240,7 @@ pub(crate) fn invalidate_trips_for_line(
         trip.status = TripStatus::Idle;
         trip.route_plan = None;
         trip.current_leg_index = 0;
+        trip.current_leg_wait_seconds = 0.0;
         if let Some(parked_at) = parked_position_by_trip_id.get(&trip.id) {
             trip.position = parked_at.clone();
         }
@@ -1630,6 +1632,7 @@ fn disembark_vehicle(
             trip.position = (*reached_passenger_position).into();
             trip.status = TripStatus::Walking;
             trip.current_leg_index += 1;
+            trip.current_leg_wait_seconds = 0.0;
         }
     }
 

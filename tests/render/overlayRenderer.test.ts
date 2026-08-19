@@ -183,6 +183,7 @@ function waiter(): ActiveTrip {
       ],
     },
     currentLegIndex: 0,
+    currentLegWaitSeconds: 0,
     privateCarTrip: null,
   };
 }
@@ -265,6 +266,7 @@ function activeTrip(
     routePlan: null,
     currentLegIndex: 0,
     patienceRemaining: 100,
+    currentLegWaitSeconds: 0,
     privateCarTrip: null,
   };
 }
@@ -680,6 +682,7 @@ function roadDrivingTrip(id: string, point: Point): ActiveTrip {
     routePlan: null,
     currentLegIndex: 0,
     patienceRemaining: 100,
+    currentLegWaitSeconds: 0,
     privateCarTrip: {
       path: {
         kind: "road",

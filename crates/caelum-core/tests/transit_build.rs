@@ -180,6 +180,7 @@ fn breaking_shuttle_return_leg_parks_vehicle_at_legs_from_waypoint() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1528,6 +1529,7 @@ fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger(
         }),
         current_leg_index: 0,
         patience_remaining: 30.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: Some(PrivateCarTrip {
             path: TransitPath::Road {
                 steps: Vec::new(),
@@ -1639,6 +1641,7 @@ fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
         }),
         current_leg_index: 0,
         patience_remaining: 2.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1706,6 +1709,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1776,6 +1780,7 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
     state.transit.vehicles = vec![Vehicle {
@@ -1911,6 +1916,7 @@ fn deleting_earlier_leg_line_leaves_transferred_trip_riding_other_line() {
         }),
         current_leg_index: 1,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
@@ -1993,6 +1999,7 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
         }),
         current_leg_index: 0,
         patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
