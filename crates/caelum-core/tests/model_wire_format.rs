@@ -376,6 +376,8 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
         estimated_deployment_cost: None,
         next_vehicle_cost: None,
         nominal_headway_seconds: Some(300.0),
+        waiting_at_risk_count: 0,
+        longest_wait_seconds: None,
     });
     let value = serde_json::to_value(&derived).unwrap();
     assert_eq!(
@@ -386,7 +388,9 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
             "requiredFleet": 3,
             "estimatedDeploymentCost": null,
             "nextVehicleCost": null,
-            "nominalHeadwaySeconds": 300.0
+            "nominalHeadwaySeconds": 300.0,
+            "waitingAtRiskCount": 0,
+            "longestWaitSeconds": null
         })
     );
 }

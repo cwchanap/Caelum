@@ -201,7 +201,7 @@ pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<S
     ordered
 }
 
-#[allow(dead_code, clippy::needless_lifetimes)]
+#[allow(clippy::needless_lifetimes)]
 pub(crate) fn platform_waiters_by_line<'a>(
     state: &'a GameSnapshot,
 ) -> HashMap<String, Vec<&'a ActiveTrip>> {

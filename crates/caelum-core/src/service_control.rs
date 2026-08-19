@@ -8,16 +8,65 @@
 //! persisted saves never carry a derived cache.
 
 use std::cmp::Ordering;
+use std::collections::HashMap;
 
 use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::model::{GameSnapshot, RouteLegPath, ServiceMetrics, TransitMode, Vehicle};
+use crate::platforms::platform_waiters_by_line;
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::route_lifecycle::is_route_operational;
 use crate::traffic::RoadFlow;
 use crate::transit::{append_vehicle_costed, initial_vehicle, vehicle_cost, vehicle_step_seconds};
+use crate::trips::elapsed_wait_seconds;
 
 /// Authoritative floor for `target_headway_seconds` on a transit route.
 pub const MIN_HEADWAY_SECONDS: u32 = 60;
+
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct WaitingHealth {
+    waiting_at_risk_count: usize,
+    longest_wait_seconds: Option<f64>,
+}
+
+fn waiting_health_by_line(state: &GameSnapshot) -> HashMap<String, WaitingHealth> {
+    let targets: HashMap<&str, u32> = state
+        .transit
+        .routes
+        .iter()
+        .filter_map(|route| {
+            route
+                .target_headway_seconds
+                .map(|target| (route.id.as_str(), target))
+        })
+        .chain(state.transit.metro_lines.iter().filter_map(|line| {
+            line.target_headway_seconds
+                .map(|target| (line.id.as_str(), target))
+        }))
+        .collect();
+
+    let mut health = HashMap::new();
+    for (line_id, waiters) in platform_waiters_by_line(state) {
+        let Some(target) = targets.get(line_id.as_str()).copied() else {
+            continue;
+        };
+        let mut line_health = WaitingHealth::default();
+        for trip in waiters {
+            let wait_seconds = elapsed_wait_seconds(trip);
+            line_health.longest_wait_seconds = Some(
+                line_health
+                    .longest_wait_seconds
+                    .map_or(wait_seconds, |longest| longest.max(wait_seconds)),
+            );
+            if wait_seconds > f64::from(target)
+                || trip.patience_remaining <= f64::from(MIN_HEADWAY_SECONDS)
+            {
+                line_health.waiting_at_risk_count += 1;
+            }
+        }
+        health.insert(line_id, line_health);
+    }
+    health
+}
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct ServiceCursor {
@@ -332,6 +381,7 @@ fn metrics(
     flow: &RoadFlow,
     assigned_fleet: usize,
     target_headway_seconds: Option<u32>,
+    waiting_health: WaitingHealth,
 ) -> Option<ServiceMetrics> {
     let round_trip_seconds = round_trip_seconds(legs, mode, flow)?;
     let required_fleet =
@@ -353,6 +403,8 @@ fn metrics(
         // Zero fleet means no passenger service: nominal headway is unavailable.
         nominal_headway_seconds: (assigned_fleet > 0)
             .then(|| round_trip_seconds / assigned_fleet as f64),
+        waiting_at_risk_count: waiting_health.waiting_at_risk_count,
+        longest_wait_seconds: waiting_health.longest_wait_seconds,
     })
 }
 
@@ -365,7 +417,9 @@ pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u3
 /// clone. Derives the `RoadFlow` once for both modes.
 pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
     let flow = crate::traffic::derive_road_flow(snapshot);
+    let waiting_health = waiting_health_by_line(snapshot);
     for route in &mut snapshot.transit.routes {
+        let health = waiting_health.get(&route.id).copied().unwrap_or_default();
         route.service_metrics = metrics(
             route.active && !snapshot.paused,
             &route.legs,
@@ -373,9 +427,11 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
             &flow,
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            health,
         );
     }
     for line in &mut snapshot.transit.metro_lines {
+        let health = waiting_health.get(&line.id).copied().unwrap_or_default();
         line.service_metrics = metrics(
             line.active && !snapshot.paused,
             &line.legs,
@@ -383,6 +439,7 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
             &flow,
             line.vehicle_ids.len(),
             line.target_headway_seconds,
+            health,
         );
     }
 }
@@ -544,12 +601,13 @@ fn round_trip_seconds(legs: &[RouteLegPath], mode: TransitMode, flow: &RoadFlow)
 mod tests {
     use super::{
         largest_gap_midpoint, metrics, required_fleet, resolve_service_cursor,
-        vehicle_cycle_offset, ServiceCursor,
+        vehicle_cycle_offset, waiting_health_by_line, ServiceCursor, WaitingHealth,
     };
     use crate::model::{
-        Heading, MovementKind, PathGeometry, Point, RoadPathStep, Route, RouteLegKind,
-        RouteLegPath, RouteLegStatus, ServiceDirection, ServicePattern, TrackPathStep, TransitMode,
-        TransitPath, TripPosition, Vehicle,
+        ActiveTrip, BusStopKind, Heading, MovementKind, PathGeometry, Platform, Point,
+        RoadPathStep, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan,
+        ServiceDirection, ServicePattern, Stop, TrackPathStep, TransitMode, TransitNodeStatus,
+        TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
     };
     use crate::traffic::RoadFlow;
     use crate::transit::{BUS_COST, METRO_COST};
@@ -636,6 +694,115 @@ mod tests {
             target_headway_seconds: None,
             service_metrics: None,
         }
+    }
+
+    fn platform_stop(id: &str, position: Point, route_id: &str) -> Stop {
+        Stop {
+            id: id.to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position,
+            platforms: vec![Platform {
+                id: format!("{id}-p0"),
+                label: "A".to_string(),
+                capacity: 50,
+                route_ids: vec![route_id.to_string()],
+            }],
+            road_access: None,
+        }
+    }
+
+    fn waiting_trip(id: &str, line_id: &str, position: Point, wait_seconds: f64) -> ActiveTrip {
+        ActiveTrip {
+            id: id.to_string(),
+            sim_id: format!("sim-{id}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: position,
+            destination: Point::from((0, 0)),
+            position: position.into(),
+            status: TripStatus::Waiting,
+            deadline: 9_999.0,
+            route_plan: Some(RoutePlan {
+                estimated_seconds: 100.0,
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Bus,
+                    from: position,
+                    to: Point::from((0, 0)),
+                    line_id: Some(line_id.to_string()),
+                    service_direction: Some(ServiceDirection::Loop),
+                    board_itinerary_index: Some(0),
+                    alight_itinerary_index: Some(0),
+                }],
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0 - wait_seconds,
+            private_car_trip: None,
+        }
+    }
+
+    #[test]
+    fn waiting_health_counts_past_target_or_low_patience_platform_waiters() {
+        let mut short_target = route_with_legs(Vec::new());
+        short_target.id = "route-short".into();
+        short_target.target_headway_seconds = Some(60);
+
+        let mut long_target = route_with_legs(Vec::new());
+        long_target.id = "route-long".into();
+        long_target.target_headway_seconds = Some(300);
+
+        let mut no_target = route_with_legs(Vec::new());
+        no_target.id = "route-none".into();
+        no_target.target_headway_seconds = None;
+
+        let mut snapshot = crate::state::create_initial_snapshot();
+        snapshot.transit.routes = vec![short_target, long_target, no_target];
+        snapshot.transit.stations.clear();
+        snapshot.transit.stops = vec![
+            platform_stop("stop-short", Point::from((5, 5)), "route-short"),
+            platform_stop("stop-long", Point::from((6, 5)), "route-long"),
+            platform_stop("stop-none", Point::from((7, 5)), "route-none"),
+        ];
+        snapshot.active_trips = vec![
+            waiting_trip("short-at-target", "route-short", Point::from((5, 5)), 60.0),
+            waiting_trip(
+                "short-past-target",
+                "route-short",
+                Point::from((5, 5)),
+                61.0,
+            ),
+            waiting_trip("short-longest", "route-short", Point::from((5, 5)), 90.0),
+            waiting_trip(
+                "long-low-patience",
+                "route-long",
+                Point::from((6, 5)),
+                181.0,
+            ),
+            waiting_trip("none-ignored", "route-none", Point::from((7, 5)), 200.0),
+            waiting_trip(
+                "short-without-platform",
+                "route-short",
+                Point::from((8, 5)),
+                200.0,
+            ),
+        ];
+
+        let health = waiting_health_by_line(&snapshot);
+
+        assert_eq!(
+            health.get("route-short"),
+            Some(&WaitingHealth {
+                waiting_at_risk_count: 2,
+                longest_wait_seconds: Some(90.0),
+            })
+        );
+        assert_eq!(
+            health.get("route-long"),
+            Some(&WaitingHealth {
+                waiting_at_risk_count: 1,
+                longest_wait_seconds: Some(181.0),
+            })
+        );
+        assert_eq!(health.get("route-none"), None);
     }
 
     #[test]
@@ -737,6 +904,7 @@ mod tests {
             &heavy,
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("connected metro line has metrics");
         assert_eq!(metrics.round_trip_seconds, 600.0);
@@ -760,6 +928,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("connected route has metrics");
         assert_eq!(metrics.round_trip_seconds, 600.0);
@@ -792,6 +961,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("connected metro line has metrics");
         assert_eq!(metrics.round_trip_seconds, 601.0);
@@ -820,6 +990,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("connected metro line has metrics");
         assert_eq!(metrics.required_fleet, Some(3));
@@ -845,6 +1016,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("connected route has metrics");
         assert_eq!(metrics.nominal_headway_seconds, Some(300.0));
@@ -872,6 +1044,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("active route has metrics");
         assert_eq!(active.required_fleet, Some(2));
@@ -886,6 +1059,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("broken route still has timing metrics");
         assert_eq!(broken.next_vehicle_cost, None);
@@ -897,6 +1071,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("paused route still has timing metrics");
         assert_eq!(paused.required_fleet, Some(2));
@@ -987,6 +1162,7 @@ mod tests {
             &RoadFlow::new(),
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("shuttle route has metrics")
         .round_trip_seconds;
@@ -1001,6 +1177,7 @@ mod tests {
             &congested,
             route.vehicle_ids.len(),
             route.target_headway_seconds,
+            WaitingHealth::default(),
         )
         .expect("shuttle route has metrics")
         .round_trip_seconds;
@@ -1132,6 +1309,7 @@ mod tests {
                 &RoadFlow::new(),
                 route.vehicle_ids.len(),
                 route.target_headway_seconds,
+                WaitingHealth::default(),
             ),
             None
         );
