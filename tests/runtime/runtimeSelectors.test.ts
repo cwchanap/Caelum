@@ -997,6 +997,11 @@ describe("route selectors", () => {
       dailyOperatingCost: 0,
       estimatedDailyOperatingCost: 1_200,
     });
+    expect(
+      shell.routes.find((route) => route.id === "route-002")?.service,
+    ).toMatchObject({
+      dailyOperatingCost: 400,
+    });
   });
 
   function busRouteWithMetrics(
