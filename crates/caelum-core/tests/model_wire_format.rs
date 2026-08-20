@@ -309,6 +309,8 @@ fn metro_line_service_fields_are_required_nullable_and_derived_output() {
         "assignedFleet": 99,
         "requiredFleet": 42,
         "estimatedDeploymentCost": 123,
+        "dailyOperatingCost": 0,
+        "estimatedDailyOperatingCost": null,
         "nominalHeadwaySeconds": 30.0
     });
     let restored: MetroLine = serde_json::from_value(forged).unwrap();
@@ -362,6 +364,8 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
         "roundTripSeconds": 1.0,
         "assignedFleet": 99,
         "requiredFleet": 42,
+        "dailyOperatingCost": 0,
+        "estimatedDailyOperatingCost": null,
         "nominalHeadwaySeconds": 30.0
     });
     let restored: Route = serde_json::from_value(forged).unwrap();
@@ -374,6 +378,8 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
         assigned_fleet: 2,
         required_fleet: Some(3),
         estimated_deployment_cost: None,
+        daily_operating_cost: 0,
+        estimated_daily_operating_cost: None,
         next_vehicle_cost: None,
         nominal_headway_seconds: Some(300.0),
         waiting_at_risk_count: 0,
@@ -387,6 +393,8 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
             "assignedFleet": 2,
             "requiredFleet": 3,
             "estimatedDeploymentCost": null,
+            "dailyOperatingCost": 0,
+            "estimatedDailyOperatingCost": null,
             "nextVehicleCost": null,
             "nominalHeadwaySeconds": 300.0,
             "waitingAtRiskCount": 0,

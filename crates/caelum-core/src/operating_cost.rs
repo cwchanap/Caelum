@@ -1,5 +1,3 @@
-#![allow(dead_code)] // Staged authority API; Tasks 2-3 add its runtime consumers.
-
 use crate::model::{EconomyPreset, GameSnapshot, RouteLegPath, TransitMode};
 use crate::route_lifecycle::is_route_operational;
 

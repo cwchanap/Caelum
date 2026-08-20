@@ -277,6 +277,63 @@ fn creative_keeps_budget_across_midnight() {
     );
     let result = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
     assert_eq!(result.snapshot.budget, 399);
+    let metrics = result.snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("creative midnight response has metrics");
+    assert_eq!(metrics.daily_operating_cost, 400);
+    assert_eq!(metrics.estimated_daily_operating_cost, None);
+}
+
+#[test]
+fn service_metrics_split_actual_and_estimated_daily_cost() {
+    let mut engine = bus_route_engine();
+    let targeted = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".into(),
+        target_headway_seconds: 3_600,
+    });
+    assert!(targeted.applied, "target should apply: {targeted:?}");
+
+    let setup = targeted.snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("setup response has metrics");
+    assert_eq!(setup.daily_operating_cost, 0);
+    assert_eq!(setup.estimated_daily_operating_cost, Some(400));
+
+    let deployed = engine.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
+    });
+    assert!(deployed.applied, "deployment should apply: {deployed:?}");
+    let metrics = deployed.snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("deployed response has metrics");
+    assert_eq!(metrics.daily_operating_cost, 400);
+    assert_eq!(metrics.estimated_daily_operating_cost, None);
+}
+
+#[test]
+fn globally_paused_active_service_keeps_actual_daily_operating_cost() {
+    let mut engine = one_bus_service_engine();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: true })
+            .applied
+    );
+
+    let paused = engine.snapshot();
+    let metrics = paused.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("paused response has metrics");
+    assert_eq!(metrics.daily_operating_cost, 400);
+    assert_eq!(metrics.estimated_daily_operating_cost, None);
 }
 
 #[test]
@@ -1299,6 +1356,8 @@ fn engine_snapshot_publishes_metro_service_metrics() {
     assert_eq!(metrics.assigned_fleet, 0);
     assert_eq!(metrics.required_fleet, None);
     assert_eq!(metrics.estimated_deployment_cost, None);
+    assert_eq!(metrics.daily_operating_cost, 0);
+    assert_eq!(metrics.estimated_daily_operating_cost, None);
     assert_eq!(metrics.next_vehicle_cost, None);
     assert_eq!(metrics.nominal_headway_seconds, None);
     assert_eq!(metrics.waiting_at_risk_count, 0);
@@ -1308,6 +1367,27 @@ fn engine_snapshot_publishes_metro_service_metrics() {
     let line_json = &value["transit"]["metroLines"][0];
     assert!(line_json.get("serviceMetrics").is_some(), "{line_json}");
     assert_eq!(line_json["serviceMetrics"]["assignedFleet"], 0);
+}
+
+#[test]
+fn deployed_metro_service_metrics_publish_actual_daily_cost() {
+    let mut engine = metro_line_engine();
+    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+        mode: "metro".into(),
+        line_id: "metro-001".into(),
+    });
+    assert!(
+        assigned.applied,
+        "metro assignment should apply: {assigned:?}"
+    );
+
+    let snapshot = engine.snapshot();
+    let metrics = snapshot.transit.metro_lines[0]
+        .service_metrics
+        .as_ref()
+        .expect("deployed metro response has metrics");
+    assert_eq!(metrics.daily_operating_cost, 2_500);
+    assert_eq!(metrics.estimated_daily_operating_cost, None);
 }
 
 #[test]
@@ -1696,6 +1776,8 @@ fn incoming_service_metrics_never_become_authority() {
         assigned_fleet: 99,
         required_fleet: Some(99),
         estimated_deployment_cost: Some(99),
+        daily_operating_cost: 99,
+        estimated_daily_operating_cost: Some(99),
         next_vehicle_cost: Some(99),
         nominal_headway_seconds: Some(1.0),
         waiting_at_risk_count: 0,

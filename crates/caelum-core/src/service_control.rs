@@ -374,8 +374,10 @@ pub(crate) fn add_service_vehicle(
 /// Derive service metrics for either transit mode. Returns `None` when no
 /// positive cycle time is derivable (any leg missing `current_path`, or a
 /// walk that sums to zero).
+#[allow(clippy::too_many_arguments)]
 fn metrics(
-    active: bool,
+    route_active: bool,
+    globally_paused: bool,
     legs: &[RouteLegPath],
     mode: TransitMode,
     flow: &RoadFlow,
@@ -386,6 +388,13 @@ fn metrics(
     let round_trip_seconds = round_trip_seconds(legs, mode, flow)?;
     let required_fleet =
         target_headway_seconds.map(|target| required_fleet(round_trip_seconds, target));
+    let daily_operating_cost =
+        crate::operating_cost::line_daily_operating_cost(route_active, legs, mode, assigned_fleet);
+    let estimated_daily_operating_cost = crate::operating_cost::estimated_line_daily_operating_cost(
+        mode,
+        assigned_fleet,
+        required_fleet,
+    );
     let estimated_deployment_cost = if assigned_fleet == 0 {
         required_fleet
             .and_then(|required| i32::try_from(required).ok())
@@ -393,12 +402,20 @@ fn metrics(
     } else {
         None
     };
-    let next_vehicle_cost = top_up_offer(active, legs, mode, assigned_fleet, required_fleet);
+    let next_vehicle_cost = top_up_offer(
+        route_active && !globally_paused,
+        legs,
+        mode,
+        assigned_fleet,
+        required_fleet,
+    );
     Some(ServiceMetrics {
         round_trip_seconds,
         assigned_fleet,
         required_fleet,
         estimated_deployment_cost,
+        daily_operating_cost,
+        estimated_daily_operating_cost,
         next_vehicle_cost,
         // Zero fleet means no passenger service: nominal headway is unavailable.
         nominal_headway_seconds: (assigned_fleet > 0)
@@ -420,8 +437,11 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
     let waiting_health = waiting_health_by_line(snapshot);
     for route in &mut snapshot.transit.routes {
         let health = waiting_health.get(&route.id).copied().unwrap_or_default();
+        let route_active = route.active;
+        let globally_paused = snapshot.paused;
         route.service_metrics = metrics(
-            route.active && !snapshot.paused,
+            route_active,
+            globally_paused,
             &route.legs,
             TransitMode::Bus,
             &flow,
@@ -432,8 +452,11 @@ pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
     }
     for line in &mut snapshot.transit.metro_lines {
         let health = waiting_health.get(&line.id).copied().unwrap_or_default();
+        let route_active = line.active;
+        let globally_paused = snapshot.paused;
         line.service_metrics = metrics(
-            line.active && !snapshot.paused,
+            route_active,
+            globally_paused,
             &line.legs,
             TransitMode::Metro,
             &flow,
@@ -986,6 +1009,7 @@ mod tests {
 
         let metrics = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Metro,
             &heavy,
@@ -1010,6 +1034,7 @@ mod tests {
 
         let metrics = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1043,6 +1068,7 @@ mod tests {
 
         let metrics = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Metro,
             &RoadFlow::new(),
@@ -1072,6 +1098,7 @@ mod tests {
         route.target_headway_seconds = Some(300);
         let metrics = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Metro,
             &RoadFlow::new(),
@@ -1098,6 +1125,7 @@ mod tests {
 
         let metrics = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1126,6 +1154,7 @@ mod tests {
 
         let active = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1141,6 +1170,7 @@ mod tests {
         broken_legs[0].status = RouteLegStatus::NetworkDisconnected;
         let broken = metrics(
             true,
+            false,
             &broken_legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1152,7 +1182,8 @@ mod tests {
         assert_eq!(broken.next_vehicle_cost, None);
 
         let paused = metrics(
-            false,
+            true,
+            true,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1162,6 +1193,7 @@ mod tests {
         )
         .expect("paused route still has timing metrics");
         assert_eq!(paused.required_fleet, Some(2));
+        assert_eq!(paused.daily_operating_cost, 400);
         assert_eq!(paused.next_vehicle_cost, None);
     }
 
@@ -1244,6 +1276,7 @@ mod tests {
 
         let free_flow = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1259,6 +1292,7 @@ mod tests {
         congested.insert(outbound_point, 8u16);
         let congested = metrics(
             true,
+            false,
             &route.legs,
             TransitMode::Bus,
             &congested,
@@ -1391,6 +1425,7 @@ mod tests {
         assert_eq!(
             metrics(
                 true,
+                false,
                 &route.legs,
                 TransitMode::Bus,
                 &RoadFlow::new(),
