@@ -625,12 +625,15 @@ function applyIntent(
       stepProgress: 0,
       parkedPosition: null,
     }));
+    // Mirrors `caelum-core::operating_cost::line_daily_operating_cost` for the
+    // deployed fleet: per-vehicle daily cost (Bus 400, Metro 2_500) × 2 vehicles.
+    const dailyOperatingCost = mode === "bus" ? 800 : 5_000;
     const serviceMetrics = {
       roundTripSeconds: 600,
       assignedFleet: 2,
       requiredFleet: 2,
       estimatedDeploymentCost: null,
-      dailyOperatingCost: 0,
+      dailyOperatingCost,
       estimatedDailyOperatingCost: null,
       nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
@@ -4381,7 +4384,7 @@ describe("route creation and management", () => {
       assignedFleet: 2,
       requiredFleet: 2,
       estimatedDeploymentCost: null,
-      dailyOperatingCost: 0,
+      dailyOperatingCost: 800,
       estimatedDailyOperatingCost: null,
       nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
