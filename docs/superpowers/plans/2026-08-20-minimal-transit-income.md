@@ -2,20 +2,24 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Credit Standard sandbox `$200` exactly once for each completed journey that used Bus or Metro, giving useful transit a direct recovery path from negative budget while Creative remains budget-neutral.
+**Goal:** Credit Standard sandbox `$200` exactly once for each completed journey whose terminal `RoutePlan` used Bus or Metro, giving useful transit a direct recovery path from negative budget while Creative remains budget-neutral.
 
-**Architecture:** Add one focused Rust `transit_income` module that classifies a resolved `ActiveTrip` and applies preset-aware positive budget settlement. Reuse the existing `trips::advance_active_trips_with_zero_delta_ids` resolution pass to aggregate income before terminal trips are removed. Do not add a scheduler, daily accumulator, line attribution, wire field, frontend formula, or persistence field.
+**Architecture:** Add one focused Rust `transit_income` module for the fixed journey-income constant and preset-aware positive settlement. Reuse `trips.rs`'s existing walking-only plan classification through one crate-local `plan_used_transit` wrapper, then aggregate income in `advance_active_trips_with_zero_delta_ids` before terminal trips are removed. Add one real Riding → alight → Arrived regression on the existing `trip_lifecycle` bus fixture; do not add a scheduler, daily accumulator, line attribution, sticky boarding-history field, wire field, frontend formula, or persistence field.
 
-**Tech Stack:** Rust `caelum-core`, existing trip/route-plan model, existing Rust unit/integration-style module tests. No TypeScript/Svelte production change.
+**Tech Stack:** Rust `caelum-core`, existing trip/route-plan model, existing Rust unit and integration tests. No TypeScript/Svelte production change.
 
 **Spec:** `docs/superpowers/specs/2026-08-20-minimal-transit-income-design.md`
 
 ## Global Constraints
 
 - `TRANSIT_TRIP_INCOME` is exactly `200`.
-- A completed journey earns once when terminal status is `Arrived` or `Late` and its retained `RoutePlan` contains at least one Bus or Metro leg.
+- A completed journey earns once when terminal status is `Arrived` or `Late` and the `RoutePlan` present at terminal resolution is not walking-only.
+- With today's `TransitMode` model, not walking-only means at least one Bus or Metro leg.
+- Reuse `trips.rs::is_walking_only` through one `pub(crate) plan_used_transit(&RoutePlan) -> bool` wrapper; do not duplicate a Bus/Metro mode match in `transit_income.rs`.
 - Bus → Metro or other multi-leg transfers still earn exactly `$200` once per journey, not once per boarding/line/mode.
-- Walk-only, private-car/planless, unserved, and non-terminal trips earn zero.
+- Walk-only, empty-plan, private-car/planless, unserved, and non-terminal trips earn zero.
+- Income follows the plan present at terminal resolution, not boarding history. If invalidation/replanning clears the original transit plan and the rider later resolves walk-only or planless, income is `$0`.
+- Do not add a sticky `used_transit` flag, settlement marker, or schema field to remember earlier boardings.
 - Standard applies positive income immediately at trip resolution and may recover from a negative budget.
 - Creative never mutates budget for transit income.
 - Use saturating integer addition for income aggregation and budget settlement.
@@ -38,7 +42,9 @@ git fetch origin
 git checkout jack65786656/hpa-646-phase-5-add-minimal-transit-income-to-prevent-standard
 git rebase origin/main
 
-rg "fn advance_active_trips_with_zero_delta_ids|fn score_arrival" crates/caelum-core/src/trips.rs
+rg "fn advance_active_trips_with_zero_delta_ids|fn score_arrival|fn is_walking_only" crates/caelum-core/src/trips.rs
+rg "fn disembark_vehicle|fn invalidate_trips_for_line" crates/caelum-core/src/transit.rs
+rg "just_disembarked_trip_does_not_consume_ride_time_as_walking_time" crates/caelum-core/tests/trip_lifecycle.rs
 rg "pub struct ActiveTrip|pub struct RoutePlan|pub struct RouteLeg" crates/caelum-core/src/model.rs
 rg "apply_day_boundary_charge|BUS_DAILY_OPERATING_COST|METRO_DAILY_OPERATING_COST" crates/caelum-core/src/operating_cost.rs
 rg "budget: formatBudget\(state.budget\)" src/runtime/runtimeSelectors.ts
@@ -49,6 +55,7 @@ Run the focused pre-change Rust tests:
 ```bash
 cargo test -p caelum-core trips::tests
 cargo test -p caelum-core operating_cost::tests
+cargo test -p caelum-core --test trip_lifecycle just_disembarked_trip_does_not_consume_ride_time_as_walking_time
 ```
 
 Expected: PASS before HPA-646 production edits.
@@ -59,35 +66,41 @@ Expected: PASS before HPA-646 production edits.
 
 ### Rust production
 
-- Create `crates/caelum-core/src/transit_income.rs` — fixed journey-income constant, qualification rule, and Standard/Creative budget settlement.
+- Create `crates/caelum-core/src/transit_income.rs` — fixed journey-income constant, terminal-trip qualification, and Standard/Creative budget settlement.
 - Modify `crates/caelum-core/src/lib.rs` — register `transit_income` as `pub(crate)`.
-- Modify `crates/caelum-core/src/trips.rs` — aggregate income from resolved trip results and apply it once before terminal results are consumed.
+- Modify `crates/caelum-core/src/trips.rs` — expose the existing walking-only classification through `plan_used_transit`, aggregate income from resolved trip results, and apply it once before terminal results are consumed.
 
 ### Rust tests
 
-- Add unit tests beside production code in `crates/caelum-core/src/transit_income.rs` — exact qualification and settlement semantics.
-- Add focused wiring regressions in the existing `#[cfg(test)]` module in `crates/caelum-core/src/trips.rs` — one-shot credit, Creative, walking-only, and multi-trip aggregation.
+- Add unit tests beside production code in `crates/caelum-core/src/transit_income.rs` — exact qualification and settlement semantics, including empty/planless zero-income behavior.
+- Add focused cash-flow wiring regressions in the existing `#[cfg(test)]` module in `crates/caelum-core/src/trips.rs` — one-shot credit, Creative, walking-only, and multi-trip aggregation.
+- Modify `crates/caelum-core/tests/trip_lifecycle.rs` — extend the existing real bus disembark fixture with route-plan-retention and `$200` Standard budget assertions.
 
 ### Explicitly unchanged
 
-- `crates/caelum-core/src/model.rs` — no model/wire/schema field.
+- `crates/caelum-core/src/model.rs` — no `used_transit`, revenue, wire, or schema field.
 - `crates/caelum-core/src/operating_cost.rs` — HPA-645 cost behavior stays independent.
-- `src/**` and `tests/**` TypeScript/Svelte — existing budget projection already makes Rust income visible; no new UI contract.
+- `src/**` and top-level `tests/**` TypeScript/Svelte — existing budget projection already makes Rust income visible; no new UI contract.
 - persistence adapters/normalization — budget already persists.
 
 ---
 
-### Task 1: Add the single transit-income authority
+### Task 1: Add the single transit-income authority and share plan classification
 
 **Files:**
 - Create: `crates/caelum-core/src/transit_income.rs`
 - Modify: `crates/caelum-core/src/lib.rs`
+- Modify: `crates/caelum-core/src/trips.rs`
 
 **Interfaces:**
-- Consumes: `model::ActiveTrip`, `EconomyPreset`, `GameSnapshot`, `TransitMode`, `TripStatus`.
+- Consumes: `model::ActiveTrip`, `EconomyPreset`, `GameSnapshot`, `RoutePlan`, `TripStatus`, plus existing `trips::is_walking_only` semantics.
 - Produces:
 
 ```rust
+// crates/caelum-core/src/trips.rs
+pub(crate) fn plan_used_transit(route_plan: &RoutePlan) -> bool;
+
+// crates/caelum-core/src/transit_income.rs
 pub(crate) const TRANSIT_TRIP_INCOME: i32 = 200;
 
 pub(crate) fn completed_transit_trip_income(trip: &ActiveTrip) -> i32;
@@ -97,10 +110,10 @@ pub(crate) fn apply_transit_income(state: &mut GameSnapshot, amount: i32);
 
 - [ ] **Step 1: Create `transit_income.rs` with failing qualification tests**
 
-Start the file with imports, the constant, and the test fixture. Do not add production function bodies yet.
+Start the file with production imports, the constant, and the test fixture. Do not add production function bodies yet.
 
 ```rust
-use crate::model::{ActiveTrip, EconomyPreset, GameSnapshot, TransitMode, TripStatus};
+use crate::model::{ActiveTrip, EconomyPreset, GameSnapshot, TripStatus};
 
 pub(crate) const TRANSIT_TRIP_INCOME: i32 = 200;
 
@@ -108,7 +121,7 @@ pub(crate) const TRANSIT_TRIP_INCOME: i32 = 200;
 mod tests {
     use super::*;
     use crate::model::{
-        Point, RouteLeg, RoutePlan, ServiceDirection, TripPosition, TripPurpose,
+        Point, RouteLeg, RoutePlan, ServiceDirection, TransitMode, TripPosition, TripPurpose,
     };
 
     fn trip(status: TripStatus, modes: &[TransitMode]) -> ActiveTrip {
@@ -191,6 +204,10 @@ mod tests {
             0,
         );
         assert_eq!(
+            completed_transit_trip_income(&trip(TripStatus::Arrived, &[])),
+            0,
+        );
+        assert_eq!(
             completed_transit_trip_income(&trip(TripStatus::Unserved, &[TransitMode::Bus])),
             0,
         );
@@ -206,6 +223,8 @@ mod tests {
 }
 ```
 
+The empty-plan assertion locks the existing `is_walking_only` convention: `all` over zero legs is true, so its inverse must be false.
+
 - [ ] **Step 2: Run the qualification tests and verify RED**
 
 ```bash
@@ -213,9 +232,32 @@ cargo test -p caelum-core transit_income::tests::completed_transit_journey_earns
 cargo test -p caelum-core transit_income::tests::non_revenue_trip_shapes_earn_zero
 ```
 
-Expected: compile failure because `completed_transit_trip_income` does not exist and the module is not registered yet.
+Expected: compile failure because `transit_income` is not registered and `completed_transit_trip_income` does not exist.
 
-- [ ] **Step 3: Register the module and implement the minimal pure qualification rule**
+- [ ] **Step 3: Expose one wrapper around the existing walking-only predicate**
+
+In `crates/caelum-core/src/trips.rs`, immediately beside the existing `is_walking_only` helper, add:
+
+```rust
+pub(crate) fn plan_used_transit(route_plan: &RoutePlan) -> bool {
+    !is_walking_only(route_plan)
+}
+```
+
+Keep `is_walking_only` itself as the one mode-classification implementation:
+
+```rust
+fn is_walking_only(route_plan: &RoutePlan) -> bool {
+    route_plan
+        .legs
+        .iter()
+        .all(|leg| leg.mode == TransitMode::Walk)
+}
+```
+
+Do not add a second `Bus | Metro` match and do not extract a route-plan evaluator module.
+
+- [ ] **Step 4: Register the module and implement the minimal pure qualification rule**
 
 In `crates/caelum-core/src/lib.rs`, add beside `operating_cost`:
 
@@ -231,11 +273,10 @@ pub(crate) fn completed_transit_trip_income(trip: &ActiveTrip) -> i32 {
         return 0;
     }
 
-    let used_transit = trip.route_plan.as_ref().is_some_and(|plan| {
-        plan.legs
-            .iter()
-            .any(|leg| matches!(leg.mode, TransitMode::Bus | TransitMode::Metro))
-    });
+    let used_transit = trip
+        .route_plan
+        .as_ref()
+        .is_some_and(crate::trips::plan_used_transit);
 
     if used_transit {
         TRANSIT_TRIP_INCOME
@@ -245,9 +286,9 @@ pub(crate) fn completed_transit_trip_income(trip: &ActiveTrip) -> i32 {
 }
 ```
 
-Do not inspect `line_id`, count transit legs, or multiply by transfers.
+Do not inspect `line_id`, historical vehicle membership, or count transit legs/transfers. The plan present at terminal resolution is the whole qualification input.
 
-- [ ] **Step 4: Run the qualification tests and verify GREEN**
+- [ ] **Step 5: Run the qualification tests and verify GREEN**
 
 ```bash
 cargo test -p caelum-core transit_income::tests::completed_transit_journey_earns_fixed_income_once
@@ -256,7 +297,7 @@ cargo test -p caelum-core transit_income::tests::non_revenue_trip_shapes_earn_ze
 
 Expected: PASS.
 
-- [ ] **Step 5: Add failing Standard/Creative settlement tests**
+- [ ] **Step 6: Add failing Standard/Creative settlement tests**
 
 Append:
 
@@ -289,7 +330,7 @@ fn creative_and_non_positive_amounts_do_not_mutate_budget() {
 }
 ```
 
-- [ ] **Step 6: Run the settlement tests and verify RED**
+- [ ] **Step 7: Run the settlement tests and verify RED**
 
 ```bash
 cargo test -p caelum-core transit_income::tests::standard_income_can_recover_negative_budget_and_saturates
@@ -298,7 +339,7 @@ cargo test -p caelum-core transit_income::tests::creative_and_non_positive_amoun
 
 Expected: compile failure because `apply_transit_income` does not exist.
 
-- [ ] **Step 7: Implement minimal preset-aware settlement**
+- [ ] **Step 8: Implement minimal preset-aware settlement**
 
 Add:
 
@@ -314,7 +355,7 @@ pub(crate) fn apply_transit_income(state: &mut GameSnapshot, amount: i32) {
 
 Do not import/use `CostPolicy`, `GameMode`, or HPA-645 operating-cost constants.
 
-- [ ] **Step 8: Run all transit-income tests and verify GREEN**
+- [ ] **Step 9: Run all transit-income tests and verify GREEN**
 
 ```bash
 cargo test -p caelum-core transit_income::tests
@@ -322,23 +363,24 @@ cargo test -p caelum-core transit_income::tests
 
 Expected: PASS.
 
-- [ ] **Step 9: Commit the authority**
+- [ ] **Step 10: Commit the authority and shared predicate**
 
 ```bash
-git add crates/caelum-core/src/lib.rs crates/caelum-core/src/transit_income.rs
+git add crates/caelum-core/src/lib.rs crates/caelum-core/src/transit_income.rs crates/caelum-core/src/trips.rs
 git commit -m "feat: add transit journey income rule"
 ```
 
 ---
 
-### Task 2: Wire one-shot income into trip resolution
+### Task 2: Wire one-shot income into trip resolution and lock real alighting
 
 **Files:**
 - Modify: `crates/caelum-core/src/trips.rs`
+- Modify: `crates/caelum-core/tests/trip_lifecycle.rs`
 
 **Interfaces:**
 - Consumes: `crate::transit_income::completed_transit_trip_income(&ActiveTrip) -> i32` and `apply_transit_income(&mut GameSnapshot, i32)` from Task 1.
-- Produces: every resolution pass credits the aggregate income of trips that became Arrived/Late with Bus/Metro in their retained route plan before terminal trips are removed.
+- Produces: every resolution pass credits the aggregate income of trips that became Arrived/Late with a transit-bearing terminal plan before terminal trips are removed; the existing real bus lifecycle test proves alighting preserves that plan through final arrival.
 
 - [ ] **Step 1: Add a local resolvable-trip fixture to `trips.rs` tests**
 
@@ -396,7 +438,7 @@ fn resolvable_journey(id: &str, modes: &[TransitMode]) -> ActiveTrip {
 }
 ```
 
-The fixture is already at its destination with `current_leg_index` past the final leg, so existing `tick_trip` resolves it through `score_arrival` without constructing a road/transit network. This tests the cash-flow seam, not routing again.
+The fixture is already at its destination with `current_leg_index` past the final leg, so existing `tick_trip` resolves it through `score_arrival` without constructing a road/transit network. Keep these tests: they isolate the cash-flow hook and duplicate-credit behavior.
 
 - [ ] **Step 2: Add a failing one-shot Standard wiring test**
 
@@ -475,20 +517,69 @@ fn same_resolution_pass_sums_completed_transit_journeys() {
 }
 ```
 
-Import `EconomyPreset` in the test module if it is not already present.
+Import `EconomyPreset` in the `trips.rs` test module if it is not already present.
 
-- [ ] **Step 4: Run the new wiring tests and verify RED**
+- [ ] **Step 4: Extend the existing real alight lifecycle fixture with the HPA-646 dependency lock**
+
+In `crates/caelum-core/tests/trip_lifecycle.rs::just_disembarked_trip_does_not_consume_ride_time_as_walking_time`, reuse the network already built by that test.
+
+Immediately after obtaining `vehicle.snapshot`, capture the post-construction Standard budget:
+
+```rust
+let mut state = vehicle.snapshot;
+let starting_budget = state.budget;
+state.paused = false;
+```
+
+After the existing disembark assertions:
+
+```rust
+assert_eq!(walking.status, TripStatus::Walking);
+assert_eq!(walking.current_leg_index, 1);
+assert_eq!(walking.position, (12, 4).into());
+```
+
+add:
+
+```rust
+assert!(walking.route_plan.as_ref().is_some_and(|plan| {
+    plan.legs.iter().any(|leg| leg.mode == TransitMode::Bus)
+}));
+```
+
+Keep the existing final arrival tick:
+
+```rust
+let arrived = tick_trips(&disembarked, &topology, 20.0);
+```
+
+and add:
+
+```rust
+assert_eq!(arrived.budget, starting_budget + 200);
+```
+
+Do not construct another route or add a separate end-to-end fare scenario. This fixture already proves Riding → real alight → retained Bus plan → final Walk → Arrived.
+
+- [ ] **Step 5: Run all new wiring/alight assertions and verify RED**
 
 ```bash
 cargo test -p caelum-core trips::tests::completed_transit_journey_credits_standard_budget_once
 cargo test -p caelum-core trips::tests::creative_completion_does_not_credit_budget
 cargo test -p caelum-core trips::tests::walking_completion_does_not_credit_budget
 cargo test -p caelum-core trips::tests::same_resolution_pass_sums_completed_transit_journeys
+cargo test -p caelum-core --test trip_lifecycle just_disembarked_trip_does_not_consume_ride_time_as_walking_time
 ```
 
-Expected: completion/removal assertions pass under existing code, but Standard budget-credit assertions fail because HPA-646 is not wired yet.
+Expected before wiring:
 
-- [ ] **Step 5: Aggregate income from resolved results before consuming them**
+- the new `walking.route_plan` retention assertion already passes on `main`;
+- completion/removal metrics still pass;
+- the Standard budget-credit assertions fail because HPA-646 has not yet applied income.
+
+That split is intentional: the lifecycle test proves both the existing alight dependency and the new cash-flow result.
+
+- [ ] **Step 6: Aggregate income from resolved results before consuming them**
 
 In `advance_active_trips_with_zero_delta_ids`, after `metric_delta` is built and before `results` is consumed by the existing `for result in results` loop, add:
 
@@ -505,31 +596,33 @@ crate::transit_income::apply_transit_income(&mut next, total_transit_income);
 
 Replace the existing single `let mut next = state.clone();` at that location rather than introducing a second clone.
 
-Do not change `TripTickResult`, `TripMetricDelta`, `score_arrival`, `update_metrics`, or terminal-trip removal. The new module reads the already-resolved result and mutates only the cloned budget.
+Do not change `TripTickResult`, `TripMetricDelta`, `score_arrival`, `update_metrics`, disembark behavior, or terminal-trip removal. The new module reads the already-resolved result and mutates only the cloned budget.
 
-- [ ] **Step 6: Run the focused wiring tests and verify GREEN**
+- [ ] **Step 7: Run the focused wiring and real-alight tests and verify GREEN**
 
 ```bash
 cargo test -p caelum-core trips::tests::completed_transit_journey_credits_standard_budget_once
 cargo test -p caelum-core trips::tests::creative_completion_does_not_credit_budget
 cargo test -p caelum-core trips::tests::walking_completion_does_not_credit_budget
 cargo test -p caelum-core trips::tests::same_resolution_pass_sums_completed_transit_journeys
+cargo test -p caelum-core --test trip_lifecycle just_disembarked_trip_does_not_consume_ride_time_as_walking_time
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Run the full `trips` module test set**
+- [ ] **Step 8: Run the broader trip test sets**
 
 ```bash
 cargo test -p caelum-core trips::tests
+cargo test -p caelum-core --test trip_lifecycle
 ```
 
-Expected: PASS. Existing trip timing, private-car, wait, growth, and granularity tests remain unchanged.
+Expected: PASS. Existing trip timing, private-car, wait, boarding/alighting, growth, and granularity behavior remains unchanged.
 
-- [ ] **Step 8: Commit trip-resolution wiring**
+- [ ] **Step 9: Commit trip-resolution wiring and lifecycle regression**
 
 ```bash
-git add crates/caelum-core/src/trips.rs
+git add crates/caelum-core/src/trips.rs crates/caelum-core/tests/trip_lifecycle.rs
 git commit -m "feat: credit completed transit journeys"
 ```
 
@@ -557,6 +650,7 @@ Expected production/test paths:
 crates/caelum-core/src/lib.rs
 crates/caelum-core/src/transit_income.rs
 crates/caelum-core/src/trips.rs
+crates/caelum-core/tests/trip_lifecycle.rs
 ```
 
 Planning docs already on the draft PR branch are also expected:
@@ -582,6 +676,7 @@ Expected: PASS.
 ```bash
 cargo test -p caelum-core transit_income::tests
 cargo test -p caelum-core trips::tests
+cargo test -p caelum-core --test trip_lifecycle just_disembarked_trip_does_not_consume_ride_time_as_walking_time
 ```
 
 Expected: PASS.
@@ -594,13 +689,13 @@ cargo test --workspace
 
 Expected: PASS.
 
-No new frontend test is required because HPA-646 changes no frontend contract. Do not create a Playwright fare scenario merely to exercise a Rust budget mutation already covered at the authoritative seam.
+No new frontend test is required because HPA-646 changes no frontend contract. Do not create a Playwright fare scenario merely to exercise a Rust budget mutation already covered at the authoritative seam and the real Rust bus lifecycle.
 
 - [ ] **Step 5: Inspect the final diff for forbidden architecture growth**
 
 ```bash
-git diff origin/main...HEAD -- crates/caelum-core/src
-rg "revenue|profit|ledger|fare" src tests || true
+git diff origin/main...HEAD -- crates/caelum-core/src crates/caelum-core/tests/trip_lifecycle.rs
+rg "revenue|profit|ledger|fare|used_transit" src tests crates/caelum-core/src/model.rs || true
 ```
 
 Confirm manually:
@@ -609,9 +704,11 @@ Confirm manually:
 - no daily income accumulator;
 - no scheduler/boundary change;
 - no `CostPolicy` expansion;
+- no sticky boarding-history / `used_transit` model field;
 - no new persistence/schema field;
 - no TypeScript fare constant/formula;
 - transfer journey credits once;
+- invalidated/replanned completion is classified only from its terminal plan;
 - Creative budget remains unchanged.
 
 - [ ] **Step 6: Commit only if verification required a corrective edit**
@@ -638,8 +735,10 @@ Then update the existing HPA-646 draft PR summary/verification. Do not open anot
 ## Plan self-review
 
 - Every HPA-646 product constraint is assigned to Task 1 or Task 2.
-- The one new domain rule has one owner: `transit_income.rs`.
+- The one new domain rule has one owner: `transit_income.rs`; existing walking-only plan classification remains owned by `trips.rs`.
 - The integration reuses the existing terminal trip-resolution pass and creates no new time boundary.
+- Qualification explicitly follows the terminal plan, so line invalidation/stranded replan behavior does not silently imply a new persisted boarding-history requirement.
 - The plan does not add line attribution, wire state, UI state, persistence state, or a generic economy abstraction.
-- Test coverage locks qualification separately from wiring, including transfer-once semantics, Creative neutrality, negative-budget recovery, duplicate-credit prevention, and multi-trip aggregation.
+- Synthetic tests lock qualification/wiring, and the existing `trip_lifecycle` bus fixture now locks the risky real alight → retained plan → `$200` completion path.
+- Test coverage includes transfer-once semantics, Creative neutrality, negative-budget recovery, duplicate-credit prevention, multi-trip aggregation, empty/planless zero-income behavior, and real alight retention.
 - No placeholders or deferred implementation steps remain.

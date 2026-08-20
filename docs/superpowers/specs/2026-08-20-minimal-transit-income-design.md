@@ -19,8 +19,10 @@ Current `main` already provides every seam needed for this slice:
 - HPA-645 is merged and owns daily Bus/Metro operating cost in `crates/caelum-core/src/operating_cost.rs`: Bus is `$400 / vehicle / game day`, Metro is `$2,500 / vehicle / game day`.
 - Standard deducts the actual city-wide operating cost at the existing midnight boundary; Creative publishes the same nominal costs without mutating budget.
 - `crates/caelum-core/src/trips.rs::advance_active_trips_with_zero_delta_ids` is the single trip-resolution pass. It already has every `TripTickResult` before terminal trips are removed and before metrics are finalized.
-- `score_arrival` marks both on-time `Arrived` and `Late` journeys as completed. `Unserved` trips do not increment completed trips.
-- A successful non-car trip retains its `RoutePlan` through resolution. Each `RouteLeg` already identifies its `TransitMode` and optional `line_id`.
+- `score_arrival` marks both on-time `Arrived` and `Late` journeys as completed and does not clear the `RoutePlan` it receives. `Unserved` trips do not increment completed trips.
+- The normal vehicle alight path in `transit::disembark_vehicle` sets the rider back to `Walking`, advances `current_leg_index`, and deliberately leaves `route_plan` intact. The existing `just_disembarked_trip_does_not_consume_ride_time_as_walking_time` lifecycle fixture already exercises Riding → alight → final Walk → Arrived on a real bus route.
+- Route-plan retention is not universal. `tick_trip` clears a `Riding` trip's plan when it is no longer on a vehicle and must recover/replan, and `transit::invalidate_trips_for_line` clears plans that reference an invalidated line. HPA-646 therefore classifies the plan present at terminal resolution, not historical boardings.
+- Each `RouteLeg` already identifies its `TransitMode`. Today the plan modes are Walk, Bus, and Metro; `trips.rs::is_walking_only` already owns the existing “all legs are Walk” predicate.
 - Private-car trips use `private_car_trip` and do not carry a transit route plan. Walking-only plans contain only `TransitMode::Walk` legs.
 - The top bar already renders authoritative `GameSnapshot.budget`. A Rust budget credit is therefore player-visible without a new frontend formula or wire field.
 - `GameSnapshot.budget` is persisted already. Crediting it requires no new save field and no snapshot-schema bump.
@@ -30,7 +32,7 @@ Current `main` already provides every seam needed for this slice:
 
 ### A. Fixed income per completed transit journey — chosen
 
-On terminal trip resolution, inspect the completed trip's existing `RoutePlan`. If it used at least one Bus or Metro leg, credit one fixed city-level amount.
+On terminal trip resolution, inspect the completed trip's existing `RoutePlan`. If that terminal plan is not walking-only, credit one fixed city-level amount.
 
 Advantages:
 
@@ -74,14 +76,16 @@ This is an initial tuning value, not a generic fare model. If playtesting later 
 A trip earns exactly `$200` when both are true:
 
 1. its terminal status is `TripStatus::Arrived` or `TripStatus::Late`; and
-2. its retained `RoutePlan` contains at least one leg whose mode is `TransitMode::Bus` or `TransitMode::Metro`.
+2. the `RoutePlan` still present at terminal resolution is not walking-only.
+
+With the current `TransitMode` model, “not walking-only” means the retained plan contains at least one Bus or Metro leg. Reuse the same predicate as `trips.rs::is_walking_only`; do not hand-roll a second Bus/Metro mode scan inside the income module.
 
 Everything else earns zero:
 
 - `Unserved` trip;
 - walking-only completed trip;
 - private-car completed trip;
-- a malformed/planless terminal trip;
+- an empty, malformed, or planless terminal trip;
 - any non-terminal trip.
 
 A journey with multiple transit legs or transfers earns once total. Examples:
@@ -93,9 +97,37 @@ Walk → Bus → Walk → Metro → Walk     = $200
 Walk only                            = $0
 Private car                          = $0
 Unserved Bus/Metro attempt           = $0
+Boarded transit → plan cleared → walk-only/planless completion = $0
 ```
 
+Income follows the plan present at terminal resolution, not boarding history. If a line invalidation or stranded-rider recovery clears the original transit plan and the rider later finishes with a walk-only or empty/planless terminal plan, that completion earns `$0`. This is intentional for HPA-646; do not add a sticky `used_transit` flag, settlement marker, or schema field merely to preserve pre-invalidation boarding history. If playtesting later says those disrupted journeys should still pay, that is a separate product rule.
+
 Late journeys still earn income because the passenger completed the transit journey. Lateness remains visible through existing metrics; withholding the fare for a late arrival would add a second quality/pricing rule with no current product need.
+
+## Share the existing plan predicate
+
+`trips.rs` already owns:
+
+```rust
+fn is_walking_only(route_plan: &RoutePlan) -> bool {
+    route_plan
+        .legs
+        .iter()
+        .all(|leg| leg.mode == TransitMode::Walk)
+}
+```
+
+Expose one tiny crate-local wrapper beside it:
+
+```rust
+pub(crate) fn plan_used_transit(route_plan: &RoutePlan) -> bool {
+    !is_walking_only(route_plan)
+}
+```
+
+`completed_transit_trip_income` calls this helper. This keeps the empty-plan convention (`all` over zero legs is true, therefore “used transit” is false) and the current mode classification in one place instead of duplicating a `Bus | Metro` match in a second module.
+
+Do not extract a route-plan evaluator or new domain module for one inverse predicate.
 
 ## Settlement timing
 
@@ -138,7 +170,7 @@ Create one focused module:
 Its complete production surface is:
 
 ```rust
-use crate::model::{ActiveTrip, EconomyPreset, GameSnapshot, TransitMode, TripStatus};
+use crate::model::{ActiveTrip, EconomyPreset, GameSnapshot, TripStatus};
 
 pub(crate) const TRANSIT_TRIP_INCOME: i32 = 200;
 
@@ -147,7 +179,7 @@ pub(crate) fn completed_transit_trip_income(trip: &ActiveTrip) -> i32;
 pub(crate) fn apply_transit_income(state: &mut GameSnapshot, amount: i32);
 ```
 
-`completed_transit_trip_income` owns only the qualification rule. It does not mutate state and does not know route objects, fleet size, operating cost, or line profitability.
+`completed_transit_trip_income` owns only the terminal-status qualification plus the call to `crate::trips::plan_used_transit`. It does not mutate state and does not know route objects, fleet size, operating cost, line profitability, or boarding history.
 
 `apply_transit_income` owns only preset-aware budget settlement:
 
@@ -178,6 +210,8 @@ Then preserve the existing result-consumption loop and metric update.
 
 Compute income from the resolved trip before terminal trips are removed. Do not infer it from `completed_trips` alone because that would incorrectly pay walking and private-car journeys. Do not infer it from vehicle passenger lists after alighting because the passenger may already have disembarked when the overall journey completes.
 
+The normal alight path is an important dependency, not an assumption to leave implicit: after `disembark_vehicle`, the terminal result must still carry the Bus/Metro-containing plan. The implementation regression suite must lock that on the existing real bus lifecycle fixture.
+
 ## No frontend, wire, or persistence expansion
 
 HPA-646 does not need a frontend production change:
@@ -199,6 +233,7 @@ The goal is a recovery path, not guaranteed profitability.
 - A paused/broken route already stops generating HPA-645 actual operating cost; it also cannot successfully carry new riders, so it earns no new income.
 - An oversized fleet can still lose money. This is desirable service-planning pressure rather than a defect in this slice.
 - HPA-646 does not add vehicle withdrawal/sale/refunds. That remains a separate product decision if playtesting shows pause + ridership income is insufficient as a recovery loop.
+- HPA-646 does not preserve historical “used transit” state across route invalidation/replanning; qualification is deliberately based on the terminal plan only.
 
 ## Determinism and duplicate-credit behavior
 
@@ -220,7 +255,7 @@ Unit tests in `transit_income.rs` lock:
 - Late Metro journey = `$200`;
 - Bus → Metro transfer journey = `$200` once;
 - walking-only Arrived journey = `$0`;
-- planless/private-car Arrived journey = `$0`;
+- empty-plan and planless/private-car Arrived journeys = `$0`;
 - Unserved transit journey = `$0`;
 - non-terminal transit journey = `$0`;
 - Standard can recover from negative budget through positive settlement;
@@ -231,7 +266,7 @@ Use small `ActiveTrip`/`RoutePlan` fixtures local to the unit-test module. Do no
 
 ### Trip-resolution wiring
 
-Focused `trips.rs` tests should prove integration rather than rebuild a full network:
+Focused `trips.rs` tests should prove the cash-flow integration without rebuilding routing:
 
 1. Start with a transit-qualifying active trip already at its destination and ready to resolve. One `advance_active_trips` call completes it, credits exactly `$200`, increments existing completion metrics, and removes it.
 2. Advance the returned snapshot again; budget does not change because the terminal trip was removed.
@@ -239,7 +274,18 @@ Focused `trips.rs` tests should prove integration rather than rebuild a full net
 4. Equivalent walking-only completion increments completed trips but credits `$0`.
 5. Two qualifying trips resolving in one pass credit `$400`, proving aggregation is additive without line attribution.
 
-Existing route/vehicle integration tests already prove boarding, riding, alighting, and coarse/fine trip timing. Do not duplicate that matrix for this cash-flow rule.
+These synthetic tests lock the settlement seam only. They are not sufficient proof that the real ride lifecycle still presents a transit-bearing plan at terminal resolution.
+
+### Real alight regression
+
+Extend the existing `crates/caelum-core/tests/trip_lifecycle.rs::just_disembarked_trip_does_not_consume_ride_time_as_walking_time` fixture rather than building a second network:
+
+1. capture the Standard budget after the bus route/vehicle fixture is constructed;
+2. after the existing Riding → alight step, assert the `walking.route_plan` still contains a Bus leg;
+3. run the existing final `tick_trips(&disembarked, &topology, 20.0)` arrival step;
+4. assert the completed journey credits exactly `$200` over that captured budget.
+
+This is the one end-to-end lock that protects HPA-646 from a future alight change that clears `route_plan`. Existing boarding/alighting timing coverage remains otherwise unchanged.
 
 ### Regression gate
 
@@ -248,6 +294,7 @@ Run focused tests first, then the normal Rust workspace gate:
 ```bash
 cargo test -p caelum-core transit_income
 cargo test -p caelum-core trips::tests
+cargo test -p caelum-core --test trip_lifecycle just_disembarked_trip_does_not_consume_ride_time_as_walking_time
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
@@ -264,6 +311,7 @@ Because no TypeScript/Svelte production contract changes, frontend tests do not 
 - route profit/loss or net operating-result metrics;
 - daily revenue counters, accounting periods, ledgers, transaction history, charts, or finance dashboard;
 - subsidies unrelated to completed ridership;
+- preserving pre-invalidation/pre-replan boarding history with a sticky `used_transit` flag or new persisted trip field;
 - taxation, loans, bonds, debt servicing, bankruptcy, or game-over rules;
 - fleet sale, withdrawal, reassignment, refund, or automatic optimization;
 - a generic economy engine/framework/trait/registry;
