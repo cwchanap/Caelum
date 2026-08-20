@@ -364,6 +364,16 @@
                             )}</span
                       >
                     </div>
+                    {#if route.service.estimatedDailyOperatingCost !== null}
+                      <div class="route-service-row">
+                        <span class="route-service-label">Est. daily cost</span>
+                        <span class="route-service-value">
+                          {formatBudget(
+                            route.service.estimatedDailyOperatingCost,
+                          )}
+                        </span>
+                      </div>
+                    {/if}
                     <div class="route-service-row">
                       <input
                         type="number"
@@ -436,6 +446,12 @@
                           ? route.service.assignedFleet
                           : `${route.service.assignedFleet} / ${route.service.requiredFleet} required`}</span
                       >
+                    </div>
+                    <div class="route-service-row">
+                      <span class="route-service-label">Daily cost</span>
+                      <span class="route-service-value">
+                        {formatBudget(route.service.dailyOperatingCost)}
+                      </span>
                     </div>
                   </div>
                   {#if route.status.primary === "running" && route.service.waitingAtRiskCount > 0}

@@ -51,6 +51,8 @@ function routeFixtures(): ShellRouteListState {
         assignedFleet: 0,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
@@ -73,6 +75,8 @@ function routeFixtures(): ShellRouteListState {
         assignedFleet: 0,
         requiredFleet: null,
         estimatedDeploymentCost: null,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
@@ -247,6 +251,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: 1_200,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
@@ -264,6 +270,9 @@ describe("LinesPanel line workspace", () => {
     expect(service).toHaveTextContent("6.0 min");
     expect(service).toHaveTextContent("Required");
     expect(service).toHaveTextContent("3 buses");
+    expect(service).toHaveTextContent("Est. daily cost");
+    expect(service).toHaveTextContent("$1,200");
+    expect(service).not.toHaveTextContent("Daily cost $0");
     const input = screen.getByTestId("route-headway-route-bus-001");
     expect(input).toHaveValue(6); // no draft: initialized from 360 / 60
     expect(input).toHaveAttribute("type", "number");
@@ -309,6 +318,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 2,
             estimatedDeploymentCost: 240_000,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
@@ -365,6 +376,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 1,
@@ -387,6 +400,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
@@ -409,6 +424,72 @@ describe("LinesPanel line workspace", () => {
     expect(screen.queryByTestId("route-health-route-bus-paused")).toBeNull();
   });
 
+  it("shows Rust-projected zero daily cost for paused or broken deployed lines", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-paused-deployed",
+          name: "Paused Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: false,
+          selected: false,
+          status: { primary: "paused", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 1,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 900,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+          },
+          failures: [],
+        },
+        {
+          id: "route-bus-broken-deployed",
+          name: "Broken Bus",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "broken", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 1,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 900,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    for (const routeId of [
+      "route-bus-paused-deployed",
+      "route-bus-broken-deployed",
+    ]) {
+      const service = screen.getByTestId(`route-service-${routeId}`);
+      expect(service).toHaveTextContent("Daily cost");
+      expect(service).toHaveTextContent("$0");
+      expect(service).not.toHaveTextContent("Est. daily cost");
+    }
+  });
+
   it("shows Target/Nominal/Fleet requirements after deployment and no setup controls", async () => {
     const props = panelProps({
       routes: [
@@ -427,6 +508,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 2,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 800,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: 348,
             waitingAtRiskCount: 0,
@@ -449,6 +532,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 2,
             requiredFleet: 2,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
@@ -467,6 +552,9 @@ describe("LinesPanel line workspace", () => {
     expect(service).toHaveTextContent("5.8 min");
     expect(service).toHaveTextContent("Fleet");
     expect(service).toHaveTextContent("2 / 3 required");
+    expect(service).toHaveTextContent("Daily cost");
+    expect(service).toHaveTextContent("$800");
+    expect(service).not.toHaveTextContent("Est. daily cost");
     expect(service.textContent).not.toContain("assigned");
     expect(screen.queryByTestId("route-health-route-bus-002")).toBeNull();
     expect(screen.queryByTestId("route-headway-route-bus-002")).toBeNull();
@@ -480,6 +568,8 @@ describe("LinesPanel line workspace", () => {
     expect(metroService).toHaveTextContent("Nominal");
     expect(metroService).toHaveTextContent("Fleet");
     expect(metroService).toHaveTextContent("2 / 2 required");
+    expect(metroService).toHaveTextContent("Daily cost");
+    expect(metroService).toHaveTextContent("$0");
     expect(screen.queryByTestId("route-headway-line-metro-001")).toBeNull();
   });
 
@@ -501,6 +591,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 1,
             requiredFleet: 99,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: 12_500,
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 2,
@@ -547,6 +639,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 1,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: 80_000,
             nominalHeadwaySeconds: 720,
             waitingAtRiskCount: 1,
@@ -584,6 +678,8 @@ describe("LinesPanel line workspace", () => {
             assignedFleet: 2,
             requiredFleet: 99,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 1,

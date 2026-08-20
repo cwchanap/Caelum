@@ -16,6 +16,7 @@
     wide?: boolean;
   }> = [
     { key: "budget", label: "Money" },
+    { key: "dailyOperatingCost", label: "Daily cost" },
     { key: "time", label: "Time" },
     { key: "networkSummary", label: "Network" },
     { key: "population", label: "Population", wide: true },
