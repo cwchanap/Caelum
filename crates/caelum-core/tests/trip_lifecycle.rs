@@ -1274,6 +1274,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     });
 
     let mut state = vehicle.snapshot;
+    let starting_budget = state.budget;
     state.paused = false;
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
@@ -1308,6 +1309,10 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     assert_eq!(walking.status, TripStatus::Walking);
     assert_eq!(walking.current_leg_index, 1);
     assert_eq!(walking.position, (12, 4).into());
+    assert!(walking
+        .route_plan
+        .as_ref()
+        .is_some_and(|plan| { plan.legs.iter().any(|leg| leg.mode == TransitMode::Bus) }));
     assert_eq!(disembarked.metrics.completed_trips, 0);
     assert!(disembarked.metrics.trip_outcomes.is_empty());
 
@@ -1321,8 +1326,11 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         disembarked.metrics.completed_trips
     );
 
+    let coarse_arrived = tick_trips(&coarse_disembarked, &topology, 20.0);
     let arrived = tick_trips(&disembarked, &topology, 20.0);
 
+    assert_eq!(arrived.budget, starting_budget + 200);
+    assert_eq!(coarse_arrived.budget, arrived.budget);
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert_eq!(arrived.metrics.trip_outcomes.len(), 1);

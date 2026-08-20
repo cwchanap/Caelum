@@ -1,9 +1,7 @@
 use crate::model::{ActiveTrip, EconomyPreset, GameSnapshot, TripStatus};
 
-#[allow(dead_code)]
 pub(crate) const TRANSIT_TRIP_INCOME: i32 = 200;
 
-#[allow(dead_code)]
 pub(crate) fn completed_transit_trip_income(trip: &ActiveTrip) -> i32 {
     if !matches!(trip.status, TripStatus::Arrived | TripStatus::Late) {
         return 0;
@@ -20,7 +18,6 @@ pub(crate) fn completed_transit_trip_income(trip: &ActiveTrip) -> i32 {
     }
 }
 
-#[allow(dead_code)]
 pub(crate) fn apply_transit_income(state: &mut GameSnapshot, amount: i32) {
     if amount == 0 || state.rules.economy_preset == EconomyPreset::Creative {
         return;

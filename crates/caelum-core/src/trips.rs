@@ -438,7 +438,14 @@ fn advance_active_trips_with_zero_delta_ids(
             .collect(),
     };
 
+    let total_transit_income = results.iter().fold(0_i32, |total, result| {
+        total.saturating_add(crate::transit_income::completed_transit_trip_income(
+            &result.trip,
+        ))
+    });
+
     let mut next = state.clone();
+    crate::transit_income::apply_transit_income(&mut next, total_transit_income);
     next.active_trips = Vec::with_capacity(results.len());
     for result in results {
         if is_terminal_status(result.trip.status) {
@@ -1531,7 +1538,6 @@ fn is_walking_only(route_plan: &RoutePlan) -> bool {
         .all(|leg| leg.mode == TransitMode::Walk)
 }
 
-#[allow(dead_code)]
 pub(crate) fn plan_used_transit(route_plan: &RoutePlan) -> bool {
     !is_walking_only(route_plan)
 }
@@ -1595,10 +1601,10 @@ fn same_position_and_point(position: &TripPosition, point: &Point) -> bool {
 mod tests {
     use super::*;
     use crate::model::{
-        ActiveTrip, GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio,
+        ActiveTrip, EconomyPreset, GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio,
         MaxUnservedRatio, MetricsState, ObjectiveThresholds, Point, PrivateCarTrip,
-        RollingWindowSeconds, SurvivalTimeSeconds, TransitPath, TripOutcome, TripOutcomeKind,
-        TripPosition, TripPurpose, TripStatus,
+        RollingWindowSeconds, RouteLeg, RoutePlan, ServiceDirection, SurvivalTimeSeconds,
+        TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus,
     };
     use crate::road_topology::RoadTopology;
     use crate::scenario::{growing_suburb_campaign, growing_suburb_growth_waves};
@@ -1669,6 +1675,128 @@ mod tests {
                 arrival_time: 101.25,
             }),
         }
+    }
+
+    fn resolvable_journey(id: &str, modes: &[TransitMode]) -> ActiveTrip {
+        let destination = Point {
+            x: modes.len() as i32,
+            y: 0,
+        };
+
+        ActiveTrip {
+            id: id.to_string(),
+            sim_id: format!("sim-{id}"),
+            purpose: TripPurpose::CommuteOutbound,
+            origin: Point { x: 0, y: 0 },
+            destination,
+            position: destination.into(),
+            status: TripStatus::Walking,
+            deadline: 1_000.0,
+            route_plan: Some(RoutePlan {
+                legs: modes
+                    .iter()
+                    .enumerate()
+                    .map(|(index, mode)| RouteLeg {
+                        mode: *mode,
+                        from: Point {
+                            x: index as i32,
+                            y: 0,
+                        },
+                        to: Point {
+                            x: index as i32 + 1,
+                            y: 0,
+                        },
+                        line_id: match mode {
+                            TransitMode::Bus => Some("bus-1".to_string()),
+                            TransitMode::Metro => Some("metro-1".to_string()),
+                            TransitMode::Walk => None,
+                        },
+                        service_direction: match mode {
+                            TransitMode::Walk => None,
+                            TransitMode::Bus | TransitMode::Metro => Some(ServiceDirection::Loop),
+                        },
+                        board_itinerary_index: None,
+                        alight_itinerary_index: None,
+                    })
+                    .collect(),
+                estimated_seconds: 1.0,
+            }),
+            current_leg_index: modes.len(),
+            patience_remaining: WAIT_PATIENCE_SECONDS,
+            current_leg_wait_seconds: 0.0,
+            private_car_trip: None,
+        }
+    }
+
+    #[test]
+    fn completed_transit_journey_credits_standard_budget_once() {
+        let mut state = create_initial_snapshot();
+        state.budget = -100;
+        state.active_trips = vec![resolvable_journey(
+            "trip-income-standard",
+            &[TransitMode::Walk, TransitMode::Bus],
+        )];
+        let flow = traffic::RoadFlow::new();
+
+        let next = advance_active_trips(&state, &flow, 0.0);
+
+        assert_eq!(next.budget, 100);
+        assert!(next.active_trips.is_empty());
+        assert_eq!(
+            next.metrics.completed_trips,
+            state.metrics.completed_trips + 1
+        );
+
+        let advanced_again = advance_active_trips(&next, &flow, 0.0);
+        assert_eq!(advanced_again.budget, 100);
+    }
+
+    #[test]
+    fn creative_and_walking_completions_do_not_credit_budget() {
+        let mut creative = create_initial_snapshot();
+        creative.rules.economy_preset = EconomyPreset::Creative;
+        creative.budget = 123;
+        creative.active_trips = vec![resolvable_journey(
+            "trip-income-creative",
+            &[TransitMode::Metro],
+        )];
+
+        let creative_next = advance_active_trips(&creative, &traffic::RoadFlow::new(), 0.0);
+        assert_eq!(creative_next.budget, 123);
+        assert_eq!(
+            creative_next.metrics.completed_trips,
+            creative.metrics.completed_trips + 1
+        );
+
+        let mut walking = create_initial_snapshot();
+        walking.budget = 50;
+        walking.active_trips = vec![resolvable_journey("trip-income-walk", &[TransitMode::Walk])];
+
+        let walking_next = advance_active_trips(&walking, &traffic::RoadFlow::new(), 0.0);
+        assert_eq!(walking_next.budget, 50);
+        assert_eq!(
+            walking_next.metrics.completed_trips,
+            walking.metrics.completed_trips + 1
+        );
+    }
+
+    #[test]
+    fn same_resolution_pass_sums_completed_transit_journeys() {
+        let mut state = create_initial_snapshot();
+        state.budget = 10;
+        state.active_trips = vec![
+            resolvable_journey("trip-income-bus", &[TransitMode::Bus]),
+            resolvable_journey("trip-income-metro", &[TransitMode::Metro]),
+        ];
+
+        let next = advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
+
+        assert_eq!(next.budget, 410);
+        assert!(next.active_trips.is_empty());
+        assert_eq!(
+            next.metrics.completed_trips,
+            state.metrics.completed_trips + 2
+        );
     }
 
     #[test]
