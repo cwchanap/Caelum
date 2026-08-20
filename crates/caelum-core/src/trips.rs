@@ -1531,6 +1531,11 @@ fn is_walking_only(route_plan: &RoutePlan) -> bool {
         .all(|leg| leg.mode == TransitMode::Walk)
 }
 
+#[allow(dead_code)]
+pub(crate) fn plan_used_transit(route_plan: &RoutePlan) -> bool {
+    !is_walking_only(route_plan)
+}
+
 fn is_trip_on_vehicle(state: &GameSnapshot, trip_id: &str) -> bool {
     state
         .transit

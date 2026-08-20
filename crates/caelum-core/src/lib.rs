@@ -54,6 +54,7 @@ pub mod state;
 pub(crate) mod stop_access;
 pub mod traffic;
 pub mod transit;
+pub(crate) mod transit_income;
 pub mod transit_nodes;
 pub mod trips;
 
