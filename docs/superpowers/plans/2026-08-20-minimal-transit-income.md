@@ -461,8 +461,7 @@ fn creative_and_walking_completions_do_not_credit_budget() {
         &[TransitMode::Metro],
     )];
 
-    let creative_next =
-        advance_active_trips(&creative, &traffic::RoadFlow::new(), 0.0);
+    let creative_next = advance_active_trips(&creative, &traffic::RoadFlow::new(), 0.0);
     assert_eq!(creative_next.budget, 123);
     assert_eq!(
         creative_next.metrics.completed_trips,
@@ -476,8 +475,7 @@ fn creative_and_walking_completions_do_not_credit_budget() {
         &[TransitMode::Walk],
     )];
 
-    let walking_next =
-        advance_active_trips(&walking, &traffic::RoadFlow::new(), 0.0);
+    let walking_next = advance_active_trips(&walking, &traffic::RoadFlow::new(), 0.0);
     assert_eq!(walking_next.budget, 50);
     assert_eq!(
         walking_next.metrics.completed_trips,
