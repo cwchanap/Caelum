@@ -1,7 +1,7 @@
 # HPA-645 Daily Vehicle Operating Cost Design
 
-**Linear:** HPA-645  
-**Parent:** HPA-335  
+**Linear:** HPA-645
+**Parent:** HPA-335
 **Related:** HPA-643, HPA-628, HPA-646
 
 ## Goal
