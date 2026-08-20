@@ -34,6 +34,7 @@ pub mod intent;
 pub mod model;
 pub mod network;
 pub mod objectives;
+pub(crate) mod operating_cost;
 pub(crate) mod persistence;
 pub mod platforms;
 pub mod population;
