@@ -252,7 +252,7 @@ Run the two projection tests again. Expected: PASS.
 
 - [ ] **Step 5: Write failing boundary-charge tests**
 
-Build snapshots from `crate::state::create_initial_snapshot()` and reuse real route/vehicle fields or a local minimal operational line fixture. Lock the recurring contract:
+Prefer a small local snapshot fixture that uses existing real route/vehicle constructors where available. If direct fixture construction is shorter, keep it inside `operating_cost.rs`; do not expose a new production helper just for tests. Lock the recurring contract:
 
 ```rust
 #[test]
@@ -267,7 +267,7 @@ fn standard_boundary_charge_subtracts_once_and_may_go_negative() {
 }
 
 #[test]
-fn creative_reports_nominal_cost_elsewhere_but_boundary_deducts_zero() {
+fn creative_boundary_deducts_zero() {
     let mut snapshot = one_bus_snapshot();
     snapshot.rules.economy_preset = crate::model::EconomyPreset::Creative;
     snapshot.budget = 399;
@@ -282,7 +282,8 @@ fn creative_reports_nominal_cost_elsewhere_but_boundary_deducts_zero() {
 fn no_day_transition_and_campaign_are_unchanged() {
     let mut same_day = one_bus_snapshot();
     let before = same_day.budget;
-    apply_day_boundary_charge(&mut same_day, same_day.day);
+    let same_day_index = same_day.day;
+    apply_day_boundary_charge(&mut same_day, same_day_index);
     assert_eq!(same_day.budget, before);
 
     let mut campaign = one_bus_snapshot();
@@ -298,7 +299,7 @@ Run:
 
 ```bash
 cargo test -p caelum-core standard_boundary_charge_subtracts_once_and_may_go_negative
-cargo test -p caelum-core creative_reports_nominal_cost_elsewhere_but_boundary_deducts_zero
+cargo test -p caelum-core creative_boundary_deducts_zero
 cargo test -p caelum-core no_day_transition_and_campaign_are_unchanged
 ```
 
