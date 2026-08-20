@@ -519,6 +519,9 @@ function selectServiceState(route: Route | MetroLine): ShellServiceState {
     requiredFleet: route.serviceMetrics?.requiredFleet ?? null,
     estimatedDeploymentCost:
       route.serviceMetrics?.estimatedDeploymentCost ?? null,
+    dailyOperatingCost: route.serviceMetrics?.dailyOperatingCost ?? 0,
+    estimatedDailyOperatingCost:
+      route.serviceMetrics?.estimatedDailyOperatingCost ?? null,
     nextVehicleCost: route.serviceMetrics?.nextVehicleCost ?? null,
     nominalHeadwaySeconds: route.serviceMetrics?.nominalHeadwaySeconds ?? null,
     waitingAtRiskCount: route.serviceMetrics?.waitingAtRiskCount ?? 0,
@@ -647,6 +650,13 @@ export function selectShellState(
   const templateLabel = SANDBOX_TEMPLATE_LABELS[state.rules.sandbox.templateId];
   const lineCount =
     state.transit.routes.length + state.transit.metroLines.length;
+  const dailyOperatingCost = [
+    ...state.transit.routes,
+    ...state.transit.metroLines,
+  ].reduce(
+    (total, line) => total + (line.serviceMetrics?.dailyOperatingCost ?? 0),
+    0,
+  );
   const networkSummary = `${state.metrics.lateTrips} late · ${state.metrics.unservedTrips} unserved`;
   const routeDraft = selectRouteEditorView(state, ui, rejection);
   const roadMutationPreview = buildRoadMutationPreview(state, ui);
@@ -680,6 +690,7 @@ export function selectShellState(
   return {
     topbar: {
       budget: formatBudget(state.budget),
+      dailyOperatingCost: formatBudget(dailyOperatingCost),
       time: formatSnapshotClock(state),
       population: `${state.sims?.length ?? 0}`,
       late: `${state.metrics.lateTrips}`,

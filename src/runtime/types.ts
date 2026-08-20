@@ -45,6 +45,7 @@ export type { ServicePattern, TransitMode } from "../domain/types";
 
 export interface ShellTopbarState {
   budget: string;
+  dailyOperatingCost: string;
   time: string;
   population: string;
   late: string;
@@ -152,6 +153,8 @@ export interface ShellServiceState {
   assignedFleet: number;
   requiredFleet: number | null;
   estimatedDeploymentCost: number | null;
+  dailyOperatingCost: number;
+  estimatedDailyOperatingCost: number | null;
   nextVehicleCost: number | null;
   nominalHeadwaySeconds: number | null;
   waitingAtRiskCount: number;

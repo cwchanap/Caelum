@@ -883,6 +883,8 @@ describe("route selectors", () => {
           assignedFleet: 0,
           requiredFleet: null,
           estimatedDeploymentCost: null,
+          dailyOperatingCost: 0,
+          estimatedDailyOperatingCost: null,
           nextVehicleCost: null,
           nominalHeadwaySeconds: null,
           waitingAtRiskCount: 0,
@@ -905,6 +907,8 @@ describe("route selectors", () => {
           assignedFleet: 0,
           requiredFleet: null,
           estimatedDeploymentCost: null,
+          dailyOperatingCost: 0,
+          estimatedDailyOperatingCost: null,
           nextVehicleCost: null,
           nominalHeadwaySeconds: null,
           waitingAtRiskCount: 0,
@@ -913,6 +917,86 @@ describe("route selectors", () => {
         failures: [],
       },
     ]);
+  });
+
+  it("aggregates actual daily costs without including hypothetical estimates", () => {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = withTracks(state, pointsOnRow(0, 3, 9));
+    state = addTestMetroStation(state, { x: 3, y: 0 });
+    state = addTestMetroStation(state, { x: 9, y: 0 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = assignTestVehicle(state, "bus", "route-002");
+    state = assignTestVehicle(state, "metro", "metro-001");
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) =>
+          route.id === "route-001"
+            ? {
+                ...route,
+                id: "setup",
+                serviceMetrics: {
+                  roundTripSeconds: 600,
+                  assignedFleet: 0,
+                  requiredFleet: 1,
+                  estimatedDeploymentCost: null,
+                  dailyOperatingCost: 0,
+                  estimatedDailyOperatingCost: 1_200,
+                  nextVehicleCost: null,
+                  nominalHeadwaySeconds: null,
+                  waitingAtRiskCount: 0,
+                  longestWaitSeconds: null,
+                },
+              }
+            : {
+                ...route,
+                serviceMetrics: {
+                  roundTripSeconds: 600,
+                  assignedFleet: 1,
+                  requiredFleet: 1,
+                  estimatedDeploymentCost: null,
+                  dailyOperatingCost: 400,
+                  estimatedDailyOperatingCost: null,
+                  nextVehicleCost: null,
+                  nominalHeadwaySeconds: 600,
+                  waitingAtRiskCount: 0,
+                  longestWaitSeconds: null,
+                },
+              },
+        ),
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          serviceMetrics: {
+            roundTripSeconds: 600,
+            assignedFleet: 1,
+            requiredFleet: 1,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 2_500,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 600,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+          },
+        })),
+      },
+    };
+
+    const shell = selectShellState(state, createUiState());
+
+    expect(shell.topbar.dailyOperatingCost).toBe("$2,900");
+    expect(
+      shell.routes.find((route) => route.id === "setup")?.service,
+    ).toMatchObject({
+      dailyOperatingCost: 0,
+      estimatedDailyOperatingCost: 1_200,
+    });
   });
 
   function busRouteWithMetrics(
@@ -1009,6 +1093,8 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: 2,
         estimatedDeploymentCost: null,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
@@ -1024,6 +1110,8 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: 2,
         estimatedDeploymentCost: null,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
@@ -1039,6 +1127,8 @@ describe("route selectors", () => {
         assignedFleet: 2,
         requiredFleet: 2,
         estimatedDeploymentCost: null,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: 300,
         waitingAtRiskCount: 0,
@@ -1099,6 +1189,8 @@ describe("route selectors", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
@@ -1117,6 +1209,8 @@ describe("route selectors", () => {
         assignedFleet: 0,
         requiredFleet: 3,
         estimatedDeploymentCost: 150_000,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
@@ -1140,6 +1234,8 @@ describe("route selectors", () => {
             assignedFleet: 2,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
@@ -1159,6 +1255,8 @@ describe("route selectors", () => {
         assignedFleet: 2,
         nominalHeadwaySeconds: 300,
         estimatedDeploymentCost: 150_000,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
         nextVehicleCost: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
@@ -1187,6 +1285,8 @@ describe("route selectors", () => {
             assignedFleet: 1,
             requiredFleet: 5,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: 42_000,
             nominalHeadwaySeconds: 600,
             waitingAtRiskCount: 2,
@@ -1202,6 +1302,8 @@ describe("route selectors", () => {
       assignedFleet: 1,
       requiredFleet: 5,
       estimatedDeploymentCost: null,
+      dailyOperatingCost: 0,
+      estimatedDailyOperatingCost: null,
       nextVehicleCost: 42_000,
       nominalHeadwaySeconds: 600,
       waitingAtRiskCount: 2,

@@ -13,6 +13,7 @@ import {
   addTestBusStop,
   addTestMetroLine,
   addTestMetroStation,
+  assignTestVehicle,
   createTestGameState,
 } from "../helpers/gameState";
 import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
@@ -1047,16 +1048,60 @@ describe("App command shell", () => {
   });
 
   it("renders the compact Signal Console topbar contract", () => {
-    const baseState = createTestGameState();
-    const state = {
-      ...baseState,
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 });
+    state = addTestBusRoute(state, ["stop-001"]);
+    state = withTracks(state, pointsOnRow(2, 7, 15));
+    state = addTestMetroStation(state, { x: 7, y: 2 });
+    state = addTestMetroStation(state, { x: 15, y: 2 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = assignTestVehicle(state, "bus", "route-001");
+    state = assignTestVehicle(state, "metro", "metro-001");
+    state = {
+      ...state,
       paused: false,
-      metrics: { ...baseState.metrics, lateTrips: 4, unservedTrips: 2 },
+      metrics: { ...state.metrics, lateTrips: 4, unservedTrips: 2 },
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          serviceMetrics: {
+            roundTripSeconds: 600,
+            assignedFleet: 1,
+            requiredFleet: 1,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 400,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 600,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+          },
+        })),
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          serviceMetrics: {
+            roundTripSeconds: 600,
+            assignedFleet: 1,
+            requiredFleet: 1,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 2_500,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 600,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+          },
+        })),
+      },
     };
     const { runtime } = createRuntimeHarness({ state });
     render(App, { props: { runtime } });
 
     expect(screen.getByText("Money")).toBeVisible();
+    expect(screen.getByText("Daily cost")).toBeVisible();
+    expect(screen.getByText("$2,900")).toBeVisible();
     expect(screen.getByText("Time")).toBeVisible();
     expect(screen.getByText("Network")).toBeVisible();
     expect(screen.getByText("Population")).toBeVisible();
@@ -1116,6 +1161,8 @@ describe("App command shell", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
@@ -1160,6 +1207,8 @@ describe("App command shell", () => {
             assignedFleet: 2,
             requiredFleet: 4,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: 12_500,
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 0,
@@ -1198,6 +1247,8 @@ describe("App command shell", () => {
             assignedFleet: 0,
             requiredFleet: 2,
             estimatedDeploymentCost: 240_000,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
@@ -1256,6 +1307,8 @@ describe("App command shell", () => {
             assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
             nextVehicleCost: null,
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,

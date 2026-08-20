@@ -318,6 +318,8 @@ export interface ServiceMetrics {
   assignedFleet: number;
   requiredFleet: number | null;
   estimatedDeploymentCost: number | null;
+  dailyOperatingCost: number;
+  estimatedDailyOperatingCost: number | null;
   nextVehicleCost: number | null;
   nominalHeadwaySeconds: number | null;
   waitingAtRiskCount: number;
