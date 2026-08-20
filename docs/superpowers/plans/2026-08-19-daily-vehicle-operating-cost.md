@@ -4,104 +4,101 @@
 
 **Goal:** Show the daily Bus/Metro fleet cost implied by the current service plan and deduct the live charge once per game day in Standard sandbox while Creative remains budget-neutral.
 
-**Architecture:** Add one focused Rust `operating_cost` module for fixed mode costs, fleet multiplication, line projection, and day-boundary deduction. Reuse `trips`' existing exact midnight substep instead of adding accounting state or a scheduler; extend runtime-only `ServiceMetrics` with one Rust-owned `dailyOperatingCost`, forward it through the existing TypeScript selector, and render one row in each existing Lines service block.
+**Architecture:** Add one narrow Rust `operating_cost` authority for mode constants, fleet projection, and one Standard day-boundary debit. Reuse the existing `trips` midnight substep and existing `service_control::ServiceMetrics` publication. Keep route activity separate from global simulation pause so HPA-628 top-up remains pause-suppressed while nominal daily cost remains visible. TypeScript forwards the Rust value and the existing Lines row formats it.
 
-**Tech Stack:** Rust `caelum-core`, serde wire contracts, TypeScript runtime selectors, Svelte 5, Vitest/Testing Library, existing cargo/bun verification scripts.
+**Tech Stack:** Rust `caelum-core`, serde runtime wire output, TypeScript runtime selectors, Svelte 5, Vitest/Testing Library, existing Rust integration tests.
 
 **Spec:** `docs/superpowers/specs/2026-08-19-daily-vehicle-operating-cost-design.md`
 
 ## Global Constraints
 
-- Single PR for HPA-645. Continue implementation on this planning branch/PR; do not open a second implementation PR.
-- Bus daily operating cost is exactly `$400` per assigned/planned vehicle per game day.
-- Metro daily operating cost is exactly `$2,500` per assigned/planned vehicle per game day.
-- The constants are explicit tuning values; do not derive them dynamically from purchase prices or add an editable rate.
-- A deployed line is chargeable only when `route_lifecycle::is_route_operational(route.active, legs)` is true and its assigned fleet is non-zero.
-- A zero-fleet line is never charged, but when `requiredFleet` is derivable it publishes the projected required-fleet daily cost before deployment.
-- Standard sandbox deducts at the game-day boundary even when the result is a negative budget; Creative deducts zero.
-- Campaign mode is unchanged by this slice.
-- Recurring cost must not use `CostQuote::authorize` / `AuthorizedCost::apply_to`; those preserve capital-purchase affordability and must remain unchanged.
-- Reuse the existing day boundary in `trips::next_boundary_after`; do not add a scheduler, timer, persisted `lastChargedDay`, settlement record, or active-time accumulator.
-- Boundary billing is not prorated. No refunds or partial-day charges.
-- Use saturating integer arithmetic for fleet multiplication, total charge accumulation, and budget subtraction.
-- Add exactly one required runtime-only `ServiceMetrics` field: `dailyOperatingCost` / `daily_operating_cost`.
-- `dailyOperatingCost` is nominal and identical in Standard and Creative; TypeScript must not reproduce economy-preset behavior or cost constants.
-- No snapshot schema bump. Save normalization must continue to omit `serviceMetrics`; the resulting `budget` already persists canonically.
-- Route-level pause makes deployed daily cost zero; global simulation pause adds no accounting state and cannot cross a day boundary while paused.
-- No fares, subsidies, revenue, net-profit calculation, ledger, finance/dashboard UI, history, loan/bankruptcy rule, fleet sale/withdrawal/reassignment, or generic economy framework.
+- Bus daily operating cost is exactly `$400 / vehicle / game day`.
+- Metro daily operating cost is exactly `$2,500 / vehicle / game day`.
+- Keep those as independent constants; do not derive them from `BUS_COST` / `METRO_COST`.
+- Do not route recurring expense through `CostPolicy`; capital purchase affordability remains unchanged.
+- Standard Sandbox deducts once when an actual game-day boundary is crossed and may become negative.
+- Creative exposes the same nominal `dailyOperatingCost` as Standard but deducts zero.
+- Campaign behavior is unchanged.
+- Charge only assigned fleets on active, connected services; inactive/broken/zero-fleet services charge zero.
+- A zero-fleet targeted line may **display** the required fleet's projected daily cost but must never be charged for that projected fleet.
+- Do not multiply by `state.day - previous_day`; there is no `crossed_days` or skipped-day settlement rule.
+- Reuse `trips::next_boundary_after`; do not add a scheduler, timer, `lastChargedDay`, proration, accrual, or history.
+- Global simulation pause is not route chargeability. It freezes time only.
+- `service_control::metrics` must receive route activity and global pause separately: top-up uses `active && !globally_paused`; daily cost uses route `active` only.
+- Add exactly one required runtime-derived `ServiceMetrics` field: `dailyOperatingCost`.
+- No snapshot schema bump. `budget` is already persisted; `serviceMetrics` remains output-only.
+- TypeScript contains no `400`, `2500`, fleet multiplication, operational predicate, or economy-preset branch for this feature.
+- Use existing `formatBudget` in Svelte.
+- No fares, subsidies, net-profit model, finance surface, vehicle sale/withdrawal/reassignment, or generic recurring-cost framework.
+- HPA-645 remains one PR: continue implementation on PR #50's branch; do not open a second implementation PR.
 
 ---
 
 ## Baseline gate
 
-Before implementation, update this branch to the latest merged `main` and verify the HPA-643/HPA-628 seams are present:
+Before implementation, update the planning branch to current `origin/main` only if needed and confirm the HPA-643/HPA-628 seams still exist:
 
 ```bash
 git fetch origin
 git rebase origin/main
 
+test -f crates/caelum-core/src/service_control.rs
+test -f crates/caelum-core/src/trips.rs
+rg "next_boundary_after|advance_tick_substep" crates/caelum-core/src/trips.rs
+rg "top_up_offer|populate_snapshot_metrics|fn metrics" crates/caelum-core/src/service_control.rs
 rg "BUS_COST|METRO_COST" crates/caelum-core/src/transit.rs
-rg "waiting_at_risk_count|next_vehicle_cost|populate_snapshot_metrics" crates/caelum-core/src/service_control.rs
-rg "next_day_boundary|advance_tick_substep" crates/caelum-core/src/trips.rs
-rg "longestWaitSeconds" src tests
+rg "waiting_at_risk_count|longest_wait_seconds" crates/caelum-core/src/model.rs
+rg "formatBudget" src/runtime/runtimeSelectors.ts src/components/hud/panels/LinesPanel.svelte
 ```
 
 Run the focused baseline:
 
 ```bash
 cargo test -p caelum-core --test service_control
-cargo test -p caelum-core --test model_wire_format
 bun run test:unit -- tests/runtime/runtimeSelectors.test.ts tests/ui/linesPanel.test.ts
 ```
 
-Expected: all pass before HPA-645 edits.
+Expected: PASS before HPA-645 production edits.
 
 ## File map
 
 ### Rust production
 
-- Create: `crates/caelum-core/src/operating_cost.rs` — fixed Bus/Metro daily cost authority, fleet multiplication, line projection, and day-boundary Standard deduction.
-- Modify: `crates/caelum-core/src/lib.rs` — register `operating_cost` as `pub(crate)`.
-- Modify: `crates/caelum-core/src/trips.rs` — call the operating-cost boundary hook immediately after time/day synchronization in `advance_tick_substep`.
-- Modify: `crates/caelum-core/src/model.rs` — add required runtime-only `ServiceMetrics.daily_operating_cost: i32`.
-- Modify: `crates/caelum-core/src/service_control.rs` — publish projected/current daily operating cost for Bus/Metro while preserving global-pause suppression of the existing top-up offer.
+- Create `crates/caelum-core/src/operating_cost.rs` — fixed daily constants, fleet projection, assigned-fleet boundary charge.
+- Modify `crates/caelum-core/src/lib.rs` — register `operating_cost` as `pub(crate)`.
+- Modify `crates/caelum-core/src/trips.rs` — invoke the charge once after `sync_clock` when a substep reaches a later day.
+- Modify `crates/caelum-core/src/model.rs` — add required runtime-only `ServiceMetrics.daily_operating_cost`.
+- Modify `crates/caelum-core/src/service_control.rs` — publish daily cost and split route-active from global-pause inputs without changing top-up semantics.
 
 ### Rust tests
 
-- Add unit tests in `crates/caelum-core/src/operating_cost.rs` for constants, projection, Standard/Creative/campaign/no-boundary semantics, and negative budget.
-- Modify: `crates/caelum-core/tests/service_control.rs` — reuse the existing real Bus/Metro fixtures to lock public day-boundary charging, coarse/fine determinism, save/restore no-double-charge, and service-output values.
-- Modify: `crates/caelum-core/tests/model_wire_format.rs` — update direct `ServiceMetrics` literals and exact camelCase JSON with `dailyOperatingCost`.
-- Update any other direct Rust `ServiceMetrics { ... }` literal found by the required-field compiler fallout; do not add serde defaults to avoid edits.
+- Unit tests in `crates/caelum-core/src/operating_cost.rs` — cost constants/projection/charge semantics.
+- Modify `crates/caelum-core/tests/service_control.rs` — public tick, Creative parity, coarse/fine, save/restore, route pause/broken, global pause, Bus/Metro output.
+- Modify `crates/caelum-core/tests/model_wire_format.rs` — required camelCase field in exact `serviceMetrics` JSON/literals.
+- Update any other direct `ServiceMetrics { ... }` literals found by `rg "ServiceMetrics \\{" crates/caelum-core`.
 
 ### TypeScript production
 
-- Modify: `src/domain/types.ts` — add required `ServiceMetrics.dailyOperatingCost: number`.
-- Modify: `src/runtime/types.ts` — add required `ShellServiceState.dailyOperatingCost: number`.
-- Modify: `src/runtime/runtimeSelectors.ts` — forward Rust's field with neutral `0` when derived metrics are absent.
-- Modify: `src/components/hud/panels/LinesPanel.svelte` — render `Est. daily cost` before deployment and `Daily cost` after deployment using `formatBudget`.
+- Modify `src/domain/types.ts` — required `ServiceMetrics.dailyOperatingCost`.
+- Modify `src/runtime/types.ts` — required `ShellServiceState.dailyOperatingCost`.
+- Modify `src/runtime/runtimeSelectors.ts` — forward Rust value with neutral `0` when metrics are absent.
+- Modify `src/components/hud/panels/LinesPanel.svelte` — `Est. daily cost` / `Daily cost` rows using `formatBudget`.
 
-### TypeScript tests with current non-null service literals
+### TypeScript tests
 
-Update the required field in:
+Update the existing non-null service-metric/shell-service fixtures that fail compilation:
 
-- `tests/runtime/runtimeSelectors.test.ts`;
-- `tests/runtime/snapshotView.test.ts`;
-- `tests/runtime/gameRuntime.test.ts`;
-- `tests/ui/appShell.test.ts`;
-- `tests/ui/linesPanel.test.ts`.
+- `tests/runtime/runtimeSelectors.test.ts`
+- `tests/runtime/snapshotView.test.ts`
+- `tests/runtime/gameRuntime.test.ts`
+- `tests/ui/appShell.test.ts`
+- `tests/ui/linesPanel.test.ts`
 
-Use compiler/search fallout to catch any additional non-null literals:
-
-```bash
-rg "longestWaitSeconds:" src tests
-rg "ServiceMetrics \{" crates/caelum-core
-```
-
-Do not edit fixtures that only use `serviceMetrics: null` unless a real compile failure proves they need it.
+Do not pre-edit unrelated helpers whose routes use `serviceMetrics: null`; let the compiler identify any real additional literal fallout.
 
 ---
 
-### Task 1: Add the focused operating-cost authority
+### Task 1: Add the narrow Rust operating-cost authority
 
 **Files:**
 - Create: `crates/caelum-core/src/operating_cost.rs`
@@ -112,84 +109,26 @@ Do not edit fixtures that only use `serviceMetrics: null` unless a real compile 
 - Produces: `METRO_DAILY_OPERATING_COST: i32 = 2_500`.
 - Produces: `vehicle_daily_operating_cost(mode: TransitMode) -> i32`.
 - Produces: `fleet_daily_operating_cost(mode: TransitMode, fleet: usize) -> i32`.
-- Produces: `projected_line_daily_operating_cost(active: bool, legs: &[RouteLegPath], mode: TransitMode, assigned_fleet: usize, required_fleet: Option<usize>) -> i32`.
+- Produces: `projected_line_daily_operating_cost(active, legs, mode, assigned_fleet, required_fleet) -> i32`.
 - Produces: `apply_day_boundary_charge(state: &mut GameSnapshot, previous_day: u32)`.
-- Depends on: existing `EconomyPreset`, `GameMode`, `GameSnapshot`, `RouteLegPath`, `TransitMode`, and `route_lifecycle::is_route_operational`.
+- Consumes: `route_lifecycle::is_route_operational`.
 
-- [ ] **Step 1: Register the module and write failing pure-rule tests**
+- [ ] **Step 1: Write failing unit tests for fixed mode/fleet costs**
 
-Add to `crates/caelum-core/src/lib.rs` next to the other crate-private feature modules:
-
-```rust
-pub(crate) mod operating_cost;
-```
-
-Create `crates/caelum-core/src/operating_cost.rs` with imports plus this test module first:
+Create `operating_cost.rs` with the test module first:
 
 ```rust
 #[cfg(test)]
 mod tests {
-    use super::{
-        apply_day_boundary_charge, fleet_daily_operating_cost,
-        projected_line_daily_operating_cost, vehicle_daily_operating_cost,
-        BUS_DAILY_OPERATING_COST, METRO_DAILY_OPERATING_COST,
-    };
-    use crate::model::{
-        EconomyPreset, GameMode, RouteLegPath, RouteLegStatus, ServiceDirection,
-        TransitMode,
-    };
-
-    fn connected_leg() -> RouteLegPath {
-        RouteLegPath {
-            from_waypoint_id: "a".into(),
-            to_waypoint_id: "b".into(),
-            direction: ServiceDirection::Loop,
-            kind: crate::model::RouteLegKind::Service,
-            status: RouteLegStatus::Connected,
-            current_path: None,
-            last_valid_path: None,
-            estimated_seconds: None,
-            failure_reason: None,
-        }
-    }
+    use super::*;
 
     #[test]
-    fn vehicle_and_fleet_daily_costs_use_fixed_mode_values() {
-        assert_eq!(BUS_DAILY_OPERATING_COST, 400);
-        assert_eq!(METRO_DAILY_OPERATING_COST, 2_500);
+    fn mode_and_fleet_daily_costs_are_fixed_and_independent() {
         assert_eq!(vehicle_daily_operating_cost(TransitMode::Bus), 400);
         assert_eq!(vehicle_daily_operating_cost(TransitMode::Metro), 2_500);
         assert_eq!(vehicle_daily_operating_cost(TransitMode::Walk), 0);
         assert_eq!(fleet_daily_operating_cost(TransitMode::Bus, 3), 1_200);
         assert_eq!(fleet_daily_operating_cost(TransitMode::Metro, 2), 5_000);
-    }
-
-    #[test]
-    fn projection_uses_required_fleet_before_deploy_and_running_fleet_after() {
-        let legs = vec![connected_leg()];
-        assert_eq!(
-            projected_line_daily_operating_cost(true, &legs, TransitMode::Bus, 0, Some(3)),
-            1_200
-        );
-        assert_eq!(
-            projected_line_daily_operating_cost(true, &legs, TransitMode::Bus, 0, None),
-            0
-        );
-        assert_eq!(
-            projected_line_daily_operating_cost(true, &legs, TransitMode::Metro, 2, Some(3)),
-            5_000
-        );
-        assert_eq!(
-            projected_line_daily_operating_cost(false, &legs, TransitMode::Bus, 3, Some(3)),
-            0
-        );
-
-        let mut broken = legs.clone();
-        broken[0].status = RouteLegStatus::Disconnected;
-        assert_eq!(
-            projected_line_daily_operating_cost(true, &broken, TransitMode::Bus, 3, Some(3)),
-            0
-        );
     }
 }
 ```
@@ -197,18 +136,17 @@ mod tests {
 Run:
 
 ```bash
-cargo test -p caelum-core operating_cost::tests::vehicle_and_fleet_daily_costs_use_fixed_mode_values
-cargo test -p caelum-core operating_cost::tests::projection_uses_required_fleet_before_deploy_and_running_fleet_after
+cargo test -p caelum-core mode_and_fleet_daily_costs_are_fixed_and_independent
 ```
 
-Expected initially: compile failure because the four functions/constants do not exist.
+Expected: FAIL because helpers/constants are not defined.
 
-- [ ] **Step 2: Implement fixed costs and projection**
+- [ ] **Step 2: Implement constants and saturating fleet multiplication**
 
-Above the test module, implement:
+Add:
 
 ```rust
-use crate::model::{EconomyPreset, GameMode, GameSnapshot, RouteLegPath, TransitMode};
+use crate::model::{GameMode, GameSnapshot, RouteLegPath, TransitMode};
 use crate::route_lifecycle::is_route_operational;
 
 pub(crate) const BUS_DAILY_OPERATING_COST: i32 = 400;
@@ -224,9 +162,71 @@ pub(crate) fn vehicle_daily_operating_cost(mode: TransitMode) -> i32 {
 
 pub(crate) fn fleet_daily_operating_cost(mode: TransitMode, fleet: usize) -> i32 {
     let fleet = i32::try_from(fleet).unwrap_or(i32::MAX);
-    fleet.saturating_mul(vehicle_daily_operating_cost(mode))
+    vehicle_daily_operating_cost(mode).saturating_mul(fleet)
+}
+```
+
+Run:
+
+```bash
+cargo test -p caelum-core mode_and_fleet_daily_costs_are_fixed_and_independent
+```
+
+Expected: PASS.
+
+- [ ] **Step 3: Write failing projection tests**
+
+Use a minimal connected `RouteLegPath` fixture in the module and add:
+
+```rust
+#[test]
+fn projection_uses_required_fleet_before_deployment_and_assigned_fleet_after() {
+    let legs = connected_legs();
+
+    assert_eq!(
+        projected_line_daily_operating_cost(true, &legs, TransitMode::Bus, 0, Some(3)),
+        1_200,
+    );
+    assert_eq!(
+        projected_line_daily_operating_cost(true, &legs, TransitMode::Bus, 2, Some(3)),
+        800,
+    );
 }
 
+#[test]
+fn projection_is_zero_for_unconfigured_inactive_or_broken_service() {
+    let connected = connected_legs();
+    let broken = broken_legs();
+
+    assert_eq!(
+        projected_line_daily_operating_cost(true, &connected, TransitMode::Bus, 0, None),
+        0,
+    );
+    assert_eq!(
+        projected_line_daily_operating_cost(false, &connected, TransitMode::Bus, 2, Some(2)),
+        0,
+    );
+    assert_eq!(
+        projected_line_daily_operating_cost(true, &broken, TransitMode::Bus, 2, Some(2)),
+        0,
+    );
+}
+```
+
+Run:
+
+```bash
+cargo test -p caelum-core projection_uses_required_fleet_before_deployment_and_assigned_fleet_after
+cargo test -p caelum-core projection_is_zero_for_unconfigured_inactive_or_broken_service
+```
+
+Expected: FAIL because projection helper is missing.
+
+- [ ] **Step 4: Implement the projection without global-pause input**
+
+Add:
+
+```rust
 pub(crate) fn projected_line_daily_operating_cost(
     active: bool,
     legs: &[RouteLegPath],
@@ -239,454 +239,313 @@ pub(crate) fn projected_line_daily_operating_cost(
             .map(|required| fleet_daily_operating_cost(mode, required))
             .unwrap_or(0);
     }
+
     if !is_route_operational(active, legs) {
         return 0;
     }
+
     fleet_daily_operating_cost(mode, assigned_fleet)
 }
 ```
 
-Run the two tests from Step 1 again.
+Run the two projection tests again. Expected: PASS.
 
-Expected: PASS.
+- [ ] **Step 5: Write failing boundary-charge tests**
 
-- [ ] **Step 3: Add failing boundary-deduction unit tests**
-
-Append tests that build the smallest canonical snapshot and insert one chargeable Bus route plus vehicle IDs. Use actual `Route` values so the charge predicate reads the same state production uses:
+Build snapshots from `crate::state::create_initial_snapshot()` and reuse real route/vehicle fields or a local minimal operational line fixture. Lock the recurring contract:
 
 ```rust
-fn standard_snapshot_with_bus_fleet(fleet: usize) -> crate::model::GameSnapshot {
-    let mut snapshot = crate::state::create_initial_snapshot();
-    snapshot.rules.game_mode = GameMode::Sandbox;
-    snapshot.rules.economy_preset = EconomyPreset::Standard;
-    snapshot.day = 1;
-    snapshot.budget = 399;
-    snapshot.transit.routes.push(crate::model::Route {
-        id: "route-001".into(),
-        name: "Bus".into(),
-        color: "#111111".into(),
-        stop_ids: vec![],
-        vehicle_ids: (0..fleet).map(|index| format!("vehicle-{index}" )).collect(),
-        active: true,
-        pattern: crate::model::ServicePattern::Loop,
-        revision: 1,
-        legs: vec![connected_leg()],
-        path_broken: false,
-        target_headway_seconds: Some(600),
-        service_metrics: None,
-    });
-    snapshot
-}
-
 #[test]
-fn standard_boundary_charge_can_make_budget_negative() {
-    let mut snapshot = standard_snapshot_with_bus_fleet(1);
+fn standard_boundary_charge_subtracts_once_and_may_go_negative() {
+    let mut snapshot = one_bus_snapshot();
+    snapshot.budget = 399;
+    snapshot.day = 1;
+
     apply_day_boundary_charge(&mut snapshot, 0);
+
     assert_eq!(snapshot.budget, -1);
 }
 
 #[test]
-fn creative_campaign_and_same_day_do_not_deduct() {
-    let base = standard_snapshot_with_bus_fleet(1);
+fn creative_reports_nominal_cost_elsewhere_but_boundary_deducts_zero() {
+    let mut snapshot = one_bus_snapshot();
+    snapshot.rules.economy_preset = crate::model::EconomyPreset::Creative;
+    snapshot.budget = 399;
+    snapshot.day = 1;
 
-    let mut creative = base.clone();
-    creative.rules.economy_preset = EconomyPreset::Creative;
-    apply_day_boundary_charge(&mut creative, 0);
-    assert_eq!(creative.budget, 399);
+    apply_day_boundary_charge(&mut snapshot, 0);
 
-    let mut campaign = base.clone();
+    assert_eq!(snapshot.budget, 399);
+}
+
+#[test]
+fn no_day_transition_and_campaign_are_unchanged() {
+    let mut same_day = one_bus_snapshot();
+    let before = same_day.budget;
+    apply_day_boundary_charge(&mut same_day, same_day.day);
+    assert_eq!(same_day.budget, before);
+
+    let mut campaign = one_bus_snapshot();
     campaign.rules.game_mode = GameMode::Campaign;
+    campaign.day = 1;
+    let before = campaign.budget;
     apply_day_boundary_charge(&mut campaign, 0);
-    assert_eq!(campaign.budget, 399);
-
-    let mut same_day = base;
-    apply_day_boundary_charge(&mut same_day, 1);
-    assert_eq!(same_day.budget, 399);
+    assert_eq!(campaign.budget, before);
 }
 ```
-
-If `Route` requires an additional field on current `main`, populate that required field explicitly rather than adding a default/compatibility helper.
 
 Run:
 
 ```bash
-cargo test -p caelum-core standard_boundary_charge_can_make_budget_negative
-cargo test -p caelum-core creative_campaign_and_same_day_do_not_deduct
+cargo test -p caelum-core standard_boundary_charge_subtracts_once_and_may_go_negative
+cargo test -p caelum-core creative_reports_nominal_cost_elsewhere_but_boundary_deducts_zero
+cargo test -p caelum-core no_day_transition_and_campaign_are_unchanged
 ```
 
-Expected initially: compile failure because `apply_day_boundary_charge` does not exist.
+Expected: FAIL because charge helper is missing.
 
-- [ ] **Step 4: Implement the day-boundary charge without affordability authorization**
+- [ ] **Step 6: Implement exactly-one-boundary debit**
 
-Add private charge aggregation and the public crate-level hook:
+Add private assigned-fleet aggregation and the charge:
 
 ```rust
-fn chargeable_daily_operating_cost(state: &GameSnapshot) -> i32 {
-    let bus = state
-        .transit
-        .routes
-        .iter()
-        .filter(|route| is_route_operational(route.active, &route.legs))
-        .fold(0_i32, |total, route| {
-            total.saturating_add(fleet_daily_operating_cost(
-                TransitMode::Bus,
-                route.vehicle_ids.len(),
-            ))
-        });
+fn chargeable_daily_cost(state: &GameSnapshot) -> i32 {
+    let bus = state.transit.routes.iter().fold(0_i32, |total, route| {
+        let cost = if route.vehicle_ids.is_empty() || !is_route_operational(route.active, &route.legs) {
+            0
+        } else {
+            fleet_daily_operating_cost(TransitMode::Bus, route.vehicle_ids.len())
+        };
+        total.saturating_add(cost)
+    });
 
-    state
-        .transit
-        .metro_lines
-        .iter()
-        .filter(|line| is_route_operational(line.active, &line.legs))
-        .fold(bus, |total, line| {
-            total.saturating_add(fleet_daily_operating_cost(
-                TransitMode::Metro,
-                line.vehicle_ids.len(),
-            ))
-        })
+    state.transit.metro_lines.iter().fold(bus, |total, line| {
+        let cost = if line.vehicle_ids.is_empty() || !is_route_operational(line.active, &line.legs) {
+            0
+        } else {
+            fleet_daily_operating_cost(TransitMode::Metro, line.vehicle_ids.len())
+        };
+        total.saturating_add(cost)
+    })
 }
 
 pub(crate) fn apply_day_boundary_charge(state: &mut GameSnapshot, previous_day: u32) {
     if state.rules.game_mode != GameMode::Sandbox || state.day <= previous_day {
         return;
     }
-    if state.rules.economy_preset == EconomyPreset::Creative {
+    if state.rules.economy_preset == crate::model::EconomyPreset::Creative {
         return;
     }
 
-    let daily_cost = chargeable_daily_operating_cost(state);
-    let crossed_days = i32::try_from(state.day - previous_day).unwrap_or(i32::MAX);
-    let total_charge = daily_cost.saturating_mul(crossed_days);
-    state.budget = state.budget.saturating_sub(total_charge);
+    let charge = chargeable_daily_cost(state);
+    if charge > 0 {
+        state.budget = state.budget.saturating_sub(charge);
+    }
 }
 ```
 
-Do **not** call `CostPolicy::quote`, `authorize`, or `AuthorizedCost::apply_to` here.
+**Do not** compute `crossed_days`; **do not** multiply the charge by `state.day - previous_day`.
 
-Run:
+Run all `operating_cost` tests:
 
 ```bash
-cargo test -p caelum-core operating_cost::tests
-cargo fmt --all -- --check
+cargo test -p caelum-core operating_cost
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 1**
+- [ ] **Step 7: Register the module and run core tests**
+
+In `lib.rs`:
+
+```rust
+pub(crate) mod operating_cost;
+```
+
+Run:
 
 ```bash
-git add crates/caelum-core/src/lib.rs crates/caelum-core/src/operating_cost.rs
+cargo test -p caelum-core
+```
+
+Expected: PASS.
+
+- [ ] **Step 8: Commit Task 1**
+
+```bash
+git add crates/caelum-core/src/operating_cost.rs crates/caelum-core/src/lib.rs
 git commit -m "feat: add daily vehicle operating cost rules"
 ```
 
 ---
 
-### Task 2: Attach Standard deduction to the existing midnight substep
+### Task 2: Charge Standard at the existing midnight boundary
 
 **Files:**
 - Modify: `crates/caelum-core/src/trips.rs`
-- Modify: `crates/caelum-core/tests/service_control.rs`
+- Test: `crates/caelum-core/tests/service_control.rs`
 
 **Interfaces:**
-- Consumes: `operating_cost::apply_day_boundary_charge(&mut GameSnapshot, previous_day: u32)` from Task 1.
-- Preserves: current `next_boundary_after` day-boundary scheduling, objective/trip ordering, pause behavior, and coarse/fine tick determinism.
-- Produces: public-engine proof that Standard can cross negative, Creative is neutral, and restore does not double-charge.
+- Consumes: `operating_cost::apply_day_boundary_charge(&mut GameSnapshot, previous_day)`.
+- Preserves: `next_boundary_after` as the only day-boundary scheduler.
+- Preserves: paused tick early return.
 
-- [ ] **Step 1: Add a one-bus deployed fixture to the existing integration test**
+- [ ] **Step 1: Add a public-engine Standard midnight regression**
 
-Near the existing Bus fixture helpers in `crates/caelum-core/tests/service_control.rs` add:
-
-```rust
-use caelum_core::clock::GAME_DAY_SECONDS;
-use caelum_core::model::MetricsState;
-
-fn one_bus_service_engine() -> GameEngine {
-    let mut engine = bus_route_engine();
-    let target = engine.dispatch(GameIntent::SetServiceTargetHeadway {
-        line_id: "route-001".to_string(),
-        target_headway_seconds: 600,
-    });
-    assert!(target.applied, "fixture target should apply: {target:?}");
-    let deployed = engine.dispatch(GameIntent::DeployInitialFleet {
-        line_id: "route-001".to_string(),
-    });
-    assert!(deployed.applied, "fixture fleet should deploy: {deployed:?}");
-    assert_eq!(engine.snapshot().transit.routes[0].vehicle_ids.len(), 1);
-    engine
-}
-
-fn with_economy_preset(engine: &GameEngine, preset: EconomyPreset) -> GameEngine {
-    let mut saved = engine.snapshot_for_save();
-    saved.rules.economy_preset = preset;
-    GameEngine::from_snapshot(saved).expect("fixture snapshot should restore")
-}
-```
-
-Keep the existing `EconomyPreset` import; add only missing imports.
-
-- [ ] **Step 2: Write failing public-engine boundary tests**
-
-Add:
+Reuse the existing connected Bus fixture in `service_control.rs`. Configure and deploy one Bus, then set the budget after deployment:
 
 ```rust
 #[test]
-fn standard_daily_operating_cost_charges_once_and_can_cross_negative() {
-    let mut engine = one_bus_service_engine();
+fn standard_running_bus_pays_once_at_midnight_and_may_go_negative() {
+    let mut engine = bus_route_engine();
+    assert!(engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".into(),
+        target_headway_seconds: 600,
+    }).applied);
+    assert!(engine.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
+    }).applied);
+
+    let assigned = engine.snapshot().transit.routes[0].vehicle_ids.len();
+    assert_eq!(assigned, 1);
     engine.set_budget_for_test(399);
     assert!(engine.dispatch(GameIntent::SetPaused { paused: false }).applied);
 
-    let result = engine.tick(GAME_DAY_SECONDS);
+    let crossed = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
 
-    assert!(result.applied);
-    assert_eq!(result.snapshot.day, 1);
-    assert_eq!(result.snapshot.budget, -1);
-    assert_eq!(result.snapshot.metrics.state, MetricsState::Running);
-}
-
-#[test]
-fn creative_daily_operating_cost_is_visible_but_budget_neutral_on_tick() {
-    let standard = one_bus_service_engine();
-    let mut creative = with_economy_preset(&standard, EconomyPreset::Creative);
-    creative.set_budget_for_test(399);
-    assert!(creative.dispatch(GameIntent::SetPaused { paused: false }).applied);
-
-    let result = creative.tick(GAME_DAY_SECONDS);
-
-    assert!(result.applied);
-    assert_eq!(result.snapshot.day, 1);
-    assert_eq!(result.snapshot.budget, 399);
+    assert!(crossed.applied);
+    assert_eq!(crossed.snapshot.day, 1);
+    assert_eq!(crossed.snapshot.budget, -1);
+    assert_eq!(crossed.snapshot.metrics.state, caelum_core::model::MetricsState::Running);
 }
 ```
 
 Run:
 
 ```bash
-cargo test -p caelum-core --test service_control standard_daily_operating_cost_charges_once_and_can_cross_negative
-cargo test -p caelum-core --test service_control creative_daily_operating_cost_is_visible_but_budget_neutral_on_tick
+cargo test -p caelum-core --test service_control standard_running_bus_pays_once_at_midnight_and_may_go_negative
 ```
 
-Expected initially: the Standard test fails with budget `399` because the tick pipeline does not call the new hook. Creative remains unchanged for the wrong reason until the hook exists.
+Expected before the hook: FAIL with budget still 399.
 
-- [ ] **Step 3: Hook the charge immediately after clock synchronization**
+- [ ] **Step 2: Hook the charge after `sync_clock`**
 
-In `trips::advance_tick_substep`, replace the opening with:
+In `advance_tick_substep`:
 
 ```rust
-fn advance_tick_substep(
-    state: &GameSnapshot,
-    flow: &traffic::RoadFlow,
-    delta_seconds: f64,
-) -> GameSnapshot {
-    let previous_day = state.day;
-    let mut next = state.clone();
-    next.time += delta_seconds;
-    sync_clock(&mut next);
-    crate::operating_cost::apply_day_boundary_charge(&mut next, previous_day);
-    reset_daily_commute_flags(&mut next);
-
-    let vehicle_state = transit::tick_vehicles(&next, flow, delta_seconds);
-    // existing remainder unchanged
+let previous_day = state.day;
+let mut next = state.clone();
+next.time += delta_seconds;
+sync_clock(&mut next);
+crate::operating_cost::apply_day_boundary_charge(&mut next, previous_day);
+reset_daily_commute_flags(&mut next);
 ```
 
-Do not change `next_boundary_after`; it already schedules exact midnight.
+Do not modify `next_boundary_after`. Do not add a timer or persisted charged-day field.
 
-Run the two tests from Step 2.
+Run the Standard test again. Expected: PASS.
 
-Expected: PASS.
+- [ ] **Step 3: Add coarse-vs-split determinism regression**
 
-- [ ] **Step 4: Add coarse/fine determinism and no-double-charge restore coverage**
-
-Add:
+Clone the same configured engine state before midnight and advance it two ways:
 
 ```rust
-#[test]
-fn daily_operating_cost_is_tick_granularity_independent() {
-    let mut coarse = one_bus_service_engine();
-    coarse.set_budget_for_test(5_000);
-    assert!(coarse.dispatch(GameIntent::SetPaused { paused: false }).applied);
+let mut coarse = configured_operating_cost_bus_engine();
+let mut split = coarse.clone();
 
-    let mut split = GameEngine::from_snapshot(coarse.snapshot_for_save()).unwrap();
-    assert!(split.dispatch(GameIntent::SetPaused { paused: false }).applied);
+let coarse_result = coarse.tick(caelum_core::clock::GAME_DAY_SECONDS + 30.0);
+let _ = split.tick(caelum_core::clock::GAME_DAY_SECONDS);
+let split_result = split.tick(30.0);
 
-    let coarse_result = coarse.tick(GAME_DAY_SECONDS + 10.0);
-    assert!(split.tick(GAME_DAY_SECONDS - 10.0).applied);
-    let split_result = split.tick(20.0);
-
-    assert_eq!(coarse_result.snapshot.time, split_result.snapshot.time);
-    assert_eq!(coarse_result.snapshot.day, split_result.snapshot.day);
-    assert_eq!(coarse_result.snapshot.budget, split_result.snapshot.budget);
-}
-
-#[test]
-fn restored_charged_boundary_does_not_charge_again_before_next_day() {
-    let mut engine = one_bus_service_engine();
-    engine.set_budget_for_test(1_000);
-    assert!(engine.dispatch(GameIntent::SetPaused { paused: false }).applied);
-    let charged = engine.tick(GAME_DAY_SECONDS);
-    assert_eq!(charged.snapshot.budget, 600);
-
-    let saved = engine.snapshot_for_save();
-    let mut restored = GameEngine::from_snapshot(saved).unwrap();
-    assert!(restored.dispatch(GameIntent::SetPaused { paused: false }).applied);
-    let next = restored.tick(1.0);
-
-    assert_eq!(next.snapshot.day, 1);
-    assert_eq!(next.snapshot.budget, 600);
-}
+assert_eq!(coarse_result.snapshot.time, split_result.snapshot.time);
+assert_eq!(coarse_result.snapshot.day, split_result.snapshot.day);
+assert_eq!(coarse_result.snapshot.budget, split_result.snapshot.budget);
 ```
 
-Run:
+Run the focused test. Expected: PASS only when the charge follows the existing midnight substep.
+
+- [ ] **Step 4: Add save/restore no-double-charge regression**
+
+After the midnight charge:
+
+```rust
+let saved = engine.snapshot_for_save();
+let charged_budget = saved.budget;
+let mut restored = GameEngine::from_snapshot(saved).unwrap();
+assert!(restored.dispatch(GameIntent::SetPaused { paused: false }).applied);
+let same_day = restored.tick(30.0);
+assert_eq!(same_day.snapshot.budget, charged_budget);
+```
+
+Run the focused test. Expected: PASS with no `lastChargedDay` state.
+
+- [ ] **Step 5: Add route pause and broken-service charge regressions**
+
+Use existing route controls/network mutation seams:
+
+```rust
+assert!(engine.dispatch(GameIntent::SetRouteActive {
+    route_id: "route-001".into(),
+    active: false,
+}).applied);
+```
+
+Cross the next midnight and assert no deduction. Add one representative broken-line case using the existing road removal fixture and assert no deduction there as well.
+
+Do not add a matrix for every broken reason.
+
+- [ ] **Step 6: Run the Rust integration gate**
 
 ```bash
-cargo test -p caelum-core --test service_control daily_operating_cost_is_tick_granularity_independent
-cargo test -p caelum-core --test service_control restored_charged_boundary_does_not_charge_again_before_next_day
-```
-
-Expected: PASS.
-
-- [ ] **Step 5: Lock paused/broken service as zero-charge at the module seam**
-
-Extend the Task 1 unit tests rather than creating another public-engine topology mutation scenario. Add one inactive assertion and one disconnected-leg assertion around `apply_day_boundary_charge`, using the same `standard_snapshot_with_bus_fleet` fixture:
-
-```rust
-#[test]
-fn inactive_or_broken_service_is_not_charged() {
-    let mut inactive = standard_snapshot_with_bus_fleet(1);
-    inactive.transit.routes[0].active = false;
-    apply_day_boundary_charge(&mut inactive, 0);
-    assert_eq!(inactive.budget, 399);
-
-    let mut broken = standard_snapshot_with_bus_fleet(1);
-    broken.transit.routes[0].legs[0].status = RouteLegStatus::Disconnected;
-    apply_day_boundary_charge(&mut broken, 0);
-    assert_eq!(broken.budget, 399);
-}
-```
-
-Run:
-
-```bash
-cargo test -p caelum-core operating_cost::tests
 cargo test -p caelum-core --test service_control
+cargo test -p caelum-core
 ```
 
 Expected: PASS.
 
-- [ ] **Step 6: Commit Task 2**
+- [ ] **Step 7: Commit Task 2**
 
 ```bash
-git add crates/caelum-core/src/operating_cost.rs crates/caelum-core/src/trips.rs crates/caelum-core/tests/service_control.rs
-git commit -m "feat: charge operating cost at day rollover"
+git add crates/caelum-core/src/trips.rs crates/caelum-core/tests/service_control.rs
+git commit -m "feat: charge daily transit operating cost"
 ```
 
 ---
 
-### Task 3: Publish the Rust-owned daily cost through `ServiceMetrics`
+### Task 3: Publish one runtime-only daily cost without conflating global pause
 
 **Files:**
 - Modify: `crates/caelum-core/src/model.rs`
 - Modify: `crates/caelum-core/src/service_control.rs`
 - Modify: `crates/caelum-core/tests/service_control.rs`
 - Modify: `crates/caelum-core/tests/model_wire_format.rs`
-- Modify: any other compiler-identified direct Rust `ServiceMetrics { ... }` literal
+- Modify: any additional direct `ServiceMetrics { ... }` literals found by search
 
 **Interfaces:**
-- Consumes: `operating_cost::projected_line_daily_operating_cost(...)` from Task 1.
-- Produces: required Rust/wire field `ServiceMetrics.daily_operating_cost: i32` / `dailyOperatingCost`.
-- Preserves: `next_vehicle_cost` remains suppressed while the global simulation is paused; nominal daily cost remains based on the route's own `active` state, not the global pause button.
-- Preserves: runtime-only service metrics; no save/schema change.
+- Produces: required `ServiceMetrics.daily_operating_cost: i32` → `dailyOperatingCost` on wire.
+- Consumes: `operating_cost::projected_line_daily_operating_cost`.
+- Preserves: HPA-628 `next_vehicle_cost` suppression while globally paused.
+- Preserves: output-only `service_metrics` persistence behavior.
 
-- [ ] **Step 1: Write failing service-output assertions**
+- [ ] **Step 1: Add the required Rust field and let compile errors reveal literal fallout**
 
-In existing zero-fleet Bus service metric coverage, after setting a target that produces `required_fleet`, assert:
-
-```rust
-let metrics = engine.snapshot().transit.routes[0]
-    .service_metrics
-    .expect("output snapshot should publish service metrics");
-assert_eq!(metrics.daily_operating_cost, 400 * metrics.required_fleet.unwrap() as i32);
-```
-
-In existing deployed Bus coverage assert:
+In `ServiceMetrics`:
 
 ```rust
-let snapshot = engine.snapshot();
-let metrics = snapshot.transit.routes[0].service_metrics.unwrap();
-assert_eq!(
-    metrics.daily_operating_cost,
-    400 * snapshot.transit.routes[0].vehicle_ids.len() as i32
-);
+pub daily_operating_cost: i32,
 ```
-
-Add/extend one Metro output assertion:
-
-```rust
-let snapshot = metro_engine.snapshot();
-let metrics = snapshot.transit.metro_lines[0].service_metrics.unwrap();
-assert_eq!(
-    metrics.daily_operating_cost,
-    2_500 * snapshot.transit.metro_lines[0].vehicle_ids.len() as i32
-);
-```
-
-For a deployed Bus paused through `SetRouteActive { active: false }`, assert the output metric is zero:
-
-```rust
-assert_eq!(
-    engine.snapshot().transit.routes[0]
-        .service_metrics
-        .unwrap()
-        .daily_operating_cost,
-    0
-);
-```
-
-Run the focused tests you edited:
-
-```bash
-cargo test -p caelum-core --test service_control daily_operating_cost
-```
-
-Expected initially: compile failure because `ServiceMetrics` has no `daily_operating_cost` field.
-
-- [ ] **Step 2: Add the required model field**
-
-In `crates/caelum-core/src/model.rs`:
-
-```rust
-pub struct ServiceMetrics {
-    pub round_trip_seconds: f64,
-    pub assigned_fleet: usize,
-    pub required_fleet: Option<usize>,
-    pub estimated_deployment_cost: Option<i32>,
-    pub next_vehicle_cost: Option<i32>,
-    pub nominal_headway_seconds: Option<f64>,
-    pub waiting_at_risk_count: usize,
-    pub longest_wait_seconds: Option<f64>,
-    pub daily_operating_cost: i32,
-}
-```
-
-Do not add `#[serde(default)]` or make the field optional.
 
 Run:
 
 ```bash
-cargo check -p caelum-core
+cargo test -p caelum-core --no-run
 ```
 
-Expected: compile failures at every direct `ServiceMetrics` constructor, providing the complete Rust blast radius.
+Expected: compile failures at direct `ServiceMetrics { ... }` literals until updated. Do not add a serde default to avoid those edits.
 
-- [ ] **Step 3: Publish cost in the shared Bus/Metro metrics path while preserving pause semantics**
+- [ ] **Step 2: Split `metrics` route activity from global pause**
 
-Import the helper in `service_control.rs`:
-
-```rust
-use crate::operating_cost::projected_line_daily_operating_cost;
-```
-
-Change the private `metrics` signature so route-active state and global-pause state are distinct:
+Change the signature from a single folded `active` flag to:
 
 ```rust
 fn metrics(
@@ -698,10 +557,10 @@ fn metrics(
     assigned_fleet: usize,
     target_headway_seconds: Option<u32>,
     waiting_health: WaitingHealth,
-) -> Option<ServiceMetrics> {
+) -> Option<ServiceMetrics>
 ```
 
-Preserve the existing top-up rule by changing only its first argument:
+Keep HPA-628 top-up behavior:
 
 ```rust
 let next_vehicle_cost = top_up_offer(
@@ -713,10 +572,10 @@ let next_vehicle_cost = top_up_offer(
 );
 ```
 
-Derive the new field after `required_fleet` is known:
+Add HPA-645 projection using route activity only:
 
 ```rust
-let daily_operating_cost = projected_line_daily_operating_cost(
+let daily_operating_cost = crate::operating_cost::projected_line_daily_operating_cost(
     active,
     legs,
     mode,
@@ -725,114 +584,173 @@ let daily_operating_cost = projected_line_daily_operating_cost(
 );
 ```
 
-Add it to the output literal:
+Publish it:
 
 ```rust
-daily_operating_cost,
+Some(ServiceMetrics {
+    round_trip_seconds,
+    assigned_fleet,
+    required_fleet,
+    estimated_deployment_cost,
+    next_vehicle_cost,
+    nominal_headway_seconds: (assigned_fleet > 0)
+        .then(|| round_trip_seconds / assigned_fleet as f64),
+    waiting_at_risk_count: waiting_health.waiting_at_risk_count,
+    longest_wait_seconds: waiting_health.longest_wait_seconds,
+    daily_operating_cost,
+})
 ```
 
-In `populate_snapshot_metrics`, pass route activity and global pause separately:
+Update `populate_snapshot_metrics` to pass separately:
 
 ```rust
-route.service_metrics = metrics(
+metrics(
     route.active,
     snapshot.paused,
     &route.legs,
     TransitMode::Bus,
-    &flow,
-    route.vehicle_ids.len(),
-    route.target_headway_seconds,
-    health,
+    ...
+)
+```
+
+and equivalent Metro call.
+
+- [ ] **Step 3: Add projection tests for pre-deployment Bus and Metro**
+
+Extend existing output assertions:
+
+```rust
+assert_eq!(
+    snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .unwrap()
+        .daily_operating_cost,
+    expected_required_bus_fleet as i32 * 400,
 );
 ```
 
-and the equivalent Metro call.
+For one Metro fixture, assert `2_500 × required/assigned fleet` as appropriate. The test may use the exported constant only if the existing integration-test visibility permits it; otherwise assert the product value directly in Rust tests. Do not expose constants publicly just for integration tests.
 
-Update internal `metrics(...)` unit-test calls with the new `globally_paused` argument. Add one assertion that global pause still suppresses `next_vehicle_cost` without zeroing a route-active deployed `daily_operating_cost`.
+- [ ] **Step 4: Add the load-bearing global-pause regression**
 
-Run:
+Use a deployed Bus fixture. Capture its assigned fleet, globally pause the simulation, and assert nominal cost stays present:
 
-```bash
-cargo test -p caelum-core service_control::tests
-cargo test -p caelum-core --test service_control
+```rust
+let assigned = engine.snapshot().transit.routes[0].vehicle_ids.len();
+let paused = engine.dispatch(GameIntent::SetPaused { paused: true });
+let metrics = paused.snapshot.transit.routes[0].service_metrics.as_ref().unwrap();
+
+assert_eq!(metrics.daily_operating_cost, 400 * assigned as i32);
 ```
 
-Expected: PASS after direct literals are fixed.
+Also use/reuse the existing shortfall Bus fixture to lock HPA-628:
 
-- [ ] **Step 4: Update the exact wire contract and runtime-only persistence proof**
-
-Use:
-
-```bash
-rg "ServiceMetrics \{" crates/caelum-core
-rg '"serviceMetrics"' crates/caelum-core/tests/model_wire_format.rs
+```rust
+let paused = shortfall.dispatch(GameIntent::SetPaused { paused: true });
+let metrics = paused.snapshot.transit.routes[0].service_metrics.as_ref().unwrap();
+assert_eq!(metrics.next_vehicle_cost, None);
+assert!(metrics.daily_operating_cost > 0);
 ```
 
-Add `daily_operating_cost` to every direct Rust literal.
+This test prevents a future refactor from passing `active && !snapshot.paused` into the operating-cost projection.
 
-In the exact JSON expectation in `crates/caelum-core/tests/model_wire_format.rs`, add:
+- [ ] **Step 5: Add Creative nominal-parity assertion**
+
+In the Creative public tick test from Task 2 (or a neighboring test), assert the same one-Bus nominal metric:
+
+```rust
+let before = engine.snapshot();
+assert_eq!(
+    before.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .unwrap()
+        .daily_operating_cost,
+    400,
+);
+
+let crossed = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
+assert_eq!(crossed.snapshot.budget, 399);
+assert_eq!(
+    crossed.snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .unwrap()
+        .daily_operating_cost,
+    400,
+);
+```
+
+This directly locks “Creative shows the same nominal cost; only deduction differs.”
+
+- [ ] **Step 6: Update exact wire/literal coverage**
+
+Find all direct literals:
+
+```bash
+rg "ServiceMetrics \\{" crates/caelum-core
+```
+
+Add `daily_operating_cost` to each.
+
+In `model_wire_format.rs`, update the exact camelCase object with:
 
 ```json
-"dailyOperatingCost": 0
+"dailyOperatingCost": 400
 ```
 
-for a neutral fixture, or the exact fixture-derived non-zero value when that literal represents an assigned/required fleet.
+or the fixture's correct neutral/projected value.
 
-Do not modify schema version.
+Keep the existing assertion that `snapshot_for_save()` omits `serviceMetrics` entirely.
 
-Run:
+- [ ] **Step 7: Run Rust gates**
 
 ```bash
-cargo test -p caelum-core --test model_wire_format
 cargo test -p caelum-core --test service_control
+cargo test -p caelum-core --test model_wire_format
+cargo test -p caelum-core
+cargo clippy -p caelum-core --all-targets -- -D warnings
+cargo fmt --all --check
 ```
 
-Expected: PASS, including the existing proof that save output omits `serviceMetrics`.
+Expected: PASS.
 
-- [ ] **Step 5: Commit Task 3**
+- [ ] **Step 8: Commit Task 3**
 
 ```bash
 git add crates/caelum-core/src/model.rs crates/caelum-core/src/service_control.rs crates/caelum-core/tests
-git commit -m "feat: publish daily service operating cost"
+git commit -m "feat: publish service daily operating cost"
 ```
 
 ---
 
-### Task 4: Forward the required field through TypeScript without duplicating rules
+### Task 4: Forward the Rust value through TypeScript
 
 **Files:**
 - Modify: `src/domain/types.ts`
 - Modify: `src/runtime/types.ts`
 - Modify: `src/runtime/runtimeSelectors.ts`
 - Modify: `tests/runtime/runtimeSelectors.test.ts`
-- Modify: `tests/runtime/snapshotView.test.ts`
-- Modify: `tests/runtime/gameRuntime.test.ts`
-- Modify: `tests/ui/appShell.test.ts`
-- Modify: `tests/ui/linesPanel.test.ts`
+- Modify: other compile-failing non-null service fixtures only
 
 **Interfaces:**
-- Consumes: Rust wire `ServiceMetrics.dailyOperatingCost: number`.
-- Produces: `ShellServiceState.dailyOperatingCost: number`.
-- Rule: TypeScript only forwards the Rust value and uses `0` when `serviceMetrics` is absent; it owns no Bus/Metro constants or formula.
+- Consumes: Rust wire key `dailyOperatingCost`.
+- Produces: `ShellServiceState.dailyOperatingCost`.
+- Must not derive any cost locally.
 
-- [ ] **Step 1: Add failing selector expectation before changing types**
+- [ ] **Step 1: Add failing selector expectation**
 
-In the existing `runtimeSelectors.test.ts` route service fixture that already includes `waitingAtRiskCount` / `longestWaitSeconds`, add Rust input:
+In the existing route service selector test, add a Rust-side fixture value:
 
 ```ts
 dailyOperatingCost: 1_200,
 ```
 
-and assert the projected shell service contains:
+and assert:
 
 ```ts
-expect(route.service.dailyOperatingCost).toBe(1_200);
-```
-
-Also keep one route with `serviceMetrics: null` and assert:
-
-```ts
-expect(route.service.dailyOperatingCost).toBe(0);
+expect(row.service.dailyOperatingCost).toBe(1_200);
 ```
 
 Run:
@@ -841,17 +759,15 @@ Run:
 bun run test:unit -- tests/runtime/runtimeSelectors.test.ts
 ```
 
-Expected initially: TypeScript/test failure because the field is not in the runtime contract.
+Expected: type/expectation failure until production types/selector are updated.
 
-- [ ] **Step 2: Add required domain/runtime types and selector forwarding**
+- [ ] **Step 2: Add required TypeScript fields**
 
 In `src/domain/types.ts`:
 
 ```ts
 export interface ServiceMetrics {
   // existing fields
-  waitingAtRiskCount: number;
-  longestWaitSeconds: number | null;
   dailyOperatingCost: number;
 }
 ```
@@ -861,11 +777,13 @@ In `src/runtime/types.ts`:
 ```ts
 export interface ShellServiceState {
   // existing fields
-  waitingAtRiskCount: number;
-  longestWaitSeconds: number | null;
   dailyOperatingCost: number;
 }
 ```
+
+Do not make either optional.
+
+- [ ] **Step 3: Forward Rust only**
 
 In `selectServiceState`:
 
@@ -873,73 +791,70 @@ In `selectServiceState`:
 dailyOperatingCost: route.serviceMetrics?.dailyOperatingCost ?? 0,
 ```
 
-Do not import `EconomyPreset`, `BUS_COST`, `METRO_COST`, or define any operating-cost constant in TypeScript.
+Do not reference `route.mode`, `vehicleIds.length`, `economyPreset`, `400`, or `2500` for this value.
+
+- [ ] **Step 4: Fix real required-field fixture fallout**
 
 Run:
 
 ```bash
 bun run check
-bun run test:unit -- tests/runtime/runtimeSelectors.test.ts
 ```
 
-Expected: compiler failures now identify remaining non-null service literals; selector test passes once those literals are fixed.
+Update only compile failures caused by non-null `ServiceMetrics` / `ShellServiceState` literals. Expected files include:
 
-- [ ] **Step 3: Fix only real required-field fallout**
+- `tests/runtime/snapshotView.test.ts`
+- `tests/runtime/gameRuntime.test.ts`
+- `tests/ui/appShell.test.ts`
+- `tests/ui/linesPanel.test.ts`
 
-Find current non-null literals:
+Use fixture-specific values; use `0` only where the fixture is deliberately neutral.
+
+- [ ] **Step 5: Search for forbidden frontend formulas**
 
 ```bash
-rg "longestWaitSeconds:" src tests
+rg "400|2_500|2500|daily.*operating.*\*|operating.*cost.*vehicle" src tests
 ```
 
-Add an explicit `dailyOperatingCost` matching each fixture's intended state to:
+Expected production matches: labels/field names only; no TypeScript cost constants or multiplication. Test fixture values may match.
 
-- `tests/runtime/snapshotView.test.ts`;
-- `tests/runtime/gameRuntime.test.ts`;
-- `tests/ui/appShell.test.ts`;
-- `tests/ui/linesPanel.test.ts`;
-- any additional compiler-identified literal.
-
-Use `0` for neutral/broken/no-service fixtures. Use a concrete non-zero quoted value for fixtures whose purpose is to exercise deployed/required service output. Do not make the type optional to avoid this fallout.
-
-Run:
+- [ ] **Step 6: Run focused frontend gates**
 
 ```bash
-bun run check
 bun run test:unit -- tests/runtime/runtimeSelectors.test.ts tests/runtime/snapshotView.test.ts tests/runtime/gameRuntime.test.ts tests/ui/appShell.test.ts
+bun run check
 ```
 
 Expected: PASS.
 
-- [ ] **Step 4: Commit Task 4**
+- [ ] **Step 7: Commit Task 4**
 
 ```bash
-git add src/domain/types.ts src/runtime/types.ts src/runtime/runtimeSelectors.ts tests/runtime tests/ui/appShell.test.ts tests/ui/linesPanel.test.ts
-git commit -m "feat: project daily operating cost to shell"
+git add src/domain/types.ts src/runtime/types.ts src/runtime/runtimeSelectors.ts tests/runtime tests/ui/appShell.test.ts
+git commit -m "feat: forward daily operating cost"
 ```
 
 ---
 
-### Task 5: Render one daily-cost row in the existing Lines service blocks
+### Task 5: Render daily cost in the existing Lines blocks
 
 **Files:**
 - Modify: `src/components/hud/panels/LinesPanel.svelte`
 - Modify: `tests/ui/linesPanel.test.ts`
 
 **Interfaces:**
-- Consumes: `route.service.dailyOperatingCost` from Task 4.
-- Uses: existing `formatBudget` only.
-- Produces: `Est. daily cost` for zero-fleet targeted service and `Daily cost` for deployed service.
+- Consumes: `route.service.dailyOperatingCost` already formatted with existing `formatBudget`.
+- No new callback/action.
 
-- [ ] **Step 1: Extend the existing pre-deployment Bus test with a failing quoted-cost assertion**
+- [ ] **Step 1: Add failing zero-fleet UI assertion**
 
-In `shows the pre-deployment bus service block and dispatches target/fleet actions`, set:
+Extend the existing pre-deployment Bus fixture with:
 
 ```ts
 dailyOperatingCost: 1_200,
 ```
 
-on its `ShellServiceState`, then add:
+Assert:
 
 ```ts
 expect(service).toHaveTextContent("Est. daily cost");
@@ -952,11 +867,11 @@ Run:
 bun run test:unit -- tests/ui/linesPanel.test.ts
 ```
 
-Expected initially: FAIL because the panel does not render the field.
+Expected: FAIL because row is not rendered.
 
-- [ ] **Step 2: Render the pre-deployment estimate only when a required fleet exists**
+- [ ] **Step 2: Render the pre-deployment estimate only when a requirement exists**
 
-In the zero-fleet service block, inside the existing `requiredFleet !== null` condition, add:
+Inside the existing `requiredFleet !== null` section add:
 
 ```svelte
 <div class="route-service-row">
@@ -967,46 +882,21 @@ In the zero-fleet service block, inside the existing `requiredFleet !== null` co
 </div>
 ```
 
-Keep it next to `Required` / `Est. deploy cost`; do not add a new component.
+Keep it under the same `requiredFleet !== null` gate so an unconfigured line does not show an irrelevant `$0` estimate.
 
-Run the test from Step 1.
+Run the focused test. Expected: PASS.
 
-Expected: PASS.
+- [ ] **Step 3: Add failing deployed/route-paused assertions**
 
-- [ ] **Step 3: Add failing deployed/paused/Metro display assertions**
+Use one deployed Bus fixture with `dailyOperatingCost: 800` and assert `Daily cost $800`.
 
-Use the nearest existing deployed Bus service-row fixture and set a non-zero value such as:
+Use one route-paused/inactive fixture whose Rust-owned value is `0` and assert `Daily cost $0`.
 
-```ts
-dailyOperatingCost: 800,
-```
+The UI test must not calculate why the value is zero.
 
-Assert:
+- [ ] **Step 4: Render the deployed row**
 
-```ts
-expect(screen.getByTestId("route-service-route-bus-001")).toHaveTextContent(
-  "Daily cost",
-);
-expect(screen.getByTestId("route-service-route-bus-001")).toHaveTextContent(
-  "$800",
-);
-```
-
-Add one paused deployed row whose Rust-owned field is `0` and assert `$0`. Do not calculate zero from `route.active` inside the test/component.
-
-In the existing Metro service fixture, provide `dailyOperatingCost: 5_000` and assert `$5,000` through the same component.
-
-Run:
-
-```bash
-bun run test:unit -- tests/ui/linesPanel.test.ts
-```
-
-Expected initially: deployed assertions fail because the row does not exist.
-
-- [ ] **Step 4: Render deployed daily cost unconditionally from the projected value**
-
-In the assigned-fleet service block after Fleet, add:
+In the existing assigned-fleet service block add:
 
 ```svelte
 <div class="route-service-row">
@@ -1017,136 +907,127 @@ In the assigned-fleet service block after Fleet, add:
 </div>
 ```
 
-Do not branch on mode, economy preset, active state, broken state, or fleet count in Svelte. Rust already owns the value.
+Do not special-case Creative or global pause in Svelte.
 
-Run:
+- [ ] **Step 5: Keep one Metro presentation assertion**
+
+Set a Metro fixture to a Rust-provided value such as `5_000` and assert `$5,000` renders through the same row. No duplicate Metro component logic.
+
+- [ ] **Step 6: Run UI gates**
 
 ```bash
 bun run test:unit -- tests/ui/linesPanel.test.ts
 bun run check
+bun run lint:svelte
+bun run lint:css
 ```
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit Task 5**
+- [ ] **Step 7: Commit Task 5**
 
 ```bash
 git add src/components/hud/panels/LinesPanel.svelte tests/ui/linesPanel.test.ts
-git commit -m "feat: show daily service cost in lines panel"
+git commit -m "feat: show service daily operating cost"
 ```
 
 ---
 
-### Task 6: Full regression verification and single-PR handoff
+### Task 6: Whole-PR verification and scope closeout
 
 **Files:**
-- No new production files expected.
-- Modify only files proven necessary by formatting/lint/test failures caused by HPA-645.
+- Modify only if verification reveals a real HPA-645 defect.
+- Do not create another PR.
 
-**Interfaces:**
-- Verifies the complete Rust authority → wire → selector → Lines row path plus existing HPA-628/HPA-643 behavior.
-
-- [ ] **Step 1: Prove no duplicate cost formula or forbidden economy machinery was introduced**
-
-Run:
+- [ ] **Step 1: Run complete automated gates**
 
 ```bash
-rg "400|2_500|2500" src tests crates/caelum-core/src \
-  -g '!crates/caelum-core/src/operating_cost.rs' \
-  -g '!**/*test*' \
-  -g '!docs/**'
-rg "lastChargedDay|RecurringExpense|ledger|subsid|fare" crates/caelum-core/src src
+cargo fmt --all --check
+cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
+bun run test:unit
+bun run test:e2e
+bun run format:check
+bun run check
+bun run lint:svelte
+bun run lint:css
+bun run build
+```
+
+Expected: PASS. No HPA-645-specific Playwright midnight test is required; the existing E2E suite remains a regression gate.
+
+- [ ] **Step 2: Run scope/reuse scans**
+
+```bash
+rg "crossed_days|lastChargedDay|RecurringExpense|EconomyService|ledger|fare|subsid" crates src
+rg "400|2_500|2500" src
+rg "dailyOperatingCost|daily_operating_cost" crates src tests
+rg "ServiceMetrics \\{" crates/caelum-core
 ```
 
 Expected:
 
-- no production TypeScript/Rust copy of the HPA-645 daily constants outside `operating_cost.rs`;
-- no new persisted charge marker, ledger, fare, or subsidy machinery.
+- no `crossed_days` / multi-day settlement helper;
+- no `lastChargedDay` / scheduler / ledger / fare/subsidy production work;
+- no frontend operating-cost constants;
+- every direct Rust `ServiceMetrics` literal includes the required field.
 
-Existing unrelated words may appear; inspect them rather than deleting unrelated code.
+- [ ] **Step 3: Explicitly verify the three review invariants**
 
-- [ ] **Step 2: Run focused Rust verification**
+Confirm test names/evidence exist for:
 
-```bash
-cargo fmt --all -- --check
-cargo test -p caelum-core operating_cost::tests
-cargo test -p caelum-core --test service_control
-cargo test -p caelum-core --test model_wire_format
-```
+1. **Boundary-only charge:** no multiplier; coarse/fine and save/restore pass.
+2. **Global pause split:** globally paused active Bus retains nominal `daily_operating_cost`; HPA-628 `next_vehicle_cost` is suppressed.
+3. **Creative nominal parity:** Creative budget stays unchanged while the one-Bus metric remains 400.
 
-Expected: PASS.
+If any is missing, add the smallest focused regression before closeout.
 
-- [ ] **Step 3: Run focused frontend verification**
-
-```bash
-bun run check
-bun run test:unit -- \
-  tests/runtime/runtimeSelectors.test.ts \
-  tests/runtime/snapshotView.test.ts \
-  tests/runtime/gameRuntime.test.ts \
-  tests/ui/appShell.test.ts \
-  tests/ui/linesPanel.test.ts
-```
-
-Expected: PASS.
-
-- [ ] **Step 4: Run repository-wide gates**
+- [ ] **Step 4: Verify no schema/persistence expansion**
 
 ```bash
-bun run format:check
-bun run lint
-bun run rust:test
-bun run test:unit
+rg "SNAPSHOT_SCHEMA_VERSION" crates/caelum-core/src/model.rs
+rg "daily_operating_cost|dailyOperatingCost" crates/caelum-core/src/persistence src/persistence src-tauri
 ```
 
-Expected: PASS.
+Expected: schema number unchanged for HPA-645 and no persisted daily-cost field.
 
-No new Playwright test is required for this slice. If an existing e2e route test fails because the required wire field changed, fix that fixture/expectation and rerun only the affected spec; do not add a midnight-waiting e2e scenario.
-
-- [ ] **Step 5: Review the diff against the design scope**
-
-Run:
+- [ ] **Step 5: Inspect final branch scope**
 
 ```bash
-git diff origin/main...HEAD --stat
-git diff origin/main...HEAD -- \
-  crates/caelum-core/src/operating_cost.rs \
-  crates/caelum-core/src/trips.rs \
-  crates/caelum-core/src/service_control.rs \
-  src/components/hud/panels/LinesPanel.svelte
+git status --short
+git diff --stat origin/main...HEAD
+git log --oneline origin/main..HEAD
 ```
 
-Confirm:
+Expected: only HPA-645 docs, Rust operating-cost/tick/service projection, thin TS forwarding, Lines UI, and focused tests.
 
-- exactly one focused operating-cost module exists;
-- no schema version changed;
-- paid capital-intent authorization code is untouched except imports required by compilation;
-- no revenue/accounting/history subsystem appeared;
-- this branch still represents the single HPA-645 PR.
+- [ ] **Step 6: Update PR #50 rather than opening another PR**
 
-- [ ] **Step 6: Commit any verification-only fixes**
+Keep PR #50 draft until implementation/review is ready. Update its body with implementation verification and any review resolution notes. Link/retain HPA-645 in Linear.
 
-If verification required HPA-645-specific formatting or fixture fixes:
+Do **not** create a separate implementation PR for this ticket.
 
-```bash
-git add <only HPA-645 files>
-git commit -m "test: complete daily operating cost coverage"
-```
+---
 
-If no fixes were needed, do not create an empty commit.
+## Final acceptance checklist
 
-## Implementation completion criteria
-
-HPA-645 is ready to move out of draft when all of the following are true:
-
-1. Standard one-Bus fixture charges `$400` at the day boundary and can move `399 -> -1` without ending Sandbox.
-2. Creative runs the same day boundary with unchanged budget while publishing the same nominal service cost.
-3. Coarse and split ticks agree on time/day/budget.
-4. A restored already-charged boundary does not charge again before the next day.
-5. Zero-fleet target projection shows required fleet × daily mode cost before deployment.
-6. Deployed active/connected service shows assigned fleet × daily mode cost; paused/broken service is zero/not charged.
-7. Bus and Metro share the same Rust projection path with 400 / 2,500 unit values.
-8. `ServiceMetrics.dailyOperatingCost` is required output, camelCase on the wire, ignored on restore, and absent from save output.
-9. TypeScript forwards the value only; Svelte formats/renders it only.
-10. Existing HPA-628 top-up and HPA-643 route-health tests remain green.
-11. No fares, subsidy, proration, ledger/history, finance screen, schema bump, or second PR was introduced.
+- [ ] Bus nominal cost = `$400 × fleet`.
+- [ ] Metro nominal cost = `$2,500 × fleet`.
+- [ ] Zero-fleet targeted service shows required-fleet projected daily cost.
+- [ ] Deployed active/connected service shows assigned-fleet daily cost.
+- [ ] Route pause/broken/zero-fleet charge zero.
+- [ ] Global simulation pause keeps nominal daily cost visible.
+- [ ] Global simulation pause still suppresses HPA-628 top-up offer.
+- [ ] Standard charges once per actual midnight and can become negative.
+- [ ] No `crossed_days` multiplier exists.
+- [ ] Creative budget is unchanged and nominal metric equals Standard for the same fleet.
+- [ ] Coarse and split ticks produce the same time/day/budget.
+- [ ] Save/restore after midnight does not double-charge.
+- [ ] `ServiceMetrics.dailyOperatingCost` is required runtime output only.
+- [ ] `snapshot_for_save()` still omits `serviceMetrics`.
+- [ ] No schema bump or persisted settlement marker.
+- [ ] No TypeScript cost formula/constants.
+- [ ] Lines uses existing `formatBudget` and existing service blocks.
+- [ ] No fares, ledger, proration, finance screen, or recurring-cost framework.
+- [ ] All workspace/unit/e2e/lint/format/build gates pass.
+- [ ] All work remains in PR #50.
