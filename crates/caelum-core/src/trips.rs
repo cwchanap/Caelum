@@ -373,9 +373,11 @@ fn advance_tick_substep(
     flow: &traffic::RoadFlow,
     delta_seconds: f64,
 ) -> GameSnapshot {
+    let previous_day = state.day;
     let mut next = state.clone();
     next.time += delta_seconds;
     sync_clock(&mut next);
+    crate::operating_cost::apply_day_boundary_charge(&mut next, previous_day);
     reset_daily_commute_flags(&mut next);
 
     let vehicle_state = transit::tick_vehicles(&next, flow, delta_seconds);

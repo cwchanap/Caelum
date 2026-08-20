@@ -46,6 +46,35 @@ fn bus_route_engine() -> GameEngine {
     engine
 }
 
+fn one_bus_service_engine() -> GameEngine {
+    let mut engine = bus_route_engine();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".into(),
+                target_headway_seconds: 3_600,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::DeployInitialFleet {
+                line_id: "route-001".into(),
+            })
+            .applied
+    );
+    assert_eq!(engine.snapshot().transit.routes[0].vehicle_ids.len(), 1);
+    engine
+}
+
+fn creative_one_bus_service_engine() -> GameEngine {
+    let deployed = one_bus_service_engine();
+    let mut snapshot = deployed.snapshot_for_save();
+    snapshot.rules.economy_preset = EconomyPreset::Creative;
+    snapshot.budget = 399;
+    GameEngine::from_snapshot(snapshot).unwrap()
+}
+
 /// A connected loop bus route whose cycle exceeds the 60-second headway floor,
 /// so a target at the floor requires at least two vehicles.
 fn long_bus_route_engine() -> GameEngine {
@@ -215,6 +244,131 @@ fn bus_route_creation_is_fleet_free_and_budget_free() {
     assert!(created.snapshot.transit.routes[0].vehicle_ids.is_empty());
     assert!(created.snapshot.transit.vehicles.is_empty());
     assert_eq!(created.snapshot.budget, before.budget);
+}
+
+#[test]
+fn standard_daily_operating_cost_crosses_budget_below_zero_at_midnight() {
+    let mut engine = one_bus_service_engine();
+    engine.set_budget_for_test(399);
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let result = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
+
+    assert!(result.applied);
+    assert_eq!(result.snapshot.day, 1);
+    assert_eq!(result.snapshot.budget, -1);
+    assert_eq!(
+        result.snapshot.metrics.state,
+        caelum_core::model::MetricsState::Running
+    );
+}
+
+#[test]
+fn creative_keeps_budget_across_midnight() {
+    let mut engine = creative_one_bus_service_engine();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let result = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(result.snapshot.budget, 399);
+}
+
+#[test]
+fn daily_charge_is_identical_for_coarse_and_split_ticks() {
+    let mut coarse = one_bus_service_engine();
+    let mut split = one_bus_service_engine();
+    coarse.set_budget_for_test(5_000);
+    split.set_budget_for_test(5_000);
+    assert!(
+        coarse
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    assert!(
+        split
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let coarse_result = coarse.tick(caelum_core::clock::GAME_DAY_SECONDS + 60.0);
+    let _ = split.tick(caelum_core::clock::GAME_DAY_SECONDS - 10.0);
+    let split_result = split.tick(70.0);
+
+    assert_eq!(coarse_result.snapshot.time, split_result.snapshot.time);
+    assert_eq!(coarse_result.snapshot.day, split_result.snapshot.day);
+    assert_eq!(coarse_result.snapshot.budget, split_result.snapshot.budget);
+}
+
+#[test]
+fn restored_post_midnight_snapshot_does_not_charge_again_same_day() {
+    let mut engine = one_bus_service_engine();
+    engine.set_budget_for_test(1_000);
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let midnight = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(midnight.snapshot.budget, 600);
+
+    let saved = engine.snapshot_for_save();
+    let mut restored = GameEngine::from_snapshot(saved).unwrap();
+    assert!(
+        restored
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let later = restored.tick(10.0);
+
+    assert_eq!(later.snapshot.day, 1);
+    assert_eq!(later.snapshot.budget, 600);
+}
+
+#[test]
+fn paused_route_does_not_incur_daily_operating_cost() {
+    let mut paused_route = one_bus_service_engine();
+    paused_route.set_budget_for_test(1_000);
+    assert!(
+        paused_route
+            .dispatch(GameIntent::SetRouteActive {
+                route_id: "route-001".into(),
+                active: false,
+            })
+            .applied
+    );
+    assert!(
+        paused_route
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let result = paused_route.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(result.snapshot.budget, 1_000);
+}
+
+#[test]
+fn broken_service_does_not_incur_daily_operating_cost() {
+    let mut broken = one_bus_service_engine();
+    broken.set_budget_for_test(1_000);
+    assert!(
+        broken
+            .dispatch(GameIntent::RemoveAtTile {
+                point: Point { x: 6, y: 5 },
+            })
+            .applied
+    );
+    assert!(
+        broken
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let result = broken.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(result.snapshot.budget, 1_000);
 }
 
 #[test]
