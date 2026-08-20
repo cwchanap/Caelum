@@ -1314,7 +1314,7 @@ body {
 }
 
 .readout {
-  flex: 1 1 0;
+  flex: 1 1 auto;
   padding-inline: 12px;
 }
 
