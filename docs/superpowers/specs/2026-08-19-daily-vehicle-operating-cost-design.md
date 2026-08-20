@@ -8,7 +8,7 @@
 
 Complete the smallest Phase 5 financial-feedback slice after HPA-643:
 
-> Show the recurring daily cost implied by a Bus/Metro service plan, then make Standard sandbox actually pay that cost once per game day while Creative displays the same nominal cost without reducing budget.
+> Show the recurring daily cost implied by a Bus/Metro service plan, then make Standard sandbox pay that cost once per game day while Creative displays the same nominal cost without reducing budget.
 
 The financial signal must change a real service-planning choice without turning Caelum into an accounting game. A tighter target can require a larger fleet and therefore a larger projected daily cost before deployment; after deployment, adding or pausing service changes the daily cost the player sees.
 
@@ -18,63 +18,55 @@ Do not add fares, subsidies, revenue attribution, ledgers, history, proration, r
 
 Current `main` already has the required seams:
 
-- `crates/caelum-core/src/transit.rs` owns the current nominal vehicle purchase costs: `BUS_COST = 8_000` and `METRO_COST = 50_000`.
-- `crates/caelum-core/src/service_control.rs` owns shared Bus/Metro cycle time, required fleet, initial deployment estimate, top-up offer, nominal headway, and the runtime-only `ServiceMetrics` projection used by the Lines row.
-- `GameEngine::snapshot()` derives `ServiceMetrics` only on an output clone; incoming service metrics are ignored and save normalization clears them.
-- `crates/caelum-core/src/trips.rs` already splits coarse ticks at the next exact game-day boundary through `next_boundary_after`, then advances a substep and synchronizes `snapshot.day` from `snapshot.time`.
-- `GameSnapshot.budget` is already canonical persisted state and the top bar already renders it.
-- `EconomyPreset` already distinguishes Standard and Creative. Existing `CostPolicy::quote` / `AuthorizedCost::apply_to` intentionally reject unaffordable capital purchases and therefore are the wrong authorization path for a recurring cost that must be allowed to take Standard below zero.
-- Persistence currently does not require `budget >= 0`, so a negative live budget does not need a schema or persistence-rule change.
-- `LinesPanel.svelte` already has separate zero-fleet and deployed service blocks, which gives the cost one natural row in each state.
+- `crates/caelum-core/src/transit.rs` owns the current nominal purchase costs: `BUS_COST = 8_000` and `METRO_COST = 50_000`.
+- `crates/caelum-core/src/service_control.rs` owns the shared Bus/Metro runtime-only `ServiceMetrics` projection used by the Lines row.
+- `GameEngine::snapshot()` derives `ServiceMetrics` on an output clone; incoming service metrics are ignored and save normalization clears them.
+- `crates/caelum-core/src/trips.rs::next_boundary_after` already inserts the next exact midnight boundary as `(day + 1) * GAME_DAY_SECONDS`.
+- Paused ticks already return without advancing game time, so global pause cannot cross a day boundary.
+- `GameSnapshot.budget` is canonical persisted state and is already visible in the top bar.
+- `EconomyPreset` already distinguishes Standard and Creative.
+- `CostPolicy::quote` / `AuthorizedCost::apply_to` intentionally reject unaffordable capital purchases and therefore are the wrong path for a recurring debit that must be allowed to take Standard below zero.
+- Persistence validates time/rules but does not require `budget >= 0`; negative Standard budget is already representable.
+- `LinesPanel.svelte` already has separate zero-fleet and deployed service blocks and already uses `formatBudget`.
 
-HPA-645 should extend these seams rather than introduce a second economy model.
+HPA-645 extends these seams rather than introducing a second economy model.
 
-## Approaches considered
+## Chosen product rule
 
-### A. Fixed daily vehicle cost + day-boundary deduction — chosen
-
-Give each mode one fixed daily vehicle cost, project it through `ServiceMetrics`, and charge the active connected fleet at the existing game-day boundary. Standard deducts; Creative does not.
-
-This is the smallest slice that satisfies all Phase 5 evidence:
-
-- the player sees recurring cost before committing to a headway/fleet;
-- the value changes when fleet size or route-active state changes;
-- Standard budget actually responds;
-- Creative stays budget-neutral;
-- no revenue system is needed to make the signal understandable.
-
-### B. Projection only — rejected
-
-Showing a daily cost without changing Standard budget is cheaper, but HPA-335 explicitly requires Standard to deduct the financial signal and allows Standard to become negative. Projection-only work would not complete the parent slice.
-
-### C. Add fares/subsidy and show net operating result — rejected for now
-
-A fare/subsidy rule would immediately require decisions about trip attribution, settlement timing, transfers, incomplete/unserved trips, and potentially per-line revenue ownership. None of that is required to make fleet operating cost affect a service decision. Add revenue later only if play evidence shows expense-only feedback is insufficient.
-
-## Product rule: one fixed daily cost per running vehicle
-
-Use explicit mode tuning constants:
+Use explicit daily tuning constants:
 
 ```rust
 pub(crate) const BUS_DAILY_OPERATING_COST: i32 = 400;
 pub(crate) const METRO_DAILY_OPERATING_COST: i32 = 2_500;
 ```
 
-The initial values are exactly 5% of the current nominal vehicle purchase prices, but the implementation keeps them as explicit constants rather than adding a configurable percentage/rate system. They are game-balance values, not accounting formulae.
+These happen to be 5% of today's purchase prices, but they are independent balance controls. Do not implement them as `0.05 * BUS_COST` / `METRO_COST`; changing purchase price must not silently retune recurring expense.
 
 A fleet's nominal daily cost is:
 
 ```text
-assigned_or_planned_vehicle_count × mode_daily_operating_cost
+vehicle count × mode daily operating cost
 ```
 
-Use saturating integer arithmetic at this boundary. A pathological forged fleet count must not panic or wrap the budget; it may saturate at `i32::MAX`.
+Use saturating integer arithmetic at this numeric boundary. `TransitMode::Walk` defensively maps to zero.
 
-`TransitMode::Walk` has no vehicle operating cost and returns zero from the helper defensively.
+## Capital cost and recurring cost are different contracts
 
-## Chargeability: active + connected + assigned
+Do **not** route daily operating cost through `CostPolicy`.
 
-A deployed line is chargeable at a day boundary only when all of these are true:
+`CostPolicy` exists to quote and authorize player purchases before mutation. Standard purchase authorization rejects when budget is insufficient and `AuthorizedCost::apply_to` refuses a deduction below zero. HPA-645 explicitly requires the opposite recurring-expense behavior:
+
+```text
+budget before midnight: $399
+one running Bus:        $400/day
+budget after midnight:  -$1
+```
+
+Therefore a narrow recurring deduction path is correct and not duplication. Existing construction, deployment, and top-up affordability behavior stays unchanged.
+
+## Chargeability: route active + connected + assigned fleet
+
+A deployed line is chargeable at a day boundary only when all are true:
 
 ```text
 route.active
@@ -82,20 +74,22 @@ AND every route leg is Connected
 AND assigned fleet > 0
 ```
 
-Reuse `route_lifecycle::is_route_operational(route.active, legs)` for the first two conditions. Do not duplicate route-health/status logic in a finance module.
+Reuse `route_lifecycle::is_route_operational(route.active, legs)` rather than duplicating route-state logic.
 
 Consequences:
 
-- a player can pause a line to make its next daily operating charge zero;
-- a broken service is not charged while its vehicles are parked/unusable;
-- a zero-fleet line is never charged;
-- global simulation pause needs no accounting flag because paused ticks do not advance game time or cross a day boundary.
+- `SetRouteActive { active: false }` makes the next daily charge zero;
+- a broken line is not charged;
+- a zero-fleet line is not charged;
+- global simulation pause is **not** a route chargeability input.
 
-This slice deliberately does not accumulate active seconds. State at the game-day boundary decides whether the next daily charge applies. There is no proration, refund, partial-day charge, or `lastChargedDay` history.
+Global pause only freezes time. A globally paused but still-active line continues to display its nominal daily operating cost because it remains the cost the service will incur at the next midnight once time resumes. No charge occurs while globally paused because no day boundary is crossed.
 
-## Day-boundary semantics
+This distinction is load-bearing: HPA-628 currently folds `route.active && !snapshot.paused` before calculating its top-up offer. HPA-645 must split those inputs so `nextVehicleCost` remains suppressed by global pause while `dailyOperatingCost` uses route-active state only.
 
-Add one narrow function in a focused module:
+## Day-boundary semantics: one charge per observed boundary
+
+Create one focused function:
 
 ```rust
 pub(crate) fn apply_day_boundary_charge(
@@ -104,34 +98,28 @@ pub(crate) fn apply_day_boundary_charge(
 )
 ```
 
-The function returns immediately when:
+It returns immediately when:
 
 - `state.rules.game_mode != GameMode::Sandbox`;
 - `state.day <= previous_day`;
-- the economy preset is Creative;
-- the live chargeable fleet cost is zero.
+- `state.rules.economy_preset == EconomyPreset::Creative`;
+- the current chargeable assigned-fleet cost is zero.
 
-For Standard, compute the current chargeable daily fleet cost and subtract it once per crossed game day. Normal engine progression crosses exactly one day at a time because `next_boundary_after` already includes the next midnight. Multiplying by `state.day - previous_day` keeps the helper safe for a direct multi-day call without introducing another scheduler.
-
-Budget subtraction uses saturating arithmetic and **does not** perform affordability authorization:
+For Standard, subtract the current chargeable fleet cost **once**:
 
 ```rust
-state.budget = state.budget.saturating_sub(total_charge);
+state.budget = state.budget.saturating_sub(total_daily_cost);
 ```
 
-That distinction is intentional:
+Do not multiply by `state.day - previous_day` and do not add a `crossed_days` concept. Normal engine progression cannot skip multiple midnights because `next_boundary_after` inserts each next day boundary. If a future change ever jumps several days in one substep, that is a tick-boundary correctness bug; charging today's fleet repeatedly would not reconstruct historical state at the skipped boundaries.
 
-- capital construction and vehicle purchases keep the existing `CostPolicy::quote(...).authorize()` behavior and cannot make Standard negative;
-- recurring operating expense may make Standard negative;
-- negative budget does not end Sandbox or mutate `metrics.state`.
+This is fixed boundary billing, not active-time accounting. State at each actual midnight decides the charge. There is no proration, refund, accrued balance, or `lastChargedDay`.
 
-Do not change `CostQuote`, `AuthorizedCost`, or paid player-intent behavior for HPA-645.
-
-## Tick integration: reuse the existing midnight boundary
+## Tick integration: reuse the existing midnight substep
 
 Do not add an economy scheduler.
 
-In `trips::advance_tick_substep`, capture the previous day, advance time, synchronize the clock, and then apply the charge:
+In `trips::advance_tick_substep`, capture the previous day, advance time, synchronize the clock, then apply the boundary charge:
 
 ```rust
 let previous_day = state.day;
@@ -142,17 +130,15 @@ crate::operating_cost::apply_day_boundary_charge(&mut next, previous_day);
 reset_daily_commute_flags(&mut next);
 ```
 
-The existing `next_boundary_after` already guarantees a substep at midnight, so this preserves coarse/fine tick determinism without a persisted charge marker.
+`next_boundary_after` already guarantees a substep ending at midnight, so a coarse tick and equivalent split ticks see the same charge boundaries.
 
-The charge runs before vehicle/trip advancement for the new day. Budget does not currently affect trip routing or movement, so no simulation ordering dependency is introduced.
+A save made after midnight already contains the deducted budget and new day/time. Restoring it and ticking within that same day has `previous_day == state.day`, so the boundary cannot be charged again. No persisted settlement marker or schema bump is needed.
 
-A save made exactly after midnight already contains the deducted budget and the new day/time. On restore, the next tick starts with `previous_day == state.day`, so the same boundary cannot be charged twice. No `lastChargedDay` field or schema bump is justified.
-
-## Focused Rust module
+## Focused Rust authority
 
 Create `crates/caelum-core/src/operating_cost.rs` and register it as `pub(crate)` in `lib.rs`.
 
-Keep exactly these responsibilities together:
+Public-within-crate surface:
 
 ```rust
 pub(crate) const BUS_DAILY_OPERATING_COST: i32 = 400;
@@ -170,16 +156,18 @@ pub(crate) fn projected_line_daily_operating_cost(
 pub(crate) fn apply_day_boundary_charge(state: &mut GameSnapshot, previous_day: u32);
 ```
 
-`projected_line_daily_operating_cost` has one UI-facing rule:
+`projected_line_daily_operating_cost` owns the one UI-facing projection rule:
 
-- when `assigned_fleet == 0`, return the required fleet's nominal daily cost when `required_fleet` exists, otherwise zero;
-- when a fleet is assigned, return its cost only while `is_route_operational(active, legs)` is true, otherwise zero.
+- zero assigned fleet + `required_fleet: Some(n)` => projected `n × mode cost`;
+- zero assigned fleet + no requirement => zero;
+- assigned fleet => assigned-fleet cost only while `is_route_operational(active, legs)` is true;
+- inactive/broken assigned fleet => zero.
 
-This gives a pre-deployment estimate and a post-deployment current charge using one field and one Rust formula.
+The actual boundary charge uses only assigned operational fleets. It must never charge a zero-fleet service's projected required fleet.
 
-Do not make a generic `RecurringExpense`, `EconomyService`, ledger entry, trait, registry, or event bus.
+Do not add `RecurringExpense`, `EconomyService`, a ledger entry, trait, registry, event bus, or generalized scheduler.
 
-## Chosen `ServiceMetrics` contract
+## `ServiceMetrics.dailyOperatingCost`
 
 Extend runtime-derived `ServiceMetrics` with exactly one required field:
 
@@ -196,24 +184,55 @@ interface ServiceMetrics {
 }
 ```
 
-The value is nominal and identical in Standard and Creative. Creative changes the deduction rule, not the projection. TypeScript must not inspect `economyPreset` to recalculate or zero the metric.
+The value is nominal and identical in Standard and Creative. Economy preset affects deduction only; TypeScript must not inspect the preset to recalculate or zero the metric.
 
-In `service_control::metrics`:
+### Keep route pause and global pause separate
 
-1. derive `round_trip_seconds` and `required_fleet` as today;
-2. compute deployment/top-up/headway values as today;
-3. call `operating_cost::projected_line_daily_operating_cost(...)` once;
-4. publish the result with the existing health fields.
+Change `service_control::metrics` to receive both route activity and global pause rather than the currently folded `active && !snapshot.paused` value:
+
+```rust
+fn metrics(
+    active: bool,
+    globally_paused: bool,
+    legs: &[RouteLegPath],
+    mode: TransitMode,
+    flow: &RoadFlow,
+    assigned_fleet: usize,
+    target_headway_seconds: Option<u32>,
+    waiting_health: WaitingHealth,
+) -> Option<ServiceMetrics>
+```
+
+Then:
+
+```rust
+let next_vehicle_cost = top_up_offer(
+    active && !globally_paused,
+    legs,
+    mode,
+    assigned_fleet,
+    required_fleet,
+);
+
+let daily_operating_cost = operating_cost::projected_line_daily_operating_cost(
+    active,
+    legs,
+    mode,
+    assigned_fleet,
+    required_fleet,
+);
+```
+
+`populate_snapshot_metrics` passes `route.active` / `line.active` and `snapshot.paused` separately. This preserves HPA-628 while preventing global pause from making the nominal daily cost disappear.
 
 Keep `ServiceMetrics` runtime-only:
 
-- no serde default for the new field;
+- no serde default for `daily_operating_cost`;
 - no compatibility alias;
-- no new persisted field;
+- no persisted field;
 - incoming `serviceMetrics` remains ignored;
-- `snapshot_for_save()` still omits it.
-
-No snapshot schema bump is required.
+- `snapshot_for_save()` still omits service metrics;
+- no snapshot schema bump.
 
 ## UI projection and copy
 
@@ -222,153 +241,123 @@ Add required `dailyOperatingCost` to:
 - `src/domain/types.ts::ServiceMetrics`;
 - `src/runtime/types.ts::ShellServiceState`.
 
-`runtimeSelectors.ts` forwards only Rust's value:
+`runtimeSelectors.ts` forwards Rust only:
 
 ```ts
 dailyOperatingCost: route.serviceMetrics?.dailyOperatingCost ?? 0,
 ```
 
-Do not duplicate mode constants, fleet multiplication, active/broken predicates, or Standard/Creative behavior in TypeScript.
+No TypeScript operating-cost constants or fleet multiplication.
 
-### Zero-fleet service block
+### Zero-fleet block
 
-When `requiredFleet !== null`, show:
+When Rust has a real required fleet, show:
 
 ```text
 Est. daily cost  $1,200
 ```
 
-beside the existing Required / Est. deploy cost rows. The same row immediately reflects a changed target because Rust recomputes `requiredFleet` and `dailyOperatingCost`.
+Do not render an estimate row before a target/required fleet exists.
 
-Do not render an `Est. daily cost $0` row before a target produces a required fleet.
+### Deployed block
 
-### Deployed service block
-
-Always show:
+Show:
 
 ```text
 Daily cost  $1,200
 ```
 
-for the current Rust projection. A route pause produces `$0`; resuming restores the fleet cost. A broken service also falls back to zero because derived service metrics are unavailable/currently non-chargeable.
+A route-level pause or broken service yields `$0`. Global simulation pause keeps the nominal value because `dailyOperatingCost` remains route-state based.
 
-Use existing `formatBudget`; do not add a second currency formatter.
-
-No new finance panel, modal, tooltip, warning, toast, chart, or global daily-cost aggregate is part of this slice. The existing top-bar budget provides the visible result when midnight applies the Standard charge.
+Use existing `formatBudget`; no new formatter or finance surface.
 
 ## Creative semantics
 
-Creative must display the same nominal `dailyOperatingCost` values as Standard so service planning still communicates scale.
+Creative displays exactly the same nominal `dailyOperatingCost` as Standard for the same route/fleet state. Only the canonical budget deduction differs.
 
-At the day boundary, Creative's canonical `budget` remains unchanged. Do not publish a Creative-specific zero cost and do not add a `deductsOperatingCost` UI flag. The preset already defines Creative as budget-neutral; the projection describes the nominal service cost.
+This needs a direct regression. A Creative public-engine test must assert both:
 
-## Negative Standard budget
+- budget is unchanged across midnight;
+- `daily_operating_cost` remains the same nominal Bus value as Standard (400 for the one-bus fixture).
 
-Standard recurring cost may cross below zero:
-
-```text
-budget before midnight: $399
-one running Bus:        $400/day
-budget after midnight:  -$1
-```
-
-This does not lose the sandbox, pause the game, remove service, or create a rejection. Existing paid player actions naturally remain unaffordable while the budget is insufficient because their existing authorization paths are unchanged.
-
-No overdraft floor, bankruptcy state, loan, emergency subsidy, or negative-budget warning is added.
+Do not publish Creative-specific zero cost and do not add a frontend `deductsOperatingCost` flag.
 
 ## Verification strategy
 
-### Pure operating-cost authority
+### Pure Rust authority
 
 Unit tests in `operating_cost.rs` lock:
 
-- Bus cost is 400 per vehicle;
-- Metro cost is 2,500 per vehicle;
-- fleet multiplication uses the shared helper;
-- zero-fleet/no-target projection is zero;
-- zero-fleet with a required fleet publishes the projected required-fleet cost;
-- active connected assigned fleet publishes the assigned-fleet cost;
-- inactive/broken assigned fleet publishes zero;
-- Standard boundary charge subtracts and can cross below zero;
-- Creative boundary charge leaves budget unchanged;
-- campaign mode is unchanged;
-- no day transition is unchanged.
+- Bus = 400/vehicle/day;
+- Metro = 2,500/vehicle/day;
+- saturating fleet multiplication;
+- zero-fleet/no-required projection = zero;
+- zero-fleet with required fleet = projected required-fleet cost;
+- active connected assigned fleet = assigned-fleet cost;
+- inactive/broken assigned fleet = zero;
+- Standard day transition deducts once and can cross below zero;
+- Creative day transition does not deduct;
+- Campaign is unchanged;
+- no day transition does not deduct.
 
-### Tick integration and determinism
+No `crossed_days` unit or multi-day multiplier test is added.
 
-Reuse the existing transit fixture in `crates/caelum-core/tests/service_control.rs` rather than building a second route harness.
+### Public tick / determinism
 
-Lock one deployed Bus through the public `GameEngine`:
+Reuse existing `crates/caelum-core/tests/service_control.rs` fixtures.
 
-- set a target that requires one bus;
-- deploy;
-- set budget to 399 via the existing test seam;
-- resume simulation;
-- tick to the next day boundary;
-- assert budget is -1 and sandbox remains running.
+Lock:
 
-Then compare one coarse tick crossing midnight with equivalent split ticks and assert at least `time`, `day`, and `budget` match. This proves the charge is attached to the existing boundary rather than raw host tick cadence.
+1. Standard one-bus fixture: set budget to 399, cross midnight, assert `-1` and sandbox remains running.
+2. Creative equivalent: cross midnight, assert budget unchanged **and** output `daily_operating_cost == 400`.
+3. Coarse tick crossing midnight vs equivalent split ticks: assert `time`, `day`, and `budget` match.
+4. Save/restore after the charged boundary: small same-day tick does not charge again.
+5. Route pause: `SetRouteActive { active: false }` publishes daily cost zero and avoids the next boundary charge.
+6. Broken service: no daily charge.
+7. Global pause invariant: on a deployed Bus, `SetPaused { paused: true }` keeps `daily_operating_cost == 400 × assigned_fleet`; on a shortfall fixture, `next_vehicle_cost` remains suppressed while globally paused.
 
-Use the same fixture converted/restored with `EconomyPreset::Creative` to prove the public tick path leaves budget unchanged.
+No Playwright midnight scenario is required; Rust owns settlement timing.
 
-Add a save/restore assertion at the charged boundary: restore the saved day-1 snapshot, resume, tick a small sub-day delta, and prove there is no duplicate charge.
+### Wire and frontend
 
-### Service output / wire
+Update direct non-null `ServiceMetrics` fixtures and the exact camelCase wire object with `dailyOperatingCost`.
 
-In existing service-control tests:
+Frontend tests lock:
 
-- zero-fleet Bus target publishes required-fleet projected daily cost;
-- deployed Bus publishes assigned-fleet daily cost;
-- paused Bus publishes zero;
-- one Metro assertion proves the shared mode path and 2,500-per-train rule;
-- forged incoming `serviceMetrics` remains non-authoritative;
-- `snapshot_for_save()` still omits service metrics.
+- selector forwards Rust's value;
+- zero-fleet target renders `Est. daily cost`;
+- deployed service renders `Daily cost`;
+- route-paused/broken value renders as `$0` from Rust projection;
+- Metro uses the same component path.
 
-Update every direct Rust `ServiceMetrics { ... }` literal and the exact camelCase `serviceMetrics` JSON expectation in `crates/caelum-core/tests/model_wire_format.rs` with `dailyOperatingCost`.
-
-### TypeScript / Svelte
-
-Update the existing required-field fixtures that already construct non-null service metrics/shell service state:
-
-- `tests/runtime/runtimeSelectors.test.ts`;
-- `tests/runtime/snapshotView.test.ts`;
-- `tests/runtime/gameRuntime.test.ts`;
-- `tests/ui/appShell.test.ts`;
-- `tests/ui/linesPanel.test.ts`.
-
-Lock in `linesPanel.test.ts`:
-
-- zero-fleet targeted Bus shows the Rust-quoted `Est. daily cost`;
-- deployed Bus shows `Daily cost`;
-- paused deployed Bus shows `$0` rather than reproducing a rule in Svelte;
-- Metro displays the Rust-provided value through the same component.
-
-No new Playwright scenario is required solely to wait for midnight. Rust owns the tick/deduction contract, and the existing UI/runtime tests can lock projection/rendering without a slow end-to-end day simulation.
+No frontend formula or preset branch is permitted.
 
 ## Risks and bounded decisions
 
-### Boundary billing is intentionally not prorated
+### Boundary gaming is accepted
 
-A route resumed just after midnight will not pay until the next day boundary; a route paused before the boundary avoids the next charge. Fixing that would require active-time accumulation or a persisted settlement marker, which is explicitly outside this evidence-backed slice. If play makes boundary gaming material, treat proration as a separate task.
+A route resumed just after midnight does not pay until the next midnight; pausing just before midnight avoids that day's charge. Fixing this requires proration/history and is intentionally outside HPA-645.
 
 ### Broken routes are free while broken
 
-This matches the current operational predicate and avoids charging vehicles that cannot run. Do not invent maintenance/ownership cost to keep charging parked fleets; that would be a second economic rule.
+This uses the existing operational predicate. Charging parked/broken assets would be a separate ownership/maintenance rule.
 
-### Daily cost values are tuning constants
+### Daily values are independent tuning constants
 
-The 400 / 2,500 values intentionally track 5% of today's purchase prices but are not dynamically derived. If vehicle purchase prices are retuned later, decide explicitly whether operating costs should also move rather than coupling two balance controls accidentally.
+400 / 2,500 are intentionally explicit. Retuning purchase prices does not automatically retune operating cost.
 
 ### No revenue yet
 
-Expense-only feedback is enough to make headway/fleet scale financially visible. Fare/subsidy work should be added only if gameplay evidence shows players cannot make useful decisions without a net result.
+Expense-only feedback is sufficient to make fleet/headway scale financially visible. Add fares/subsidies only if later play evidence requires a net operating result.
 
 ## Non-goals
 
 - fares, subsidies, ticket revenue, transfers/revenue attribution, or net profit;
 - per-distance, per-hour, occupancy, congestion, vehicle-age, fuel, energy, staffing, or maintenance models;
 - active-time history, proration, refunds, partial-day settlement, transaction logs, or accounting periods;
+- a multi-day catch-up multiplier or skipped-boundary settlement rule;
 - budgets by department, cost centres, ledgers, loans, bonds, taxes, bankruptcy, or game-over rules;
 - a finance/dashboard/history UI or global cost chart;
 - target editing after deployment, fleet withdrawal/sale/reassignment/refund, holding, or optimization;
-- a generic recurring-expense system, plugin architecture, dependency, feature flag, schema migration, or backward-compatibility adapter.
+- a generic recurring-expense system, dependency, feature flag, schema migration, or backward-compatibility adapter;
+- changes to capital purchase affordability or `CostPolicy`.
