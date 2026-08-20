@@ -332,6 +332,16 @@ Frontend tests lock:
 
 No frontend formula or preset branch is permitted.
 
+## Review resolutions
+
+The planning review made three valid tightening changes:
+
+1. **Removed multi-day multiplication.** `apply_day_boundary_charge` subtracts once when `state.day > previous_day`; the existing tick boundary is authoritative. A skipped-midnight jump would be a tick bug, not a settlement feature.
+2. **Locked global-pause separation.** The plan now requires a regression showing an active deployed line keeps nominal `dailyOperatingCost` while globally paused, while HPA-628 `nextVehicleCost` remains suppressed.
+3. **Locked Creative nominal parity.** The Creative public-engine regression now asserts both unchanged budget and the same one-Bus nominal `daily_operating_cost == 400`.
+
+No other architecture change is needed.
+
 ## Risks and bounded decisions
 
 ### Boundary gaming is accepted
