@@ -1487,6 +1487,10 @@ body {
 }
 
 @media (min-width: 1024px) and (max-width: 1199px) {
+  .brand-tag {
+    display: none;
+  }
+
   .topbar-readout--wide {
     display: none;
   }
