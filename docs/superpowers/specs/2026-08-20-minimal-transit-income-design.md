@@ -191,17 +191,22 @@ Keep this separate from `operating_cost.rs`. Cost and income are two concrete ru
 The production change in `trips.rs` should remain small and local:
 
 ```rust
-let total_transit_income = results.iter().fold(0_i32, |total, result| {
-    total.saturating_add(crate::transit_income::completed_transit_trip_income(
-        &result.trip,
-    ))
-});
+let total_transit_income = results
+    .iter()
+    .filter(|result| result.completed_trips > 0)
+    .fold(0_i32, |total, result| {
+        total.saturating_add(crate::transit_income::completed_transit_trip_income(
+            &result.trip,
+        ))
+    });
 
 let mut next = state.clone();
 crate::transit_income::apply_transit_income(&mut next, total_transit_income);
 ```
 
 Then preserve the existing result-consumption loop and metric update.
+
+The `completed_trips > 0` filter is required, not optional. `tick_trip` returns `unchanged` (with `completed_trips: 0`) for a trip that was already terminal (`Arrived`/`Late`) when the pass began — e.g. one carried in from a restored snapshot — while `completed_transit_trip_income` keys off status alone. Without the filter, every subsequent tick re-credits the fare. `completed_trips` is set to `1` only in `score_arrival`, the single transition into a terminal arrival status, so the filter matches the `apply_arrival_to_sim` gate below and does not pay walking/private-car journeys (those never set `completed_trips` to a transit-qualifying transition without a transit-bearing plan).
 
 Compute income from the resolved trip before terminal trips are removed. Do not infer it from `completed_trips` alone because that would incorrectly pay walking and private-car journeys. Do not infer it from vehicle passenger lists after alighting because the passenger may already have disembarked when the overall journey completes.
 
@@ -254,7 +259,7 @@ No new identity or settlement marker is needed.
 
 A completed trip is terminal and is removed from `active_trips` during the same `advance_active_trips_with_zero_delta_ids` call in which income is credited. Re-advancing the returned snapshot therefore cannot encounter that trip and cannot credit it twice.
 
-Save/restore needs no special handling: the budget already contains the credit and the completed trip is absent from the saved active-trip set.
+Save/restore does not need a persisted settlement marker, but it does rely on the `completed_trips > 0` filter in the income fold. A restored snapshot can carry a trip that is already `Arrived`/`Late` in `active_trips` (the save boundary serializes `active_trips` as-is, and a terminal trip is only removed by the next resolution pass). `tick_trip` returns `unchanged` with `completed_trips: 0` for such a pre-existing terminal trip, and `completed_transit_trip_income` keys off status alone, so without the filter every subsequent tick would re-credit the fare. The `completed_trips > 0` gate — set only in `score_arrival` during the live terminal transition — ensures a pre-existing terminal trip is settled at most once. The `pre_existing_terminal_transit_trip_is_not_re_credited` test locks this invariant.
 
 Coarse and equivalent split ticks must finish with the same budget. The real bus lifecycle fixture already has one coarse disembark path and one split disembark path in scope; HPA-646 extends that same fixture through final arrival and compares the resulting budgets.
 
@@ -288,7 +293,8 @@ Focused `trips.rs` tests prove the cash-flow integration without rebuilding rout
 2. advancing the returned snapshot again does not credit twice;
 3. equivalent Creative completion changes trip/metrics state but not budget;
 4. equivalent walking-only completion increments completed trips but credits `$0`;
-5. two qualifying trips resolving in one pass credit `$400`.
+5. two qualifying trips resolving in one pass credit `$400`;
+6. a pre-existing terminal transit trip (`pre_existing_terminal_transit_trip_is_not_re_credited`) — e.g. one carried in from a restored snapshot — is not re-credited, locking the `completed_trips > 0` gate.
 
 These synthetic tests lock the settlement seam only. They are not sufficient proof that the real ride lifecycle still presents a transit-bearing plan at terminal resolution.
 

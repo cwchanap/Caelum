@@ -577,17 +577,22 @@ This fixture reaches final arrival at about `32.5s` at speed 1, while `GAME_DAY_
 In `advance_active_trips_with_zero_delta_ids`, after `metric_delta` is built and before `results` is consumed by the existing `for result in results` loop, add:
 
 ```rust
-let total_transit_income = results.iter().fold(0_i32, |total, result| {
-    total.saturating_add(crate::transit_income::completed_transit_trip_income(
-        &result.trip,
-    ))
-});
+let total_transit_income = results
+    .iter()
+    .filter(|result| result.completed_trips > 0)
+    .fold(0_i32, |total, result| {
+        total.saturating_add(crate::transit_income::completed_transit_trip_income(
+            &result.trip,
+        ))
+    });
 
 let mut next = state.clone();
 crate::transit_income::apply_transit_income(&mut next, total_transit_income);
 ```
 
 Replace the existing single `let mut next = state.clone();` at that location rather than introducing a second clone.
+
+The `completed_trips > 0` filter is load-bearing, not cosmetic. `tick_trip` returns `unchanged` (with `completed_trips: 0`) for a trip that was already terminal (`Arrived`/`Late`) when the pass began — e.g. one carried in from a restored snapshot — while `completed_transit_trip_income` keys off status alone. Without the filter, every subsequent tick re-credits the fare. `completed_trips` is set to `1` only in `score_arrival`, the single transition into a terminal arrival status, so the filter matches the `apply_arrival_to_sim` gate below.
 
 Do not change `TripTickResult`, `TripMetricDelta`, `score_arrival`, `update_metrics`, `disembark_vehicle`, or terminal-trip removal. The new module reads the already-resolved result and mutates only the cloned budget.
 
@@ -597,6 +602,7 @@ Do not change `TripTickResult`, `TripMetricDelta`, `score_arrival`, `update_metr
 cargo test -p caelum-core trips::tests::completed_transit_journey_credits_standard_budget_once
 cargo test -p caelum-core trips::tests::creative_and_walking_completions_do_not_credit_budget
 cargo test -p caelum-core trips::tests::same_resolution_pass_sums_completed_transit_journeys
+cargo test -p caelum-core trips::tests::pre_existing_terminal_transit_trip_is_not_re_credited
 cargo test -p caelum-core --test trip_lifecycle just_disembarked_trip_does_not_consume_ride_time_as_walking_time
 ```
 
@@ -606,6 +612,7 @@ Expected: PASS, including:
 - Creative neutrality;
 - walk-only zero income;
 - two-trip `$400` aggregation;
+- a pre-existing terminal transit trip (e.g. from a restored snapshot) is not re-credited;
 - real alight plan retention;
 - real arrival `+200`;
 - coarse/split final budget equality.
