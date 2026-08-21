@@ -438,11 +438,22 @@ fn advance_active_trips_with_zero_delta_ids(
             .collect(),
     };
 
-    let total_transit_income = results.iter().fold(0_i32, |total, result| {
-        total.saturating_add(crate::transit_income::completed_transit_trip_income(
-            &result.trip,
-        ))
-    });
+    // Gate income on `completed_trips > 0` so a trip that was already
+    // terminal (`Arrived`/`Late`) before this resolution pass — e.g. carried
+    // in from a restored snapshot — is not re-credited. `tick_trip` returns
+    // `unchanged` (with `completed_trips: 0`) for already-terminal trips, and
+    // `completed_transit_trip_income` keys off status alone, so without this
+    // gate every subsequent tick would re-add the fare. `completed_trips` is
+    // set to 1 only in `score_arrival`, the single transition into a terminal
+    // arrival status, so this matches the `apply_arrival_to_sim` gate below.
+    let total_transit_income = results
+        .iter()
+        .filter(|result| result.completed_trips > 0)
+        .fold(0_i32, |total, result| {
+            total.saturating_add(crate::transit_income::completed_transit_trip_income(
+                &result.trip,
+            ))
+        });
 
     let mut next = state.clone();
     crate::transit_income::apply_transit_income(&mut next, total_transit_income);
@@ -1797,6 +1808,32 @@ mod tests {
             next.metrics.completed_trips,
             state.metrics.completed_trips + 2
         );
+    }
+
+    #[test]
+    fn pre_existing_terminal_transit_trip_is_not_re_credited() {
+        // A trip that is already `Arrived` with a transit route plan when the
+        // resolution pass starts must not earn fare again. `tick_trip` returns
+        // `unchanged` (completed_trips: 0) for already-terminal trips, and
+        // `completed_transit_trip_income` keys off status alone, so without the
+        // `completed_trips > 0` gate on the income fold this trip would be
+        // re-credited on every tick — e.g. a restored snapshot carrying a
+        // terminal trip in `active_trips`.
+        let mut already_arrived = resolvable_journey(
+            "trip-income-pre-terminal",
+            &[TransitMode::Walk, TransitMode::Bus],
+        );
+        already_arrived.status = TripStatus::Arrived;
+
+        let mut state = create_initial_snapshot();
+        state.budget = 50;
+        state.active_trips = vec![already_arrived];
+
+        let next = advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
+
+        assert_eq!(next.budget, 50);
+        assert!(next.active_trips.is_empty());
+        assert_eq!(next.metrics.completed_trips, state.metrics.completed_trips);
     }
 
     #[test]
