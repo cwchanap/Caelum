@@ -4,7 +4,7 @@
 
 **Goal:** Fix the five post-Phase-5 playtest blockers—structure-direction feedback, parallel one-way authoring, the suspected incomplete 2×2 dual-road crossing, map-blocking route drafting, and the Demolish shortcut—in one implementation PR.
 
-**Architecture:** Keep road semantics in `caelum-core::road`. First make "no lateral link between parallel one-way lanes" a topology invariant enforced both when connecting endpoints and when canonicalizing existing edges; then layer the requested 3-tile **standalone OneWay build policy** on top as a separate Rust preflight shared by preview and commit. Route drafting keeps its current runtime state and relaxes only Lines ↔ collapsed visibility. The dual-junction production repair remains conditional on a RED missing-edge reproduction.
+**Architecture:** Keep road semantics in `caelum-core::road`. First make "no traversable lateral link between parallel one-way lanes" a topology invariant enforced both when connecting endpoints and when canonicalizing existing edges (inherited links are stripped where arrow-aligned continuation identifies them; graph-indistinguishable residue stays as a dormant, untraversable stub); then layer the requested 3-tile **standalone OneWay build policy** on top as a separate Rust preflight shared by preview and commit. Route drafting keeps its current runtime state and relaxes only Lines ↔ collapsed visibility. The dual-junction production repair remains conditional on a RED missing-edge reproduction.
 
 **Tech Stack:** Rust / `caelum-core`, TypeScript, Svelte, Vitest, Playwright.
 
@@ -14,7 +14,7 @@
 
 - Deliver everything in **one implementation PR**; internal commits may be separate.
 - Structure-owned road cells are silent no-ops for direction cycling; ordinary authored road tiles remain editable.
-- Parallel one-way lanes must not retain perpendicular lateral links, regardless of authoring order.
+- Parallel one-way lanes must never gain a traversable perpendicular lateral link. Newly authored links are prevented; inherited links are stripped by canonicalization where arrow-aligned continuation identifies them, and structurally indistinguishable residue (downstream lane ends) stays serialized but untraversable via `lane_accepts`.
 - `RoadPreset::OneWay` has a **3-tile standalone build policy** where longitudinal spans overlap: distances 1 and 2 reject, distance 3 allows.
 - The 3-tile policy is not a global map invariant. `CycleRoadDirection` and `DualBidirectional` remain outside that placement preflight.
 - `DualBidirectional` keeps its generated adjacent paired carriageway.
@@ -30,7 +30,7 @@
 ## Review decisions locked into this plan
 
 - The same-direction endpoint condition in `connect_neighbor_endpoints` is real, but do not assume the old "pruning destroys the through road" mechanism: current endpoint-join cleanup can preserve the lateral bridge. Test the unwanted final graph directly.
-- A connection-time guard alone is insufficient because a TwoWay endpoint bridge can later become parallel one-way through direction edits. Canonicalization must remove inherited lateral links too.
+- A connection-time guard alone is insufficient because a TwoWay endpoint bridge can later become parallel one-way through direction edits. Canonicalization strips inherited links where arrow-aligned continuation distinguishes them from protected ring transients; a downstream-end parallel-lane pair is the same arrow/edge-labeled graph as that transient, so its residue stays as a dormant stub rather than paying for serialized stroke provenance.
 - The 3-tile distance remains the requested product policy even though only adjacency is a direct connection hazard.
 - Do not call the 3-tile validator from `CycleRoadDirection`; that would couple a build policy into intermediate direction-cycle states. Topology safety is handled independently.
 - Structure-owned direction clicks stay silent rather than showing replacement copy.
@@ -45,7 +45,7 @@
 - Modify `crates/caelum-core/src/road.rs`
   - structure-owned direction no-op;
   - shared lateral-parallel-one-way predicate;
-  - prevent new lateral endpoint links and canonicalize inherited ones away;
+  - prevent new lateral endpoint links and strip inherited ones during canonicalization, leaving only graph-indistinguishable dormant stubs;
   - standalone OneWay 3-tile placement preflight;
   - only if Task 4 proves RED: bounded 2×2 automatic-junction completion.
 - Modify `crates/caelum-core/src/rejection.rs`
@@ -234,6 +234,10 @@ git commit -m "fix: make structure direction clicks quiet"
 ---
 
 ### Task 2: Make parallel-one-way lateral-link removal a topology invariant
+
+> **Revised during review:** the invariant is stated as "never retain a *traversable* lateral link." Canonicalization strips inherited links only when arrow-aligned lane continuation distinguishes them from protected 2×2-loop transients; downstream-end residue is graph-indistinguishable from those transients, so it stays serialized as a dormant stub (untraversable via `lane_accepts`). Removing retention-time stripping outright was tested and rejected: without it, a retained upstream bridge steers direction-cycle rebuilds into pruning the lane's own through edge. `direction_edit_endpoints_strip_upstream_and_keep_downstream_lateral_links` pins both outcomes.
+
+**Files:**
 
 **Files:**
 - Modify: `crates/caelum-core/src/road.rs`
@@ -969,8 +973,8 @@ PR body must report all five fixes, the separate topology-vs-spacing decision, t
 - [ ] Existing road-authoring and engine-topology direction rejection tests are rewritten.
 - [ ] `InvalidDirectionChange` is deleted from current contracts.
 - [ ] Structure silence is explicitly intentional.
-- [ ] Task 2 tests both prevention of a new same-direction lateral link and cleanup of an inherited TwoWay->OneWay link.
-- [ ] Shared lateral-link predicate is used by connection and canonicalization, not copied with drifting conditions.
+- [ ] Task 2 tests both prevention of a new same-direction lateral link and the strip-upstream / dormant-downstream outcome of an inherited TwoWay->OneWay link.
+- [ ] Shared lateral-link predicate is used by connection and canonicalization, with canonicalization requiring arrow-aligned continuation, not copied with drifting conditions.
 - [ ] Existing opposite-direction Dual anti-U-turn behavior remains covered.
 - [ ] 3 tiles remains the requested policy: distance 1/2 reject, 3 allow.
 - [ ] Spec does not claim distance 2 is mechanically unsafe.
