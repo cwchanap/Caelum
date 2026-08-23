@@ -30,14 +30,45 @@ fn assert_reciprocal_edge(snapshot: &GameSnapshot, point: Point, heading: Headin
 }
 
 fn assert_complete_two_by_two(snapshot: &GameSnapshot) {
+    assert_complete_two_by_two_at(snapshot, point(6, 2));
+}
+
+fn assert_complete_two_by_two_at(snapshot: &GameSnapshot, top_left: Point) {
     for (point, heading) in [
-        (point(6, 2), Heading::East),
-        (point(6, 2), Heading::South),
-        (point(7, 2), Heading::South),
-        (point(6, 3), Heading::East),
+        (top_left, Heading::East),
+        (top_left, Heading::South),
+        (point(top_left.x + 1, top_left.y), Heading::South),
+        (point(top_left.x, top_left.y + 1), Heading::East),
     ] {
         assert_reciprocal_edge(snapshot, point, heading);
     }
+}
+
+fn assert_two_by_two_footprint(snapshot: &GameSnapshot, top_left: Point) {
+    let expected = [
+        top_left,
+        point(top_left.x + 1, top_left.y),
+        point(top_left.x, top_left.y + 1),
+        point(top_left.x + 1, top_left.y + 1),
+    ];
+    let junction = snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| structure.is_automatic_junction() && structure.footprint() == expected)
+        .unwrap_or_else(|| panic!("expected automatic 2x2 junction at {top_left:?}"));
+    assert_eq!(junction.footprint(), expected);
+}
+
+fn blank_grid_engine() -> GameEngine {
+    let mut request = caelum_core::canonical_default_request();
+    request.template_id = "blankGrid".to_string();
+    GameEngine::from_sandbox_request(request)
+        .expect("blank grid fixture request should remain valid")
+}
+
+fn lay(engine: &mut GameEngine, points: Vec<Point>, preset: RoadPreset) {
+    dispatch(engine, GameIntent::LayRoadLine { points, preset });
 }
 
 fn dispatch(engine: &mut GameEngine, intent: GameIntent) {
@@ -187,6 +218,168 @@ fn vertical_first_dual_intersection_has_all_four_internal_edges() {
     let engine = vertical_first_dual_intersection_engine();
     let snapshot = engine.snapshot();
     assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::TwoWay,
+    );
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(6, 2));
+    assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::TwoWay,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(6, 2));
+    assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::OneWay,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(6, 2));
+    assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_internal_edges() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (2..=9).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (9..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(6, 2));
+    assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn recapture_dual_t_junction_at_vertical_endpoint_has_all_four_internal_edges() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (0..=3).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(6, 2));
+    assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn recapture_dual_crossings_with_adjacent_refreshes_have_all_four_internal_edges() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    // y=5 merges the two crossings into one 2x4 automatic junction, so the
+    // nearest separate-junction variant leaves one vertical-only row at y=4.
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 6)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(6, 2));
+    assert_complete_two_by_two(&snapshot);
+    assert_two_by_two_footprint(&snapshot, point(6, 5));
+    assert_complete_two_by_two_at(&snapshot, point(6, 5));
+}
+
+#[test]
+fn recapture_crossroads_starter_beside_dual_crossing_has_all_four_internal_edges() {
+    let mut engine = GameEngine::new();
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 6)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(10, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    let snapshot = engine.snapshot();
+    assert_two_by_two_footprint(&snapshot, point(10, 5));
+    assert_complete_two_by_two_at(&snapshot, point(10, 5));
 }
 
 #[test]
