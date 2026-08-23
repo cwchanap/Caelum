@@ -406,15 +406,16 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
         // Skip lateral connections between established parallel one-way lanes.
         // These perpendicular endpoint links turn lane endpoints into mixed-axis
         // automatic-junction candidates and can destroy the through road;
-        // the invariant covers both same- and opposite-direction lanes. Evidence
-        // of a longitudinal lane edge on each side keeps transient arrows from
-        // mid-direction-cycle states stripping real through-edges.
+        // the invariant covers both same- and opposite-direction lanes. Creation
+        // keeps the weak same-axis evidence: suppressing an endpoint link is
+        // safe, and opposing lane ends legitimately lack arrow-aligned edges.
         if is_lateral_parallel_one_way_link(
             current_one_way,
             &current_connections,
             neighbor.one_way,
             &neighbor.road_connections,
             heading,
+            false,
         ) {
             continue;
         }
@@ -916,6 +917,7 @@ fn canonicalize_authored_roads(map: &mut GameMap) {
                     neighbor.one_way,
                     &neighbor.road_connections,
                     *heading,
+                    true,
                 )
             })
             .collect();
@@ -1059,16 +1061,25 @@ fn is_lateral_parallel_one_way_link(
     neighbor: Option<Heading>,
     neighbor_connections: &[Heading],
     heading: Heading,
+    require_arrow_continuation: bool,
 ) -> bool {
-    fn has_longitudinal_lane_edge(connections: &[Heading], axis: Heading) -> bool {
+    fn has_lane_axis_edge(connections: &[Heading], axis: Heading) -> bool {
         connections.iter().any(|edge| same_axis(*edge, axis))
     }
+    // Retention (canonicalization) additionally demands arrow-aligned lane
+    // continuation on both sides. Any same-axis edge is not enough there: loop
+    // or corner cells cycled to transient arrows carry same-axis edges that
+    // belong to unrelated ring segments, and trusting those stripped real
+    // through-edges permanently.
     match (current, neighbor) {
         (Some(current), Some(neighbor)) => {
             same_axis(current, neighbor)
                 && !same_axis(heading, current)
-                && has_longitudinal_lane_edge(current_connections, current)
-                && has_longitudinal_lane_edge(neighbor_connections, neighbor)
+                && has_lane_axis_edge(current_connections, current)
+                && has_lane_axis_edge(neighbor_connections, neighbor)
+                && (!require_arrow_continuation
+                    || (current_connections.contains(&current)
+                        && neighbor_connections.contains(&neighbor)))
         }
         _ => false,
     }
