@@ -259,18 +259,16 @@ fn removing_both_vertical_approaches_dissolves_orphaned_crossing_edges() {
 }
 
 #[test]
-fn cycling_a_structure_tile_is_rejected_atomically() {
+fn cycling_a_structure_tile_is_a_silent_no_op() {
     let (mut engine, _) = crossing_engine();
     let before = engine.snapshot();
+
     let result = engine.dispatch(GameIntent::CycleRoadDirection {
         point: point(14, 8),
     });
 
     assert!(!result.applied);
-    assert_eq!(
-        result.rejection.unwrap().code,
-        RejectionCode::InvalidDirectionChange
-    );
+    assert!(result.rejection.is_none());
     assert_eq!(result.snapshot, before);
 }
 

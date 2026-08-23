@@ -1,7 +1,7 @@
 use caelum_core::model::{Point, ServicePattern, TransitMode};
 use caelum_core::road::RoadMutation;
 use caelum_core::road_topology::RoadTopology;
-use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset};
+use caelum_core::{GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -62,22 +62,17 @@ fn accepted_network_dispatch_commits_snapshot_and_cache_together() {
 }
 
 #[test]
-fn rejected_direction_change_mutates_neither_snapshot_nor_cache() {
+fn structure_direction_no_op_mutates_neither_snapshot_nor_cache() {
     let mut engine = crossing_engine();
     let before_snapshot = engine.snapshot();
     let before_topology = engine.road_topology_for_test().clone();
+
     let result = engine.dispatch(GameIntent::CycleRoadDirection {
         point: point(14, 8),
     });
 
     assert!(!result.applied);
-    assert_eq!(
-        result
-            .rejection
-            .as_ref()
-            .map(|rejection| rejection.code.clone()),
-        Some(RejectionCode::InvalidDirectionChange)
-    );
+    assert!(result.rejection.is_none());
     assert_eq!(engine.snapshot(), before_snapshot);
     assert_eq!(engine.road_topology_for_test(), &before_topology);
 }

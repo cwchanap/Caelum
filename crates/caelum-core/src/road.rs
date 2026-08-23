@@ -98,8 +98,9 @@ fn apply_linear_tiles_in_order(
             skipped_tiles,
         )?,
         RoadMutation::CycleRoadDirection { point } => {
-            cycle_road_direction(candidate, *point)?;
-            changed_tiles.push(*point);
+            if cycle_road_direction(candidate, *point)? {
+                changed_tiles.push(*point);
+            }
             0
         }
         RoadMutation::PlaceRoundabout { .. } => {
@@ -443,7 +444,7 @@ fn connect(map: &mut GameMap, point: Point, heading: Heading) {
     }
 }
 
-fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()> {
+fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<bool> {
     let Some(tile) = candidate.map.tile(point) else {
         return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
     };
@@ -451,11 +452,9 @@ fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayR
         return Err(GameplayRejection::at(RejectionCode::RoadRequired, point));
     }
     if tile.road_structure_id.is_some() {
-        return Err(GameplayRejection::at(
-            RejectionCode::InvalidDirectionChange,
-            point,
-        ));
+        return Ok(false);
     }
+
     let next = match tile.one_way {
         None => Some(Heading::North),
         Some(Heading::North) => Some(Heading::East),
@@ -463,14 +462,11 @@ fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayR
         Some(Heading::South) => Some(Heading::West),
         Some(Heading::West) => None,
     };
-    // The tile's existence was checked at the top of this function; surface an
-    // `OutOfBounds` rejection if a future regression invalidates it before the
-    // write instead of panicking under the Tauri Mutex.
     let Some(tile) = candidate.map.tile_mut(point) else {
         return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));
     };
     tile.one_way = next;
-    Ok(())
+    Ok(true)
 }
 
 fn remove_road(candidate: &mut GameSnapshot, point: Point) -> GameplayResult<()> {
