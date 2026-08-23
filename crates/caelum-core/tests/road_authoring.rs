@@ -417,6 +417,70 @@ fn direction_edit_removes_inherited_parallel_one_way_lateral_link() {
 }
 
 #[test]
+fn direction_edit_endpoints_strip_upstream_and_keep_downstream_lateral_links() {
+    let mut engine = GameEngine::new();
+    for y in [5, 6] {
+        let result = engine.dispatch(GameIntent::LayRoadLine {
+            points: (3..=10).map(|x| point(x, y)).collect(),
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(result.applied, "fixture TwoWay should apply: {result:?}");
+    }
+
+    // Left (upstream) ends: arrows point into the lanes, so the arrow-aligned
+    // continuation evidence holds and the inherited bridge is stripped.
+    for point in [point(3, 5), point(3, 6)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+    }
+    let map = &engine.snapshot().map;
+    assert!(!map
+        .tile(point(3, 5))
+        .expect("upstream upper endpoint")
+        .road_connections
+        .contains(&Heading::South));
+    assert!(!map
+        .tile(point(3, 6))
+        .expect("upstream lower endpoint")
+        .road_connections
+        .contains(&Heading::North));
+
+    // Right (downstream) ends: arrows point off the lane ends, so no
+    // arrow-aligned continuation exists. This state is a rotation of the
+    // protected 2x2-loop transient (loop_with_spur_repro), and keeping the
+    // dead-end bridge is the accepted cost of preserving ring edges.
+    for point in [point(10, 5), point(10, 6)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+    }
+    let map = &engine.snapshot().map;
+    let upper = map.tile(point(10, 5)).expect("downstream upper endpoint");
+    let lower = map.tile(point(10, 6)).expect("downstream lower endpoint");
+    assert_eq!(upper.one_way, Some(Heading::East));
+    assert_eq!(lower.one_way, Some(Heading::East));
+    assert!(upper.road_connections.contains(&Heading::South));
+    assert!(lower.road_connections.contains(&Heading::North));
+    assert!(upper.road_connections.contains(&Heading::West));
+    assert!(lower.road_connections.contains(&Heading::West));
+}
+
+#[test]
 fn direction_cycle_intermediate_state_preserves_through_edges() {
     let mut engine = GameEngine::new();
     let result = engine.dispatch(GameIntent::LayRoadLine {
