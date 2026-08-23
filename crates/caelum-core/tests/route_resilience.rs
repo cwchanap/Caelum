@@ -1,3 +1,4 @@
+use caelum_core::heading::heading_between;
 use caelum_core::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Heading, PathGeometry, Point, Route, RouteLegKind,
     RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitNodeStatus,
@@ -40,11 +41,30 @@ fn lay_two_way_line(engine: &mut GameEngine, points: Vec<Point>) {
 }
 
 fn set_one_way_line(engine: &mut GameEngine, points: Vec<Point>) {
-    let result = engine.dispatch(GameIntent::LayRoadLine {
-        points,
-        preset: RoadPreset::OneWay,
-    });
-    assert!(result.applied, "fixture direction should apply: {result:?}");
+    let direction = heading_between(points[0], points[1]).expect("fixture line has a direction");
+    let cycles = match direction {
+        Heading::North => 1,
+        Heading::East => 2,
+        Heading::South => 3,
+        Heading::West => 4,
+    };
+    for point in points {
+        if engine
+            .snapshot()
+            .map
+            .tile(point)
+            .is_some_and(|tile| tile.road_structure_id.is_some())
+        {
+            continue;
+        }
+        for _ in 0..cycles {
+            let result = engine.dispatch(GameIntent::CycleRoadDirection { point });
+            assert!(
+                result.applied,
+                "fixture direction should apply at {point:?}: {result:?}"
+            );
+        }
+    }
 }
 
 fn horizontal(y: i32, from_x: i32, to_x: i32) -> Vec<Point> {

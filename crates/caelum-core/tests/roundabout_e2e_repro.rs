@@ -67,10 +67,11 @@ fn assert_preview_connected(
     );
 }
 
-/// Reproduces the browser scenario for both roundabout sizes: two opposing
-/// one-way approaches cross a dual-bidirectional vertical road before entering
-/// the roundabout. The Shuttle return service reaches its first terminal through
-/// an automatic-junction transition that can span more than one tile.
+/// Reproduces the browser scenario for both roundabout sizes: a one-way and a
+/// bidirectional approach cross a dual-bidirectional vertical road before
+/// entering the roundabout. The Shuttle return service reaches its first
+/// terminal through an automatic-junction transition that can span more than
+/// one tile.
 fn assert_roundabout_e2e_preview_is_connected(
     origin: Point,
     size: RoundaboutSize,
@@ -101,7 +102,7 @@ fn assert_roundabout_e2e_preview_is_connected(
             .rev()
             .map(|x| point(x, origin.y))
             .collect(),
-        RoadPreset::OneWay,
+        RoadPreset::TwoWay,
     );
     road_line(
         &mut engine,
