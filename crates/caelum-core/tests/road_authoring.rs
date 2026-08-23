@@ -195,6 +195,90 @@ fn adjacent_opposing_lanes_do_not_connect_mid_block() {
 }
 
 #[test]
+fn adjacent_same_direction_one_way_lanes_do_not_connect_laterally() {
+    let mut engine = GameEngine::new();
+
+    let standalone = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).rev().map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::OneWay,
+    });
+    assert!(
+        standalone.applied,
+        "fixture OneWay should apply: {standalone:?}"
+    );
+
+    // East-canonical Dual at y=7 generates a westbound reverse lane at y=6,
+    // adjacent to the westbound standalone lane at y=5.
+    let dual = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 7)).collect(),
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(dual.applied, "fixture Dual should apply: {dual:?}");
+
+    let map = &engine.snapshot().map;
+    for x in [3, 10] {
+        let outer = map.tile(point(x, 5)).expect("standalone endpoint");
+        let inner = map.tile(point(x, 6)).expect("dual reverse endpoint");
+        assert_eq!(outer.one_way, Some(Heading::West));
+        assert_eq!(inner.one_way, Some(Heading::West));
+        assert!(!outer.road_connections.contains(&Heading::South));
+        assert!(!inner.road_connections.contains(&Heading::North));
+        assert!(outer
+            .road_connections
+            .iter()
+            .any(|edge| matches!(edge, Heading::East | Heading::West)));
+        assert!(inner
+            .road_connections
+            .iter()
+            .any(|edge| matches!(edge, Heading::East | Heading::West)));
+    }
+}
+
+#[test]
+fn direction_edit_removes_inherited_parallel_one_way_lateral_link() {
+    let mut engine = GameEngine::new();
+    for y in [5, 6] {
+        let result = engine.dispatch(GameIntent::LayRoadLine {
+            points: (3..=10).map(|x| point(x, y)).collect(),
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(result.applied, "fixture TwoWay should apply: {result:?}");
+    }
+
+    let before = engine.snapshot();
+    assert!(before
+        .map
+        .tile(point(3, 5))
+        .expect("upper endpoint")
+        .road_connections
+        .contains(&Heading::South));
+
+    // None -> North -> East on each endpoint.
+    for point in [point(3, 5), point(3, 6)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+    }
+
+    let map = &engine.snapshot().map;
+    let upper = map.tile(point(3, 5)).expect("upper endpoint");
+    let lower = map.tile(point(3, 6)).expect("lower endpoint");
+    assert_eq!(upper.one_way, Some(Heading::East));
+    assert_eq!(lower.one_way, Some(Heading::East));
+    assert!(!upper.road_connections.contains(&Heading::South));
+    assert!(!lower.road_connections.contains(&Heading::North));
+    assert!(upper.road_connections.contains(&Heading::East));
+    assert!(lower.road_connections.contains(&Heading::East));
+}
+
+#[test]
 fn restored_road_endpoint_connects_to_new_adjacent_stroke() {
     let mut engine = GameEngine::new();
     let first = engine.dispatch(GameIntent::LayRoadLine {
