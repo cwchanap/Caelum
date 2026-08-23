@@ -187,6 +187,11 @@ fn lay_road_line(
 
     let forward = line_direction(points);
     let dual_direction = canonical_line_direction(points);
+    if preset == RoadPreset::OneWay {
+        if let Some(direction) = forward {
+            validate_one_way_parallel_spacing(&original.map, points, direction)?;
+        }
+    }
     let direction = match preset {
         RoadPreset::TwoWay => None,
         RoadPreset::OneWay => forward,
@@ -947,6 +952,51 @@ fn line_direction(points: &[Point]) -> Option<Heading> {
         return None;
     }
     heading_between(points[0], points[1])
+}
+
+const MIN_PARALLEL_ONE_WAY_SPACING_TILES: i32 = 3;
+
+fn perpendicular_point(point: Point, direction: Heading, delta: i32) -> Option<Point> {
+    match direction {
+        Heading::East | Heading::West => Some(Point {
+            x: point.x,
+            y: point.y.checked_add(delta)?,
+        }),
+        Heading::North | Heading::South => Some(Point {
+            x: point.x.checked_add(delta)?,
+            y: point.y,
+        }),
+    }
+}
+
+fn validate_one_way_parallel_spacing(
+    map: &GameMap,
+    points: &[Point],
+    direction: Heading,
+) -> GameplayResult<()> {
+    for point in points {
+        for distance in 1..MIN_PARALLEL_ONE_WAY_SPACING_TILES {
+            for delta in [-distance, distance] {
+                let Some(nearby_point) = perpendicular_point(*point, direction, delta) else {
+                    continue;
+                };
+                let Some(nearby) = map.tile(nearby_point) else {
+                    continue;
+                };
+                if nearby.kind == "road"
+                    && nearby
+                        .one_way
+                        .is_some_and(|existing| same_axis(existing, direction))
+                {
+                    return Err(GameplayRejection::at(
+                        RejectionCode::OneWayParallelTooClose,
+                        *point,
+                    ));
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn stroke_direction_overflows(points: &[Point]) -> bool {
