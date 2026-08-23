@@ -1350,9 +1350,12 @@ describe("App command shell", () => {
       "route-draft-panel-gate",
       "route-draft-shelf-gate",
     ]);
+    const lines = screen.getByTestId("command-destination-lines");
+    expect(lines).not.toHaveAttribute("aria-describedby");
     for (const control of screen
       .getByTestId("command-shelf")
       .querySelectorAll("button")) {
+      if (control === lines) continue;
       expect(control).toHaveAttribute(
         "aria-describedby",
         "route-draft-shelf-gate",
@@ -1396,7 +1399,7 @@ describe("App command shell", () => {
     expect(screen.getAllByText("Avg Wait").at(-1)).toBeVisible();
   });
 
-  it("passes the active city name to City and pins Lines for a draft", async () => {
+  it("passes the active city name to City and lets Lines collapse during a draft", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
@@ -1404,6 +1407,19 @@ describe("App command shell", () => {
     await fireEvent.click(screen.getByTestId("command-destination-lines"));
     await fireEvent.click(screen.getByRole("button", { name: "New Bus" }));
     expect(runtime.setTool).toHaveBeenCalledWith("busRoute");
+    expect(screen.getByTestId("command-panel")).toHaveAttribute(
+      "data-command-panel",
+      "lines",
+    );
+
+    const lines = screen.getByTestId("command-destination-lines");
+    expect(lines).not.toHaveAttribute("aria-disabled", "true");
+    await fireEvent.click(screen.getByRole("button", { name: "Close Lines" }));
+    expect(screen.queryByTestId("command-panel")).toBeNull();
+    expect(lines).toHaveAttribute("aria-expanded", "false");
+    expect(lines).not.toHaveAttribute("aria-disabled", "true");
+
+    await fireEvent.click(lines);
     expect(screen.getByTestId("command-panel")).toHaveAttribute(
       "data-command-panel",
       "lines",

@@ -681,7 +681,7 @@
         <CommandPanel
           destination="lines"
           title="Lines"
-          canClose={currentSnapshot.ui.routeDraft === null}
+          canClose={true}
           onClose={() => handleCloseCommandPanel("lines")}
         >
           <LinesPanel

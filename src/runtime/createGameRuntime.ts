@@ -1289,7 +1289,13 @@ export async function createGameRuntime(
     },
     setCommandDestination(destination: CommandDestination | null) {
       if (dead) return getSnapshot();
-      if (ui.routeDraft !== null) return getSnapshot();
+      if (
+        ui.routeDraft !== null &&
+        destination !== null &&
+        destination !== "lines"
+      ) {
+        return getSnapshot();
+      }
       const nextDestination =
         destination === ui.activeCommandDestination ? null : destination;
       const nextBuildGroup =
