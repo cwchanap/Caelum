@@ -56,8 +56,6 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "That road stroke has no valid tiles.";
     case "invalidTrackStroke":
       return "That track stroke has no valid tiles.";
-    case "invalidDirectionChange":
-      return "Change the approach lane; structure directions are automatic.";
     case "nodeAlreadyExists":
       return "A compatible transit node already occupies that anchor.";
     case "ambiguousTransitNode":

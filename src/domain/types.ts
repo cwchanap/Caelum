@@ -138,7 +138,6 @@ export type RejectionCode =
   | "trackRequired"
   | "invalidRoadStroke"
   | "invalidTrackStroke"
-  | "invalidDirectionChange"
   | "nodeAlreadyExists"
   | "ambiguousTransitNode"
   | "missingRouteNode"
