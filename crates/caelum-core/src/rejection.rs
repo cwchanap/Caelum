@@ -19,6 +19,7 @@ pub enum RejectionCode {
     TrackRequired,
     InvalidRoadStroke,
     InvalidTrackStroke,
+    OneWayParallelTooClose,
     NodeAlreadyExists,
     AmbiguousTransitNode,
     MissingRouteNode,

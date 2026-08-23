@@ -138,6 +138,7 @@ export type RejectionCode =
   | "trackRequired"
   | "invalidRoadStroke"
   | "invalidTrackStroke"
+  | "oneWayParallelTooClose"
   | "nodeAlreadyExists"
   | "ambiguousTransitNode"
   | "missingRouteNode"

@@ -4,10 +4,23 @@ use caelum_core::model::{
 use caelum_core::road::{apply_road_mutation, RoadMutation};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::transit::ROAD_COST;
-use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
+use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
+}
+
+fn one_way_engine(points: Vec<Point>) -> GameEngine {
+    let mut request = caelum_core::canonical_default_request();
+    request.template_id = "blankGrid".to_string();
+    let mut engine = GameEngine::from_sandbox_request(request)
+        .expect("blank grid fixture request should remain valid");
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points,
+        preset: RoadPreset::OneWay,
+    });
+    assert!(result.applied, "fixture OneWay should apply: {result:?}");
+    engine
 }
 
 fn horizontal_points(y: i32) -> Vec<Point> {
@@ -232,6 +245,131 @@ fn adjacent_same_direction_one_way_lanes_do_not_connect_laterally() {
             .iter()
             .any(|edge| matches!(edge, Heading::East | Heading::West)));
     }
+}
+
+#[test]
+fn standalone_one_way_spacing_is_three_tiles_and_longitudinally_local() {
+    for y in [6, 7] {
+        let mut engine = one_way_engine((3..=10).map(|x| point(x, 5)).collect());
+        let before = engine.snapshot();
+        let result = engine.dispatch(GameIntent::LayRoadLine {
+            points: (3..=10).map(|x| point(x, y)).collect(),
+            preset: RoadPreset::OneWay,
+        });
+        assert!(!result.applied);
+        assert_eq!(
+            result.rejection.as_ref().map(|rejection| &rejection.code),
+            Some(&RejectionCode::OneWayParallelTooClose),
+        );
+        assert_eq!(result.snapshot, before);
+    }
+
+    let mut distance_three = one_way_engine((3..=10).map(|x| point(x, 5)).collect());
+    assert!(
+        distance_three
+            .dispatch(GameIntent::LayRoadLine {
+                points: (3..=10).map(|x| point(x, 8)).collect(),
+                preset: RoadPreset::OneWay,
+            })
+            .applied
+    );
+
+    let mut non_overlapping = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
+    assert!(
+        non_overlapping
+            .dispatch(GameIntent::LayRoadLine {
+                points: (8..=12).map(|x| point(x, 6)).collect(),
+                preset: RoadPreset::OneWay,
+            })
+            .applied
+    );
+
+    let mut crossing = one_way_engine((3..=10).map(|x| point(x, 5)).collect());
+    assert!(
+        crossing
+            .dispatch(GameIntent::LayRoadLine {
+                points: (2..=8).map(|y| point(6, y)).collect(),
+                preset: RoadPreset::OneWay,
+            })
+            .applied
+    );
+}
+
+#[test]
+fn standalone_one_way_checks_existing_dual_lane_but_dual_self_authoring_remains_legal() {
+    let mut engine = GameEngine::new();
+    let dual = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 10)).collect(),
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(
+        dual.applied,
+        "Dual must self-author its paired lane: {dual:?}"
+    );
+
+    let before = engine.snapshot();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 12)).collect(),
+        preset: RoadPreset::OneWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::OneWayParallelTooClose),
+    );
+    assert_eq!(result.snapshot, before);
+}
+
+#[test]
+fn one_way_overlay_is_checked_before_merge_lane_direction() {
+    let mut engine = one_way_engine((3..=10).map(|x| point(x, 5)).collect());
+    let two_way = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 7)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(two_way.applied, "TwoWay fixture should apply: {two_way:?}");
+
+    let before = engine.snapshot();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 7)).collect(),
+        preset: RoadPreset::OneWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::OneWayParallelTooClose),
+    );
+    assert_eq!(result.snapshot, before);
+}
+
+#[test]
+fn one_way_spacing_rejection_matches_preview_and_commit() {
+    let mut engine = one_way_engine((3..=10).map(|x| point(x, 5)).collect());
+    let mutation = RoadMutation::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 6)).collect(),
+        preset: RoadPreset::OneWay,
+    };
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: mutation.clone(),
+        generation: 1,
+    });
+    assert_eq!(
+        preview.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::OneWayParallelTooClose),
+    );
+
+    let before = engine.snapshot();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=10).map(|x| point(x, 6)).collect(),
+        preset: RoadPreset::OneWay,
+    });
+    assert!(!result.applied);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::OneWayParallelTooClose),
+    );
+    assert_eq!(result.snapshot, before);
 }
 
 #[test]

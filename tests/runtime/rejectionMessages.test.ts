@@ -8,6 +8,19 @@ import {
 import type { GameplayRejection } from "../../src/domain/types";
 import type { GameplayWarning } from "../../src/runtime/backend/types";
 
+describe("rejectionMessage", () => {
+  it("maps oneWayParallelTooClose", () => {
+    const rejection = {
+      code: "oneWayParallelTooClose",
+      context: gameplayRejectionContext(),
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(
+      "Keep parallel one-way roads at least 3 tiles apart.",
+    );
+  });
+});
+
 describe("workingSaveErrorMessage", () => {
   it.each([
     [{ kind: "busy" } as const, "Another city action is already in progress."],
