@@ -397,15 +397,12 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
             connect(map, point, heading);
             continue;
         }
-        // Skip cross-lane connections between the two opposing one-way lanes of
-        // a dual-bidirectional road. These perpendicular endpoint links are
-        // not T-junction arms — they are U-turn slots that give endpoint tiles
-        // both horizontal and vertical axes, pulling them into an automatic-
-        // junction cluster whose pruning logic then destroys the through road.
-        if let (Some(current_dir), Some(neighbor_dir)) = (current_one_way, neighbor.one_way) {
-            if neighbor_dir == opposite(current_dir) && !same_axis(heading, current_dir) {
-                continue;
-            }
+        // Skip lateral connections between parallel one-way lanes. These
+        // perpendicular endpoint links turn lane endpoints into mixed-axis
+        // automatic-junction candidates and can destroy the through road;
+        // the invariant covers both same- and opposite-direction lanes.
+        if is_lateral_parallel_one_way_link(current_one_way, neighbor.one_way, heading) {
+            continue;
         }
         if neighbor.road_connections.len() >= 2
             && !neighbor
@@ -883,14 +880,23 @@ fn canonicalize_authored_roads(map: &mut GameMap) {
                     x: tile.x,
                     y: tile.y,
                 },
+                tile.one_way,
                 tile.road_connections.clone(),
             )
         })
         .collect();
-    for (point, headings) in connections {
+    for (point, current_one_way, headings) in connections {
         let valid: Vec<_> = headings
             .into_iter()
-            .filter(|heading| reciprocal_connection(map, point, *heading))
+            .filter(|heading| {
+                if !reciprocal_connection(map, point, *heading) {
+                    return false;
+                }
+                let neighbor_one_way = map
+                    .tile(offset(point, *heading))
+                    .and_then(|neighbor| neighbor.one_way);
+                !is_lateral_parallel_one_way_link(current_one_way, neighbor_one_way, *heading)
+            })
             .collect();
         if let Some(tile) = map.tile_mut(point) {
             tile.road_connections = valid;
@@ -979,6 +985,19 @@ fn canonical_line_direction(points: &[Point]) -> Option<Heading> {
 fn same_axis(left: Heading, right: Heading) -> bool {
     matches!(left, Heading::North | Heading::South)
         == matches!(right, Heading::North | Heading::South)
+}
+
+fn is_lateral_parallel_one_way_link(
+    current: Option<Heading>,
+    neighbor: Option<Heading>,
+    heading: Heading,
+) -> bool {
+    match (current, neighbor) {
+        (Some(current), Some(neighbor)) => {
+            same_axis(current, neighbor) && !same_axis(heading, current)
+        }
+        _ => false,
+    }
 }
 
 fn has_axis(connections: &[Heading], horizontal: bool) -> bool {
