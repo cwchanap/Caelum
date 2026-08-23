@@ -382,6 +382,7 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
         return;
     };
     let current_one_way = current_tile.one_way;
+    let current_connections = current_tile.road_connections.clone();
     for heading in [Heading::North, Heading::East, Heading::South, Heading::West] {
         let neighbor_point = offset(point, heading);
         let Some(neighbor) = map.tile(neighbor_point) else {
@@ -402,11 +403,19 @@ fn connect_neighbor_endpoints(map: &mut GameMap, point: Point) {
             connect(map, point, heading);
             continue;
         }
-        // Skip lateral connections between parallel one-way lanes. These
-        // perpendicular endpoint links turn lane endpoints into mixed-axis
+        // Skip lateral connections between established parallel one-way lanes.
+        // These perpendicular endpoint links turn lane endpoints into mixed-axis
         // automatic-junction candidates and can destroy the through road;
-        // the invariant covers both same- and opposite-direction lanes.
-        if is_lateral_parallel_one_way_link(current_one_way, neighbor.one_way, heading) {
+        // the invariant covers both same- and opposite-direction lanes. Evidence
+        // of a longitudinal lane edge on each side keeps transient arrows from
+        // mid-direction-cycle states stripping real through-edges.
+        if is_lateral_parallel_one_way_link(
+            current_one_way,
+            &current_connections,
+            neighbor.one_way,
+            &neighbor.road_connections,
+            heading,
+        ) {
             continue;
         }
         if neighbor.road_connections.len() >= 2
@@ -892,15 +901,22 @@ fn canonicalize_authored_roads(map: &mut GameMap) {
         .collect();
     for (point, current_one_way, headings) in connections {
         let valid: Vec<_> = headings
-            .into_iter()
+            .iter()
+            .copied()
             .filter(|heading| {
                 if !reciprocal_connection(map, point, *heading) {
                     return false;
                 }
-                let neighbor_one_way = map
-                    .tile(offset(point, *heading))
-                    .and_then(|neighbor| neighbor.one_way);
-                !is_lateral_parallel_one_way_link(current_one_way, neighbor_one_way, *heading)
+                let Some(neighbor) = map.tile(offset(point, *heading)) else {
+                    return false;
+                };
+                !is_lateral_parallel_one_way_link(
+                    current_one_way,
+                    &headings,
+                    neighbor.one_way,
+                    &neighbor.road_connections,
+                    *heading,
+                )
             })
             .collect();
         if let Some(tile) = map.tile_mut(point) {
@@ -1039,12 +1055,20 @@ fn same_axis(left: Heading, right: Heading) -> bool {
 
 fn is_lateral_parallel_one_way_link(
     current: Option<Heading>,
+    current_connections: &[Heading],
     neighbor: Option<Heading>,
+    neighbor_connections: &[Heading],
     heading: Heading,
 ) -> bool {
+    fn has_longitudinal_lane_edge(connections: &[Heading], axis: Heading) -> bool {
+        connections.iter().any(|edge| same_axis(*edge, axis))
+    }
     match (current, neighbor) {
         (Some(current), Some(neighbor)) => {
-            same_axis(current, neighbor) && !same_axis(heading, current)
+            same_axis(current, neighbor)
+                && !same_axis(heading, current)
+                && has_longitudinal_lane_edge(current_connections, current)
+                && has_longitudinal_lane_edge(neighbor_connections, neighbor)
         }
         _ => false,
     }

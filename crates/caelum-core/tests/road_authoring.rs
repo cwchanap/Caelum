@@ -417,6 +417,60 @@ fn direction_edit_removes_inherited_parallel_one_way_lateral_link() {
 }
 
 #[test]
+fn direction_cycle_intermediate_state_preserves_through_edges() {
+    let mut engine = GameEngine::new();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(3, 5), point(4, 5)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(result.applied, "fixture TwoWay should apply: {result:?}");
+
+    // One step per tile across separate dispatches: both arrows are transiently
+    // North while the real through-edge between them stays East/West.
+    for point in [point(3, 5), point(4, 5)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+    }
+
+    let map = &engine.snapshot().map;
+    assert!(map
+        .tile(point(3, 5))
+        .expect("west tile")
+        .road_connections
+        .contains(&Heading::East));
+    assert!(map
+        .tile(point(4, 5))
+        .expect("east tile")
+        .road_connections
+        .contains(&Heading::West));
+
+    for point in [point(3, 5), point(4, 5)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::CycleRoadDirection { point })
+                .applied
+        );
+    }
+
+    let map = &engine.snapshot().map;
+    assert_eq!(map.tile(point(3, 5)).unwrap().one_way, Some(Heading::East));
+    assert_eq!(map.tile(point(4, 5)).unwrap().one_way, Some(Heading::East));
+    assert!(map
+        .tile(point(3, 5))
+        .expect("west tile")
+        .road_connections
+        .contains(&Heading::East));
+    assert!(map
+        .tile(point(4, 5))
+        .expect("east tile")
+        .road_connections
+        .contains(&Heading::West));
+}
+
+#[test]
 fn restored_road_endpoint_connects_to_new_adjacent_stroke() {
     let mut engine = GameEngine::new();
     let first = engine.dispatch(GameIntent::LayRoadLine {
