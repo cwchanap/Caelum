@@ -38,7 +38,7 @@
   }>;
 
   function activate(destination: CommandDestination): void {
-    if (command.routeDraftActive) return;
+    if (command.routeDraftActive && destination !== "lines") return;
     onSetDestination(
       command.activeDestination === destination ? null : destination,
     );
@@ -67,8 +67,10 @@
         class:is-active={command.activeDestination === destination.id}
         aria-expanded={command.activeDestination === destination.id}
         aria-controls={`command-panel-${destination.id}`}
-        aria-disabled={command.routeDraftActive ? "true" : undefined}
-        aria-describedby={command.routeDraftActive
+        aria-disabled={command.routeDraftActive && destination.id !== "lines"
+          ? "true"
+          : undefined}
+        aria-describedby={command.routeDraftActive && destination.id !== "lines"
           ? "route-draft-shelf-gate"
           : undefined}
         data-testid={`command-destination-${destination.id}`}

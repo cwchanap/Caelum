@@ -2519,13 +2519,28 @@ describe("command destination navigation", () => {
     });
   });
 
-  it("ignores destination, overlay, tool, Build leaf, and second edit changes while a route draft is active", async () => {
+  it("allows only Lines to collapse and reopen while a route draft is active", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(snapshotWithBusRoute()),
     });
     runtime.setTool("busRoute");
-    const before = runtime.getSnapshot();
+    const opened = runtime.getSnapshot();
+    const draft = opened.ui.routeDraft;
+    expect(opened.ui.activeCommandDestination).toBe("lines");
+    expect(draft).not.toBeNull();
+
+    const collapsed = runtime.setCommandDestination(null);
+    expect(collapsed.ui.activeCommandDestination).toBeNull();
+    expect(collapsed.ui.routeDraft).toBe(draft);
+
+    const blockedBuild = runtime.setCommandDestination("build");
+    expect(blockedBuild.ui).toBe(collapsed.ui);
+    expect(blockedBuild.state).toBe(collapsed.state);
+
+    const reopened = runtime.setCommandDestination("lines");
+    expect(reopened.ui.activeCommandDestination).toBe("lines");
+    expect(reopened.ui.routeDraft).toBe(draft);
 
     for (const next of [
       () => runtime.setCommandDestination("data"),
@@ -2540,25 +2555,31 @@ describe("command destination navigation", () => {
       () => runtime.startRouteEdit("route-001"),
     ]) {
       const after = next();
-      expect(after.ui).toBe(before.ui);
-      expect(after.state).toBe(before.state);
+      expect(after.ui).toBe(reopened.ui);
+      expect(after.state).toBe(reopened.state);
     }
   });
 
-  it("pins new and edited drafts to Lines", async () => {
+  it("opens new and edited route drafts in Lines", async () => {
     const fresh = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
-    expect(fresh.setTool("busRoute").ui.activeCommandDestination).toBe("lines");
+    expect(fresh.setTool("busRoute").ui).toMatchObject({
+      activeTool: "busRoute",
+      activeCommandDestination: "lines",
+    });
+    expect(fresh.getSnapshot().ui.routeDraft).not.toBeNull();
 
     const edited = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(snapshotWithBusRoute()),
     });
-    expect(edited.startRouteEdit("route-001").ui.activeCommandDestination).toBe(
-      "lines",
-    );
+    expect(edited.startRouteEdit("route-001").ui).toMatchObject({
+      activeTool: "busRoute",
+      activeCommandDestination: "lines",
+    });
+    expect(edited.getSnapshot().ui.routeDraft).not.toBeNull();
   });
 
   it("returns to Select and the Lines list after successful Save", async () => {
@@ -2647,16 +2668,21 @@ describe("command destination navigation", () => {
     expect(escaped.ui.activeCommandDestination).toBeNull();
   });
 
-  it("Escape cancels a busRoute draft and restores the Lines destination", async () => {
+  it("Escape cancels a collapsed busRoute draft and restores the Lines destination", async () => {
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
     runtime.setTool("busRoute");
+    const draft = runtime.getSnapshot().ui.routeDraft;
+    runtime.setCommandDestination(null);
+    expect(runtime.getSnapshot().ui.activeCommandDestination).toBeNull();
+
     const escaped = runtime.handleEscape();
     expect(escaped.ui.routeDraft).toBeNull();
     expect(escaped.ui.activeTool).toBe("inspect");
     expect(escaped.ui.activeCommandDestination).toBe("lines");
+    expect(escaped.ui.routeDraft).not.toBe(draft);
   });
 
   it("Escape closes the command panel without clearing the active overlay", async () => {

@@ -30,7 +30,7 @@ describe("CommandShelf", () => {
     expect(screen.getByRole("button", { name: "Demolish" })).toBeTruthy();
   });
 
-  it("blocks every conflicting activation while a route draft pins Lines", async () => {
+  it("keeps Lines operable while gating every other command during a route draft", async () => {
     const onSetDestination = vi.fn();
     const onSetTool = vi.fn();
     render(CommandShelf, {
@@ -44,11 +44,23 @@ describe("CommandShelf", () => {
         onSetTool,
       },
     });
-    const build = screen.getByRole("button", { name: "Build" });
-    expect(build.getAttribute("aria-disabled")).toBe("true");
-    await fireEvent.click(build);
-    await fireEvent.click(screen.getByRole("button", { name: "Demolish" }));
-    expect(onSetDestination).not.toHaveBeenCalled();
+
+    for (const label of ["Build", "Data", "City"]) {
+      const destination = screen.getByRole("button", { name: label });
+      expect(destination.getAttribute("aria-disabled")).toBe("true");
+      await fireEvent.click(destination);
+    }
+    for (const label of ["Select", "Demolish"]) {
+      const tool = screen.getByRole("button", { name: label });
+      expect(tool.getAttribute("aria-disabled")).toBe("true");
+      await fireEvent.click(tool);
+    }
+
+    const lines = screen.getByTestId("command-destination-lines");
+    expect(lines.getAttribute("aria-disabled")).toBeNull();
+    await fireEvent.click(lines);
+    expect(onSetDestination).toHaveBeenCalledTimes(1);
+    expect(onSetDestination).toHaveBeenCalledWith(null);
     expect(onSetTool).not.toHaveBeenCalled();
   });
 

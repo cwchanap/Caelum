@@ -44,11 +44,9 @@ export async function openCommandDestination(
 ): Promise<void> {
   const trigger = page.getByTestId(`command-destination-${destination}`);
   const expanded = await trigger.getAttribute("aria-expanded");
-  // A destination pinned open by an active route draft is `aria-disabled` but
-  // already expanded — that is a legitimate "already open" state, so only fail
-  // fast when the trigger is disabled AND closed. Clicking a disabled, closed
-  // trigger is a silent no-op (the click handler returns early) that would
-  // otherwise hang on the `aria-expanded` wait below.
+  // Active route drafts keep Lines enabled so it can collapse/reopen. Other
+  // command destinations remain aria-disabled; fail fast when one of those is
+  // closed instead of clicking a known no-op and waiting for aria-expanded.
   if (
     expanded !== "true" &&
     (await trigger.getAttribute("aria-disabled")) === "true"
