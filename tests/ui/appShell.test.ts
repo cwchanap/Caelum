@@ -1450,7 +1450,7 @@ describe("App command shell", () => {
     await fireEvent.keyDown(window, { key: "v" });
     expect(runtime.setTool).toHaveBeenCalledWith("inspect");
 
-    runtime.setTool.mockClear();
+    vi.mocked(runtime.setTool).mockClear();
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     await fireEvent.keyDown(
       screen.getByRole("textbox", { name: "Rename Harbour City" }),
