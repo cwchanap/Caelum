@@ -1411,6 +1411,12 @@ describe("App command shell", () => {
       "data-command-panel",
       "lines",
     );
+    expect(screen.getByTestId("command-panel")).toHaveClass(
+      "command-panel--pinned",
+    );
+    expect(
+      screen.getByRole("button", { name: "Close Lines" }),
+    ).toBeEnabled();
 
     const lines = screen.getByTestId("command-destination-lines");
     expect(lines).not.toHaveAttribute("aria-disabled", "true");

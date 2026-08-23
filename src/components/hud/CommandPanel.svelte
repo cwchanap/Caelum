@@ -6,11 +6,19 @@
     destination: CommandDestination;
     title: string;
     canClose: boolean;
+    pinned?: boolean;
     onClose: () => void;
     children?: Snippet;
   }
 
-  let { destination, title, canClose, onClose, children }: Props = $props();
+  let {
+    destination,
+    title,
+    canClose,
+    pinned = false,
+    onClose,
+    children,
+  }: Props = $props();
   let region: HTMLElement | null = $state(null);
 
   $effect(() => {
@@ -26,7 +34,7 @@
     bind:this={region}
     id={`command-panel-${destination}`}
     class="command-panel"
-    class:command-panel--pinned={!canClose}
+    class:command-panel--pinned={pinned}
     data-testid="command-panel"
     data-command-panel={destination}
     aria-labelledby={`command-panel-title-${destination}`}

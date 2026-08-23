@@ -682,6 +682,7 @@
           destination="lines"
           title="Lines"
           canClose={true}
+          pinned={currentSnapshot.ui.routeDraft !== null}
           onClose={() => handleCloseCommandPanel("lines")}
         >
           <LinesPanel
