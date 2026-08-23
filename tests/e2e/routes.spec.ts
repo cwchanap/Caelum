@@ -8,6 +8,7 @@ import {
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
+  mapTileViewportPoint,
   openCommandDestination,
   rebuildRoadTile,
   removeMapTile,
@@ -31,6 +32,14 @@ const SIMPLE_ROUTE_STOPS = [
 ] as const;
 const FARTHER_ROUTE_STOP = { x: 19, y: 12 } as const;
 const DRAFT_ROUTE_STOPS = SIMPLE_ROUTE_STOPS.slice(0, 2);
+const OCCLUSION_ROUTE_STOPS = [
+  { x: 3, y: 3 },
+  { x: 7, y: 3 },
+  { x: 11, y: 3 },
+  { x: 15, y: 3 },
+  { x: 19, y: 3 },
+] as const;
+const OCCLUSION_COVERED_STOP = { x: 21, y: 5 } as const;
 const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
 
@@ -375,6 +384,90 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await page.getByTestId("route-delete-route-001").click();
   await page.getByTestId("route-delete-route-001").click();
   await expect(page.getByTestId("route-name-route-001")).toHaveCount(0);
+});
+
+test("proves route drafting can reach a stop beneath the Lines panel", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Route Occlusion", "blankGrid");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 2, y: 4 }, { x: 21, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  const stops = [...OCCLUSION_ROUTE_STOPS, OCCLUSION_COVERED_STOP];
+  for (const stop of stops) {
+    await clickMapTile(canvas, stop);
+  }
+  await expectRoadsideStopAnchors(page, stops);
+
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  const panel = page.getByTestId("command-panel");
+  await expect(panel).toBeVisible();
+
+  const candidates = await Promise.all(
+    stops.map(async (tile) => ({
+      tile,
+      point: await mapTileViewportPoint(canvas, tile),
+    })),
+  );
+  const panelBox = await panel.boundingBox();
+  if (panelBox === null) {
+    throw new Error("Lines command panel does not have a visible bounding box");
+  }
+  const insidePanel = (point: { x: number; y: number }) =>
+    point.x >= panelBox.x &&
+    point.x <= panelBox.x + panelBox.width &&
+    point.y >= panelBox.y &&
+    point.y <= panelBox.y + panelBox.height;
+  const covered = candidates.filter(({ point }) => insidePanel(point));
+  const exposed = candidates.filter(({ point }) => !insidePanel(point));
+  const measured = JSON.stringify({ panel: panelBox, candidates });
+  expect(
+    covered.length,
+    `Expected a covered stop; measured ${measured}`,
+  ).toBeGreaterThan(0);
+  expect(
+    exposed.length,
+    `Expected an exposed stop; measured ${measured}`,
+  ).toBeGreaterThan(0);
+  const coveredCandidate = covered[0];
+  const exposedCandidate = exposed[0];
+  if (coveredCandidate === undefined || exposedCandidate === undefined) {
+    throw new Error(`Missing measured occlusion candidates: ${measured}`);
+  }
+
+  expect(
+    await page.evaluate(({ x, y }) => {
+      const top = document.elementFromPoint(x, y);
+      return top?.closest('[data-testid="command-panel"]') !== null;
+    }, coveredCandidate.point),
+  ).toBe(true);
+
+  await clickMapTile(canvas, exposedCandidate.tile);
+  await expect
+    .poll(
+      async () =>
+        (await runtimeSnapshot(page)).ui.routeDraft?.waypointIds.length ?? 0,
+    )
+    .toBe(1);
+
+  await page.getByRole("button", { name: "Close Lines" }).click();
+  await expect(page.getByTestId("command-panel")).toHaveCount(0);
+  await clickMapTile(canvas, coveredCandidate.tile);
+  await expect
+    .poll(
+      async () =>
+        (await runtimeSnapshot(page)).ui.routeDraft?.waypointIds.length ?? 0,
+    )
+    .toBe(2);
+
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await expect(page.getByTestId("route-waypoint-0")).toBeVisible();
+  await expect(page.getByTestId("route-waypoint-1")).toBeVisible();
 });
 
 test("undoes and redoes a roadside route draft while preview is pending", async ({

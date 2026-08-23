@@ -2,6 +2,7 @@ import { expect, type Locator, type Page } from "@playwright/test";
 import { tileSize } from "../../src/render/canvas";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
+import type { SandboxTemplateId } from "../../src/domain/types";
 import type { BuildGroup } from "../../src/domain/catalog/buildGroups";
 import type { CommandDestination } from "../../src/ui/uiState";
 
@@ -22,6 +23,7 @@ export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
 export async function createDefaultCity(
   page: Page,
   name = "E2E City",
+  templateId: SandboxTemplateId = "crossroads",
 ): Promise<void> {
   await page.goto("/");
   const newCityScreen = page.getByTestId("new-city-screen");
@@ -34,6 +36,7 @@ export async function createDefaultCity(
   }
   await expect(newCityScreen).toBeVisible();
   await page.getByLabel("City name").fill(name);
+  await page.getByLabel("Template").selectOption(templateId);
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 }
@@ -127,6 +130,21 @@ export function _boardTransformForTest(box: {
   return boardTransform(box);
 }
 
+export async function mapTileViewportPoint(
+  canvas: Locator,
+  tile: { x: number; y: number },
+): Promise<{ x: number; y: number }> {
+  const box = await canvas.boundingBox();
+  if (box === null) {
+    throw new Error("Game canvas does not have a visible bounding box");
+  }
+  const { scale, offsetX, offsetY } = boardTransform(box);
+  return {
+    x: box.x + offsetX + (tile.x + 0.5) * tileSize * scale,
+    y: box.y + offsetY + (tile.y + 0.5) * tileSize * scale,
+  };
+}
+
 /**
  * Click the centre of the given map tile on the runtime canvas. The `position`
  * is element-relative (Playwright `click`), so it does not include the canvas's
@@ -136,18 +154,14 @@ export async function clickMapTile(
   canvas: Locator,
   tile: { x: number; y: number },
 ): Promise<void> {
+  const point = await mapTileViewportPoint(canvas, tile);
   const box = await canvas.boundingBox();
   if (box === null) {
     throw new Error("Game canvas does not have a visible bounding box");
   }
 
-  const { scale, offsetX, offsetY } = boardTransform(box);
-
   await canvas.click({
-    position: {
-      x: offsetX + (tile.x + 0.5) * tileSize * scale,
-      y: offsetY + (tile.y + 0.5) * tileSize * scale,
-    },
+    position: { x: point.x - box.x, y: point.y - box.y },
   });
 }
 
@@ -155,17 +169,14 @@ export async function hoverMapTile(
   canvas: Locator,
   tile: { x: number; y: number },
 ): Promise<void> {
+  const point = await mapTileViewportPoint(canvas, tile);
   const box = await canvas.boundingBox();
   if (box === null) {
     throw new Error("Game canvas does not have a visible bounding box");
   }
 
-  const { scale, offsetX, offsetY } = boardTransform(box);
   await canvas.hover({
-    position: {
-      x: offsetX + (tile.x + 0.5) * tileSize * scale,
-      y: offsetY + (tile.y + 0.5) * tileSize * scale,
-    },
+    position: { x: point.x - box.x, y: point.y - box.y },
   });
 }
 
