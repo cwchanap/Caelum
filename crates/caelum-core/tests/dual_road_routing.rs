@@ -1,3 +1,4 @@
+use caelum_core::heading::{offset, opposite};
 use caelum_core::model::{
     GameSnapshot, Heading, MovementKind, Point, Route, RouteLegStatus, ServicePattern, TransitMode,
 };
@@ -6,6 +7,37 @@ use caelum_core::{GameEngine, GameIntent, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
+}
+
+fn assert_reciprocal_edge(snapshot: &GameSnapshot, point: Point, heading: Heading) {
+    let tile = snapshot.map.tile(point).expect("edge origin tile");
+    assert!(
+        tile.road_connections.contains(&heading),
+        "expected {heading:?} edge from {point:?}, got {:?}",
+        tile.road_connections
+    );
+    let neighbor_point = offset(point, heading);
+    let neighbor = snapshot
+        .map
+        .tile(neighbor_point)
+        .expect("edge destination tile");
+    assert!(
+        neighbor.road_connections.contains(&opposite(heading)),
+        "expected reciprocal {:?} edge from {neighbor_point:?}, got {:?}",
+        opposite(heading),
+        neighbor.road_connections
+    );
+}
+
+fn assert_complete_two_by_two(snapshot: &GameSnapshot) {
+    for (point, heading) in [
+        (point(6, 2), Heading::East),
+        (point(6, 2), Heading::South),
+        (point(7, 2), Heading::South),
+        (point(6, 3), Heading::East),
+    ] {
+        assert_reciprocal_edge(snapshot, point, heading);
+    }
 }
 
 fn dispatch(engine: &mut GameEngine, intent: GameIntent) {
@@ -95,6 +127,66 @@ fn dual_intersection_engine() -> GameEngine {
         dispatch(&mut engine, GameIntent::AddBusStop { point: stop_point });
     }
     engine
+}
+
+fn vertical_first_dual_intersection_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (0..=7).map(|y| point(6, y)).collect(),
+            preset: RoadPreset::DualBidirectional,
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: (2..=12).map(|x| point(x, 3)).collect(),
+            preset: RoadPreset::DualBidirectional,
+        },
+    );
+
+    let snapshot = engine.snapshot();
+    let junction = snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            structure.is_automatic_junction() && structure.footprint().contains(&point(6, 2))
+        })
+        .expect("dual roads should generate an automatic junction");
+    assert_eq!(
+        junction.footprint(),
+        &[point(6, 2), point(7, 2), point(6, 3), point(7, 3)]
+    );
+    assert_eq!(
+        junction.port_keys(),
+        vec![
+            (point(6, 2), Heading::North),
+            (point(6, 2), Heading::West),
+            (point(6, 3), Heading::South),
+            (point(6, 3), Heading::West),
+            (point(7, 2), Heading::North),
+            (point(7, 2), Heading::East),
+            (point(7, 3), Heading::East),
+            (point(7, 3), Heading::South),
+        ]
+    );
+    engine
+}
+
+#[test]
+fn horizontal_first_dual_intersection_has_all_four_internal_edges() {
+    let engine = dual_intersection_engine();
+    let snapshot = engine.snapshot();
+    assert_complete_two_by_two(&snapshot);
+}
+
+#[test]
+fn vertical_first_dual_intersection_has_all_four_internal_edges() {
+    let engine = vertical_first_dual_intersection_engine();
+    let snapshot = engine.snapshot();
+    assert_complete_two_by_two(&snapshot);
 }
 
 #[test]
