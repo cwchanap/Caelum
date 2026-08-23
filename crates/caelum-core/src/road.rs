@@ -1071,6 +1071,18 @@ fn is_lateral_parallel_one_way_link(
     // or corner cells cycled to transient arrows carry same-axis edges that
     // belong to unrelated ring segments, and trusting those stripped real
     // through-edges permanently.
+    //
+    // This discriminator is deliberately direction-asymmetric and cannot be
+    // made symmetric: a downstream-end parallel-lane pair (arrows pointing off
+    // the lane ends, lateral bridge kept) is a rotation of the protected 2x2
+    // loop transient state (arrows across the ring, lateral ring edge kept).
+    // The two worlds are the same arrow/edge-labeled graph, so no structural
+    // rule can strip one bridge and preserve the other ring edge; only
+    // unserialized stroke provenance could tell them apart. Kept bridges at
+    // downstream lane ends are dead-end U-turn stubs — accepted cost of
+    // preserving ring edges through direction cycles.
+    // ponytail: intent-dependent rule; serialize stroke provenance if lane-end
+    // cleanup ever matters more than loop preservation.
     match (current, neighbor) {
         (Some(current), Some(neighbor)) => {
             same_axis(current, neighbor)
