@@ -522,7 +522,7 @@
       setSnapshot(runtime.setTool("track"));
       return;
     }
-    if (key === "x") {
+    if (key === "d") {
       setSnapshot(runtime.setTool("remove"));
       return;
     }

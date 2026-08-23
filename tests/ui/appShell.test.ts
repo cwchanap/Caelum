@@ -1426,7 +1426,7 @@ describe("App command shell", () => {
     );
   });
 
-  it("routes B/R/T/X/V and road presets through guarded runtime methods", async () => {
+  it("routes B/R/T/D/V and road presets through guarded runtime methods", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
     await fireEvent.keyDown(window, { key: "b" });
@@ -1438,9 +1438,19 @@ describe("App command shell", () => {
     await fireEvent.keyDown(window, { key: "t" });
     expect(runtime.setTool).toHaveBeenCalledWith("track");
     await fireEvent.keyDown(window, { key: "x" });
+    expect(runtime.setTool).not.toHaveBeenCalledWith("remove");
+    await fireEvent.keyDown(window, { key: "d" });
     expect(runtime.setTool).toHaveBeenCalledWith("remove");
     await fireEvent.keyDown(window, { key: "v" });
     expect(runtime.setTool).toHaveBeenCalledWith("inspect");
+
+    runtime.setTool.mockClear();
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.keyDown(
+      screen.getByRole("textbox", { name: "Rename Harbour City" }),
+      { key: "d" },
+    );
+    expect(runtime.setTool).not.toHaveBeenCalled();
   });
 
   it("calls runtime Escape once and disposes on unmount", async () => {
