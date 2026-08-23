@@ -70,7 +70,7 @@ async function seedRoundaboutApproaches(
     { x: origin.x - 5, y: bottom },
     { x: right, y: bottom },
   );
-  await selectBuildLeaf(page, "roads", "road-oneWay");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(
     page,
     canvas,
