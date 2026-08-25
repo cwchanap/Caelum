@@ -11,18 +11,20 @@ Make the existing build tools predictable during real map authoring without intr
 
 1. Demolish removes the inclusive **N × M rectangle** between pointer-down and pointer-up.
 2. A valid perpendicular road crossing, including dual-bidirectional × dual-bidirectional, produces a complete and traversable junction.
-3. A multi-tile player road stroke cannot silently repaint or overlap an existing road. Reusing a road tile is legal only for a genuine perpendicular crossing.
+3. An axis-resolved multi-tile player road stroke cannot silently repaint or overlap an existing road. Reusing a road tile is legal only for a genuine perpendicular crossing.
 
 The implementation stays inside the current frontend drag/runtime flow and the authoritative Rust road-mutation pipeline. Browser/WASM and Tauri continue to consume the same existing backend methods.
 
 ## Review disposition
 
-The reviewed product shape remains unchanged. The implementation contract is narrowed in four places:
+The product shape remains unchanged. The implementation contract is tightened in six places:
 
-- inventory and rewrite every test fixture that still specifies player `LayRoadLine` overlay as success;
-- keep `author_scenario_road_line` merge-on-contact behavior for built-in sandbox templates;
-- make the dual-junction task characterization-only until a post-fixture RED result identifies a production seam;
-- run the player smoke in Blank Grid, not the default Crossroads template.
+- inventory every `LayRoadLine` core-test fixture before editing production code;
+- classify fixtures as **contract** or **scenery**, because they require opposite treatment;
+- keep built-in scenario road authoring on its existing merge-on-contact path;
+- scope the strict player preflight to non-degenerate single-axis strokes, which is the only shape the UI emits;
+- name the intentional road-contact atomicity versus non-road skip split;
+- keep topology characterization-only until a post-migration RED result identifies a production seam.
 
 No topology repair implementation is pre-authorized by this design.
 
@@ -36,17 +38,49 @@ The row-only behavior comes from `createGameRuntime.ts`: road-mutation preview c
 
 The smallest fix is to share that geometry and choose points by tool. No new controller method, backend intent, or Rust removal path is needed.
 
+Demolish does not receive a renderer-side geometry fallback. `renderRoadMutationPreview` continues to draw only the authoritative Rust preview. This matters for large rectangle gestures: the player must see the exact changed/skipped/route-impact candidate that commit will apply, rather than an optimistic local outline in a game with no undo.
+
 ### Player road overlap is currently treated as an edit
 
 `crates/caelum-core/src/road.rs::author_lane_tiles` currently accepts an existing road tile and calls `merge_lane_direction`. The generated reverse carriageway also has a separate `can_overlay_reverse_lane` decision.
 
-That gives player `LayRoadLine` several incompatible meanings: new road, same-axis repaint, direction update, partial upgrade, or perpendicular crossing. HPA-551 removes the repaint/upgrade meanings from multi-tile player authoring. Existing-road direction editing remains the separate single-tile direction-cycle interaction.
+That gives player `LayRoadLine` several incompatible meanings:
+
+- build new road;
+- repaint or upgrade a same-axis road;
+- partially build while skipping an occupied reverse-lane tile;
+- create a perpendicular crossing.
+
+HPA-551 removes repaint, upgrade, and partial road-contact meanings from axis-resolved multi-tile player authoring. Existing-road direction editing remains the separate single-tile direction-cycle interaction.
+
+### Structure contact is also changing meaning
+
+Player line authoring currently skips roundabout-owned tiles and may merge direction state into other structure-owned road tiles. HPA-551 changes both cases to whole-stroke `BlockedTile` rejection for axis-resolved player strokes.
+
+This is intentional. A structure footprint owns its road geometry and must not be partially repainted by the ordinary Road tool.
 
 ### Scenario authoring intentionally overlays
 
-`author_scenario_road_line` is a different caller with a different contract. Crossroads composes four one-way arterials through the same central cells, and Small Town crosses two two-way roads. Those deterministic templates need merge-on-contact construction and do not represent a player build gesture.
+`author_scenario_road_line` is a different caller with a different contract. Crossroads composes four one-way arterials through shared central cells, and Small Town crosses two two-way roads. Those deterministic templates need merge-on-contact construction and do not represent a player build gesture.
 
-Player `LayRoadLine` therefore gains strict contact preflight; `author_scenario_road_line` keeps its current merge policy. The implementation must not route template construction through the new player preflight.
+Player `LayRoadLine` therefore gains strict contact preflight; `author_scenario_road_line` keeps its current merge policy. Template construction must not pass through the new player preflight.
+
+### The UI and the host boundary accept different stroke shapes
+
+The player UI emits a non-degenerate axis-locked line through `axisLockedLine`. The Rust wire boundary can still receive duplicate-point, bent, loop, or otherwise non-axis-locked `LayRoadLine` payloads, and existing tests exercise those shapes.
+
+HPA-551 does not redesign that broader host contract. Strict contact preflight applies only when the points resolve to one non-zero axis. Degenerate or bent host strokes retain their current authoring/skip semantics. Existing duplicate and bent-stroke tests remain controls.
+
+This is deliberately narrower than claiming every arbitrary host payload is overlap-safe. The player-facing guarantee is complete because the UI cannot emit the excluded shapes.
+
+### Road contact and non-road obstruction use different mutation models
+
+After HPA-551:
+
+- existing-road contact covered by the player preflight rejects the whole axis-resolved stroke atomically;
+- building occupancy, transit-node occupancy, blocked terrain, out-of-bounds tiles, and affordability continue through the existing per-tile skip/ordered-budget behavior.
+
+The split is intentional. Repainting a road changes existing player-authored network state; skipping a non-road obstruction leaves that obstruction untouched while allowing the rest of the requested construction. HPA-551 does not broaden into an all-or-nothing road-building transaction.
 
 ### Junction correctness must be proven at four layers
 
@@ -59,13 +93,13 @@ A useful reproduction distinguishes:
 3. exact reciprocal external boundary ports;
 4. compiled legal paths through the junction.
 
-Only a RED result after all obsolete overlay fixtures have been rewritten can justify a production topology investigation.
+Only a RED result after obsolete contract fixtures and incidental scenery overlays have been rewritten can justify a production topology investigation.
 
 ## Product decisions
 
 ## 1. Demolish uses an inclusive rectangle
 
-Add one shared pure helper in `src/ui/roadDrag.ts`:
+Move the existing row-major rectangle algorithm from `src/render/overlayRenderer.ts` into `src/ui/roadDrag.ts`:
 
 ```ts
 export function rectanglePoints(start: Point, end: Point): Point[]
@@ -104,15 +138,34 @@ Both `roadMutationForUi` and `commitDrag` use this helper.
 | Demolish | inclusive rectangle |
 | Area | existing inclusive rectangle intent |
 
-`overlayRenderer.ts` imports `rectanglePoints` for area preview and deletes its private duplicate. Demolish continues to render the authoritative road-mutation preview; no local renderer geometry fallback is added.
+`overlayRenderer.ts` imports `rectanglePoints` for area preview and deletes its private duplicate. Demolish continues to render the authoritative road-mutation preview.
 
 Single-tile demolition remains `removeAtTile`. A 1 × N or N × 1 rectangle remains behaviorally identical to the current line drag.
 
-## 2. Player road contact is validated before cost or mutation
+## 2. Axis-resolved player road contact is validated before cost or mutation
 
-The overlap rule applies to multi-tile player `LayRoadLine`. It does not change `LayRoad`, `CycleRoadDirection`, or `author_scenario_road_line`.
+The strict overlap rule applies to a multi-tile `LayRoadLine` whose points resolve to one non-zero axis. It does not change:
 
-For a valid multi-tile stroke, derive the requested axis and inspect every point in the complete requested footprint against the **original** map before authoring either lane or applying budget.
+- `LayRoad`;
+- `CycleRoadDirection`;
+- `author_scenario_road_line`;
+- duplicate-point or bent/loop host strokes that the player UI cannot emit.
+
+Add one small private resolver for the preflight gate:
+
+```rust
+fn axis_resolved_stroke_direction(points: &[Point]) -> Option<Heading>
+```
+
+It returns a heading only when:
+
+- at least one segment exists;
+- every consecutive pair is adjacent and non-duplicate;
+- every segment is on the same horizontal or vertical axis.
+
+It does not replace `line_direction` or `canonical_line_direction`, because those existing helpers still own OneWay direction and Dual carriageway geometry for the broader host contract.
+
+For an axis-resolved stroke, inspect every point in the complete requested footprint against the **original** map before authoring either lane or applying budget.
 
 The footprint is:
 
@@ -154,8 +207,11 @@ Consequences:
 
 - same-axis OneWay overlay now returns `BlockedTile`, not `OneWayParallelTooClose`;
 - a reverse-lane conflict rejects before the forward lane spends or builds;
-- a partial overlap cannot build its empty tail;
+- a partial road overlap cannot build its empty tail;
+- structure and roundabout contact reject the whole stroke;
 - preview and commit share the same rejection through `road::apply_road_mutation`.
+
+Non-road obstructions continue to skip per tile, and budget exhaustion continues to stop/skip in input order as today.
 
 ### Road extension and T-junctions
 
@@ -186,12 +242,12 @@ Implement it by composing existing `reverse_lane_points` and `deduplicate_points
 
 The helper is consumed by:
 
-1. player `LayRoadLine` preflight;
+1. axis-resolved player `LayRoadLine` preflight;
 2. `preview.rs::attempted_mutation_tiles` for rejected `LayRoadLine` previews.
 
 For Dual rejection, preview must show both attempted carriageways, including a conflict that exists only on the generated reverse lane.
 
-Validation reads the original map. Existing self-intersection/duplicate behavior inside one host-supplied mutation is outside the new existing-road contact rule and should not be accidentally changed.
+Validation reads the original map. Existing self-intersection and duplicate behavior inside one non-axis-resolved host mutation is intentionally outside the strict player contact rule.
 
 ## 4. Player and scenario authoring keep separate policies
 
@@ -202,7 +258,7 @@ Keep `merge_lane_direction` and `can_overlay_reverse_lane` available to `author_
 This is two callers with two explicit policies, not a new abstraction:
 
 ```text
-player LayRoadLine
+axis-resolved player LayRoadLine
   -> complete-footprint preflight
   -> empty tiles + approved perpendicular crossings only
 
@@ -212,41 +268,74 @@ scenario author_scenario_road_line
 
 No sandbox production code changes are expected.
 
-## 5. Old overlay fixtures are deliberately rewritten
+## 5. Fixture discovery precedes production edits
 
-The old player contract is encoded beyond the three dual-upgrade recapture tests. Before the topology gate runs, retarget at least these fixtures:
+Before changing `road.rs`, run:
 
-### `crates/caelum-core/tests/transit_build.rs`
+```bash
+rg -n 'LayRoadLine|lay_road_line' crates/caelum-core/tests
+```
 
-- `lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_existing_roads`
-- `lay_road_line_one_way_is_idempotent_when_direction_already_matches`
-- `lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied`
-- `lay_road_line_one_way_over_two_way_road_updates_direction`
+The current code search spans 24 core-test files. Record every hit in the PR under a fixture inventory with one of two dispositions:
 
-These become atomic `BlockedTile` tests with unchanged snapshot/budget. The reverse-lane cases additionally prove the forward lane was not authored.
+### Contract fixture
 
-### `crates/caelum-core/tests/road_authoring.rs`
+The test asserts overlay, repaint, partial upgrade, or idempotent re-lay as the product behavior.
 
-- `road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay`
-- `one_way_overlay_is_checked_before_merge_lane_direction`
+Action: retarget the assertion to the new `BlockedTile` contract or replace it with a legal clean-crossing/adjacent-extension fixture.
 
-The first becomes a partial-overlap atomicity test. The second expects `BlockedTile` before one-way spacing.
+Known contract fixtures include:
 
-### `crates/caelum-core/tests/dual_road_routing.rs`
+- `transit_build.rs`
+  - `lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_existing_roads`
+  - `lay_road_line_one_way_is_idempotent_when_direction_already_matches`
+  - `lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied`
+  - `lay_road_line_one_way_over_two_way_road_updates_direction`
+- `road_authoring.rs`
+  - `road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay`
+  - `one_way_overlay_is_checked_before_merge_lane_direction`
+- `dual_road_routing.rs`
+  - the three `recapture_dual_crossing_after_*_upgrade_*` / overlay reproductions
+  - the collinear continuation fixture that repeats the prior endpoint
 
-Remove or replace the three accepted upgrade fixtures:
+### Scenery fixture
 
-- `recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges`
-- `recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges`
-- `recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges`
+The test’s real assertion is routing, persistence, topology, service behavior, or another feature; overlap occurs only while arranging its map.
 
-Rewrite the collinear continuation fixture so the second segment starts on the adjacent empty tile rather than repeating the previous endpoint.
+Action: rebuild the setup legally and preserve the load-bearing assertion.
 
-`dual_intersection_engine` also currently overlays TwoWay on Dual approach lanes to make stop access bidirectional. Rewrite it by removing the selected Dual approach stretch and relaying TwoWay onto the resulting empty tiles before using it as the left-turn oracle. A RED turn after that rewrite is meaningful; a RED turn from a rejected fixture is not.
+Known scenery fixtures include:
 
-The implementation begins with a repository search for remaining overlay/repaint expectations and finishes by running the full Rust workspace suite. Do not weaken preflight to preserve an old test.
+- `transit_router.rs::terminal_turnaround_recovers_after_a_roundabout_is_placed`
+  - keep the 2 × 2 loop;
+  - change the west approach to `(1..=2)` and the east approach to `(5..=6).rev()`;
+  - rely on `connect_neighbor_endpoints` to attach to the loop;
+  - keep the terminal-turnaround and roundabout-recovery assertions.
+- `dual_road_routing.rs::dual_intersection_engine`
+  - do not overlay TwoWay onto Dual approaches;
+  - remove the selected approach stretch;
+  - relay TwoWay onto the resulting empty tiles;
+  - keep the stop-access and left-turn assertions.
 
-## 6. Dual-junction work is characterization-only until RED
+Known controls that must remain unchanged include non-road partial skips, affordability ordering, duplicate-point strokes, and bent/self-overlapping host strokes. The inventory records them as controls rather than contract migrations.
+
+A test must not be deleted merely because its setup contains overlap. Delete/retarget only when overlay itself is the contract under test.
+
+The production preflight and every required fixture rewrite land at one green commit boundary. Run `cargo test --workspace` before that commit.
+
+## 6. Original reproductions map to explicit replacements
+
+The three upgrade-based recapture tests are not removed without trace. Record this mapping in the implementation PR and test comments:
+
+| Original reproduction | Product-contract replacement | Legal topology replacement |
+| --- | --- | --- |
+| `recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges` | same-axis/upgrade stroke rejects atomically | `horizontal_first_dual_intersection_has_all_four_internal_edges` upgraded to the full crossing contract |
+| `recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges` | same-axis/upgrade stroke rejects atomically | `vertical_first_dual_intersection_has_all_four_internal_edges` upgraded to the full crossing contract |
+| `recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges` | OneWay/Dual repaint rejects atomically | clean horizontal-first Dual × Dual crossing plus reversed-input characterization |
+
+If the legal replacements are GREEN after fixture migration, the original symptom is evidence of the now-forbidden overlay path rather than a missing clean-crossing topology repair.
+
+## 7. Dual-junction work is characterization-only until RED
 
 Extend the existing dual-crossing assertions using current helpers:
 
@@ -254,6 +343,8 @@ Extend the existing dual-crossing assertions using current helpers:
 - `assert_complete_two_by_two_at`;
 - `RoadStructure::port_keys`;
 - `GameEngine::road_topology_for_test().find_path_between_access_tiles`.
+
+`port_keys()` already returns a sorted canonical vector, so exact equality checks the port set without depending on insertion/emission order.
 
 Cover clean player-valid sequences:
 
@@ -271,7 +362,7 @@ For the canonical clean cross, assert the exact eight boundary ports and represe
 Run the complete matrix after fixture migration.
 
 - If footprint, edges, ports, and paths are GREEN, commit characterization tests and make **no topology production change**.
-- If RED, record the first failing layer and the exact fixture in the implementation PR. Investigate that seam before writing production code, and revise this plan with the confirmed minimal fix.
+- If RED, record the first failing layer and exact fixture in the implementation PR. Investigate that seam, revise this design and implementation plan with the confirmed minimal fix, and only then change production topology.
 
 The plan intentionally contains no paste-ready internal-edge completion, port-repair, or transition-generation implementation. A generic 2 × 2 mesh completion remains rejected.
 
@@ -288,6 +379,7 @@ pointermove
   -> dragMutationPoints(remove, start, current)
   -> rectanglePoints
   -> existing RemoveAtTiles preview
+  -> Rust candidate changed/skipped/route impacts
 
 pointerup
   -> commitDrag
@@ -295,18 +387,29 @@ pointerup
   -> existing RemoveAtTiles dispatch
 ```
 
-### Player road line
+### Axis-resolved player road line
 
 ```text
 pointerup
   -> axisLockedLine
   -> LayRoadLine
   -> overflow validation
+  -> axis_resolved_stroke_direction
   -> road_line_footprint
-  -> validate original-map contacts
+  -> validate original-map road contacts
   -> reject atomically OR author empty/approved crossing tiles
   -> refresh automatic junctions
   -> compile and commit topology
+```
+
+### Non-axis-resolved host road line
+
+```text
+host LayRoadLine payload
+  -> existing overflow validation
+  -> axis_resolved_stroke_direction returns None
+  -> skip strict player road-contact preflight
+  -> retain existing host authoring/skip behavior
 ```
 
 No TypeScript placement rule duplicates Rust contact classification.
@@ -321,7 +424,7 @@ No TypeScript placement rule duplicates Rust contact classification.
 - keep the existing “bulldozes a line with the remove tool drag” regression;
 - run the existing overlay renderer suite after extracting the area helper; no new count-only renderer test is needed.
 
-### Rust road authoring
+### Rust player road authoring
 
 - complete and partial same-axis overlap reject atomically;
 - identical OneWay re-lay rejects rather than acting idempotently;
@@ -334,16 +437,27 @@ No TypeScript placement rule duplicates Rust contact classification.
 - adjacent-empty extension connects;
 - rejected preview shows the full Dual footprint;
 - preview and commit match;
+- non-road blocked/building/transit-node tiles retain per-tile skip behavior;
+- duplicate and bent host strokes retain their existing behavior;
 - Crossroads and Small Town template construction remains valid.
+
+### Fixture migration
+
+- classify every core-test `LayRoadLine` hit before production changes;
+- retarget contract fixtures;
+- rebuild scenery fixtures legally;
+- keep the terminal-turnaround recovery regression;
+- keep the real dual left-turn oracle;
+- run `cargo test --workspace` before each Rust commit boundary.
 
 ### Junction characterization
 
 - clean build orders and reverse input orders;
 - expected 2 × 2 footprint;
 - four internal reciprocal edges;
-- exact eight live boundary ports;
+- exact eight live boundary ports through canonical `port_keys()`;
 - representative compiled straight and turn paths;
-- no production topology change without post-migration RED evidence.
+- no production topology change without post-migration RED evidence and a revised plan.
 
 ### Player smoke
 
@@ -380,30 +494,40 @@ Build two road rows away from template infrastructure, drag Demolish diagonally 
 - `crates/caelum-core/tests/transit_build.rs`
 - `crates/caelum-core/tests/road_authoring.rs`
 - `crates/caelum-core/tests/dual_road_routing.rs`
+- `crates/caelum-core/tests/transit_router.rs`
+- any additional file identified by the pre-edit `LayRoadLine` inventory
 
-Verification includes the existing `sandbox_coverage` and renderer tests even though those files should not require modification.
+Verification includes the existing `sandbox_coverage` and renderer tests even when those files require no modification.
 
 ## Acceptance criteria
 
 - Demolish previews and removes arbitrary inclusive N × M rectangles in every drag direction.
+- Existing 1 × N demolition and single-tile demolition remain valid.
 - Road and Track remain axis-locked.
-- Same-axis, partial, ambiguous, existing-junction, and roundabout road contacts reject before cost or mutation.
-- Both Dual carriageways are validated against the original map.
+- Every axis-resolved player road stroke validates all existing-road contacts against the original map.
+- Same-axis, partial, ambiguous, existing-junction, and roundabout contacts reject before cost or mutation.
+- Both carriageways of an axis-resolved Dual stroke are checked before authoring.
 - Perpendicular through-crossings and endpoint T-junctions remain legal.
 - Adjacent-empty extension remains usable.
+- Non-road obstructions retain the existing per-tile skip/ordered-budget semantics.
+- Degenerate and bent host-only strokes retain their current semantics and are not described as covered by the strict player preflight.
 - Single-click direction editing remains unchanged.
 - Crossroads and Small Town continue to construct through scenario-only merge semantics.
-- Every old overlay-as-success fixture is removed or retargeted; none is preserved by weakening preflight.
-- A clean Dual × Dual crossing has its expected footprint, reciprocal internal edges, eight live ports, and legal compiled paths.
-- No topology production diff lands without a RED result after fixture migration.
+- Every core-test `LayRoadLine` hit is classified before production edits.
+- Contract fixtures are retargeted; scenery fixtures preserve their original assertions through legal setup.
+- The three original upgrade reproductions have documented contract and legal-topology replacements.
+- A clean Dual × Dual crossing exposes the expected footprint, reciprocal internal edges, eight live ports, and legal compiled paths.
+- No topology production diff lands without a RED result after fixture migration and a revised plan.
 - Preview and commit agree for accepted and rejected road strokes.
 - The implementation ships in the single HPA-551 PR.
 
 ## Non-goals
 
-- Free-form, diagonal, curved, or L-shaped Road/Track drags.
-- Player upgrade-in-place road repainting.
-- Adding a player road arm through an existing automatic-junction footprint.
-- Changing deterministic scenario road authoring.
+- Free-form, diagonal, curved, or L-shaped Road/Track drags in the player UI.
+- Redesigning or rejecting arbitrary bent/duplicate host `LayRoadLine` payloads.
+- Upgrade-in-place player road repainting.
+- Adding a road arm through an existing automatic-junction footprint.
 - New road provenance, stroke identity, lane-capacity model, or generic junction framework.
-- New undo/redo, backend, persistence, migration, or compatibility machinery.
+- New undo/redo or transaction framework.
+- Save migration or backward compatibility for development snapshots.
+- Broad refactoring outside the touched drag, fixture, and road-authoring seams.
