@@ -9,47 +9,57 @@
 
 Make the existing build tools predictable during real map authoring without introducing a new editor framework:
 
-1. Demolish drags remove the inclusive **N × M rectangle** between pointer-down and pointer-up.
+1. Demolish removes the inclusive **N × M rectangle** between pointer-down and pointer-up.
 2. A valid perpendicular road crossing, including dual-bidirectional × dual-bidirectional, produces a complete and traversable junction.
-3. A multi-tile road stroke cannot silently repaint or overlap an existing road. Reusing a road tile is legal only for a genuine perpendicular crossing.
+3. A multi-tile player road stroke cannot silently repaint or overlap an existing road. Reusing a road tile is legal only for a genuine perpendicular crossing.
 
 The implementation stays inside the current frontend drag/runtime flow and the authoritative Rust road-mutation pipeline. Browser/WASM and Tauri continue to consume the same existing backend methods.
 
-## Current behavior and root-cause boundaries
+## Review disposition
 
-### Demolish is constrained by frontend geometry, not backend capability
+The reviewed product shape remains unchanged. The implementation contract is narrowed in four places:
+
+- inventory and rewrite every test fixture that still specifies player `LayRoadLine` overlay as success;
+- keep `author_scenario_road_line` merge-on-contact behavior for built-in sandbox templates;
+- make the dual-junction task characterization-only until a post-fixture RED result identifies a production seam;
+- run the player smoke in Blank Grid, not the default Crossroads template.
+
+No topology repair implementation is pre-authorized by this design.
+
+## Verified current boundaries
+
+### Demolish is constrained by frontend geometry
 
 `UiState.drag` already stores an atomic gesture with `tool`, `start`, and `current`. The backend `removeAtTiles` operation already accepts an arbitrary point list and applies the existing full removal behavior for roads, track, buildings, transit nodes, and whole roundabouts.
 
-The row-only behavior comes from `createGameRuntime.ts`: both road-mutation preview construction and `commitDrag()` pass every Road, Track, and Remove drag through `axisLockedLine`. The renderer already contains an inclusive row-major rectangle helper for area painting, but that helper is private to `overlayRenderer.ts`.
+The row-only behavior comes from `createGameRuntime.ts`: road-mutation preview construction and `commitDrag()` currently pass Road, Track, and Remove through `axisLockedLine`. `overlayRenderer.ts` already contains an inclusive row-major rectangle helper for area painting.
 
-The smallest fix is therefore to share rectangle geometry and choose geometry by tool. No new controller method, backend intent, or Rust removal path is needed.
+The smallest fix is to share that geometry and choose points by tool. No new controller method, backend intent, or Rust removal path is needed.
 
-### Road overlap is currently treated as an edit
+### Player road overlap is currently treated as an edit
 
-`crates/caelum-core/src/road.rs::author_lane_tiles` currently accepts an existing road tile. It calls `merge_lane_direction`, which can preserve or replace one-way metadata depending on the existing connections. The generated reverse carriageway has a separate `can_overlay_reverse_lane` rule, so forward and reverse lanes do not apply one uniform contact policy.
+`crates/caelum-core/src/road.rs::author_lane_tiles` currently accepts an existing road tile and calls `merge_lane_direction`. The generated reverse carriageway also has a separate `can_overlay_reverse_lane` decision.
 
-That behavior makes a dragged road stroke ambiguous:
+That gives player `LayRoadLine` several incompatible meanings: new road, same-axis repaint, direction update, partial upgrade, or perpendicular crossing. HPA-551 removes the repaint/upgrade meanings from multi-tile player authoring. Existing-road direction editing remains the separate single-tile direction-cycle interaction.
 
-- it can be a new road;
-- it can upgrade or repaint an existing same-axis road;
-- it can create a perpendicular crossing;
-- the forward and generated reverse lanes can make different decisions over the same map.
+### Scenario authoring intentionally overlays
 
-The player requirement removes that ambiguity. Multi-tile road authoring is new-road construction plus legal crossings only. Existing-road direction editing remains the separate single-tile direction-cycle interaction.
+`author_scenario_road_line` is a different caller with a different contract. Crossroads composes four one-way arterials through the same central cells, and Small Town crosses two two-way roads. Those deterministic templates need merge-on-contact construction and do not represent a player build gesture.
 
-### Junction correctness must be proven at the right layers
+Player `LayRoadLine` therefore gains strict contact preflight; `author_scenario_road_line` keeps its current merge policy. The implementation must not route template construction through the new player preflight.
 
-Current tests cover several clean and upgrade-based dual-road crossing sequences and assert four internal reciprocal edges for a 2 × 2 automatic junction. The topology compiler, however, routes automatic junctions through their live boundary ports, not merely through the serialized internal mesh.
+### Junction correctness must be proven at four layers
 
-A useful reproduction must therefore distinguish four layers:
+Existing dual-road tests already have helpers for the expected 2 × 2 footprint and the four internal reciprocal edges. Automatic-junction routing, however, is compiled from live boundary ports.
 
-1. expected automatic-junction footprint;
+A useful reproduction distinguishes:
+
+1. automatic-junction footprint;
 2. reciprocal internal road edges;
-3. reciprocal external boundary ports;
+3. exact reciprocal external boundary ports;
 4. compiled legal paths through the junction.
 
-Production topology code changes only after one of those assertions is RED. A clean crossing that already passes all four layers does not justify another completion or normalization pass.
+Only a RED result after all obsolete overlay fixtures have been rewritten can justify a production topology investigation.
 
 ## Product decisions
 
@@ -61,31 +71,17 @@ Add one shared pure helper in `src/ui/roadDrag.ts`:
 export function rectanglePoints(start: Point, end: Point): Point[]
 ```
 
-The helper returns every point in the inclusive bounds:
+It returns every point in the inclusive bounds in deterministic row-major order: top to bottom, then left to right. Drag direction does not change the point list.
 
 ```text
-minX = min(start.x, end.x)
-maxX = max(start.x, end.x)
-minY = min(start.y, end.y)
-maxY = max(start.y, end.y)
-```
+(2,3) -> (4,4)
+[(2,3), (3,3), (4,3), (2,4), (3,4), (4,4)]
 
-Ordering is deterministic row-major order: top to bottom, then left to right. Drag direction does not change the resulting point list.
-
-Examples:
-
-```text
-(2, 3) -> (4, 4)
-[
-  (2,3), (3,3), (4,3),
-  (2,4), (3,4), (4,4),
-]
-
-(4, 4) -> (2, 3)
+(4,4) -> (2,3)
 produces the same list
 ```
 
-`createGameRuntime.ts` chooses drag points once through a small local helper:
+`createGameRuntime.ts` chooses geometry once:
 
 ```ts
 function dragMutationPoints(
@@ -99,85 +95,85 @@ function dragMutationPoints(
 }
 ```
 
-Both `roadMutationForUi` and `commitDrag` use this helper. This prevents preview/commit geometry drift.
-
-Behavior by tool remains:
+Both `roadMutationForUi` and `commitDrag` use this helper.
 
 | Tool | Drag geometry |
 | --- | --- |
 | Road | axis-locked line |
 | Track | axis-locked line |
 | Demolish | inclusive rectangle |
-| Area | inclusive rectangle through the existing rectangle intent |
+| Area | existing inclusive rectangle intent |
 
-`overlayRenderer.ts` imports the shared `rectanglePoints` for area paint preview and deletes its private duplicate. Demolish continues to render the authoritative road-mutation preview, which already carries changed/skipped tiles, route impact warnings, and structure footprints.
+`overlayRenderer.ts` imports `rectanglePoints` for area preview and deletes its private duplicate. Demolish continues to render the authoritative road-mutation preview; no local renderer geometry fallback is added.
 
 Single-tile demolition remains `removeAtTile`. A 1 × N or N × 1 rectangle remains behaviorally identical to the current line drag.
 
-## 2. Road contact is validated before budget or map mutation
+## 2. Player road contact is validated before cost or mutation
 
-The overlap rule applies to `LayRoadLine`, not to the existing single-tile `LayRoad`/`CycleRoadDirection` click contract.
+The overlap rule applies to multi-tile player `LayRoadLine`. It does not change `LayRoad`, `CycleRoadDirection`, or `author_scenario_road_line`.
 
-For a valid multi-tile road stroke, derive the requested axis from the stroke. Then validate every point in the complete requested footprint against the **original** map before authoring either lane or spending budget.
+For a valid multi-tile stroke, derive the requested axis and inspect every point in the complete requested footprint against the **original** map before authoring either lane or applying budget.
 
-The complete footprint is:
+The footprint is:
 
 - TwoWay: forward points;
 - OneWay: forward points;
-- DualBidirectional: forward points plus the generated reverse-carriageway points.
+- DualBidirectional: forward points plus generated reverse-carriageway points.
 
-A requested point that is empty or otherwise handled by the existing placement/skip rules is not an overlap conflict. When the point is already a road, apply this table:
+When a footprint point is already a road:
 
 | Existing road state | Result |
 | --- | --- |
 | Ordinary road with only the perpendicular connection axis | legal crossing |
-| Ordinary road with any connection on the requested axis | reject |
-| Ordinary road with both axes | reject existing junction overlap |
-| Ordinary road with no established connection axis | reject ambiguous overlap |
-| Any structure-owned road tile | reject |
-| Any roundabout-owned tile | reject |
+| Ordinary road with any requested-axis connection | reject |
+| Ordinary road with both axes | reject existing-junction overlap |
+| Ordinary road with no established axis | reject ambiguous overlap |
+| Structure-owned or roundabout-owned road | reject |
 
-“Only the perpendicular axis” includes a perpendicular endpoint with one reciprocal edge, so a new stroke may form a T-junction as well as a full crossing. It does not include an existing mixed-axis junction cell.
+“Only the perpendicular axis” includes a perpendicular endpoint with one reciprocal edge, so the new stroke may form a T-junction as well as a through-crossing.
 
-On the first conflict, return:
+The first conflict returns:
 
 ```rust
 GameplayRejection::at(RejectionCode::BlockedTile, point)
 ```
 
-The existing player message, “That tile is blocked,” is sufficient for this first version. No new Rust/TypeScript rejection enum is added.
+The existing “That tile is blocked.” copy remains sufficient.
 
-### Atomicity
+### Ordering and atomicity
 
-The preflight runs before:
+The preflight runs after stroke/offset overflow validation but before:
 
-- one-way spacing validation;
+- one-way parallel-spacing validation;
 - any `CostPolicy` authorization/application;
 - `author_lane_tiles`;
 - connection creation;
 - automatic-junction refresh.
 
-Therefore a partially overlapping stroke cannot build its empty portion, spend budget, or alter route topology before being rejected. Preview and commit share `road::apply_road_mutation`, so the same rejection and unchanged snapshot apply to both.
+Consequences:
 
-### Road extension
+- same-axis OneWay overlay now returns `BlockedTile`, not `OneWayParallelTooClose`;
+- a reverse-lane conflict rejects before the forward lane spends or builds;
+- a partial overlap cannot build its empty tail;
+- preview and commit share the same rejection through `road::apply_road_mutation`.
 
-A player extends an existing road by starting the new drag on the adjacent empty tile. `connect_neighbor_endpoints` attaches the new sequence to the existing endpoint. Starting the stroke on the existing endpoint is same-axis overlap and is rejected.
+### Road extension and T-junctions
 
-This removes upgrade-in-place and repaint semantics from the multi-tile tool without removing ordinary extension.
+A player extends an existing road by starting the new drag on the adjacent empty tile. `connect_neighbor_endpoints` attaches the new sequence to the existing endpoint. Starting the stroke on the existing endpoint is same-axis overlap and rejects.
 
-### Existing-road single click
+A perpendicular stroke may end on an existing endpoint. That is a legal T-junction and receives an explicit regression test.
 
-A zero-length Road drag remains the existing deferred click behavior:
+### Single-tile Road click
 
-- empty tile: lay one two-way road tile;
-- ordinary road tile: cycle its direction;
-- structure-owned road tile: unchanged silent no-op through the existing rule.
+A zero-length Road drag keeps the deferred click contract:
 
-No preset-dependent single-tile behavior is added.
+- empty tile: lay one two-way tile;
+- ordinary road tile: cycle direction;
+- structure-owned road tile: unchanged silent no-op.
 
-## 3. One footprint helper serves validation and rejected previews
+## 3. Reuse existing Rust geometry and axis helpers
 
-Add a small Rust helper in `road.rs`:
+Add one named helper because validation and rejected preview both need the same complete footprint:
 
 ```rust
 pub(crate) fn road_line_footprint(
@@ -186,64 +182,98 @@ pub(crate) fn road_line_footprint(
 ) -> Vec<Point>
 ```
 
-For valid coordinates it returns the deterministic, de-duplicated forward footprint plus the generated reverse carriageway for `DualBidirectional`. The mutation path continues to perform the existing overflow rejection before trusting generated reverse points. For an already-rejected overflowing stroke, preview may fall back to the supplied forward points.
+Implement it by composing existing `reverse_lane_points` and `deduplicate_points`. Contact classification reuses existing `has_axis`; do not add a second equivalent axis predicate.
 
-The helper is used by:
+The helper is consumed by:
 
-1. the preflight contact validator;
+1. player `LayRoadLine` preflight;
 2. `preview.rs::attempted_mutation_tiles` for rejected `LayRoadLine` previews.
 
-This matters for dual roads: when the conflict lies on the generated reverse lane, the invalid preview must show both attempted carriageways rather than only the dragged forward line.
+For Dual rejection, preview must show both attempted carriageways, including a conflict that exists only on the generated reverse lane.
 
-## 4. Existing-road authoring is narrowed to legal crossings
+Validation reads the original map. Existing self-intersection/duplicate behavior inside one host-supplied mutation is outside the new existing-road contact rule and should not be accidentally changed.
 
-After the preflight, an existing road tile encountered by `author_lane_tiles` is known to be a legal perpendicular crossing.
+## 4. Player and scenario authoring keep separate policies
 
-The implementation should therefore:
+After player preflight, an existing road encountered by player `author_lane_tiles` is already known to be an ordinary perpendicular crossing. The player path no longer calls `can_overlay_reverse_lane` or makes a second permissive contact decision.
 
-- remove the `reverse_lane` parameter from `author_lane_tiles`;
-- delete `can_overlay_reverse_lane`;
-- keep a narrowly named merge helper only for the legal crossing case;
-- set the crossing tile to two-way (`one_way = None`) while retaining authored reciprocal connections for both axes;
-- keep ordinary empty-tile placement, per-tile blocked skips, and budget exhaustion behavior unchanged.
+Keep `merge_lane_direction` and `can_overlay_reverse_lane` available to `author_scenario_road_line`. Crossroads and Small Town must continue to construct and compile without passing through the player overlap policy.
 
-The validator owns whether contact is allowed. The author owns how an already-approved crossing is materialized. This avoids a second, weaker policy inside the reverse-carriageway loop.
-
-## 5. Dual-road intersection repair is evidence-gated
-
-Extend `crates/caelum-core/tests/dual_road_routing.rs` with a reusable contract assertion for a clean 2 × 2 dual-road crossing.
-
-For a crossing whose top-left footprint point is `p`, assert:
+This is two callers with two explicit policies, not a new abstraction:
 
 ```text
-Internal reciprocal edges:
-p       <-> p + East
-p       <-> p + South
-p+East  <-> p + East + South
-p+South <-> p + East + South
+player LayRoadLine
+  -> complete-footprint preflight
+  -> empty tiles + approved perpendicular crossings only
+
+scenario author_scenario_road_line
+  -> existing deterministic merge-on-contact construction
 ```
 
-Also assert the exact eight live boundary port keys: two on each side of the 2 × 2 footprint. Finally, prove representative straight and turning paths across the compiled `RoadTopology`.
+No sandbox production code changes are expected.
 
-Cover the small sequence matrix justified by the report:
+## 5. Old overlay fixtures are deliberately rewritten
+
+The old player contract is encoded beyond the three dual-upgrade recapture tests. Before the topology gate runs, retarget at least these fixtures:
+
+### `crates/caelum-core/tests/transit_build.rs`
+
+- `lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_existing_roads`
+- `lay_road_line_one_way_is_idempotent_when_direction_already_matches`
+- `lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied`
+- `lay_road_line_one_way_over_two_way_road_updates_direction`
+
+These become atomic `BlockedTile` tests with unchanged snapshot/budget. The reverse-lane cases additionally prove the forward lane was not authored.
+
+### `crates/caelum-core/tests/road_authoring.rs`
+
+- `road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay`
+- `one_way_overlay_is_checked_before_merge_lane_direction`
+
+The first becomes a partial-overlap atomicity test. The second expects `BlockedTile` before one-way spacing.
+
+### `crates/caelum-core/tests/dual_road_routing.rs`
+
+Remove or replace the three accepted upgrade fixtures:
+
+- `recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges`
+- `recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges`
+- `recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges`
+
+Rewrite the collinear continuation fixture so the second segment starts on the adjacent empty tile rather than repeating the previous endpoint.
+
+`dual_intersection_engine` also currently overlays TwoWay on Dual approach lanes to make stop access bidirectional. Rewrite it by removing the selected Dual approach stretch and relaying TwoWay onto the resulting empty tiles before using it as the left-turn oracle. A RED turn after that rewrite is meaningful; a RED turn from a rejected fixture is not.
+
+The implementation begins with a repository search for remaining overlay/repaint expectations and finishes by running the full Rust workspace suite. Do not weaken preflight to preserve an old test.
+
+## 6. Dual-junction work is characterization-only until RED
+
+Extend the existing dual-crossing assertions using current helpers:
+
+- `assert_two_by_two_footprint`;
+- `assert_complete_two_by_two_at`;
+- `RoadStructure::port_keys`;
+- `GameEngine::road_topology_for_test().find_path_between_access_tiles`.
+
+Cover clean player-valid sequences:
 
 - horizontal first, then vertical;
 - vertical first, then horizontal;
-- each crossing stroke supplied in reverse point order;
-- a road extension authored from the adjacent empty tile before the crossing is added.
+- reversed horizontal input order;
+- reversed vertical input order;
+- adjacent-empty collinear extension before adding the crossing;
+- the existing endpoint dual T-junction fixture.
 
-Do not retain upgrade-in-place fixtures as accepted product behavior. Tests whose only purpose is proving that TwoWay/OneWay strokes can be repainted into Dual should be replaced by overlap-rejection tests.
+For the canonical clean cross, assert the exact eight boundary ports and representative horizontal, vertical, and turning paths. The rewritten `dual_intersection_engine` remains the turning-path oracle.
 
-### Root-cause decision gate
+### Decision gate
 
-After the no-overlap preflight is implemented, run the crossing contract tests before touching topology production code.
+Run the complete matrix after fixture migration.
 
-- **Missing reciprocal road edge:** change only `connect_authored_sequence` / `connect_neighbor_endpoints`, or add a narrowly restricted 2 × 2 completion helper if the RED fixture proves an incomplete already-classified 2 × 2 junction.
-- **Edges correct, boundary port missing:** change only boundary-port derivation in `refresh_automatic_junctions`.
-- **Edges and ports correct, path missing:** change only `compile_automatic_junction_transitions` in `road_topology.rs`.
-- **All assertions GREEN:** make no topology production change. The reported broken state came from a now-forbidden overlay sequence or needs a more exact playtest reproduction before further work.
+- If footprint, edges, ports, and paths are GREEN, commit characterization tests and make **no topology production change**.
+- If RED, record the first failing layer and the exact fixture in the implementation PR. Investigate that seam before writing production code, and revise this plan with the confirmed minimal fix.
 
-A generic “connect every adjacent road in a 2 × 2 block” pass is rejected. It can invent turns inside parallel roads or malformed structures and would obscure which layer actually failed.
+The plan intentionally contains no paste-ready internal-edge completion, port-repair, or transition-generation implementation. A generic 2 × 2 mesh completion remains rejected.
 
 ## Runtime data flow
 
@@ -254,46 +284,76 @@ pointerdown
   -> UiState.drag { tool: remove, start, current: start }
 
 pointermove
-  -> setDragCurrent(current)
+  -> setDragCurrent
   -> dragMutationPoints(remove, start, current)
-  -> rectanglePoints(start, current)
-  -> RoadMutation::RemoveAtTiles preview request
-  -> Rust remove_at_tiles candidate
-  -> changed/skipped/route-impact preview
+  -> rectanglePoints
+  -> existing RemoveAtTiles preview
 
 pointerup
   -> commitDrag
   -> same dragMutationPoints helper
-  -> GameIntent::RemoveAtTiles
-  -> Rust remove_at_tiles commit
+  -> existing RemoveAtTiles dispatch
 ```
 
-### Road line
+### Player road line
 
 ```text
 pointerup
   -> axisLockedLine
-  -> GameIntent::LayRoadLine
+  -> LayRoadLine
+  -> overflow validation
   -> road_line_footprint
-  -> validate complete footprint against original map
-  -> reject atomically OR author approved empty/crossing tiles
+  -> validate original-map contacts
+  -> reject atomically OR author empty/approved crossing tiles
   -> refresh automatic junctions
-  -> canonicalize roads
-  -> compile and commit topology with snapshot
+  -> compile and commit topology
 ```
 
-No TypeScript placement rule duplicates the Rust overlap classification. TypeScript supplies gesture geometry; Rust remains authoritative for gameplay validity.
+No TypeScript placement rule duplicates Rust contact classification.
 
-## Error and failure handling
+## Testing strategy
 
-- Empty road strokes keep `InvalidRoadStroke`.
-- Coordinate/offset overflow keeps `InvalidRoadStroke`.
-- One-way proximity keeps `OneWayParallelTooClose` when no overlap conflict exists.
-- Road overlap uses `BlockedTile` at the first conflicting point.
-- A rejected stroke leaves snapshot, budget, topology cache, dirty state, and routes unchanged.
-- Demolishing a rectangle with at least one removable item applies; non-removable/empty cells remain skipped through the existing removal contract.
-- A rectangle with no removable item keeps the existing `BlockedTile` rejection.
-- Backend/preview host failures continue through the current runtime error paths; no new retry or rollback state is introduced.
+### TypeScript
+
+- `rectanglePoints`: row-major, reverse-drag invariant, 1 × 1, 1 × N, N × 1;
+- runtime preview and commit dispatch the same rectangle;
+- Road and Track still dispatch axis-locked lines;
+- keep the existing “bulldozes a line with the remove tool drag” regression;
+- run the existing overlay renderer suite after extracting the area helper; no new count-only renderer test is needed.
+
+### Rust road authoring
+
+- complete and partial same-axis overlap reject atomically;
+- identical OneWay re-lay rejects rather than acting idempotently;
+- TwoWay-to-OneWay repaint rejects;
+- generated reverse-lane road conflict rejects before forward authoring;
+- ambiguous isolated-road contact rejects;
+- through-crossing and endpoint T-junction remain legal;
+- Dual × Dual remains legal;
+- existing junction and roundabout contact reject;
+- adjacent-empty extension connects;
+- rejected preview shows the full Dual footprint;
+- preview and commit match;
+- Crossroads and Small Town template construction remains valid.
+
+### Junction characterization
+
+- clean build orders and reverse input orders;
+- expected 2 × 2 footprint;
+- four internal reciprocal edges;
+- exact eight live boundary ports;
+- representative compiled straight and turn paths;
+- no production topology change without post-migration RED evidence.
+
+### Player smoke
+
+Add the smoke to `tests/e2e/smoke.spec.ts`. Create the city explicitly with:
+
+```ts
+await createDefaultCity(page, "E2E City", "blankGrid");
+```
+
+Build two road rows away from template infrastructure, drag Demolish diagonally across a smaller rectangle, and assert every in-rectangle road is empty while the next road tile outside the rectangle remains.
 
 ## File scope
 
@@ -307,78 +367,43 @@ No TypeScript placement rule duplicates the Rust overlap classification. TypeScr
 
 - `tests/runtime/roadDrag.test.ts`
 - `tests/runtime/gameRuntime.test.ts`
-- `tests/render/overlayRenderer.test.ts`
-- `tests/e2e/commandShelf.spec.ts`
+- `tests/e2e/smoke.spec.ts`
 
 ### Rust production
 
 - `crates/caelum-core/src/road.rs`
 - `crates/caelum-core/src/preview.rs`
-- `crates/caelum-core/src/road_topology.rs` only if a RED path assertion identifies that seam
+- `crates/caelum-core/src/road_topology.rs` only after confirmed RED evidence and an updated plan
 
 ### Rust tests
 
+- `crates/caelum-core/tests/transit_build.rs`
 - `crates/caelum-core/tests/road_authoring.rs`
 - `crates/caelum-core/tests/dual_road_routing.rs`
 
-No new production module, backend method, public controller method, dependency, persistence field, schema version, migration, or compatibility wrapper.
-
-## Testing strategy
-
-### TypeScript unit/runtime
-
-- `rectanglePoints` returns row-major inclusive points.
-- Reverse drag directions return the same canonical rectangle.
-- 1 × 1, 1 × N, and N × 1 remain correct.
-- Remove preview and commit dispatch the same rectangle points.
-- Road and Track continue to dispatch axis-locked lines.
-- Area preview still uses the same rectangle geometry after helper extraction.
-
-### Rust road authoring
-
-- complete same-axis overlap rejects atomically;
-- partial overlap rejects atomically and does not build the empty tail;
-- generated reverse-lane overlap rejects the entire Dual stroke;
-- perpendicular TwoWay and OneWay crossings remain legal;
-- clean Dual × Dual crossing remains legal;
-- mixed-axis automatic-junction overlap rejects;
-- roundabout/structure-owned overlap rejects;
-- extension from adjacent empty tile connects;
-- preview and commit return the same rejection and unchanged snapshot;
-- single-tile direction cycling remains unchanged.
-
-### Junction topology
-
-- both construction orders;
-- reversed point order;
-- complete 2 × 2 internal reciprocal mesh;
-- exact eight boundary ports;
-- representative straight and turning paths;
-- no production topology helper without a RED assertion.
-
-### Player-level smoke
-
-Build a small rectangle of roads in Blank Grid, arm Demolish, drag diagonally across it, and verify every road tile in the rectangle is empty while an adjacent tile outside the rectangle remains unchanged.
+Verification includes the existing `sandbox_coverage` and renderer tests even though those files should not require modification.
 
 ## Acceptance criteria
 
 - Demolish previews and removes arbitrary inclusive N × M rectangles in every drag direction.
-- Road and Track drags remain straight and axis-locked.
-- Same-axis, partial, ambiguous, junction-owned, and roundabout-owned road overlaps reject before any mutation or cost.
-- Both forward and generated reverse lanes are validated.
-- Perpendicular one-lane and dual-lane crossings remain legal.
-- Road extension from the adjacent empty tile remains usable.
+- Road and Track remain axis-locked.
+- Same-axis, partial, ambiguous, existing-junction, and roundabout road contacts reject before cost or mutation.
+- Both Dual carriageways are validated against the original map.
+- Perpendicular through-crossings and endpoint T-junctions remain legal.
+- Adjacent-empty extension remains usable.
 - Single-click direction editing remains unchanged.
+- Crossroads and Small Town continue to construct through scenario-only merge semantics.
+- Every old overlay-as-success fixture is removed or retargeted; none is preserved by weakening preflight.
 - A clean Dual × Dual crossing has its expected footprint, reciprocal internal edges, eight live ports, and legal compiled paths.
+- No topology production diff lands without a RED result after fixture migration.
 - Preview and commit agree for accepted and rejected road strokes.
-- The implementation ships as one PR for HPA-551.
+- The implementation ships in the single HPA-551 PR.
 
 ## Non-goals
 
 - Free-form, diagonal, curved, or L-shaped Road/Track drags.
-- Upgrade-in-place road repainting.
-- Adding a road arm through an existing automatic-junction footprint.
+- Player upgrade-in-place road repainting.
+- Adding a player road arm through an existing automatic-junction footprint.
+- Changing deterministic scenario road authoring.
 - New road provenance, stroke identity, lane-capacity model, or generic junction framework.
-- New undo/redo or transaction framework.
-- Save migration or backward compatibility for development snapshots.
-- Broad refactoring outside the touched drag and road-authoring seams.
+- New undo/redo, backend, persistence, migration, or compatibility machinery.
