@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Add inclusive rectangular demolition, reject ambiguous/same-axis road overlap atomically, and prove clean dual-road crossings are fully traversable.
+**Goal:** Add inclusive rectangular demolition, reject player road overlap atomically, preserve deterministic scenario construction, and characterize clean dual-road junction connectivity.
 
-**Architecture:** Keep pointer/gesture state unchanged. TypeScript selects deterministic drag geometry and sends the existing intents; `caelum-core` validates the complete road footprint before budget or map mutation and remains the only gameplay authority. Junction production code changes only when a new layered Rust fixture proves the failing edge, port, or compiled-path seam.
+**Architecture:** TypeScript selects deterministic drag geometry and sends the existing intents. `caelum-core` performs one complete-footprint player-road preflight before spacing, cost, or mutation; built-in scenarios retain their separate merge-on-contact authoring path. Dual-junction production code remains unchanged unless the post-fixture characterization matrix is RED and the plan is revised with the confirmed failing seam.
 
 **Tech Stack:** Rust (`caelum-core`), TypeScript, Svelte runtime/canvas rendering, Vitest, Playwright, Bun, Cargo
 
@@ -12,55 +12,55 @@
 
 ## Global Constraints
 
-- Deliver all implementation and tests in **one PR for HPA-551**; internal commits are review checkpoints, not separate PRs.
-- Keep `GameBackend`, WASM, and Tauri interfaces unchanged.
-- Keep the current `DragGesture`; add no new editor state or controller method.
-- Road and Track remain axis-locked. Only Demolish changes to rectangular drag geometry.
-- Rust owns road-contact validity; do not duplicate overlap classification in TypeScript.
-- A multi-tile road stroke may reuse an ordinary road tile only when that tile has the perpendicular axis and not the requested axis.
-- Reject the complete road stroke before cost or mutation on same-axis, mixed-axis, structure-owned, roundabout-owned, or axis-less road contact.
-- Keep single-tile Road click behavior unchanged.
-- Use existing `blockedTile`; add no rejection enum unless an observed implementation failure proves the message unusable.
-- Do not add topology repair code without a RED layered crossing fixture.
-- Breaking the old upgrade-in-place behavior is intentional; delete or rewrite tests that specify it.
-- Add no dependency, save field, schema bump, migration, provenance model, or compatibility wrapper.
+- Deliver implementation and tests in the existing **single HPA-551 PR**.
+- Keep `GameBackend`, WASM, Tauri, `GameIntent`, and `DragGesture` interfaces unchanged.
+- Road and Track remain axis-locked; only Demolish changes to rectangular geometry.
+- Rust owns road-contact validity; do not classify overlap in TypeScript.
+- Player multi-tile `LayRoadLine` may reuse an ordinary road tile only for a perpendicular crossing.
+- Validate both Dual carriageways against the original map before one-way spacing, cost, or mutation.
+- Keep single-tile `LayRoad` / `CycleRoadDirection` behavior unchanged.
+- Keep `author_scenario_road_line` merge-on-contact behavior for Crossroads and Small Town.
+- Reuse `has_axis`, `reverse_lane_points`, and `deduplicate_points`; do not add equivalent helpers.
+- Use existing `BlockedTile`; add no rejection enum or message.
+- Remove or rewrite old overlay-as-success fixtures; never weaken preflight to keep them green.
+- Do not add production topology code from this plan. A post-migration RED result requires root-cause evidence and a plan update first.
+- Add no dependency, save field, schema bump, migration, provenance model, compatibility wrapper, or generic road framework.
 
 ## File Structure
 
-- `src/ui/roadDrag.ts` — pure shared line and rectangle point generation.
-- `src/runtime/createGameRuntime.ts` — choose drag geometry once for preview and commit.
-- `src/render/overlayRenderer.ts` — consume shared rectangle geometry; render authoritative remove previews.
-- `crates/caelum-core/src/road.rs` — derive complete road footprint, preflight contacts, and author approved crossings.
-- `crates/caelum-core/src/preview.rs` — render the complete attempted Dual footprint on rejection.
-- `crates/caelum-core/src/road_topology.rs` — conditional only when the new path assertion is RED after edges and ports are correct.
-- `tests/runtime/roadDrag.test.ts` — pure rectangle ordering and direction invariance.
-- `tests/runtime/gameRuntime.test.ts` — preview/commit intent geometry and unchanged Road/Track behavior.
-- `tests/render/overlayRenderer.test.ts` — area helper extraction and rectangular removal overlay.
-- `crates/caelum-core/tests/road_authoring.rs` — atomic road-contact policy and preview parity.
-- `crates/caelum-core/tests/dual_road_routing.rs` — layered dual-crossing contract and root-cause gate.
-- `tests/e2e/commandShelf.spec.ts` — player-level diagonal Demolish drag.
+- `src/ui/roadDrag.ts` — shared line and rectangle point generation.
+- `src/runtime/createGameRuntime.ts` — choose geometry once for preview and commit.
+- `src/render/overlayRenderer.ts` — consume shared rectangle geometry for Area preview.
+- `crates/caelum-core/src/road.rs` — player footprint derivation and contact preflight; scenario policy remains separate.
+- `crates/caelum-core/src/preview.rs` — full rejected Dual footprint.
+- `tests/runtime/roadDrag.test.ts` — pure rectangle ordering.
+- `tests/runtime/gameRuntime.test.ts` — preview/commit geometry and existing line regression.
+- `tests/e2e/smoke.spec.ts` — Blank Grid rectangular demolition journey.
+- `crates/caelum-core/tests/road_authoring.rs` — overlap, T-junction, extension, and preview parity.
+- `crates/caelum-core/tests/transit_build.rs` — retarget old line-overlay contracts.
+- `crates/caelum-core/tests/dual_road_routing.rs` — valid fixture rewrite plus layered junction characterization.
 
 ---
 
-### Task 1: Share Rectangle Geometry and Dispatch Rectangular Demolition
+### Task 1: Share Rectangle Geometry and Use It for Demolish
 
 **Files:**
-- Modify: `src/ui/roadDrag.ts:1-25`
-- Modify: `src/runtime/createGameRuntime.ts:1117-1145, 1409-1465`
-- Modify: `src/render/overlayRenderer.ts:20-65, 414-458`
-- Test: `tests/runtime/roadDrag.test.ts`
-- Test: `tests/runtime/gameRuntime.test.ts`
-- Test: `tests/render/overlayRenderer.test.ts`
+- Modify: `src/ui/roadDrag.ts`
+- Modify: `src/runtime/createGameRuntime.ts`
+- Modify: `src/render/overlayRenderer.ts`
+- Modify: `tests/runtime/roadDrag.test.ts`
+- Modify: `tests/runtime/gameRuntime.test.ts`
+- Modify: `tests/e2e/smoke.spec.ts`
+- Verify unchanged: `tests/render/overlayRenderer.test.ts`
 
 **Interfaces:**
 - Produces: `rectanglePoints(start: Point, end: Point): Point[]`
-- Produces locally in `createGameRuntime.ts`: `dragMutationPoints(tool: "road" | "track" | "remove", start: Point, current: Point): Point[]`
-- Preserves: `axisLockedLine(start: Point, end: Point): Point[]`
-- Consumed by: Task 5 Playwright smoke
+- Produces locally: `dragMutationPoints(tool, start, current): Point[]`
+- Preserves: `axisLockedLine`, `removeAtTile`, `removeAtTiles`
 
 - [ ] **Step 1: Add failing pure rectangle tests**
 
-Update the import and add a dedicated suite in `tests/runtime/roadDrag.test.ts`:
+Update `tests/runtime/roadDrag.test.ts`:
 
 ```ts
 import { axisLockedLine, rectanglePoints } from "../../src/ui/roadDrag";
@@ -87,7 +87,10 @@ describe("rectanglePoints", () => {
     );
   });
 
-  it("keeps single-row, single-column, and single-tile rectangles inclusive", () => {
+  it("keeps 1x1, 1xN, and Nx1 rectangles inclusive", () => {
+    expect(rectanglePoints({ x: 7, y: 8 }, { x: 7, y: 8 })).toEqual([
+      { x: 7, y: 8 },
+    ]);
     expect(rectanglePoints({ x: 1, y: 2 }, { x: 3, y: 2 })).toEqual([
       { x: 1, y: 2 },
       { x: 2, y: 2 },
@@ -98,16 +101,11 @@ describe("rectanglePoints", () => {
       { x: 2, y: 2 },
       { x: 2, y: 3 },
     ]);
-    expect(rectanglePoints({ x: 7, y: 8 }, { x: 7, y: 8 })).toEqual([
-      { x: 7, y: 8 },
-    ]);
   });
 });
 ```
 
 - [ ] **Step 2: Run the pure test and verify RED**
-
-Run:
 
 ```bash
 bunx vitest run --project runtime tests/runtime/roadDrag.test.ts
@@ -115,7 +113,7 @@ bunx vitest run --project runtime tests/runtime/roadDrag.test.ts
 
 Expected: FAIL because `rectanglePoints` is not exported.
 
-- [ ] **Step 3: Implement the pure rectangle helper**
+- [ ] **Step 3: Export the existing row-major rectangle algorithm**
 
 Append to `src/ui/roadDrag.ts`:
 
@@ -138,22 +136,25 @@ export function rectanglePoints(start: Point, end: Point): Point[] {
 }
 ```
 
-- [ ] **Step 4: Add failing runtime intent tests**
+- [ ] **Step 4: Add a runtime preview/commit parity test**
 
-In `tests/runtime/gameRuntime.test.ts`, replace the line-only Demolish expectation with rectangle coverage and retain explicit Road/Track line checks:
+Add `RoadMutation` to the existing backend-type imports in `tests/runtime/gameRuntime.test.ts`, then add:
 
 ```ts
-it("dispatches the same inclusive rectangle for remove preview and commit", async () => {
+it("uses the same inclusive rectangle for remove preview and commit", async () => {
   const previewMutations: RoadMutation[] = [];
   const backend = backendSpy();
   backend.previewRoadMutation = vi.fn(async (request) => {
     previewMutations.push(request.mutation);
+    const changedTiles =
+      request.mutation.type === "removeAtTiles"
+        ? request.mutation.points
+        : request.mutation.type === "removeAtTile"
+          ? [request.mutation.point]
+          : [];
     return {
       generation: request.generation,
-      changedTiles:
-        request.mutation.type === "removeAtTiles"
-          ? request.mutation.points
-          : [],
+      changedTiles,
       authoredTiles: [],
       generatedStructures: [],
       cost: 0,
@@ -191,62 +192,27 @@ it("dispatches the same inclusive rectangle for remove preview and commit", asyn
     points: expected,
   });
 });
-
-it("keeps road and track drags axis-locked", async () => {
-  const backend = backendSpy();
-  const runtime = await createGameRuntime({ backend });
-
-  runtime.setTool("road");
-  runtime.startDrag({ x: 2, y: 3 });
-  runtime.setDragCurrent({ x: 5, y: 4 });
-  await runtime.commitDrag();
-  expect(backend.intents.at(-1)).toMatchObject({
-    type: "layRoadLine",
-    points: [
-      { x: 2, y: 3 },
-      { x: 3, y: 3 },
-      { x: 4, y: 3 },
-      { x: 5, y: 3 },
-    ],
-  });
-
-  runtime.setTool("track");
-  runtime.startDrag({ x: 2, y: 3 });
-  runtime.setDragCurrent({ x: 3, y: 6 });
-  await runtime.commitDrag();
-  expect(backend.intents.at(-1)).toEqual({
-    type: "layTrackLine",
-    points: [
-      { x: 2, y: 3 },
-      { x: 2, y: 4 },
-      { x: 2, y: 5 },
-      { x: 2, y: 6 },
-    ],
-  });
-});
 ```
 
-Add `RoadMutation` to the existing backend-type import in that test file.
+Keep the existing `bulldozes a line with the remove tool drag` test. A 1 × N rectangle remains an explicit regression.
 
-- [ ] **Step 5: Run runtime tests and verify RED**
-
-Run:
+- [ ] **Step 5: Run the runtime test and verify RED**
 
 ```bash
-bunx vitest run --project runtime tests/runtime/roadDrag.test.ts tests/runtime/gameRuntime.test.ts
+bunx vitest run --project runtime tests/runtime/gameRuntime.test.ts -t "same inclusive rectangle"
 ```
 
-Expected: `roadDrag.test.ts` passes after Step 3; the new runtime rectangle expectation FAILS because Remove still uses `axisLockedLine`.
+Expected: FAIL because Remove still uses `axisLockedLine`.
 
-- [ ] **Step 6: Use one geometry selector for preview and commit**
+- [ ] **Step 6: Select drag geometry once for preview and commit**
 
-Update the import in `createGameRuntime.ts`:
+Update the runtime import:
 
 ```ts
 import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 ```
 
-Add beside the other small pure runtime helpers:
+Add beside the existing small pure runtime helpers:
 
 ```ts
 function dragMutationPoints(
@@ -260,13 +226,7 @@ function dragMutationPoints(
 }
 ```
 
-In `roadMutationForUi`, replace:
-
-```ts
-const points = axisLockedLine(gesture.start, gesture.current);
-```
-
-with:
+In `roadMutationForUi`, replace the current `axisLockedLine` call with:
 
 ```ts
 const points = dragMutationPoints(
@@ -276,129 +236,103 @@ const points = dragMutationPoints(
 );
 ```
 
-In `commitDrag`, derive `points` only after the Area early-return:
+In `commitDrag`, keep the Area early return, then derive the same `points` and use it for the single-tile, Remove, Track, and Road branches. Road and Track still receive axis-locked points.
 
-```ts
-const points = dragMutationPoints(
-  gesture.tool,
-  gesture.start,
-  gesture.current,
-);
-if (points.length <= 1) {
-  // existing single-tile branch, using points[0]
-}
-```
+- [ ] **Step 7: Remove the private renderer duplicate**
 
-Rename the remaining local `line` references in that method to `points`. Road and Track still receive `axisLockedLine`; Remove receives `rectanglePoints`.
-
-- [ ] **Step 7: Extract renderer rectangle geometry without changing rendering ownership**
-
-In `overlayRenderer.ts`, import both helpers:
+In `overlayRenderer.ts`:
 
 ```ts
 import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 ```
 
-Delete the private `rectanglePoints` implementation. Keep `planAreaPaintPreview` unchanged except that it now consumes the imported helper. Do not add a local Remove fallback; `renderRoadMutationPreview` remains the source of changed/skipped removal tiles.
+Delete the private `rectanglePoints` function. Keep `planAreaPaintPreview` consuming the imported helper. Do not add a Remove renderer fallback; `renderRoadMutationPreview` continues to draw Rust-provided `changedTiles` / `skippedTiles`.
 
-- [ ] **Step 8: Add a render regression for rectangular removal preview**
-
-In `tests/render/overlayRenderer.test.ts`, construct a Remove drag and a matching authoritative preview:
-
-```ts
-it("renders every tile in a rectangular remove preview", () => {
-  const state = createTestGameState();
-  const ui = {
-    ...createUiState(),
-    activeTool: "remove" as const,
-    drag: {
-      tool: "remove" as const,
-      start: { x: 2, y: 3 },
-      current: { x: 4, y: 4 },
-    },
-    roadMutationPreview: {
-      generation: 1,
-      changedTiles: rectanglePoints({ x: 2, y: 3 }, { x: 4, y: 4 }),
-      authoredTiles: [],
-      generatedStructures: [],
-      cost: 0,
-      skippedTiles: [],
-      routeImpacts: [],
-      warnings: [],
-      rejection: null,
-    },
-  };
-
-  renderOverlays(ctx, state, ui);
-
-  expect(ctx.fillRect).toHaveBeenCalledTimes(6);
-});
-```
-
-Use the file’s existing `ctx`, state factory, and overlay-render entrypoint rather than creating a second canvas harness. Import `rectanglePoints` from `src/ui/roadDrag`.
-
-- [ ] **Step 9: Run focused TypeScript tests and verify GREEN**
-
-Run:
+- [ ] **Step 8: Run focused TypeScript tests**
 
 ```bash
 bunx vitest run --project runtime tests/runtime/roadDrag.test.ts tests/runtime/gameRuntime.test.ts
 bunx vitest run --project ui tests/render/overlayRenderer.test.ts
 ```
 
-Expected: PASS.
+Expected: PASS. No new count-only renderer assertion is required because geometry is locked by the pure helper and runtime mutation test.
 
-- [ ] **Step 10: Commit the rectangular demolition slice**
+- [ ] **Step 9: Add a Blank Grid player smoke**
+
+Update imports in `tests/e2e/smoke.spec.ts` to include `runtimeSnapshot`. Add:
+
+```ts
+test("demolishes an inclusive rectangle in Blank Grid", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await createDefaultCity(page, "E2E City", "blankGrid");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 4, y: 4 }, { x: 8, y: 4 });
+  await dragMapTiles(page, canvas, { x: 4, y: 6 }, { x: 8, y: 6 });
+
+  await selectTool(page, "demolish");
+  await dragMapTiles(page, canvas, { x: 4, y: 4 }, { x: 7, y: 6 });
+
+  await expect
+    .poll(async () => {
+      const tiles = (await runtimeSnapshot(page)).state.map.tiles;
+      const kind = (x: number, y: number) =>
+        tiles.find((tile) => tile.x === x && tile.y === y)?.kind;
+      return {
+        top: [4, 5, 6, 7].map((x) => kind(x, 4)),
+        bottom: [4, 5, 6, 7].map((x) => kind(x, 6)),
+        outsideTop: kind(8, 4),
+        outsideBottom: kind(8, 6),
+      };
+    })
+    .toEqual({
+      top: ["empty", "empty", "empty", "empty"],
+      bottom: ["empty", "empty", "empty", "empty"],
+      outsideTop: "road",
+      outsideBottom: "road",
+    });
+});
+```
+
+- [ ] **Step 10: Run the focused player smoke**
 
 ```bash
-git add src/ui/roadDrag.ts src/runtime/createGameRuntime.ts src/render/overlayRenderer.ts tests/runtime/roadDrag.test.ts tests/runtime/gameRuntime.test.ts tests/render/overlayRenderer.test.ts
+bunx playwright test tests/e2e/smoke.spec.ts -g "demolishes an inclusive rectangle"
+```
+
+Expected: PASS without sleeps or Crossroads starter-road dependencies.
+
+- [ ] **Step 11: Commit the demolition slice**
+
+```bash
+git add src/ui/roadDrag.ts src/runtime/createGameRuntime.ts src/render/overlayRenderer.ts tests/runtime/roadDrag.test.ts tests/runtime/gameRuntime.test.ts tests/e2e/smoke.spec.ts
 git commit -m "feat: support rectangular demolition drags"
 ```
 
 ---
 
-### Task 2: Reject Road Overlap Before Authoring
+### Task 2: Add Atomic Player Road-Contact Preflight
 
 **Files:**
-- Modify: `crates/caelum-core/src/road.rs:160-360`
+- Modify: `crates/caelum-core/src/road.rs`
 - Modify: `crates/caelum-core/tests/road_authoring.rs`
-- Modify: `crates/caelum-core/tests/dual_road_routing.rs` to remove old upgrade-in-place expectations
+- Verify unchanged: `crates/caelum-core/src/sandbox.rs`
+- Verify unchanged: `crates/caelum-core/tests/sandbox_coverage.rs`
 
 **Interfaces:**
 - Produces: `pub(crate) fn road_line_footprint(points: &[Point], preset: RoadPreset) -> Vec<Point>`
-- Produces privately: `validate_road_line_contacts(map: &GameMap, footprint: &[Point], requested_axis: Heading) -> GameplayResult<()>`
-- Consumed by: Task 3 rejected-preview footprint
-- Preserves: `GameIntent::LayRoadLine`, `RoadPreset`, `BlockedTile`
+- Produces privately: `validate_road_line_contacts(map, footprint, requested_axis)`
+- Preserves: `author_scenario_road_line`, `merge_lane_direction`, `can_overlay_reverse_lane`
 
-- [ ] **Step 1: Add a blank-grid helper and failing overlap tests**
+- [ ] **Step 1: Add failing player-contact tests**
 
-In `crates/caelum-core/tests/road_authoring.rs`, add or reuse:
-
-```rust
-fn blank_grid_engine() -> GameEngine {
-    let mut request = caelum_core::canonical_default_request();
-    request.template_id = "blankGrid".to_string();
-    GameEngine::from_sandbox_request(request)
-        .expect("blank grid fixture request should remain valid")
-}
-
-fn lay_line(engine: &mut GameEngine, points: Vec<Point>, preset: RoadPreset) {
-    let result = engine.dispatch(GameIntent::LayRoadLine { points, preset });
-    assert!(result.applied, "fixture line should apply: {result:?}");
-}
-```
-
-Add these tests:
+In `road_authoring.rs`, use its existing Blank Grid fixture pattern and add:
 
 ```rust
 #[test]
-fn same_axis_road_overlap_rejects_the_complete_stroke_atomically() {
-    let mut engine = blank_grid_engine();
-    lay_line(
-        &mut engine,
-        (3..=8).map(|x| point(x, 5)).collect(),
-        RoadPreset::TwoWay,
-    );
+fn partial_same_axis_overlap_rejects_before_building_the_empty_tail() {
+    let mut engine = one_way_engine((3..=8).map(|x| point(x, 5)).collect());
     let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
@@ -412,26 +346,17 @@ fn same_axis_road_overlap_rejects_the_complete_stroke_atomically() {
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
     );
-    assert_eq!(
-        result.rejection.and_then(|rejection| rejection.context.point),
-        Some(point(6, 5)),
-    );
+    assert_eq!(result.rejection.unwrap().context.point, Some(point(6, 5)));
     assert_eq!(engine.snapshot().map.tile(point(9, 5)).unwrap().kind, "empty");
 }
 
 #[test]
-fn dual_reverse_lane_overlap_rejects_before_the_forward_lane_is_built() {
-    let mut engine = blank_grid_engine();
-    lay_line(
-        &mut engine,
-        (3..=10).map(|x| point(x, 5)).collect(),
-        RoadPreset::TwoWay,
-    );
+fn dual_reverse_lane_road_contact_rejects_before_forward_authoring() {
+    let mut engine = one_way_engine((3..=8).map(|x| point(x, 5)).collect());
     let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
-        // East-canonical Dual at y=6 generates its reverse lane at y=5.
-        points: (3..=10).map(|x| point(x, 6)).collect(),
+        points: (3..=8).map(|x| point(x, 6)).collect(),
         preset: RoadPreset::DualBidirectional,
     });
 
@@ -443,135 +368,92 @@ fn dual_reverse_lane_overlap_rejects_before_the_forward_lane_is_built() {
     );
     assert_eq!(engine.snapshot().map.tile(point(3, 6)).unwrap().kind, "empty");
 }
+```
 
+- [ ] **Step 2: Add legal crossing, endpoint T-junction, and extension tests**
+
+```rust
 #[test]
-fn perpendicular_crossing_remains_legal() {
-    let mut engine = blank_grid_engine();
-    lay_line(
-        &mut engine,
-        (3..=10).map(|x| point(x, 5)).collect(),
-        RoadPreset::TwoWay,
-    );
+fn perpendicular_through_crossing_remains_legal() {
+    let mut engine = one_way_engine((3..=8).map(|x| point(x, 5)).collect());
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: (2..=8).map(|y| point(6, y)).collect(),
         preset: RoadPreset::TwoWay,
     });
 
-    assert!(result.applied, "perpendicular crossing should apply: {result:?}");
-    let crossing = result.snapshot.map.tile(point(6, 5)).unwrap();
-    assert!(crossing.road_connections.contains(&Heading::East));
-    assert!(crossing.road_connections.contains(&Heading::West));
-    assert!(crossing.road_connections.contains(&Heading::North));
-    assert!(crossing.road_connections.contains(&Heading::South));
+    assert!(result.applied, "crossing should apply: {result:?}");
+    let tile = result.snapshot.map.tile(point(6, 5)).unwrap();
+    for heading in [Heading::North, Heading::East, Heading::South, Heading::West] {
+      assert!(tile.road_connections.contains(&heading));
+    }
 }
 
 #[test]
-fn road_extension_starts_on_the_adjacent_empty_tile() {
-    let mut engine = blank_grid_engine();
-    lay_line(
-        &mut engine,
-        (3..=6).map(|x| point(x, 5)).collect(),
-        RoadPreset::TwoWay,
-    );
+fn perpendicular_endpoint_contact_forms_a_t_junction() {
+    let mut engine = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=5).map(|y| point(6, y)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(result.applied, "T-junction should apply: {result:?}");
+    let tile = result.snapshot.map.tile(point(6, 5)).unwrap();
+    assert!(tile.road_connections.contains(&Heading::North));
+    assert!(tile.road_connections.contains(&Heading::West));
+    assert!(!tile.road_connections.contains(&Heading::South));
+}
+
+#[test]
+fn adjacent_empty_road_extension_remains_legal() {
+    let mut engine = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: (7..=10).map(|x| point(x, 5)).collect(),
         preset: RoadPreset::TwoWay,
     });
 
-    assert!(result.applied, "adjacent extension should apply: {result:?}");
-    assert!(result
-        .snapshot
-        .map
-        .tile(point(6, 5))
-        .unwrap()
-        .road_connections
-        .contains(&Heading::East));
-    assert!(result
-        .snapshot
-        .map
-        .tile(point(7, 5))
-        .unwrap()
-        .road_connections
-        .contains(&Heading::West));
+    assert!(result.applied, "extension should apply: {result:?}");
+    assert!(result.snapshot.map.tile(point(6, 5)).unwrap()
+        .road_connections.contains(&Heading::East));
+    assert!(result.snapshot.map.tile(point(7, 5)).unwrap()
+        .road_connections.contains(&Heading::West));
 }
 ```
 
-- [ ] **Step 2: Add failing structure-contact tests**
+Use the file’s existing formatting and helper functions. The T-junction assertion may include the east edge already carried by the existing endpoint; the load-bearing new edge is North.
 
-Add two focused tests using existing fixture helpers where available:
+- [ ] **Step 3: Add structure-owned contact tests**
+
+Add one automatic-junction case and one roundabout-owned case. Each must assert:
 
 ```rust
-#[test]
-fn road_line_cannot_repaint_an_existing_automatic_junction() {
-    let mut engine = blank_grid_engine();
-    lay_line(
-        &mut engine,
-        (3..=10).map(|x| point(x, 5)).collect(),
-        RoadPreset::TwoWay,
-    );
-    lay_line(
-        &mut engine,
-        (2..=8).map(|y| point(6, y)).collect(),
-        RoadPreset::TwoWay,
-    );
-    let before = engine.snapshot();
-
-    let result = engine.dispatch(GameIntent::LayRoadLine {
-        points: (4..=8).map(|x| point(x, 5)).collect(),
-        preset: RoadPreset::TwoWay,
-    });
-
-    assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
-    assert_eq!(
-        result.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::BlockedTile),
-    );
-}
-
-#[test]
-fn road_line_cannot_repaint_a_roundabout_footprint() {
-    let mut engine = blank_grid_engine();
-    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
-        origin: point(8, 7),
-        size: RoundaboutSize::Compact2x2,
-    });
-    assert!(placed.applied, "roundabout fixture should apply: {placed:?}");
-    let before = engine.snapshot();
-
-    let result = engine.dispatch(GameIntent::LayRoadLine {
-        points: (6..=11).map(|x| point(x, 7)).collect(),
-        preset: RoadPreset::TwoWay,
-    });
-
-    assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
-    assert_eq!(
-        result.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::BlockedTile),
-    );
-}
+assert!(!result.applied);
+assert_eq!(result.snapshot, before);
+assert_eq!(
+    result.rejection.as_ref().map(|rejection| &rejection.code),
+    Some(&RejectionCode::BlockedTile),
+);
 ```
 
-If the roundabout placement fixture requires compatible approach roads, reuse the existing roundabout fixture builder from this test module; keep the assertion target on a structure-owned footprint tile.
+Build the automatic junction from two clean perpendicular lines. Build the roundabout through the existing `PlaceRoundabout` fixture pattern used in this test target. The attempted player line must include a structure footprint tile.
 
-- [ ] **Step 3: Run the overlap tests and verify RED**
-
-Run:
+- [ ] **Step 4: Run the focused tests and verify RED/unchanged controls**
 
 ```bash
-cargo test -p caelum-core --test road_authoring road_overlap -- --nocapture
-cargo test -p caelum-core --test road_authoring dual_reverse_lane_overlap -- --nocapture
-cargo test -p caelum-core --test road_authoring road_line_cannot_repaint -- --nocapture
+cargo test -p caelum-core --test road_authoring partial_same_axis_overlap -- --nocapture
+cargo test -p caelum-core --test road_authoring dual_reverse_lane_road_contact -- --nocapture
+cargo test -p caelum-core --test road_authoring perpendicular_through_crossing -- --nocapture
+cargo test -p caelum-core --test road_authoring perpendicular_endpoint_contact -- --nocapture
+cargo test -p caelum-core --test road_authoring adjacent_empty_road_extension -- --nocapture
 ```
 
-Expected before implementation: same-axis, reverse-lane, and structure-contact tests FAIL because existing roads are currently merged or skipped rather than rejecting the whole stroke. Perpendicular crossing and adjacent extension should remain GREEN.
+Expected: overlap tests RED; clean crossing, T-junction, and adjacent extension remain GREEN. A legal-control failure must be investigated before implementing preflight.
 
-- [ ] **Step 4: Implement complete-footprint derivation**
+- [ ] **Step 5: Derive the complete footprint with existing helpers**
 
-In `road.rs`, add near the direction/offset helpers:
+Add near `reverse_lane_points`:
 
 ```rust
 pub(crate) fn road_line_footprint(points: &[Point], preset: RoadPreset) -> Vec<Point> {
@@ -588,19 +470,13 @@ pub(crate) fn road_line_footprint(points: &[Point], preset: RoadPreset) -> Vec<P
 }
 ```
 
-Keep overflow rejection in `lay_road_line` before this footprint is trusted for mutation.
+This is the only new Dual geometry helper. Do not duplicate `reverse_lane_points` or `deduplicate_points`.
 
-- [ ] **Step 5: Implement the one authoritative contact validator**
+- [ ] **Step 6: Implement contact classification with existing `has_axis`**
 
-Add these private helpers:
+Add:
 
 ```rust
-fn connection_has_axis(connections: &[Heading], horizontal: bool) -> bool {
-    connections.iter().any(|heading| {
-        matches!(heading, Heading::East | Heading::West) == horizontal
-    })
-}
-
 fn validate_road_line_contacts(
     map: &GameMap,
     footprint: &[Point],
@@ -621,11 +497,9 @@ fn validate_road_line_contacts(
             return Err(GameplayRejection::at(RejectionCode::BlockedTile, *point));
         }
 
-        let has_requested_axis =
-            connection_has_axis(&tile.road_connections, requested_horizontal);
-        let has_perpendicular_axis =
-            connection_has_axis(&tile.road_connections, !requested_horizontal);
-        if has_requested_axis || !has_perpendicular_axis {
+        let has_requested = has_axis(&tile.road_connections, requested_horizontal);
+        let has_perpendicular = has_axis(&tile.road_connections, !requested_horizontal);
+        if has_requested || !has_perpendicular {
             return Err(GameplayRejection::at(RejectionCode::BlockedTile, *point));
         }
     }
@@ -634,132 +508,217 @@ fn validate_road_line_contacts(
 }
 ```
 
-This accepts only ordinary roads with perpendicular-axis evidence and rejects same-axis, mixed-axis, and axis-less roads.
+This accepts only an ordinary road with perpendicular-axis evidence. Same-axis, mixed-axis, and axis-less roads reject.
 
-- [ ] **Step 6: Call preflight before every mutating/cost path**
+- [ ] **Step 7: Call preflight before spacing, cost, or mutation**
 
-In `lay_road_line`, after stroke and reverse-offset overflow validation, derive the canonical requested axis and complete footprint:
+In `lay_road_line`:
 
-```rust
-let requested_axis = canonical_line_direction(points).ok_or_else(|| {
-    GameplayRejection::at(RejectionCode::InvalidRoadStroke, points[0])
-})?;
-let footprint = road_line_footprint(points, preset);
-validate_road_line_contacts(&original.map, &footprint, requested_axis)?;
-```
+1. keep the existing empty-points and subtraction-overflow checks;
+2. compute `forward` and `dual_direction` as today;
+3. keep the existing reverse-lane-offset overflow rejection;
+4. when `dual_direction` is `Some`, derive the footprint and call `validate_road_line_contacts`;
+5. only then run `validate_one_way_parallel_spacing` and author lanes.
 
-Place this before `validate_one_way_parallel_spacing`, `author_lane_tiles`, and any cost application. Preserve `line_direction(points)` for the actual OneWay arrow direction; the canonical axis is only for axis/contact classification and Dual geometry.
-
-- [ ] **Step 7: Remove the second reverse-lane policy**
-
-Change:
+Use this shape:
 
 ```rust
-fn author_lane_tiles(
-    candidate: &mut GameSnapshot,
-    original: &GameSnapshot,
-    points: &[Point],
-    direction: Option<Heading>,
-    reverse_lane: bool,
-) -> GameplayResult<AuthoredLane>
-```
-
-to:
-
-```rust
-fn author_lane_tiles(
-    candidate: &mut GameSnapshot,
-    original: &GameSnapshot,
-    points: &[Point],
-    direction: Option<Heading>,
-) -> GameplayResult<AuthoredLane>
-```
-
-Update both call sites. Delete `can_overlay_reverse_lane`. For `existing.kind == "road"`, call a renamed crossing-only helper:
-
-```rust
-fn author_approved_crossing(tile: &mut Tile) {
-    debug_assert!(tile.road_structure_id.is_none());
-    tile.one_way = None;
+let forward = line_direction(points);
+let dual_direction = canonical_line_direction(points);
+if preset == RoadPreset::DualBidirectional {
+    if let Some(direction) = dual_direction {
+        if reverse_lane_offset_overflows(points, direction) {
+            return Err(GameplayRejection::at(
+                RejectionCode::InvalidRoadStroke,
+                points[0],
+            ));
+        }
+    }
+}
+if let Some(requested_axis) = dual_direction {
+    let footprint = road_line_footprint(points, preset);
+    validate_road_line_contacts(&original.map, &footprint, requested_axis)?;
+}
+if preset == RoadPreset::OneWay {
+    if let Some(direction) = forward {
+        validate_one_way_parallel_spacing(&original.map, points, direction)?;
+    }
 }
 ```
 
-The preflight has already proved the existing tile is a perpendicular ordinary road. Do not re-run a weaker contact test here.
+Keeping the `Some` gate preserves the existing single-coordinate/duplicate-coordinate host behavior; the real UI supplies an axis-locked non-zero line for multi-tile drags.
 
-- [ ] **Step 8: Rewrite upgrade-in-place tests to the new contract**
+- [ ] **Step 8: Remove the player reverse-lane policy without touching scenario authoring**
 
-In `dual_road_routing.rs`:
-
-- delete `recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges`;
-- delete `recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges`;
-- delete `recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges`;
-- rewrite `recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_internal_edges` so the second Dual segment begins at the adjacent empty column, not on the previous endpoint:
+Remove `reverse_lane` from player `author_lane_tiles` and both player call sites. Delete only this player branch:
 
 ```rust
-lay(
-    &mut engine,
-    (2..=9).map(|x| point(x, 3)).collect(),
-    RoadPreset::DualBidirectional,
-);
-lay(
-    &mut engine,
-    (10..=12).map(|x| point(x, 3)).collect(),
-    RoadPreset::DualBidirectional,
-);
+if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
+    continue;
+}
 ```
 
-Rename it to `dual_crossing_after_adjacent_colinear_extension_has_all_four_internal_edges`.
+For an existing road after preflight, keep:
 
-The deleted accepted-behavior cases are replaced by the atomic rejection tests in `road_authoring.rs`; do not preserve them as compatibility tests.
+```rust
+let Some(tile) = candidate.map.tile_mut(*point) else {
+    continue;
+};
+merge_lane_direction(tile, direction);
+lane.points.push(*point);
+continue;
+```
 
-- [ ] **Step 9: Run focused Rust tests and verify GREEN**
+Do **not** delete or rename `merge_lane_direction` or `can_overlay_reverse_lane`; `author_scenario_road_line` still uses both for deterministic template construction.
 
-Run:
+- [ ] **Step 9: Run focused road and sandbox controls**
 
 ```bash
-cargo test -p caelum-core --test road_authoring road_overlap -- --nocapture
-cargo test -p caelum-core --test road_authoring dual_reverse_lane_overlap -- --nocapture
-cargo test -p caelum-core --test road_authoring perpendicular_crossing -- --nocapture
-cargo test -p caelum-core --test road_authoring road_extension -- --nocapture
+cargo test -p caelum-core --test road_authoring partial_same_axis_overlap -- --nocapture
+cargo test -p caelum-core --test road_authoring dual_reverse_lane_road_contact -- --nocapture
+cargo test -p caelum-core --test road_authoring perpendicular_ -- --nocapture
+cargo test -p caelum-core --test road_authoring adjacent_empty_road_extension -- --nocapture
 cargo test -p caelum-core --test road_authoring road_line_cannot_repaint -- --nocapture
-cargo test -p caelum-core --test dual_road_routing dual_crossing_after_adjacent_colinear_extension -- --nocapture
+cargo test -p caelum-core --test sandbox_coverage -- --nocapture
 ```
 
-Expected: PASS. Verify the rejection snapshots equal the pre-dispatch snapshot and the empty tail/forward lane was not built.
+Expected: player-contact tests PASS and built-in sandbox tests remain PASS.
 
-- [ ] **Step 10: Commit the authoritative overlap rule**
+- [ ] **Step 10: Commit player preflight**
 
 ```bash
-git add crates/caelum-core/src/road.rs crates/caelum-core/tests/road_authoring.rs crates/caelum-core/tests/dual_road_routing.rs
-git commit -m "fix: reject road overlap before authoring"
+git add crates/caelum-core/src/road.rs crates/caelum-core/tests/road_authoring.rs
+git commit -m "fix: reject player road overlap before authoring"
 ```
 
 ---
 
-### Task 3: Keep Rejected Dual-Road Preview and Commit in Parity
+### Task 3: Retarget Overlay Fixtures and Complete Rejected Preview
 
 **Files:**
-- Modify: `crates/caelum-core/src/preview.rs:600-660`
-- Test: `crates/caelum-core/tests/road_authoring.rs`
+- Modify: `crates/caelum-core/src/preview.rs`
+- Modify: `crates/caelum-core/tests/transit_build.rs`
+- Modify: `crates/caelum-core/tests/road_authoring.rs`
+- Modify: `crates/caelum-core/tests/dual_road_routing.rs`
 
 **Interfaces:**
-- Consumes: `road::road_line_footprint(points, preset)` from Task 2
-- Preserves: `RoadMutationPreviewResponse`
-- Produces: complete `changed_tiles` footprint for rejected Dual road previews
+- Consumes: `road::road_line_footprint`
+- Preserves: scenario template authoring and accepted preview wire format
+- Produces: full rejected Dual footprint
 
-- [ ] **Step 1: Add a failing preview/commit parity test**
+- [ ] **Step 1: Inventory every old player-overlay fixture before editing**
 
-Add to `road_authoring.rs`:
+Run:
+
+```bash
+rg -n 'LayRoadLine|lay_road_line' crates/caelum-core/tests
+rg -n 'overlay|upgrade|idempotent|already matches|existing road|skips reverse|updates direction|continuation seam' crates/caelum-core/tests
+```
+
+The known inventory that must be addressed is:
+
+```text
+transit_build.rs
+  lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_existing_roads
+  lay_road_line_one_way_is_idempotent_when_direction_already_matches
+  lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied
+  lay_road_line_one_way_over_two_way_road_updates_direction
+
+road_authoring.rs
+  road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay
+  one_way_overlay_is_checked_before_merge_lane_direction
+
+dual_road_routing.rs
+  recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges
+  recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges
+  recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges
+  recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_internal_edges
+  dual_intersection_engine TwoWay-on-Dual stop-access setup
+```
+
+Keep unrelated blocked-tile skips, budget exhaustion, duplicate-point, and scenario-template tests.
+
+- [ ] **Step 2: Retarget `transit_build.rs` overlay tests**
+
+Apply these dispositions:
+
+- replace the two reverse-lane existing-road success tests with one atomic `BlockedTile` test that checks unchanged snapshot/budget and no forward lane;
+- rewrite matching OneWay re-lay to expect `BlockedTile`, not idempotent unchanged;
+- rewrite TwoWay-to-OneWay direction update to expect `BlockedTile`, not repaint.
+
+Use the common assertion shape:
+
+```rust
+let before = engine.snapshot();
+let result = engine.dispatch(GameIntent::LayRoadLine { points, preset });
+assert!(!result.applied);
+assert_eq!(result.snapshot, before);
+assert_eq!(
+    result.rejection.as_ref().map(|rejection| &rejection.code),
+    Some(&RejectionCode::BlockedTile),
+);
+```
+
+Delete the redundant second reverse-lane test after the surviving test covers a conflict on the generated carriageway and verifies the forward carriageway stayed empty.
+
+- [ ] **Step 3: Retarget `road_authoring.rs` order/atomicity tests**
+
+- delete `road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay` when Task 2’s partial-overlap test covers its budget/empty-tail invariant;
+- rename `one_way_overlay_is_checked_before_merge_lane_direction` to `one_way_overlap_rejects_before_parallel_spacing` and expect `BlockedTile` at the overlay point.
+
+The latter locks the new validation order: overlap preflight wins before `OneWayParallelTooClose`.
+
+- [ ] **Step 4: Rewrite dual-road fixtures to valid player sequences**
+
+In `dual_road_routing.rs`:
+
+- delete the three upgrade-in-place recapture tests;
+- rewrite the continuation test so the second segment begins at `x = 10`, adjacent to the prior segment ending at `x = 9`;
+- rename it `dual_crossing_after_adjacent_colinear_extension_has_all_four_internal_edges`.
+
+Add a helper for stop-access fixture replacement:
+
+```rust
+fn replace_lane_stretch_with_two_way(engine: &mut GameEngine, points: Vec<Point>) {
+    dispatch(
+        engine,
+        GameIntent::RemoveAtTiles {
+            points: points.clone(),
+        },
+    );
+    dispatch(
+        engine,
+        GameIntent::LayRoadLine {
+            points,
+            preset: RoadPreset::TwoWay,
+        },
+    );
+}
+```
+
+In `dual_intersection_engine`, replace the two illegal TwoWay overlays with:
+
+```rust
+replace_lane_stretch_with_two_way(
+    &mut engine,
+    (8..=12).map(|x| point(x, 3)).collect(),
+);
+replace_lane_stretch_with_two_way(
+    &mut engine,
+    (4..=6).map(|y| point(6, y)).collect(),
+);
+```
+
+Keep the stop positions and left-turn route oracle unchanged. The remove-then-relay sequence explicitly produces empty tiles before player `LayRoadLine`.
+
+- [ ] **Step 5: Add rejected Dual preview parity**
+
+In `road_authoring.rs`, add:
 
 ```rust
 #[test]
-fn dual_reverse_lane_overlap_preview_and_commit_reject_the_same_full_footprint() {
-    let mut engine = blank_grid_engine();
-    lay_line(
-        &mut engine,
-        (3..=6).map(|x| point(x, 5)).collect(),
-        RoadPreset::TwoWay,
-    );
+fn dual_reverse_lane_overlap_preview_shows_both_carriageways() {
+    let mut engine = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
     let points: Vec<_> = (3..=6).map(|x| point(x, 6)).collect();
     let mutation = RoadMutation::LayRoadLine {
         points: points.clone(),
@@ -770,6 +729,7 @@ fn dual_reverse_lane_overlap_preview_and_commit_reject_the_same_full_footprint()
         mutation,
         generation: 41,
     });
+
     assert_eq!(
         preview.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -777,8 +737,14 @@ fn dual_reverse_lane_overlap_preview_and_commit_reject_the_same_full_footprint()
     assert_eq!(
         preview.changed_tiles,
         vec![
-            point(3, 6), point(4, 6), point(5, 6), point(6, 6),
-            point(3, 5), point(4, 5), point(5, 5), point(6, 5),
+            point(3, 6),
+            point(4, 6),
+            point(5, 6),
+            point(6, 6),
+            point(3, 5),
+            point(4, 5),
+            point(5, 5),
+            point(6, 5),
         ],
     );
 
@@ -793,19 +759,9 @@ fn dual_reverse_lane_overlap_preview_and_commit_reject_the_same_full_footprint()
 }
 ```
 
-- [ ] **Step 2: Run the parity test and verify RED**
+- [ ] **Step 6: Use the shared footprint for rejected line previews**
 
-Run:
-
-```bash
-cargo test -p caelum-core --test road_authoring dual_reverse_lane_overlap_preview_and_commit -- --nocapture
-```
-
-Expected: FAIL because `attempted_mutation_tiles` currently returns only the supplied forward points for `LayRoadLine`.
-
-- [ ] **Step 3: Use the shared complete footprint in rejected previews**
-
-Change `preview.rs::attempted_mutation_tiles` from the combined line/remove match to explicit arms:
+Change `preview.rs::attempted_mutation_tiles` to separate Road and Remove lines:
 
 ```rust
 fn attempted_mutation_tiles(mutation: &RoadMutation) -> Vec<Point> {
@@ -822,51 +778,59 @@ fn attempted_mutation_tiles(mutation: &RoadMutation) -> Vec<Point> {
 }
 ```
 
-Do not change accepted preview normalization, route-impact calculation, or wire types.
+Accepted preview normalization and route-impact calculation stay unchanged.
 
-- [ ] **Step 4: Run preview and road-authoring tests and verify GREEN**
-
-Run:
+- [ ] **Step 7: Run the rewritten targets and the full core suite**
 
 ```bash
-cargo test -p caelum-core --test road_authoring dual_reverse_lane_overlap_preview_and_commit -- --nocapture
-cargo test -p caelum-core --test road_authoring one_way_spacing_rejection_matches_preview_and_commit -- --nocapture
+cargo test -p caelum-core --test transit_build lay_road_line_ -- --nocapture
+cargo test -p caelum-core --test road_authoring -- --nocapture
+cargo test -p caelum-core --test dual_road_routing -- --nocapture
+cargo test -p caelum-core --test sandbox_coverage -- --nocapture
+cargo test -p caelum-core -- --nocapture
 ```
 
-Expected: PASS. The existing OneWay preview/commit parity remains unchanged.
+Expected: PASS. Any remaining old-contract failure is rewritten or removed; do not modify preflight to restore overlay.
 
-- [ ] **Step 5: Commit preview parity**
+- [ ] **Step 8: Re-run the inventory search**
 
 ```bash
-git add crates/caelum-core/src/preview.rs crates/caelum-core/tests/road_authoring.rs
-git commit -m "fix: preview the complete dual-road footprint"
+rg -n 'overlay|upgrade|idempotent|already matches|existing road|skips reverse|updates direction|continuation seam' crates/caelum-core/tests
+```
+
+Review every remaining match. It may remain only when it describes scenario authoring, single-tile direction editing, removal/rebuild, or a non-road blocked-tile skip.
+
+- [ ] **Step 9: Commit fixture migration and preview parity**
+
+```bash
+git add crates/caelum-core/src/preview.rs crates/caelum-core/tests/transit_build.rs crates/caelum-core/tests/road_authoring.rs crates/caelum-core/tests/dual_road_routing.rs
+git commit -m "test: align road fixtures with no-overlap authoring"
 ```
 
 ---
 
-### Task 4: Reproduce and Localize Dual-Junction Connectivity
+### Task 4: Characterize Clean Dual Junctions and Verify the PR
 
 **Files:**
 - Modify: `crates/caelum-core/tests/dual_road_routing.rs`
-- Conditional modify: `crates/caelum-core/src/road.rs`
-- Conditional modify: `crates/caelum-core/src/road_topology.rs`
+- Do not modify from this plan: `crates/caelum-core/src/road_topology.rs`
+- Verify all files changed in Tasks 1–3
 
 **Interfaces:**
-- Consumes: clean Dual road authoring and adjacent-extension contract from Task 2
-- Produces test helper: `assert_dual_crossing_contract(snapshot: &GameSnapshot, top_left: Point)`
-- Produces test helper: `assert_crossing_path(engine: &GameEngine, from: Point, to: Point, from_heading: Heading, to_heading: Heading)`
-- No new public production interface
+- Produces test helper: `assert_dual_crossing_contract`
+- Produces test helper: `assert_access_path`
+- No new production interface
 
-- [ ] **Step 1: Strengthen the reusable crossing assertion**
+- [ ] **Step 1: Extend the existing crossing helper with exact ports**
 
-In `dual_road_routing.rs`, add:
+Add:
 
 ```rust
 fn assert_dual_crossing_contract(snapshot: &GameSnapshot, top_left: Point) {
     assert_two_by_two_footprint(snapshot, top_left);
     assert_complete_two_by_two_at(snapshot, top_left);
 
-    let structure = snapshot
+    let junction = snapshot
         .map
         .road_structures
         .iter()
@@ -883,7 +847,7 @@ fn assert_dual_crossing_contract(snapshot: &GameSnapshot, top_left: Point) {
         .expect("expected 2x2 automatic junction");
 
     assert_eq!(
-        structure.port_keys(),
+        junction.port_keys(),
         vec![
             (top_left, Heading::North),
             (top_left, Heading::West),
@@ -898,14 +862,12 @@ fn assert_dual_crossing_contract(snapshot: &GameSnapshot, top_left: Point) {
 }
 ```
 
-Keep the vector sorted in the same canonical order as existing `port_keys()` assertions. If the current helper order differs, copy the existing clean-fixture order exactly rather than sorting only in the test.
+Copy the canonical order from the existing fixture assertion exactly.
 
-- [ ] **Step 2: Add compiled straight-path assertions**
-
-Add:
+- [ ] **Step 2: Add compiled access-path assertions**
 
 ```rust
-fn assert_crossing_path(
+fn assert_access_path(
     engine: &GameEngine,
     from: Point,
     to: Point,
@@ -929,17 +891,17 @@ fn assert_crossing_path(
 }
 ```
 
-For the existing crossing at top-left `(6, 2)`, call it for the two through corridors:
+For the canonical `(6,2)` junction, assert:
 
 ```rust
-assert_crossing_path(
+assert_access_path(
     &engine,
     point(5, 3),
     point(8, 3),
     Heading::East,
     Heading::East,
 );
-assert_crossing_path(
+assert_access_path(
     &engine,
     point(6, 1),
     point(6, 4),
@@ -948,15 +910,22 @@ assert_crossing_path(
 );
 ```
 
-Retain the existing route-preview left-turn test; it provides the representative turning-path assertion using real stops and route resolution.
+Keep `dual_bidirectional_route_uses_the_legal_left_turn_and_lane` as the real turning-path assertion after its fixture rewrite.
 
-- [ ] **Step 3: Add the small build-order/input-order matrix**
+- [ ] **Step 3: Apply the full contract to valid sequence fixtures**
 
-Update the existing horizontal-first and vertical-first tests to call `assert_dual_crossing_contract` and both straight-path assertions. Add two reverse-input fixtures:
+Update these fixtures to call `assert_dual_crossing_contract` and the two access paths:
+
+- horizontal-first clean crossing;
+- vertical-first clean crossing;
+- adjacent-empty collinear extension;
+- existing dual endpoint T-junction.
+
+Add reverse-input fixtures:
 
 ```rust
 #[test]
-fn reversed_horizontal_stroke_keeps_the_dual_crossing_contract() {
+fn reversed_horizontal_input_keeps_the_dual_crossing_contract() {
     let mut engine = blank_grid_engine();
     lay(
         &mut engine,
@@ -968,14 +937,11 @@ fn reversed_horizontal_stroke_keeps_the_dual_crossing_contract() {
         (0..=7).map(|y| point(6, y)).collect(),
         RoadPreset::DualBidirectional,
     );
-
     assert_dual_crossing_contract(&engine.snapshot(), point(6, 2));
-    assert_crossing_path(&engine, point(5, 3), point(8, 3), Heading::East, Heading::East);
-    assert_crossing_path(&engine, point(6, 1), point(6, 4), Heading::South, Heading::South);
 }
 
 #[test]
-fn reversed_vertical_stroke_keeps_the_dual_crossing_contract() {
+fn reversed_vertical_input_keeps_the_dual_crossing_contract() {
     let mut engine = blank_grid_engine();
     lay(
         &mut engine,
@@ -987,219 +953,56 @@ fn reversed_vertical_stroke_keeps_the_dual_crossing_contract() {
         (0..=7).rev().map(|y| point(6, y)).collect(),
         RoadPreset::DualBidirectional,
     );
-
     assert_dual_crossing_contract(&engine.snapshot(), point(6, 2));
-    assert_crossing_path(&engine, point(5, 3), point(8, 3), Heading::East, Heading::East);
-    assert_crossing_path(&engine, point(6, 1), point(6, 4), Heading::South, Heading::South);
 }
 ```
 
-Also update `dual_crossing_after_adjacent_colinear_extension_has_all_four_internal_edges` from Task 2 to call the full contract helper, not only the internal-edge helper.
+Add the path assertions to both reverse-input tests as well.
 
-- [ ] **Step 4: Run the layered fixtures before touching production topology**
-
-Run:
+- [ ] **Step 4: Run the characterization matrix before any topology edit**
 
 ```bash
 cargo test -p caelum-core --test dual_road_routing horizontal_first_dual_intersection -- --nocapture
 cargo test -p caelum-core --test dual_road_routing vertical_first_dual_intersection -- --nocapture
 cargo test -p caelum-core --test dual_road_routing reversed_ -- --nocapture
 cargo test -p caelum-core --test dual_road_routing adjacent_colinear_extension -- --nocapture
+cargo test -p caelum-core --test dual_road_routing dual_t_junction -- --nocapture
 cargo test -p caelum-core --test dual_road_routing dual_bidirectional_route_uses_the_legal_left_turn -- --nocapture
 ```
 
-Interpret the first failing layer exactly:
+Read failures in this order:
 
-1. footprint assertion;
-2. reciprocal internal edge assertion;
-3. exact boundary-port assertion;
+1. footprint;
+2. internal reciprocal edge;
+3. exact boundary port;
 4. compiled straight path;
-5. existing route-preview turn.
+5. route-preview turn.
 
-If every command is GREEN, skip Steps 5–7 and proceed to Step 8. That is the expected outcome when the reported broken map required an overlay sequence now rejected by Task 2.
+- [ ] **Step 5: Follow the evidence gate**
 
-- [ ] **Step 5: Internal-edge RED branch — repair only an already-classified 2 × 2 component**
-
-Execute this step only when the footprint is exactly the expected contiguous 2 × 2 automatic-junction candidate and one of the four internal reciprocal edges is missing.
-
-Add a private helper in `road.rs`:
-
-```rust
-fn complete_two_by_two_internal_edges(map: &mut GameMap, footprint: &[Point]) -> bool {
-    if footprint.len() != 4 {
-        return false;
-    }
-    let min_x = footprint.iter().map(|point| point.x).min().unwrap();
-    let max_x = footprint.iter().map(|point| point.x).max().unwrap();
-    let min_y = footprint.iter().map(|point| point.y).min().unwrap();
-    let max_y = footprint.iter().map(|point| point.y).max().unwrap();
-    if max_x - min_x != 1 || max_y - min_y != 1 {
-        return false;
-    }
-
-    let top_left = Point { x: min_x, y: min_y };
-    for (point, heading) in [
-        (top_left, Heading::East),
-        (top_left, Heading::South),
-        (Point { x: min_x + 1, y: min_y }, Heading::South),
-        (Point { x: min_x, y: min_y + 1 }, Heading::East),
-    ] {
-        connect(map, point, heading);
-    }
-    true
-}
-```
-
-Call it only inside `refresh_automatic_junctions` after the component has both horizontal and vertical live boundary-port axes. Restart the refresh iteration after completion so ports are derived from the repaired reciprocal graph. Do not call it for closed loops, single-axis artifacts, or arbitrary 2 × 2 road blocks.
-
-Re-run all Step 4 commands. Continue only when all are GREEN.
-
-- [ ] **Step 6: Boundary-port RED branch — repair the missing reciprocal attachment, not the port list cosmetically**
-
-Execute this step only when all four internal reciprocal edges are present but an expected boundary port is absent.
-
-For the missing expected `(point, edge)`:
-
-1. assert in the test that the footprint tile contains `edge`;
-2. assert that `offset(point, edge)` is an ordinary road;
-3. assert that the outside road contains `opposite(edge)`.
-
-The first failed assertion identifies the authoring connection that must be restored in `connect_authored_sequence` or `connect_neighbor_endpoints`. Fix that reciprocal edge creation and keep `refresh_automatic_junctions` port derivation unchanged; it already derives ports from live reciprocal edges.
-
-Add the exact reciprocal assertion to the failing fixture so the regression cannot be hidden by later structure compilation. Re-run all Step 4 commands.
-
-- [ ] **Step 7: Compiled-path RED branch — fix only live port transition filtering**
-
-Execute this step only when footprint, internal edges, all eight boundary ports, and outside reciprocal connections are correct but `find_path_between_access_tiles` or the existing route-preview turn fails.
-
-In `road_topology.rs::compile_automatic_junction_transitions`, preserve the current entry/exit port iteration and change only the failed live-map predicate shown by the fixture. Add a focused transition assertion using the existing hidden `transition_for` seam:
-
-```rust
-let topology = engine.road_topology_for_test();
-assert!(topology
-    .transition_for(
-        RoadState {
-            position: point(6, 3),
-            incoming_heading: Heading::East,
-        },
-        Heading::South,
-    )
-    .is_some());
-```
-
-Use the actual missing entry/outgoing pair reported by the failing path; do not broaden transition generation to every port pair that violates `lane_accepts`.
-
-Re-run all Step 4 commands.
-
-- [ ] **Step 8: Run the full dual-road test target**
-
-Run:
-
-```bash
-cargo test -p caelum-core --test dual_road_routing -- --nocapture
-```
-
-Expected: PASS.
-
-- [ ] **Step 9: Commit the characterization gate and any proven root fix**
-
-When production topology was unchanged:
+When every command is GREEN:
 
 ```bash
 git add crates/caelum-core/tests/dual_road_routing.rs
-git commit -m "test: lock dual-road crossing connectivity"
+git commit -m "test: lock clean dual-road crossing connectivity"
 ```
 
-When one RED branch required production code:
+When any command is RED:
+
+1. leave `road.rs` and `road_topology.rs` unchanged;
+2. record the first failing assertion, fixture sequence, tile/edge/port, and path reason in the implementation PR;
+3. trace that exact seam under the systematic-debugging workflow;
+4. update this plan with the confirmed minimal production change before implementing it.
+
+Do not add a generic 2 × 2 completion helper, synthetic port insertion, or broadened transition generation from this plan.
+
+- [ ] **Step 6: Run complete repository verification**
 
 ```bash
-git add crates/caelum-core/src/road.rs crates/caelum-core/src/road_topology.rs crates/caelum-core/tests/dual_road_routing.rs
-git commit -m "fix: repair dual-road crossing connectivity"
-```
-
-Stage only the production file actually changed; do not create an empty or speculative topology diff.
-
----
-
-### Task 5: Add Player-Level Demolition Coverage and Verify the One-PR Slice
-
-**Files:**
-- Modify: `tests/e2e/commandShelf.spec.ts`
-- Verify all files changed in Tasks 1–4
-
-**Interfaces:**
-- Consumes: `dragMapTiles`, `runtimeSnapshot`, `selectBuildLeaf`, and the existing command-shelf Demolish control
-- Produces: player-visible rectangular demolition smoke
-
-- [ ] **Step 1: Add a failing Playwright smoke**
-
-Append to `tests/e2e/commandShelf.spec.ts`:
-
-```ts
-test("demolishes an inclusive rectangle while preserving tiles outside it", async ({
-  page,
-}) => {
-  await page.setViewportSize({ width: 1280, height: 800 });
-  await createDefaultCity(page);
-  const canvas = page.locator("canvas[data-runtime-canvas='true']");
-
-  await selectBuildLeaf(page, "roads", "road-twoWay");
-  await dragMapTiles(page, canvas, { x: 4, y: 6 }, { x: 8, y: 6 });
-  await dragMapTiles(page, canvas, { x: 4, y: 8 }, { x: 8, y: 8 });
-
-  await page.getByTestId("command-tool-demolish").click();
-  await dragMapTiles(page, canvas, { x: 4, y: 6 }, { x: 7, y: 8 });
-
-  await expect
-    .poll(async () => {
-      const tiles = (await runtimeSnapshot(page)).state.map.tiles;
-      const kind = (x: number, y: number) =>
-        tiles.find((tile) => tile.x === x && tile.y === y)?.kind;
-      return {
-        removedTop: [4, 5, 6, 7].map((x) => kind(x, 6)),
-        removedBottom: [4, 5, 6, 7].map((x) => kind(x, 8)),
-        outsideTop: kind(8, 6),
-        outsideBottom: kind(8, 8),
-      };
-    })
-    .toEqual({
-      removedTop: ["empty", "empty", "empty", "empty"],
-      removedBottom: ["empty", "empty", "empty", "empty"],
-      outsideTop: "road",
-      outsideBottom: "road",
-    });
-});
-```
-
-This proves the diagonal drag spans multiple rows and does not collapse to the dominant axis.
-
-- [ ] **Step 2: Run the focused E2E test**
-
-Run:
-
-```bash
-bunx playwright test tests/e2e/commandShelf.spec.ts -g "demolishes an inclusive rectangle"
-```
-
-Expected after Task 1: PASS. If it fails, inspect the pointer gesture and final runtime snapshot; do not add timing sleeps. Reuse the existing polling helper pattern.
-
-- [ ] **Step 3: Run focused TypeScript and Rust suites**
-
-```bash
-bunx vitest run --project runtime tests/runtime/roadDrag.test.ts tests/runtime/gameRuntime.test.ts
-bunx vitest run --project ui tests/render/overlayRenderer.test.ts
-cargo test -p caelum-core --test road_authoring -- --nocapture
-cargo test -p caelum-core --test dual_road_routing -- --nocapture
-```
-
-Expected: PASS.
-
-- [ ] **Step 4: Run repository verification**
-
-```bash
+git diff --check
 cargo fmt --all --check
-cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 bun run format:check
 bun run check
 bun run lint
@@ -1208,54 +1011,35 @@ bun run test:e2e
 bun run build
 ```
 
-Expected: every command exits 0. `bun` pre-hooks rebuild WASM when Rust sources are newer, so do not manually copy generated artifacts into Git.
+Expected: every command exits 0. Report any environment/tooling failure separately from a code failure; do not claim the suite passed without the full output.
 
-- [ ] **Step 5: Review the final diff against HPA-551**
-
-Confirm the diff has:
-
-- one shared `rectanglePoints` helper;
-- one runtime geometry selector used by preview and commit;
-- no new backend/controller/save interface;
-- one Rust complete-footprint preflight before cost/mutation;
-- no upgrade-in-place compatibility path;
-- complete rejected Dual preview footprint;
-- layered crossing tests;
-- topology production changes only when a test was RED;
-- one Playwright player smoke.
-
-Remove unrelated formatting or refactoring before committing.
-
-- [ ] **Step 6: Commit the player smoke and final verification state**
+- [ ] **Step 7: Inspect the final PR scope**
 
 ```bash
-git add tests/e2e/commandShelf.spec.ts
-git commit -m "test: cover rectangular demolition end to end"
+git status --short
+git diff --stat origin/main...HEAD
+git diff --name-only origin/main...HEAD
 ```
 
-- [ ] **Step 7: Update the existing HPA-551 PR rather than opening another PR**
+Expected production scope:
 
-Push every Task 1–5 commit to the branch already linked to HPA-551. Update the same PR body with:
-
-```markdown
-## Implementation
-
-- rectangular Demolish preview and commit geometry
-- atomic complete-footprint road overlap preflight
-- full Dual rejected-preview footprint
-- layered dual-junction edge/port/path coverage
-
-## Verification
-
-- `cargo fmt --all --check`
-- `cargo clippy --workspace --all-targets -- -D warnings`
-- `cargo test --workspace`
-- `bun run format:check`
-- `bun run check`
-- `bun run lint`
-- `bun run test:unit`
-- `bun run test:e2e`
-- `bun run build`
+```text
+src/ui/roadDrag.ts
+src/runtime/createGameRuntime.ts
+src/render/overlayRenderer.ts
+crates/caelum-core/src/road.rs
+crates/caelum-core/src/preview.rs
 ```
 
-Do not open a second implementation PR for HPA-551.
+Expected test scope:
+
+```text
+tests/runtime/roadDrag.test.ts
+tests/runtime/gameRuntime.test.ts
+tests/e2e/smoke.spec.ts
+crates/caelum-core/tests/transit_build.rs
+crates/caelum-core/tests/road_authoring.rs
+crates/caelum-core/tests/dual_road_routing.rs
+```
+
+`crates/caelum-core/src/road_topology.rs`, host adapters, persistence, schemas, and sandbox production files should be absent unless a separately documented RED investigation revised this plan.
