@@ -18,3 +18,20 @@ export function axisLockedLine(start: Point, end: Point): Point[] {
   }
   return line;
 }
+
+/** Inclusive row-major rectangle. Drag direction does not affect ordering. */
+export function rectanglePoints(start: Point, end: Point): Point[] {
+  const minX = Math.min(start.x, end.x);
+  const maxX = Math.max(start.x, end.x);
+  const minY = Math.min(start.y, end.y);
+  const maxY = Math.max(start.y, end.y);
+  const points: Point[] = [];
+
+  for (let y = minY; y <= maxY; y += 1) {
+    for (let x = minX; x <= maxX; x += 1) {
+      points.push({ x, y });
+    }
+  }
+
+  return points;
+}

@@ -28,7 +28,7 @@ import {
   type RouteDraft,
   type RouteDraftInteractionError,
 } from "../ui/routeDraft";
-import { axisLockedLine } from "../ui/roadDrag";
+import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 import {
   createUiState,
   type CommandDestination,
@@ -96,6 +96,16 @@ function restoreRouteDraftCheckpoint(
     previewPending: true,
     preview: null,
   };
+}
+
+function dragMutationPoints(
+  tool: "road" | "track" | "remove",
+  start: Point,
+  current: Point,
+): Point[] {
+  return tool === "remove"
+    ? rectanglePoints(start, current)
+    : axisLockedLine(start, current);
 }
 
 export interface CreateGameRuntimeOptions {
@@ -1121,7 +1131,11 @@ export async function createGameRuntime(
       gesture !== null &&
       (gesture.tool === "road" || gesture.tool === "remove")
     ) {
-      const points = axisLockedLine(gesture.start, gesture.current);
+      const points = dragMutationPoints(
+        gesture.tool,
+        gesture.start,
+        gesture.current,
+      );
       if (gesture.tool === "remove") {
         return points.length === 1
           ? { type: "removeAtTile", point: points[0] }
@@ -1441,25 +1455,29 @@ export async function createGameRuntime(
           end: gesture.current,
         });
       }
-      const line = axisLockedLine(gesture.start, gesture.current);
-      if (line.length <= 1) {
+      const points = dragMutationPoints(
+        gesture.tool,
+        gesture.start,
+        gesture.current,
+      );
+      if (points.length <= 1) {
         if (gesture.tool === "road") {
           // A zero-length road drag is a tap: defer the lay-vs-cycle decision
           // to execution time so the tile kind reflects drained queued updates.
-          return enqueueComputedDispatch(() => roadClickIntent(line[0]));
+          return enqueueComputedDispatch(() => roadClickIntent(points[0]));
         }
-        const intent = intentForToolClick(line[0]);
+        const intent = intentForToolClick(points[0]);
         return intent === null ? commit(state, ui) : enqueueDispatch(intent);
       }
       if (gesture.tool === "remove") {
-        return enqueueDispatch({ type: "removeAtTiles", points: line });
+        return enqueueDispatch({ type: "removeAtTiles", points });
       }
       if (gesture.tool === "track") {
-        return enqueueDispatch({ type: "layTrackLine", points: line });
+        return enqueueDispatch({ type: "layTrackLine", points });
       }
       return enqueueDispatch({
         type: "layRoadLine",
-        points: line,
+        points,
         preset: roadPreset,
       });
     },
