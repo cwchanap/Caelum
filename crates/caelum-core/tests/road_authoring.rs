@@ -479,6 +479,47 @@ fn one_way_spacing_rejection_matches_preview_and_commit() {
 }
 
 #[test]
+fn dual_reverse_lane_overlap_preview_and_commit_share_rejection_and_footprint() {
+    let mut engine = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
+    let points: Vec<_> = (3..=6).map(|x| point(x, 6)).collect();
+    let mutation = RoadMutation::LayRoadLine {
+        points: points.clone(),
+        preset: RoadPreset::DualBidirectional,
+    };
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation,
+        generation: 41,
+    });
+    assert_eq!(
+        preview.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(
+        preview.changed_tiles,
+        vec![
+            point(3, 6),
+            point(4, 6),
+            point(5, 6),
+            point(6, 6),
+            point(3, 5),
+            point(4, 5),
+            point(5, 5),
+            point(6, 5),
+        ],
+    );
+
+    let before = engine.snapshot();
+    let committed = engine.dispatch(GameIntent::LayRoadLine {
+        points,
+        preset: RoadPreset::DualBidirectional,
+    });
+    assert!(!committed.applied);
+    assert_eq!(committed.snapshot, before);
+    assert_eq!(committed.rejection, preview.rejection);
+}
+
+#[test]
 fn direction_edit_removes_inherited_parallel_one_way_lateral_link() {
     let mut engine = GameEngine::new();
     for y in [5, 6] {

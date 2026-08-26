@@ -620,9 +620,8 @@ fn attempted_mutation_tiles(mutation: &RoadMutation) -> Vec<Point> {
         RoadMutation::LayRoad { point }
         | RoadMutation::CycleRoadDirection { point }
         | RoadMutation::RemoveAtTile { point } => vec![*point],
-        RoadMutation::LayRoadLine { points, .. } | RoadMutation::RemoveAtTiles { points } => {
-            points.clone()
-        }
+        RoadMutation::LayRoadLine { points, preset } => road::road_line_footprint(points, *preset),
+        RoadMutation::RemoveAtTiles { points } => points.clone(),
         RoadMutation::PlaceRoundabout { origin, .. } => vec![*origin],
     }
 }
