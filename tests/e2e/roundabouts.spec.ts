@@ -63,11 +63,18 @@ async function seedRoundaboutApproaches(
   const width = size === "compact2x2" ? 2 : 3;
   const bottom = origin.y + width - 1;
   const right = Math.min(origin.x + width + 4, MAP_WIDTH - 1);
+  // The compact 2x2 one-way approach must start one tile west of the dual
+  // carriageway so its tile under the dual crossing is an interior degree-2
+  // segment; otherwise the two-way approach above grafts a perpendicular link
+  // onto the one-way endpoint and the new road-safety preflight rejects the
+  // dual carriageway before it can connect the legs. Mirrors the Rust
+  // `roundabout_e2e_repro` fixture geometry.
+  const oneWayStartX = origin.x - 5 - (width === 2 ? 1 : 0);
   await selectBuildLeaf(page, "roads", "road-oneWay");
   await dragMapTiles(
     page,
     canvas,
-    { x: origin.x - 5, y: bottom },
+    { x: oneWayStartX, y: bottom },
     { x: right, y: bottom },
   );
   await selectBuildLeaf(page, "roads", "road-twoWay");
