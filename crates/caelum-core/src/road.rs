@@ -187,6 +187,20 @@ fn lay_road_line(
 
     let forward = line_direction(points);
     let dual_direction = canonical_line_direction(points);
+    if preset == RoadPreset::DualBidirectional {
+        if let Some(direction) = dual_direction {
+            if reverse_lane_offset_overflows(points, direction) {
+                return Err(GameplayRejection::at(
+                    RejectionCode::InvalidRoadStroke,
+                    points[0],
+                ));
+            }
+        }
+    }
+    if let Some(requested_axis) = axis_resolved_stroke_direction(points) {
+        let footprint = road_line_footprint(points, preset);
+        validate_road_line_contacts(&original.map, &footprint, requested_axis)?;
+    }
     if preset == RoadPreset::OneWay {
         if let Some(direction) = forward {
             validate_one_way_parallel_spacing(&original.map, points, direction)?;
@@ -197,7 +211,7 @@ fn lay_road_line(
         RoadPreset::OneWay => forward,
         RoadPreset::DualBidirectional => dual_direction,
     };
-    let forward = author_lane_tiles(candidate, original, points, direction, false)?;
+    let forward = author_lane_tiles(candidate, original, points, direction)?;
     let mut cost = forward.cost;
     connect_authored_sequence(&mut candidate.map, &forward.points);
     for point in &forward.points {
@@ -214,21 +228,12 @@ fn lay_road_line(
 
     if preset == RoadPreset::DualBidirectional {
         if let Some(canonical) = dual_direction {
-            // Reverse-lane offsets can overflow i32 even when consecutive stroke
-            // subtraction is fine (e.g. South reverse +1 on x=i32::MAX).
-            if reverse_lane_offset_overflows(points, canonical) {
-                return Err(GameplayRejection::at(
-                    RejectionCode::InvalidRoadStroke,
-                    points[0],
-                ));
-            }
             let reverse_points = reverse_lane_points(points, canonical);
             let authored = author_lane_tiles(
                 candidate,
                 original,
                 &reverse_points,
                 Some(opposite(canonical)),
-                true,
             )?;
             cost += authored.cost;
             connect_authored_sequence(&mut candidate.map, &authored.points);
@@ -268,7 +273,6 @@ fn author_lane_tiles(
     original: &GameSnapshot,
     points: &[Point],
     direction: Option<Heading>,
-    reverse_lane: bool,
 ) -> GameplayResult<AuthoredLane> {
     let mut lane = AuthoredLane {
         points: Vec::new(),
@@ -282,9 +286,6 @@ fn author_lane_tiles(
             continue;
         }
         if existing.kind == "road" {
-            if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
-                continue;
-            }
             // `existing` was just fetched from this tile, so it is present; skip
             // defensively rather than panicking under the Tauri Mutex.
             let Some(tile) = candidate.map.tile_mut(*point) else {
@@ -972,6 +973,15 @@ fn line_direction(points: &[Point]) -> Option<Heading> {
     heading_between(points[0], points[1])
 }
 
+fn axis_resolved_stroke_direction(points: &[Point]) -> Option<Heading> {
+    let mut pairs = points.windows(2);
+    let first = pairs.next()?;
+    let direction = heading_between(first[0], first[1])?;
+    pairs
+        .all(|pair| heading_between(pair[0], pair[1]) == Some(direction))
+        .then_some(direction)
+}
+
 const MIN_PARALLEL_ONE_WAY_SPACING_TILES: i32 = 3;
 
 fn perpendicular_point(point: Point, direction: Heading, delta: i32) -> Option<Point> {
@@ -985,6 +995,35 @@ fn perpendicular_point(point: Point, direction: Heading, delta: i32) -> Option<P
             y: point.y,
         }),
     }
+}
+
+fn validate_road_line_contacts(
+    map: &GameMap,
+    footprint: &[Point],
+    requested_axis: Heading,
+) -> GameplayResult<()> {
+    let requested_horizontal = matches!(requested_axis, Heading::East | Heading::West);
+
+    for point in footprint {
+        let Some(tile) = map.tile(*point) else {
+            continue;
+        };
+        if tile.kind != "road" {
+            continue;
+        }
+        if tile.road_structure_id.is_some() || crate::roundabouts::is_roundabout_owned(map, *point)
+        {
+            return Err(GameplayRejection::at(RejectionCode::BlockedTile, *point));
+        }
+
+        let has_requested = has_axis(&tile.road_connections, requested_horizontal);
+        let has_perpendicular = has_axis(&tile.road_connections, !requested_horizontal);
+        if has_requested || !has_perpendicular {
+            return Err(GameplayRejection::at(RejectionCode::BlockedTile, *point));
+        }
+    }
+
+    Ok(())
 }
 
 fn validate_one_way_parallel_spacing(
@@ -1101,6 +1140,19 @@ fn has_axis(connections: &[Heading], horizontal: bool) -> bool {
     connections
         .iter()
         .any(|heading| horizontal == matches!(heading, Heading::East | Heading::West))
+}
+
+pub(crate) fn road_line_footprint(points: &[Point], preset: RoadPreset) -> Vec<Point> {
+    let mut footprint = points.to_vec();
+    if preset == RoadPreset::DualBidirectional {
+        if let Some(direction) = canonical_line_direction(points) {
+            if !reverse_lane_offset_overflows(points, direction) {
+                footprint.extend(reverse_lane_points(points, direction));
+            }
+        }
+    }
+    deduplicate_points(&mut footprint);
+    footprint
 }
 
 fn reverse_lane_points(points: &[Point], direction: Heading) -> Vec<Point> {

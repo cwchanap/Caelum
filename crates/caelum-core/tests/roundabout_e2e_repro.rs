@@ -91,9 +91,16 @@ fn assert_roundabout_e2e_preview_is_connected(
         "residential",
     );
 
+    let one_way_start = if width == 2 {
+        vertical_x - 1
+    } else {
+        vertical_x
+    };
     road_line(
         &mut engine,
-        (vertical_x..=right).map(|x| point(x, bottom_y)).collect(),
+        (one_way_start..=right)
+            .map(|x| point(x, bottom_y))
+            .collect(),
         RoadPreset::OneWay,
     );
     road_line(
