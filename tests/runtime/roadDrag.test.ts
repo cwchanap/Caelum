@@ -12,15 +12,11 @@ describe("rectanglePoints", () => {
   ];
 
   it("returns an inclusive row-major rectangle", () => {
-    expect(rectanglePoints({ x: 2, y: 3 }, { x: 4, y: 4 })).toEqual(
-      expected,
-    );
+    expect(rectanglePoints({ x: 2, y: 3 }, { x: 4, y: 4 })).toEqual(expected);
   });
 
   it("canonicalizes reverse drag direction", () => {
-    expect(rectanglePoints({ x: 4, y: 4 }, { x: 2, y: 3 })).toEqual(
-      expected,
-    );
+    expect(rectanglePoints({ x: 4, y: 4 }, { x: 2, y: 3 })).toEqual(expected);
   });
 
   it("keeps 1x1, 1xN, and Nx1 rectangles inclusive", () => {
