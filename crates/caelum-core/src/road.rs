@@ -197,7 +197,9 @@ fn lay_road_line(
             }
         }
     }
-    if let Some(requested_axis) = axis_resolved_stroke_direction(points) {
+    let axis_direction = axis_resolved_stroke_direction(points);
+    let axis_resolved = axis_direction.is_some();
+    if let Some(requested_axis) = axis_direction {
         let footprint = road_line_footprint(points, preset);
         validate_road_line_contacts(&original.map, &footprint, requested_axis)?;
     }
@@ -211,7 +213,7 @@ fn lay_road_line(
         RoadPreset::OneWay => forward,
         RoadPreset::DualBidirectional => dual_direction,
     };
-    let forward = author_lane_tiles(candidate, original, points, direction)?;
+    let forward = author_lane_tiles(candidate, original, points, direction, false)?;
     let mut cost = forward.cost;
     connect_authored_sequence(&mut candidate.map, &forward.points);
     for point in &forward.points {
@@ -234,6 +236,7 @@ fn lay_road_line(
                 original,
                 &reverse_points,
                 Some(opposite(canonical)),
+                !axis_resolved,
             )?;
             cost += authored.cost;
             connect_authored_sequence(&mut candidate.map, &authored.points);
@@ -273,6 +276,7 @@ fn author_lane_tiles(
     original: &GameSnapshot,
     points: &[Point],
     direction: Option<Heading>,
+    reverse_lane: bool,
 ) -> GameplayResult<AuthoredLane> {
     let mut lane = AuthoredLane {
         points: Vec::new(),
@@ -286,6 +290,9 @@ fn author_lane_tiles(
             continue;
         }
         if existing.kind == "road" {
+            if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
+                continue;
+            }
             // `existing` was just fetched from this tile, so it is present; skip
             // defensively rather than panicking under the Tauri Mutex.
             let Some(tile) = candidate.map.tile_mut(*point) else {

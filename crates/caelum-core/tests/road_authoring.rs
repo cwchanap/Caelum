@@ -781,6 +781,37 @@ fn duplicate_point_host_stroke_retains_existing_merge_semantics() {
 }
 
 #[test]
+fn bent_dual_host_stroke_skips_existing_reverse_lane_tile() {
+    let initial = create_initial_snapshot();
+    let prepared = apply_road_mutation(
+        &initial,
+        &RoadMutation::LayRoadLine {
+            points: (2..=6).map(|x| point(x, 3)).collect(),
+            preset: RoadPreset::OneWay,
+        },
+    )
+    .expect("fixture OneWay should apply")
+    .snapshot;
+    // The generated reverse lane turns south from the target; the existing
+    // east-west connection is perpendicular to that bent leg.
+    let target = point(4, 3);
+    let before = tile(&prepared, target).clone();
+
+    let result = apply_road_mutation(
+        &prepared,
+        &RoadMutation::LayRoadLine {
+            points: vec![point(3, 4), point(4, 4), point(4, 5)],
+            preset: RoadPreset::DualBidirectional,
+        },
+    )
+    .expect("bent host stroke should apply");
+
+    assert_eq!(tile(&result.snapshot, target).one_way, before.one_way);
+    assert!(result.skipped_tiles.contains(&target));
+    assert!(!result.changed_tiles.contains(&target));
+}
+
+#[test]
 fn road_line_contact_with_automatic_junction_is_rejected_atomically() {
     let (mut engine, _) = crossing_engine();
     let before = engine.snapshot();
