@@ -137,17 +137,32 @@ fn dual_intersection_engine() -> GameEngine {
     // dual-bidirectional. The route must still enter the junction on the
     // explicitly selected approach lane, but both service directions can use
     // the same roadside stops.
+    let horizontal_two_way: Vec<_> = (8..=12).map(|x| point(x, 3)).collect();
     dispatch(
         &mut engine,
-        GameIntent::LayRoadLine {
-            points: (8..=12).map(|x| point(x, 3)).collect(),
-            preset: RoadPreset::TwoWay,
+        GameIntent::RemoveAtTiles {
+            points: horizontal_two_way.clone(),
         },
     );
     dispatch(
         &mut engine,
         GameIntent::LayRoadLine {
-            points: (4..=6).map(|y| point(6, y)).collect(),
+            points: horizontal_two_way,
+            preset: RoadPreset::TwoWay,
+        },
+    );
+
+    let vertical_two_way: Vec<_> = (4..=6).map(|y| point(6, y)).collect();
+    dispatch(
+        &mut engine,
+        GameIntent::RemoveAtTiles {
+            points: vertical_two_way.clone(),
+        },
+    );
+    dispatch(
+        &mut engine,
+        GameIntent::LayRoadLine {
+            points: vertical_two_way,
             preset: RoadPreset::TwoWay,
         },
     );
@@ -206,6 +221,17 @@ fn vertical_first_dual_intersection_engine() -> GameEngine {
     engine
 }
 
+// horizontal-then-vertical upgrade reproduction
+//   -> atomic upgrade rejection
+//   -> horizontal_first_dual_intersection full clean contract
+//
+// vertical-then-horizontal upgrade reproduction
+//   -> atomic upgrade rejection
+//   -> vertical_first_dual_intersection full clean contract
+//
+// pre-existing OneWay overlay reproduction
+//   -> atomic OneWay/Dual repaint rejection
+//   -> clean horizontal-first + reversed-input Dual characterization
 #[test]
 fn horizontal_first_dual_intersection_has_all_four_internal_edges() {
     let engine = dual_intersection_engine();
@@ -221,78 +247,6 @@ fn vertical_first_dual_intersection_has_all_four_internal_edges() {
 }
 
 #[test]
-fn recapture_dual_crossing_after_horizontal_then_vertical_upgrade_has_all_four_internal_edges() {
-    let mut engine = blank_grid_engine();
-    lay(
-        &mut engine,
-        (0..=7).map(|y| point(6, y)).collect(),
-        RoadPreset::TwoWay,
-    );
-    lay(
-        &mut engine,
-        (2..=12).map(|x| point(x, 3)).collect(),
-        RoadPreset::DualBidirectional,
-    );
-    lay(
-        &mut engine,
-        (0..=7).map(|y| point(6, y)).collect(),
-        RoadPreset::DualBidirectional,
-    );
-
-    let snapshot = engine.snapshot();
-    assert_two_by_two_footprint(&snapshot, point(6, 2));
-    assert_complete_two_by_two(&snapshot);
-}
-
-#[test]
-fn recapture_dual_crossing_after_vertical_then_horizontal_upgrade_has_all_four_internal_edges() {
-    let mut engine = blank_grid_engine();
-    lay(
-        &mut engine,
-        (0..=7).map(|y| point(6, y)).collect(),
-        RoadPreset::TwoWay,
-    );
-    lay(
-        &mut engine,
-        (0..=7).map(|y| point(6, y)).collect(),
-        RoadPreset::DualBidirectional,
-    );
-    lay(
-        &mut engine,
-        (2..=12).map(|x| point(x, 3)).collect(),
-        RoadPreset::DualBidirectional,
-    );
-
-    let snapshot = engine.snapshot();
-    assert_two_by_two_footprint(&snapshot, point(6, 2));
-    assert_complete_two_by_two(&snapshot);
-}
-
-#[test]
-fn recapture_dual_crossing_after_preexisting_one_way_overlay_has_all_four_internal_edges() {
-    let mut engine = blank_grid_engine();
-    lay(
-        &mut engine,
-        (2..=12).map(|x| point(x, 3)).collect(),
-        RoadPreset::OneWay,
-    );
-    lay(
-        &mut engine,
-        (0..=7).map(|y| point(6, y)).collect(),
-        RoadPreset::DualBidirectional,
-    );
-    lay(
-        &mut engine,
-        (2..=12).map(|x| point(x, 3)).collect(),
-        RoadPreset::DualBidirectional,
-    );
-
-    let snapshot = engine.snapshot();
-    assert_two_by_two_footprint(&snapshot, point(6, 2));
-    assert_complete_two_by_two(&snapshot);
-}
-
-#[test]
 fn recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_internal_edges() {
     let mut engine = blank_grid_engine();
     lay(
@@ -302,7 +256,7 @@ fn recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_
     );
     lay(
         &mut engine,
-        (9..=12).map(|x| point(x, 3)).collect(),
+        (10..=12).map(|x| point(x, 3)).collect(),
         RoadPreset::DualBidirectional,
     );
     lay(

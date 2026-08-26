@@ -288,7 +288,10 @@ fn route_with_alternate_path_and_rider() -> AlternateRouteFixture {
 }
 
 fn one_way_three_leg_route() -> GameSnapshot {
-    let mut engine = GameEngine::new();
+    let mut request = caelum_core::canonical_default_request();
+    request.template_id = "blankGrid".to_string();
+    let mut engine = GameEngine::from_sandbox_request(request)
+        .expect("blank grid fixture request should remain valid");
     lay_two_way_line(&mut engine, horizontal(5, 2, 10));
     lay_two_way_line(&mut engine, vertical(10, 5, 9));
     lay_two_way_line(&mut engine, horizontal(9, 10, 2));

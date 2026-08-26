@@ -460,9 +460,12 @@ fn complete_automatic_junction_may_be_replaced_but_partial_overlap_rejects() {
     let mut full = crossing_engine();
     assert!(full.dispatch(place_standard_roundabout()).applied);
 
-    let mut partial = GameEngine::new();
+    let mut request = caelum_core::canonical_default_request();
+    request.template_id = "blankGrid".to_string();
+    let mut partial = GameEngine::from_sandbox_request(request)
+        .expect("blank grid fixture request should remain valid");
     for y in [8, 9] {
-        road_line(&mut partial, (7..=12).map(|x| point(x, y)).collect());
+        road_line(&mut partial, (6..=13).map(|x| point(x, y)).collect());
     }
     for x in [9, 10] {
         road_line(&mut partial, (6..=11).map(|y| point(x, y)).collect());

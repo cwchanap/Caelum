@@ -160,6 +160,111 @@ fn snapshot_for_preset(state: &GameSnapshot, preset: EconomyPreset, budget: i32)
 }
 
 #[test]
+fn partial_same_axis_overlap_rejects_before_building_the_empty_tail() {
+    let mut engine = one_way_engine((3..=8).map(|x| point(x, 5)).collect());
+    let before = engine.snapshot();
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (6..=12).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(result.rejection.unwrap().context.point, Some(point(6, 5)));
+    assert_eq!(
+        engine.snapshot().map.tile(point(9, 5)).unwrap().kind,
+        "empty"
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+}
+
+#[test]
+fn dual_reverse_lane_road_contact_rejects_before_forward_authoring() {
+    let mut engine = one_way_engine((3..=8).map(|x| point(x, 5)).collect());
+    let before = engine.snapshot();
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (3..=8).map(|x| point(x, 6)).collect(),
+        preset: RoadPreset::DualBidirectional,
+    });
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(
+        engine.snapshot().map.tile(point(3, 6)).unwrap().kind,
+        "empty"
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+}
+
+#[test]
+fn perpendicular_through_crossing_remains_legal() {
+    let mut engine = one_way_engine((3..=8).map(|x| point(x, 5)).collect());
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=8).map(|y| point(6, y)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(result.applied, "crossing should apply: {result:?}");
+    let tile = result.snapshot.map.tile(point(6, 5)).unwrap();
+    for heading in [Heading::North, Heading::East, Heading::South, Heading::West] {
+        assert!(tile.road_connections.contains(&heading));
+    }
+}
+
+#[test]
+fn perpendicular_endpoint_contact_forms_a_t_junction() {
+    let mut engine = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=5).map(|y| point(6, y)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(result.applied, "T-junction should apply: {result:?}");
+    let tile = result.snapshot.map.tile(point(6, 5)).unwrap();
+    assert!(tile.road_connections.contains(&Heading::North));
+    assert!(tile.road_connections.contains(&Heading::West));
+    assert!(!tile.road_connections.contains(&Heading::South));
+}
+
+#[test]
+fn adjacent_empty_road_extension_remains_legal() {
+    let mut engine = one_way_engine((3..=6).map(|x| point(x, 5)).collect());
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (7..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(result.applied, "extension should apply: {result:?}");
+    assert!(result
+        .snapshot
+        .map
+        .tile(point(6, 5))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::East));
+    assert!(result
+        .snapshot
+        .map
+        .tile(point(7, 5))
+        .unwrap()
+        .road_connections
+        .contains(&Heading::West));
+}
+
+#[test]
 fn dual_bidirectional_crossing_preserves_both_corridors_and_lane_directions() {
     let mut engine = GameEngine::new();
     lay_dual_horizontal(&mut engine, 8);
@@ -299,7 +404,7 @@ fn standalone_one_way_spacing_is_three_tiles_and_longitudinally_local() {
 fn standalone_one_way_checks_existing_dual_lane_but_dual_self_authoring_remains_legal() {
     let mut engine = GameEngine::new();
     let dual = engine.dispatch(GameIntent::LayRoadLine {
-        points: (3..=10).map(|x| point(x, 10)).collect(),
+        points: (3..=10).map(|x| point(x, 12)).collect(),
         preset: RoadPreset::DualBidirectional,
     });
     assert!(
@@ -309,7 +414,7 @@ fn standalone_one_way_checks_existing_dual_lane_but_dual_self_authoring_remains_
 
     let before = engine.snapshot();
     let result = engine.dispatch(GameIntent::LayRoadLine {
-        points: (3..=10).map(|x| point(x, 12)).collect(),
+        points: (3..=10).map(|x| point(x, 14)).collect(),
         preset: RoadPreset::OneWay,
     });
     assert!(!result.applied);
@@ -335,11 +440,12 @@ fn one_way_overlay_is_checked_before_merge_lane_direction() {
         preset: RoadPreset::OneWay,
     });
     assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::OneWayParallelTooClose),
+        Some(&RejectionCode::BlockedTile),
     );
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot().budget, before.budget);
 }
 
 #[test]
@@ -613,6 +719,89 @@ fn cycling_a_structure_tile_is_a_silent_no_op() {
 }
 
 #[test]
+fn duplicate_point_host_stroke_retains_existing_merge_semantics() {
+    let initial = create_initial_snapshot();
+    let prepared = apply_road_mutation(&initial, &RoadMutation::LayRoad { point: point(2, 2) })
+        .expect("fixture road should apply")
+        .snapshot;
+
+    let result = apply_road_mutation(
+        &prepared,
+        &RoadMutation::LayRoadLine {
+            points: vec![point(2, 2), point(2, 2), point(3, 2)],
+            preset: RoadPreset::TwoWay,
+        },
+    )
+    .expect("degenerate host stroke keeps existing semantics");
+
+    assert_eq!(result.snapshot.map.tile(point(2, 2)).unwrap().kind, "road");
+    assert_eq!(result.snapshot.map.tile(point(3, 2)).unwrap().kind, "road");
+    assert_eq!(result.cost, ROAD_COST);
+}
+
+#[test]
+fn road_line_contact_with_automatic_junction_is_rejected_atomically() {
+    let (mut engine, _) = crossing_engine();
+    let before = engine.snapshot();
+
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(14, 8), point(14, 9), point(14, 10)],
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+}
+
+#[test]
+fn road_line_contact_with_roundabout_is_rejected_atomically() {
+    let mut engine = GameEngine::new();
+    let horizontal = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(
+        horizontal.applied,
+        "horizontal fixture should apply: {horizontal:?}"
+    );
+    let vertical = engine.dispatch(GameIntent::LayRoadLine {
+        points: (1..=9).map(|y| point(6, y)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(
+        vertical.applied,
+        "vertical fixture should apply: {vertical:?}"
+    );
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(5, 4),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(
+        placed.applied,
+        "roundabout fixture should apply: {placed:?}"
+    );
+
+    let before = engine.snapshot();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(6, 4), point(5, 4), point(4, 4), point(3, 4)],
+        preset: RoadPreset::TwoWay,
+    });
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+}
+
+#[test]
 fn partial_stroke_skips_invalid_tiles_in_input_order() {
     let state = stroke_fixture_with_budget(ROAD_COST * 2);
     let result = apply_road_mutation(
@@ -657,33 +846,6 @@ fn budget_limited_road_stroke_diverges_only_by_ordered_affordability() {
     assert!(creative.skipped_tiles.is_empty());
     assert_eq!(creative.cost, ROAD_COST * 3);
     assert_eq!(creative.snapshot.budget, ROAD_COST * 2);
-}
-
-#[test]
-fn road_stroke_keeps_scanning_to_a_later_free_existing_road_overlay() {
-    let initial = create_initial_snapshot();
-    let prepared = apply_road_mutation(&initial, &RoadMutation::LayRoad { point: point(4, 2) })
-        .expect("fixture road should apply")
-        .snapshot;
-    let state = snapshot_for_preset(&prepared, EconomyPreset::Standard, ROAD_COST);
-
-    let result = apply_road_mutation(
-        &state,
-        &RoadMutation::LayRoadLine {
-            points: vec![point(2, 2), point(3, 2), point(4, 2)],
-            preset: RoadPreset::OneWay,
-        },
-    )
-    .expect("stroke should retain the free existing overlay");
-
-    assert_eq!(result.changed_tiles, vec![point(2, 2), point(4, 2)]);
-    assert_eq!(result.skipped_tiles, vec![point(3, 2)]);
-    assert_eq!(result.cost, ROAD_COST);
-    assert_eq!(result.snapshot.budget, 0);
-    assert_eq!(
-        tile(&result.snapshot, point(4, 2)).one_way,
-        Some(Heading::East)
-    );
 }
 
 #[test]

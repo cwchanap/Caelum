@@ -1161,33 +1161,33 @@ fn lay_road_line_one_way_sets_axis_direction_and_charges_new_tiles() {
 }
 
 #[test]
-fn lay_road_line_dual_bidirectional_adds_left_reverse_lane_without_hijacking_existing_roads() {
+fn lay_road_line_dual_bidirectional_rejects_existing_reverse_lane_contact_atomically() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayRoad {
         point: (1, 0).into(),
     });
+    let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
         preset: RoadPreset::DualBidirectional,
     });
 
-    assert!(result.applied);
-    let tile = |x: i32, y: i32| {
-        result
-            .snapshot
-            .map
-            .tiles
-            .iter()
-            .find(|tile| tile.x == x && tile.y == y)
-            .expect("tile exists")
-    };
-    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(1, 0).one_way.map(|h| h.as_str()), None);
-    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), Some("west"));
-    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+    assert_eq!(
+        result.snapshot.map.tile((1, 0).into()),
+        before.map.tile((1, 0).into())
+    );
+    assert_eq!(
+        result.snapshot.map.tile((1, 1).into()).unwrap().kind,
+        "empty"
+    );
 }
 
 #[test]
@@ -2027,65 +2027,57 @@ fn deleting_future_leg_line_clears_ghost_passenger_from_current_vehicle() {
 }
 
 #[test]
-fn lay_road_line_one_way_is_idempotent_when_direction_already_matches() {
-    // lay_lane returns false (no charge, no change) when the existing road's
-    // one_way already equals the requested direction. Re-laying the same
-    // one-way line over itself must not double-charge or change the snapshot.
+fn lay_road_line_one_way_rejects_idempotent_existing_road_contact_atomically() {
     let mut engine = GameEngine::new();
     let first = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
         preset: RoadPreset::OneWay,
     });
     assert!(first.applied);
-    let budget_after_first = first.snapshot.budget;
+    let before = engine.snapshot();
 
-    let second = engine.dispatch(GameIntent::LayRoadLine {
+    let result = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
         preset: RoadPreset::OneWay,
     });
-    // No tile changed (all already one-way east), so the line is "unchanged".
-    assert!(!second.applied);
-    assert_eq!(second.snapshot.budget, budget_after_first);
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
 }
 
 #[test]
-fn lay_road_line_dual_bidirectional_skips_reverse_lane_when_tile_is_occupied() {
-    // lay_reverse_lane returns false when the reverse-lane tile is not empty.
-    // Pre-place a road on the reverse-lane tile (north of the forward lane);
-    // the forward lane still lands, but the reverse lane is skipped rather
-    // than hijacking the existing road.
+fn lay_road_line_dual_bidirectional_rejects_occupied_reverse_lane_atomically() {
     let mut engine = GameEngine::new();
-    // Pre-place a two-way road at (2, 0) — the reverse-lane tile for a
-    // dual-bidirectional line at y=1 (reverse lane is at y=0, north/left of
-    // the canonical east forward lane).
     engine.dispatch(GameIntent::LayRoad {
         point: (2, 0).into(),
     });
+    let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
         preset: RoadPreset::DualBidirectional,
     });
-    assert!(result.applied);
 
-    let tile = |x: i32, y: i32| {
-        result
-            .snapshot
-            .map
-            .tiles
-            .iter()
-            .find(|tile| tile.x == x && tile.y == y)
-            .expect("tile exists")
-    };
-    // Forward lane (y=1) is one-way east.
-    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
-    // The pre-existing road at (2,0) keeps its two-way (None) direction — the
-    // reverse lane did not overwrite it. (1,0) and (3,0) get the reverse lane.
-    assert_eq!(tile(2, 0).one_way.map(|h| h.as_str()), None);
-    assert_eq!(tile(1, 0).one_way.map(|h| h.as_str()), Some("west"));
-    assert_eq!(tile(3, 0).one_way.map(|h| h.as_str()), Some("west"));
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+    assert_eq!(
+        result.snapshot.map.tile((2, 0).into()),
+        before.map.tile((2, 0).into())
+    );
+    assert_eq!(
+        result.snapshot.map.tile((1, 1).into()).unwrap().kind,
+        "empty"
+    );
 }
 
 #[test]
@@ -2345,48 +2337,38 @@ fn remove_at_tiles_all_unchanged_is_rejected() {
 }
 
 #[test]
-fn lay_road_line_one_way_over_two_way_road_updates_direction() {
-    // lay_lane on an existing road whose one_way differs from the requested
-    // direction must flip the direction and report a change (return true),
-    // rather than skipping the tile as already-matching.
+fn lay_road_line_one_way_rejects_repaint_and_single_tile_direction_cycle_remains_edit() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::LayRoad {
         point: (1, 1).into(),
     });
-    // Pre-existing road is two-way (one_way == None).
-    assert_eq!(
-        engine
-            .snapshot()
-            .map
-            .tiles
-            .iter()
-            .find(|tile| tile.x == 1 && tile.y == 1)
-            .unwrap()
-            .one_way,
-        None
-    );
+    let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![(1, 1).into(), (2, 1).into(), (3, 1).into()],
         preset: RoadPreset::OneWay,
     });
-    assert!(result.applied);
-    let tile = |x: i32, y: i32| {
-        result
-            .snapshot
-            .map
-            .tiles
-            .iter()
-            .find(|tile| tile.x == x && tile.y == y)
-            .expect("tile exists")
-    };
-    // The pre-existing two-way road is flipped to one-way east.
-    assert_eq!(tile(1, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(2, 1).one_way.map(|h| h.as_str()), Some("east"));
-    assert_eq!(tile(3, 1).one_way.map(|h| h.as_str()), Some("east"));
-    // The initial LayRoad charged one tile; the line charges the two newly
-    // placed tiles (the flipped (1,1) tile is an update, not a new placement).
-    assert_eq!(result.snapshot.budget, 120_000 - 3 * 100);
+
+    assert!(!result.applied);
+    assert_eq!(result.snapshot, before);
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+
+    let cycle = engine.dispatch(GameIntent::CycleRoadDirection {
+        point: (1, 1).into(),
+    });
+    assert!(
+        cycle.applied,
+        "single-tile direction edit should apply: {cycle:?}"
+    );
+    assert_eq!(
+        engine.snapshot().map.tile((1, 1).into()).unwrap().one_way,
+        Some(caelum_core::model::Heading::North)
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
 }
 
 #[test]

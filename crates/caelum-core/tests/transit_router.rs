@@ -538,14 +538,14 @@ fn terminal_turnaround_recovers_after_a_roundabout_is_placed() {
     dispatch(
         &mut engine,
         GameIntent::LayRoadLine {
-            points: (1..=3).map(|x| point(x, 3)).collect(),
+            points: (1..=2).map(|x| point(x, 3)).collect(),
             preset: RoadPreset::OneWay,
         },
     );
     dispatch(
         &mut engine,
         GameIntent::LayRoadLine {
-            points: (4..=6).rev().map(|x| point(x, 3)).collect(),
+            points: (5..=6).rev().map(|x| point(x, 3)).collect(),
             preset: RoadPreset::OneWay,
         },
     );
