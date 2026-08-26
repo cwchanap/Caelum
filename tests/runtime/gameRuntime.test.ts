@@ -12,6 +12,7 @@ import type {
   DispatchResult,
   GameBackend,
   GameIntent,
+  RoadMutation,
   RoadMutationPreviewResponse,
   RoutePreviewResponse,
   RustMetroLine,
@@ -4802,6 +4803,58 @@ describe("runtime road drag", () => {
           intent.point.y === 0,
       ),
     ).toBe(false);
+  });
+
+  it("uses the same inclusive rectangle for remove preview and commit", async () => {
+    const previewMutations: RoadMutation[] = [];
+    const backend = backendSpy();
+    backend.previewRoadMutation = vi.fn(async (request) => {
+      previewMutations.push(request.mutation);
+      const changedTiles =
+        request.mutation.type === "removeAtTiles"
+          ? request.mutation.points
+          : request.mutation.type === "removeAtTile"
+            ? [request.mutation.point]
+            : [];
+      return {
+        generation: request.generation,
+        changedTiles,
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      };
+    });
+    const runtime = await createGameRuntime({
+      backend,
+      hoverPreviewDebounceMs: 0,
+    });
+
+    runtime.setTool("remove");
+    runtime.startDrag({ x: 2, y: 3 });
+    runtime.setDragCurrent({ x: 4, y: 4 });
+
+    const expected = [
+      { x: 2, y: 3 },
+      { x: 3, y: 3 },
+      { x: 4, y: 3 },
+      { x: 2, y: 4 },
+      { x: 3, y: 4 },
+      { x: 4, y: 4 },
+    ];
+    expect(previewMutations.at(-1)).toEqual({
+      type: "removeAtTiles",
+      points: expected,
+    });
+
+    await runtime.commitDrag();
+    expect(backend.intents.at(-1)).toEqual({
+      type: "removeAtTiles",
+      points: expected,
+    });
   });
 
   it("bulldozes a line with the remove tool drag", async () => {

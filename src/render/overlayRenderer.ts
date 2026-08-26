@@ -21,7 +21,7 @@ import type {
 import { getBuildingFootprint } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
 import { selectPlatformOccupancy } from "../domain/platformOccupancy";
-import { axisLockedLine } from "../ui/roadDrag";
+import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
 import { tileSize, type BoardTransform } from "./canvas";
 import { colors } from "./colors";
@@ -42,22 +42,6 @@ import {
 const previewStrokeInset = 2;
 
 type RoundaboutStructure = Extract<RoadStructure, { kind: "roundabout" }>;
-
-function rectanglePoints(start: Point, end: Point): Point[] {
-  const minX = Math.min(start.x, end.x);
-  const maxX = Math.max(start.x, end.x);
-  const minY = Math.min(start.y, end.y);
-  const maxY = Math.max(start.y, end.y);
-  const points: Point[] = [];
-
-  for (let y = minY; y <= maxY; y += 1) {
-    for (let x = minX; x <= maxX; x += 1) {
-      points.push({ x, y });
-    }
-  }
-
-  return points;
-}
 
 function planAreaPaintPreview(
   state: GameState,

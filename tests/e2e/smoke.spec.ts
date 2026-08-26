@@ -4,6 +4,7 @@ import {
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
+  runtimeSnapshot,
   openCommandDestination,
   selectTool,
 } from "./helpers";
@@ -104,4 +105,36 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
     .poll(async () => (await clockValue.textContent())?.trim() ?? "")
     .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
   await expect(clockValue).toHaveText(/^Day 1 \d{2}:\d{2}$/);
+});
+
+test("demolishes an inclusive rectangle in Blank Grid", async ({ page }) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await createDefaultCity(page, "E2E City", "blankGrid");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 4, y: 4 }, { x: 8, y: 4 });
+  await dragMapTiles(page, canvas, { x: 4, y: 6 }, { x: 8, y: 6 });
+
+  await selectTool(page, "demolish");
+  await dragMapTiles(page, canvas, { x: 4, y: 4 }, { x: 7, y: 6 });
+
+  await expect
+    .poll(async () => {
+      const tiles = (await runtimeSnapshot(page)).state.map.tiles;
+      const kind = (x: number, y: number) =>
+        tiles.find((tile) => tile.x === x && tile.y === y)?.kind;
+      return {
+        top: [4, 5, 6, 7].map((x) => kind(x, 4)),
+        bottom: [4, 5, 6, 7].map((x) => kind(x, 6)),
+        outsideTop: kind(8, 4),
+        outsideBottom: kind(8, 6),
+      };
+    })
+    .toEqual({
+      top: ["empty", "empty", "empty", "empty"],
+      bottom: ["empty", "empty", "empty", "empty"],
+      outsideTop: "road",
+      outsideBottom: "road",
+    });
 });
