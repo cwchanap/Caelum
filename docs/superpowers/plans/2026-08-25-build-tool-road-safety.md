@@ -1136,7 +1136,31 @@ fn reversed_vertical_stroke_satisfies_the_full_crossing_contract() {
 }
 ```
 
-Update the adjacent-empty collinear extension fixture and the existing endpoint dual T-junction fixture to call `assert_dual_crossing_contract`.
+Update the adjacent-empty collinear extension fixture to call `assert_dual_crossing_contract`.
+
+**Decision-gate outcome (recorded after the Step 5 matrix ran):** the existing
+endpoint dual T-junction fixture does **not** call `assert_dual_crossing_contract`.
+Its first run was RED at layer 3 with six actual ports versus the eight-port
+crossing vector. Investigation confirmed the production topology is correct: the
+fixture's vertical dual terminates at the junction, there is no road south of the
+2 × 2, and boundary ports exist only at junction edges that meet road tiles — a
+three-arm endpoint junction therefore has exactly six ports. The minimal
+confirmed seam is the test assertion, not production code. The T-junction fixture
+instead asserts the same 2 × 2 footprint and reciprocal internal edges plus its
+exact six-port canonical set (in `port_keys()` canonical order):
+
+```rust
+vec![
+    (top_left, Heading::North),
+    (top_left, Heading::West),
+    (point(top_left.x, top_left.y + 1), Heading::West),
+    (point(top_left.x + 1, top_left.y), Heading::North),
+    (point(top_left.x + 1, top_left.y), Heading::East),
+    (point(top_left.x + 1, top_left.y + 1), Heading::East),
+]
+```
+
+Rename it to `dual_t_junction_at_vertical_endpoint_satisfies_the_t_junction_contract`.
 
 - [ ] **Step 5: Run the characterization matrix before any topology edit**
 

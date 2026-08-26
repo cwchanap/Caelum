@@ -364,6 +364,14 @@ Run the complete matrix after fixture migration.
 - If footprint, edges, ports, and paths are GREEN, commit characterization tests and make **no topology production change**.
 - If RED, record the first failing layer and exact fixture in the implementation PR. Investigate that seam, revise this design and implementation plan with the confirmed minimal fix, and only then change production topology.
 
+Decision-gate outcome: the matrix ran GREEN through layers 1-2 everywhere and
+GREEN through layer 4 for the canonical and reversed through-crossings; the
+endpoint dual T-junction fixture was RED at layer 3 with six actual ports. The
+seam was investigated and confirmed to be the assertion, not production: a
+three-arm endpoint junction exposes exactly its six arm ports, and the eight-port
+crossing vector applies only to the four-arm canonical cross. The revision is
+test-side (a T-junction port contract); no production topology change was made.
+
 The plan intentionally contains no paste-ready internal-edge completion, port-repair, or transition-generation implementation. A generic 2 × 2 mesh completion remains rejected.
 
 ## Runtime data flow
