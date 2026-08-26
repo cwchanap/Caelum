@@ -29,10 +29,6 @@ fn assert_reciprocal_edge(snapshot: &GameSnapshot, point: Point, heading: Headin
     );
 }
 
-fn assert_complete_two_by_two(snapshot: &GameSnapshot) {
-    assert_complete_two_by_two_at(snapshot, point(6, 2));
-}
-
 fn assert_complete_two_by_two_at(snapshot: &GameSnapshot, top_left: Point) {
     for (point, heading) in [
         (top_left, Heading::East),
@@ -58,6 +54,93 @@ fn assert_two_by_two_footprint(snapshot: &GameSnapshot, top_left: Point) {
         .find(|structure| structure.is_automatic_junction() && structure.footprint() == expected)
         .unwrap_or_else(|| panic!("expected automatic 2x2 junction at {top_left:?}"));
     assert_eq!(junction.footprint(), expected);
+}
+
+fn assert_dual_crossing_contract(snapshot: &GameSnapshot, top_left: Point) {
+    assert_two_by_two_footprint(snapshot, top_left);
+    assert_complete_two_by_two_at(snapshot, top_left);
+
+    let expected_footprint = [
+        top_left,
+        point(top_left.x + 1, top_left.y),
+        point(top_left.x, top_left.y + 1),
+        point(top_left.x + 1, top_left.y + 1),
+    ];
+    let structure = snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            structure.is_automatic_junction() && structure.footprint() == expected_footprint
+        })
+        .expect("expected 2x2 automatic junction");
+
+    assert_eq!(
+        structure.port_keys(),
+        vec![
+            (top_left, Heading::North),
+            (top_left, Heading::West),
+            (point(top_left.x, top_left.y + 1), Heading::South),
+            (point(top_left.x, top_left.y + 1), Heading::West),
+            (point(top_left.x + 1, top_left.y), Heading::North),
+            (point(top_left.x + 1, top_left.y), Heading::East),
+            (point(top_left.x + 1, top_left.y + 1), Heading::East),
+            (point(top_left.x + 1, top_left.y + 1), Heading::South),
+        ],
+    );
+}
+
+fn assert_dual_t_junction_contract(snapshot: &GameSnapshot, top_left: Point) {
+    assert_two_by_two_footprint(snapshot, top_left);
+    assert_complete_two_by_two_at(snapshot, top_left);
+
+    let expected_footprint = [
+        top_left,
+        point(top_left.x + 1, top_left.y),
+        point(top_left.x, top_left.y + 1),
+        point(top_left.x + 1, top_left.y + 1),
+    ];
+    let structure = snapshot
+        .map
+        .road_structures
+        .iter()
+        .find(|structure| {
+            structure.is_automatic_junction() && structure.footprint() == expected_footprint
+        })
+        .expect("expected 2x2 automatic junction");
+
+    assert_eq!(
+        structure.port_keys(),
+        vec![
+            (top_left, Heading::North),
+            (top_left, Heading::West),
+            (point(top_left.x, top_left.y + 1), Heading::West),
+            (point(top_left.x + 1, top_left.y), Heading::North),
+            (point(top_left.x + 1, top_left.y), Heading::East),
+            (point(top_left.x + 1, top_left.y + 1), Heading::East),
+        ],
+    );
+}
+
+fn assert_access_path(
+    engine: &GameEngine,
+    from: Point,
+    to: Point,
+    from_heading: Heading,
+    to_heading: Heading,
+) {
+    let snapshot = engine.snapshot();
+    let path = engine
+        .road_topology_for_test()
+        .find_path_between_access_tiles(
+            &snapshot.map,
+            from,
+            to,
+            Some(from_heading),
+            Some(to_heading),
+        )
+        .unwrap_or_else(|reason| panic!("expected path {from:?} -> {to:?}, got {reason:?}"));
+    assert!(!path.road_steps().is_empty());
 }
 
 fn blank_grid_engine() -> GameEngine {
@@ -221,33 +304,117 @@ fn vertical_first_dual_intersection_engine() -> GameEngine {
     engine
 }
 
-// horizontal-then-vertical upgrade reproduction
-//   -> atomic upgrade rejection
-//   -> horizontal_first_dual_intersection full clean contract
-//
-// vertical-then-horizontal upgrade reproduction
-//   -> atomic upgrade rejection
-//   -> vertical_first_dual_intersection full clean contract
-//
-// pre-existing OneWay overlay reproduction
-//   -> atomic OneWay/Dual repaint rejection
-//   -> clean horizontal-first + reversed-input Dual characterization
+// HPA-551 reproduction mapping:
+// - horizontal->vertical upgrade: product behavior is now BlockedTile;
+//   horizontal_first_dual_intersection_* is the legal topology equivalent.
+// - vertical->horizontal upgrade: product behavior is now BlockedTile;
+//   vertical_first_dual_intersection_* is the legal topology equivalent.
+// - pre-existing OneWay overlay: product behavior is now BlockedTile;
+//   clean horizontal-first plus reversed-input tests retain junction evidence.
 #[test]
-fn horizontal_first_dual_intersection_has_all_four_internal_edges() {
+fn horizontal_first_dual_intersection_satisfies_the_full_crossing_contract() {
     let engine = dual_intersection_engine();
-    let snapshot = engine.snapshot();
-    assert_complete_two_by_two(&snapshot);
+    assert_dual_crossing_contract(&engine.snapshot(), point(6, 2));
+    assert_access_path(
+        &engine,
+        point(5, 3),
+        point(8, 3),
+        Heading::East,
+        Heading::East,
+    );
+    assert_access_path(
+        &engine,
+        point(6, 1),
+        point(6, 4),
+        Heading::South,
+        Heading::South,
+    );
 }
 
 #[test]
-fn vertical_first_dual_intersection_has_all_four_internal_edges() {
+fn vertical_first_dual_intersection_satisfies_the_full_crossing_contract() {
     let engine = vertical_first_dual_intersection_engine();
-    let snapshot = engine.snapshot();
-    assert_complete_two_by_two(&snapshot);
+    assert_dual_crossing_contract(&engine.snapshot(), point(6, 2));
+    assert_access_path(
+        &engine,
+        point(5, 3),
+        point(8, 3),
+        Heading::East,
+        Heading::East,
+    );
+    assert_access_path(
+        &engine,
+        point(6, 1),
+        point(6, 4),
+        Heading::South,
+        Heading::South,
+    );
 }
 
 #[test]
-fn recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_internal_edges() {
+fn reversed_horizontal_stroke_satisfies_the_full_crossing_contract() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (2..=12).rev().map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (0..=7).map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    assert_dual_crossing_contract(&engine.snapshot(), point(6, 2));
+    assert_access_path(
+        &engine,
+        point(5, 3),
+        point(8, 3),
+        Heading::East,
+        Heading::East,
+    );
+    assert_access_path(
+        &engine,
+        point(6, 1),
+        point(6, 4),
+        Heading::South,
+        Heading::South,
+    );
+}
+
+#[test]
+fn reversed_vertical_stroke_satisfies_the_full_crossing_contract() {
+    let mut engine = blank_grid_engine();
+    lay(
+        &mut engine,
+        (2..=12).map(|x| point(x, 3)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+    lay(
+        &mut engine,
+        (0..=7).rev().map(|y| point(6, y)).collect(),
+        RoadPreset::DualBidirectional,
+    );
+
+    assert_dual_crossing_contract(&engine.snapshot(), point(6, 2));
+    assert_access_path(
+        &engine,
+        point(5, 3),
+        point(8, 3),
+        Heading::East,
+        Heading::East,
+    );
+    assert_access_path(
+        &engine,
+        point(6, 1),
+        point(6, 4),
+        Heading::South,
+        Heading::South,
+    );
+}
+
+#[test]
+fn adjacent_empty_collinear_extension_satisfies_the_full_crossing_contract() {
     let mut engine = blank_grid_engine();
     lay(
         &mut engine,
@@ -266,12 +433,11 @@ fn recapture_dual_crossing_built_across_colinear_continuation_seam_has_all_four_
     );
 
     let snapshot = engine.snapshot();
-    assert_two_by_two_footprint(&snapshot, point(6, 2));
-    assert_complete_two_by_two(&snapshot);
+    assert_dual_crossing_contract(&snapshot, point(6, 2));
 }
 
 #[test]
-fn recapture_dual_t_junction_at_vertical_endpoint_has_all_four_internal_edges() {
+fn dual_t_junction_at_vertical_endpoint_satisfies_the_t_junction_contract() {
     let mut engine = blank_grid_engine();
     lay(
         &mut engine,
@@ -285,8 +451,7 @@ fn recapture_dual_t_junction_at_vertical_endpoint_has_all_four_internal_edges() 
     );
 
     let snapshot = engine.snapshot();
-    assert_two_by_two_footprint(&snapshot, point(6, 2));
-    assert_complete_two_by_two(&snapshot);
+    assert_dual_t_junction_contract(&snapshot, point(6, 2));
 }
 
 #[test]
@@ -312,7 +477,7 @@ fn recapture_dual_crossings_with_adjacent_refreshes_have_all_four_internal_edges
 
     let snapshot = engine.snapshot();
     assert_two_by_two_footprint(&snapshot, point(6, 2));
-    assert_complete_two_by_two(&snapshot);
+    assert_complete_two_by_two_at(&snapshot, point(6, 2));
     assert_two_by_two_footprint(&snapshot, point(6, 5));
     assert_complete_two_by_two_at(&snapshot, point(6, 5));
 }
