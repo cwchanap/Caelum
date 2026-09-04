@@ -16,7 +16,7 @@ mod city_store;
 ///
 /// The epoch is the cross-reload ownership authority: every
 /// `game_begin_runtime` call increments it and returns the new value plus the
-/// authoritative snapshot from the same critical section. A webview reload
+/// current presentation update from the same critical section. A webview reload
 /// destroys the JavaScript runtime while this Rust process and its engine stay
 /// alive, so stale mutating commands are rejected before they can commit.
 struct OwnedEngine {
@@ -56,7 +56,7 @@ enum TauriCommandError<E> {
     Host(String),
 }
 
-/// Gameplay rejections travel inside `DispatchResult`; this covers only host
+/// Gameplay rejections travel inside `GameplayUpdateResult`; this covers only host
 /// failures and stale runtime epochs.
 #[derive(Serialize)]
 #[serde(untagged)]

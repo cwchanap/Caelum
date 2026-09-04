@@ -247,16 +247,27 @@ describe("demand overlay", () => {
   it("saturates repeated demand instead of overdrawing", () => {
     const state = {
       ...createTestGameState(),
-      demandFlow: [{ point: { x: 9, y: 4 }, count: 3 }],
+      demandFlow: [
+        { point: { x: 9, y: 4 }, count: 3 },
+        { point: { x: 2, y: 7 }, count: 1 },
+      ],
     };
     const ui = { ...createUiState(), activeOverlay: "demand" as const };
 
     const { ctx, fills } = trafficCtx();
     renderOverlays(ctx, state, ui);
 
-    // 1 - (1 - 0.24)^3: repeated destinations darken smoothly toward 1.
-    expect(fills).toHaveLength(1);
-    expect(fills[0].globalAlpha).toBeCloseTo(1 - Math.pow(0.76, 3));
+    // The fill color is fully opaque; the only source of transparency is
+    // globalAlpha = 1 - (1 - 0.24)^count, so one row renders at 0.24 and
+    // repeats compound via canvas alpha instead of double-compositing a
+    // translucent fillStyle.
+    expect(fills).toHaveLength(2);
+    for (const fill of fills) {
+      expect(fill.fillStyle).toBe("rgb(216, 180, 95)");
+    }
+    const alphaByX = new Map(fills.map((fill) => [fill.x, fill.globalAlpha]));
+    expect(alphaByX.get(2 * tileSize)).toBeCloseTo(0.24);
+    expect(alphaByX.get(9 * tileSize)).toBeCloseTo(1 - Math.pow(0.76, 3));
   });
 });
 

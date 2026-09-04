@@ -122,11 +122,11 @@ Mutating commands, save capture, and restore carry the private epoch and retain
 stale-epoch checks; pure snapshot, sandbox-build, and preview operations do not
 become public lifecycle APIs.
 
-The public `DispatchResult` contains only the snapshot, `applied`, and optional
-rejection. Private apply data still supports mutation commits, route lifecycle
-work, and cost/footprint handling, while route and road preview responses retain
-the impact data consumed by the UI. Dispatch impact was removed from the public
-host wire, not from the internal mutation or preview paths.
+The public result is `GameplayUpdateResult { update: PresentationUpdate,
+applied, rejection }`. Private apply data still supports mutation commits, route
+lifecycle work, and cost/footprint handling, while route and road preview
+responses retain the impact data consumed by the UI. Dispatch impact was removed
+from the public host wire, not from the internal mutation or preview paths.
 
 Persistence responses use a JSON-compatible serializer only on the persistence
 path. Ordinary `presentation`, `dispatch`, and `tick` traffic crosses the

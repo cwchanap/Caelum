@@ -49,7 +49,6 @@ fn low_budget_single_road_rejects_standard_and_applies_creative_without_deductio
 
     assert!(creative_result.applied, "{creative_result:?}");
     assert_eq!(creative.snapshot().budget, creative_before.budget);
-    assert_eq!(creative.snapshot(), creative.snapshot());
 }
 
 #[test]
