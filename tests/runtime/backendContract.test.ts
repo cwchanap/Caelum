@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import type { GameBackend } from "../../src/runtime/backend";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -10,28 +11,31 @@ describe("GameBackend contract", () => {
   it("contains only the nine runtime-consumed methods", () => {
     const backend: GameBackend = {
       ...previewBackendStubs(),
-      snapshot: async () => createRustSnapshot(),
+      presentation: async () => createPresentationUpdate(createRustSnapshot()),
       dispatch: async () => ({
-        snapshot: createRustSnapshot(),
+        update: createPresentationUpdate(createRustSnapshot(), false),
         applied: false,
         rejection: null,
       }),
       tick: async () => ({
-        snapshot: createRustSnapshot(),
+        update: createPresentationUpdate(createRustSnapshot(), false),
         applied: false,
         rejection: null,
       }),
-      reset: async () => ({ ok: true, snapshot: createRustSnapshot() }),
+      reset: async () => ({
+        ok: true,
+        update: createPresentationUpdate(createRustSnapshot()),
+      }),
     };
 
     expect(Object.keys(backend).sort()).toEqual([
       "buildSandboxSnapshot",
       "dispatch",
+      "presentation",
       "previewRoadMutation",
       "previewRoute",
       "reset",
       "restoreSnapshot",
-      "snapshot",
       "snapshotForSave",
       "tick",
     ]);

@@ -9,7 +9,7 @@ import { citySaveStoreError } from "../persistence/citySaveStore";
 import type { EconomyPreset, SandboxTemplateId } from "../domain/types";
 import type {
   GameBackend,
-  RustGameSnapshot,
+  PresentationUpdate,
   SandboxCreationError,
   SandboxHostError,
   SnapshotError,
@@ -66,7 +66,7 @@ export interface WorkingSaveRuntimeHost {
   now: () => string;
   createCityId: () => string;
   awaitGameplayIdle: () => Promise<void>;
-  installRestoredGameplay: (snapshot: RustGameSnapshot) => void;
+  installRestoredGameplay: (update: PresentationUpdate) => void;
   publish: () => void;
   isRuntimeDead: () => boolean;
 }
@@ -164,7 +164,7 @@ export function createWorkingSaveRuntime(
 
   const restoreAndInstall = async (
     snapshot: unknown,
-  ): Promise<WorkingSaveResult<RustGameSnapshot>> => {
+  ): Promise<WorkingSaveResult<void>> => {
     if (!isLive()) {
       return { ok: false, error: { kind: "unavailable" } };
     }
@@ -187,7 +187,7 @@ export function createWorkingSaveRuntime(
     }
 
     try {
-      host.installRestoredGameplay(restored.snapshot);
+      host.installRestoredGameplay(restored.update);
     } catch (thrown: unknown) {
       if (isLive()) {
         activeCity = null;
@@ -196,7 +196,7 @@ export function createWorkingSaveRuntime(
       return { ok: false, error: backendHostFailure(thrown) };
     }
 
-    return { ok: true, value: restored.snapshot };
+    return { ok: true, value: undefined };
   };
 
   const listCities = async (): Promise<WorkingSaveResult<CitySummary[]>> => {

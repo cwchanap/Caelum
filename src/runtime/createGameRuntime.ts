@@ -37,11 +37,11 @@ import {
   type UiState,
 } from "../ui/uiState";
 import type {
-  DispatchResult,
   GameBackend,
   GameIntent,
+  GameplayUpdateResult,
+  PresentationUpdate,
   RoadMutation,
-  RustGameSnapshot,
   SandboxResetError,
 } from "./backend";
 import type { CitySaveStore, CitySummary } from "../persistence/citySaveStore";
@@ -49,7 +49,7 @@ import { createCanvasHost } from "./createCanvasHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
-import { normalizeRustSnapshot } from "./snapshotView";
+import { applyPresentationUpdate } from "./presentationView";
 import { createWorkingSaveRuntime } from "./workingSaveRuntime";
 import type {
   RuntimeController,
@@ -215,7 +215,7 @@ export async function createGameRuntime(
   const now = options.now ?? (() => new Date().toISOString());
   const createCityId =
     options.createCityId ?? (() => globalThis.crypto.randomUUID());
-  let state = normalizeRustSnapshot(await backend.snapshot());
+  let state = applyPresentationUpdate(null, await backend.presentation());
   let ui = createUiState();
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
@@ -357,19 +357,13 @@ export async function createGameRuntime(
   };
 
   const commitDispatchResult = (
-    result: DispatchResult,
+    result: GameplayUpdateResult,
     nextUi: UiState,
-    preserveStateOnNoop = false,
   ): RuntimeSnapshot => {
     if (result.applied) {
       workingSave.markDirty();
     }
-    return commit(
-      preserveStateOnNoop && !result.applied
-        ? state
-        : normalizeRustSnapshot(result.snapshot),
-      nextUi,
-    );
+    return commit(applyPresentationUpdate(state, result.update), nextUi);
   };
 
   const clearHoverPreviewTimer = (): void => {
@@ -499,13 +493,13 @@ export async function createGameRuntime(
       // `rejection` untouched — it persists until the player dismisses it or a
       // subsequent dispatch sets a new one.
       if (!result.applied) {
-        // The engine returned the same snapshot (paused, speed 0, zero-delta).
-        // Skip normalizeRustSnapshot so commit's reference-equality check
-        // short-circuits — otherwise the fresh spread object forces a publish
-        // to every subscriber on every animation frame even when nothing moved.
+        // The engine returned an unchanged frame (paused, speed 0, zero-delta).
+        // Skip applyPresentationUpdate so commit's reference-equality check
+        // short-circuits — otherwise the fresh object forces a publish to every
+        // subscriber on every animation frame even when nothing moved.
         return commit(state, ui);
       }
-      return commitDispatchResult(result, ui, true);
+      return commitDispatchResult(result, ui);
     });
 
   const requestRoutePreview = (draft: RouteDraft): void => {
@@ -1074,18 +1068,20 @@ export async function createGameRuntime(
     activeRoadMutation = null;
   };
 
-  const installRestoredGameplay = (rawSnapshot: RustGameSnapshot): void => {
+  const installRestoredGameplay = (update: PresentationUpdate): void => {
     clearHoverPreviewTimer();
     previewRuntimeEpoch += 1;
     previewCoordinator.invalidateRoute();
+    previewCoordinator.invalidateRoadMutation();
     invalidateRoadPreview();
     activeRouteSaveTokens.clear();
     nextRouteDraftInstanceId = 1;
-    state = normalizeRustSnapshot(rawSnapshot);
+    state = applyPresentationUpdate(null, update);
     ui = createUiState();
     backendError = null;
     rejection = null;
     sandboxResetError = null;
+    activeRoadMutation = null;
   };
 
   const workingSave = createWorkingSaveRuntime({
@@ -1238,11 +1234,11 @@ export async function createGameRuntime(
           sandboxResetError = result.error;
           return publish();
         }
-        const snapshot = result.snapshot;
+        const update = result.update;
         sandboxResetError = null;
         backendError = null;
         rejection = null;
-        state = normalizeRustSnapshot(snapshot);
+        state = applyPresentationUpdate(null, update);
         ui = createUiState();
         workingSave.markDirty();
         return publish();

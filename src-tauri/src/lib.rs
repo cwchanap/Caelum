@@ -3,10 +3,10 @@ use std::sync::Mutex;
 use serde::Serialize;
 
 use caelum_core::{
-    check_snapshot_schema, create_sandbox_snapshot, DispatchResult, GameEngine, GameIntent,
-    GameSnapshot, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
-    RoutePreviewResponse, SandboxCreationError, SandboxCreationRequest, SandboxResetError,
-    SnapshotLoadError,
+    check_snapshot_schema, create_sandbox_snapshot, GameEngine, GameIntent, GameSnapshot,
+    GameplayUpdateResult, PresentationUpdate, RoadMutationPreviewRequest,
+    RoadMutationPreviewResponse, RoutePreviewRequest, RoutePreviewResponse, SandboxCreationError,
+    SandboxCreationRequest, SandboxResetError, SnapshotLoadError,
 };
 use tauri::State;
 
@@ -69,7 +69,7 @@ enum GameplayCommandError {
 #[serde(rename_all = "camelCase")]
 struct BeginRuntimeResponse {
     runtime_epoch: u64,
-    snapshot: GameSnapshot,
+    update: PresentationUpdate,
 }
 
 #[derive(Debug, Serialize)]
@@ -125,7 +125,7 @@ fn restore_snapshot_with(
 ) -> Result<serde_json::Value, SnapshotCommandError> {
     let snapshot = decode_snapshot(snapshot)?;
     let candidate = GameEngine::from_snapshot(snapshot).map_err(SnapshotCommandError::from)?;
-    let encoded = serde_json::to_value(candidate.snapshot())
+    let encoded = serde_json::to_value(candidate.presentation())
         .map_err(|error| SnapshotCommandError::HostFailure(error.to_string()))?;
     let mut owned = state
         .lock()
@@ -136,9 +136,9 @@ fn restore_snapshot_with(
 }
 
 #[tauri::command]
-fn game_snapshot(state: State<'_, EngineState>) -> Result<GameSnapshot, String> {
+fn game_presentation(state: State<'_, EngineState>) -> Result<PresentationUpdate, String> {
     let owned = state.lock().map_err(|error| error.to_string())?;
-    Ok(owned.engine.snapshot())
+    Ok(owned.engine.presentation())
 }
 
 #[tauri::command]
@@ -146,10 +146,10 @@ fn game_begin_runtime(state: State<'_, EngineState>) -> Result<BeginRuntimeRespo
     let mut owned = state.lock().map_err(|error| error.to_string())?;
     owned.runtime_epoch += 1;
     let epoch = owned.runtime_epoch;
-    let snapshot = owned.engine.snapshot();
+    let update = owned.engine.presentation();
     Ok(BeginRuntimeResponse {
         runtime_epoch: epoch,
-        snapshot,
+        update,
     })
 }
 
@@ -158,7 +158,7 @@ fn game_dispatch(
     state: State<'_, EngineState>,
     intent: GameIntent,
     runtime_epoch: u64,
-) -> Result<DispatchResult, GameplayCommandError> {
+) -> Result<GameplayUpdateResult, GameplayCommandError> {
     let mut owned = state
         .lock()
         .map_err(|error| GameplayCommandError::Host(error.to_string()))?;
@@ -176,7 +176,7 @@ fn game_tick(
     state: State<'_, EngineState>,
     delta_seconds: f64,
     runtime_epoch: u64,
-) -> Result<DispatchResult, GameplayCommandError> {
+) -> Result<GameplayUpdateResult, GameplayCommandError> {
     let mut owned = state
         .lock()
         .map_err(|error| GameplayCommandError::Host(error.to_string()))?;
@@ -200,7 +200,7 @@ fn game_build_sandbox_snapshot(
 fn game_reset(
     state: State<'_, EngineState>,
     runtime_epoch: u64,
-) -> Result<GameSnapshot, TauriCommandError<SandboxResetError>> {
+) -> Result<PresentationUpdate, TauriCommandError<SandboxResetError>> {
     let mut owned = state
         .lock()
         .map_err(|error| TauriCommandError::Host(error.to_string()))?;
@@ -255,7 +255,7 @@ fn game_preview_road_mutation(
 
 fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builder<R> {
     builder.invoke_handler(tauri::generate_handler![
-        game_snapshot,
+        game_presentation,
         game_begin_runtime,
         game_dispatch,
         game_tick,
@@ -405,14 +405,15 @@ mod tests {
 
         let ticked = game_tick(state.clone(), 1.0, session.runtime_epoch)
             .unwrap_or_else(|_| panic!("tick succeeds"));
-        assert!(ticked.snapshot.time > dispatched.snapshot.time);
+        assert!(ticked.update.frame.time > dispatched.update.frame.time);
 
         let saved = game_snapshot_for_save(state.clone(), session.runtime_epoch)
             .expect("save capture succeeds");
         let restored = game_restore_snapshot(state, saved.clone(), session.runtime_epoch)
             .expect("valid restore succeeds");
 
-        assert_eq!(restored, saved);
+        assert_eq!(restored["frame"]["budget"], saved["budget"]);
+        assert!(!restored["scene"].is_null());
     }
 
     #[test]

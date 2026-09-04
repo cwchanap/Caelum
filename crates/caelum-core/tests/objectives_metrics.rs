@@ -16,9 +16,9 @@ fn survival_requires_served_demand() {
     let mut engine = GameEngine::new();
     engine.dispatch(GameIntent::SetPaused { paused: false });
 
-    let result = engine.tick(1_201.0);
+    let _result = engine.tick(1_201.0);
 
-    assert_eq!(result.snapshot.metrics.state, MetricsState::Running);
+    assert_eq!(engine.snapshot().metrics.state, MetricsState::Running);
 }
 
 #[test]
@@ -153,10 +153,10 @@ fn sandbox_with_served_demand_runs_past_campaign_survival_time() {
     snapshot.metrics.completed_trips = 1;
     let mut engine = common::running_engine_from_fixture(snapshot);
 
-    let result = engine.tick(1_201.0);
+    let _result = engine.tick(1_201.0);
 
-    assert_eq!(result.snapshot.time, 1_201.0);
-    assert_eq!(result.snapshot.metrics.state, MetricsState::Running);
+    assert_eq!(engine.snapshot().time, 1_201.0);
+    assert_eq!(engine.snapshot().metrics.state, MetricsState::Running);
 }
 
 #[test]

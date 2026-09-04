@@ -1,6 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type {
-  DispatchResult,
   GameBackend,
   GameIntent,
   RustGameSnapshot,
@@ -8,6 +7,7 @@ import type {
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -50,15 +50,13 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
   });
 
   return {
-    async snapshot() {
-      return snapshot;
-    },
+    presentation: stubs.presentation,
     snapshotForSave() {
       return stubs.snapshotForSave();
     },
     async restoreSnapshot(candidate) {
       snapshot = candidate as RustGameSnapshot;
-      return { ok: true, snapshot };
+      return { ok: true, update: createPresentationUpdate(snapshot) };
     },
     buildSandboxSnapshot: stubs.buildSandboxSnapshot,
     blockNextDispatch() {
@@ -80,7 +78,7 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
         dispatchGate = null;
       }
     },
-    async dispatch(intent: GameIntent): Promise<DispatchResult> {
+    async dispatch(intent: GameIntent) {
       if (dispatchGate !== null && !dispatchStarted) {
         dispatchStarted = true;
         dispatchStartedResolve();
@@ -91,21 +89,24 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
         snapshot = { ...snapshot, budget: intent.budget };
       }
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot, snapshot !== before),
         applied: snapshot !== before,
         rejection: null,
       };
     },
-    async tick(): Promise<DispatchResult> {
+    async tick() {
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot, false),
         applied: false,
         rejection: null,
       };
     },
     async reset() {
       snapshot = createRustSnapshot();
-      return { ok: true, snapshot };
+      return {
+        ok: true as const,
+        update: createPresentationUpdate(snapshot),
+      };
     },
     previewRoute: stubs.previewRoute,
     previewRoadMutation: stubs.previewRoadMutation,

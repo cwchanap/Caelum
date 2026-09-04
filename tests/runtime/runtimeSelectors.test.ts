@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { COSTS } from "../../src/domain/catalog/transit";
 import type {
-  ActiveTrip,
   ServiceMetrics,
   LegFailureReason,
   RouteLegPath,
@@ -12,7 +11,6 @@ import {
 } from "../../src/runtime/runtimeSelectors";
 import { normalizeRoutePreviewResponse } from "../../src/runtime/backend/shared";
 import { routeFailureGuidance } from "../../src/runtime/rejectionMessages";
-import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import type { RoadMutationPreviewResponse } from "../../src/runtime/backend/types";
 import { createUiState } from "../../src/ui/uiState";
 import {
@@ -21,7 +19,6 @@ import {
   editDraft,
 } from "../../src/ui/routeDraft";
 import type { RoutePreviewResponse } from "../../src/runtime/backend/types";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
 import {
   addTestBusRoute,
   addTestBusStop,
@@ -38,41 +35,14 @@ import {
   withTracks,
 } from "../helpers/mapFixtures";
 
-// Waiting commuters live in `state.activeTrips` in the Rust-backed runtime,
-// so the occupancy selector reads `activeTrips`. Build a waiting trip.
-function waitingBusTrip(
-  id: string,
-  position: { x: number; y: number },
-  lineId: string,
-): ActiveTrip {
-  return {
-    id,
-    simId: `sim-${id}`,
-    purpose: "commuteOutbound",
-    origin: position,
-    destination: { x: 0, y: 0 },
-    position,
-    status: "waiting",
-    deadline: 9_999,
-    routePlan: {
-      estimatedSeconds: 100,
-      legs: [
-        {
-          mode: "bus",
-          from: position,
-          to: { x: 0, y: 0 },
-          lineId,
-          serviceDirection: "loop",
-          boardItineraryIndex: 0,
-          alightItineraryIndex: 0,
-        },
-      ],
-    },
-    currentLegIndex: 0,
-    patienceRemaining: 100,
-    currentLegWaitSeconds: 0,
-    privateCarTrip: null,
-  };
+// Platform occupancy is a presentation row in the Rust-backed runtime, so the
+// inspector reads `state.platformOccupancy`. Build a waiting row.
+function platformRow(platformId: string, count: number, capacity: number) {
+  return { platformId, count, capacity };
+}
+
+function buildingRow(buildingId: string, occupancy: number) {
+  return { buildingId, occupancy };
 }
 
 describe("selectShellState inspector", () => {
@@ -84,33 +54,13 @@ describe("selectShellState inspector", () => {
     };
   }
 
-  function testSim(
-    id: string,
-    home: { x: number; y: number },
-    workplace?: { x: number; y: number },
-  ) {
-    return {
-      id,
-      home,
-      position: home,
-      workerProfile: "worker" as const,
-      shiftTemplate: null,
-      workplace,
-      commuteDay: 0,
-      outboundResolvedToday: false,
-      outboundArrivedToday: false,
-      returnResolvedToday: false,
-      returnedHomeToday: false,
-    };
-  }
-
-  it("emits a residents building inspector from snapshot membership", () => {
+  it("emits a residents building inspector from presentation occupancy", () => {
     let state = createTestGameState();
     state = placeTestBuilding(state, "smallHouse", { x: 1, y: 1 }, 0);
     const building = state.buildings[0];
     state = {
       ...state,
-      sims: [testSim("sim-001", { x: 2, y: 1 })],
+      buildingOccupancy: [buildingRow(building.id, 1)],
     };
 
     const inspector = selectShellState(state, inspectAt("1,1")).inspector;
@@ -125,13 +75,13 @@ describe("selectShellState inspector", () => {
     });
   });
 
-  it("emits a jobs building inspector from snapshot membership", () => {
+  it("emits a jobs building inspector from presentation occupancy", () => {
     let state = createTestGameState();
     state = placeTestBuilding(state, "supermarket", { x: 5, y: 1 }, 0);
     const building = state.buildings[0];
     state = {
       ...state,
-      sims: [testSim("sim-001", { x: 1, y: 1 }, { x: 6, y: 2 })],
+      buildingOccupancy: [buildingRow(building.id, 1)],
     };
 
     const inspector = selectShellState(state, inspectAt("5,1")).inspector;
@@ -192,7 +142,7 @@ describe("selectShellState inspector", () => {
     ]);
   });
 
-  it("reports platform occupancy from waiting trips", () => {
+  it("reports platform occupancy from presentation rows", () => {
     let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withRoads(state, pointsOnColumn(14, 7, 8));
     state = addTestBusStop(state, { x: 14, y: 7 }, "busTerminal");
@@ -204,10 +154,14 @@ describe("selectShellState inspector", () => {
     const terminal = state.transit.stops.find((s) => s.kind === "busTerminal")!;
     const routeId = state.transit.routes[0].id;
 
-    const waiter = waitingBusTrip("c-wait", terminal.position, routeId);
+    const routedPlatform = terminal.platforms.find((platform) =>
+      platform.routeIds.includes(routeId),
+    )!;
     state = {
       ...state,
-      activeTrips: [...(state.activeTrips ?? []), waiter],
+      platformOccupancy: [
+        platformRow(routedPlatform.id, 1, routedPlatform.capacity),
+      ],
     };
 
     const ui = {
@@ -1784,39 +1738,12 @@ describe("ShellCommandState and ShellCityState", () => {
     expect(COSTS.busTerminal).toBe(12_000);
   });
 
-  it("formats Rust snapshot clock and population from sims", () => {
-    const state = normalizeRustSnapshot(
-      createRustSnapshot({
-        day: 1,
-        clockMinutes: 9 * 60 + 5,
-        sims: [
-          {
-            id: "sim-001",
-            home: { x: 1, y: 1 },
-            position: { x: 1, y: 1 },
-            workerProfile: "worker",
-            shiftTemplate: "standard",
-            workplace: { x: 8, y: 2 },
-            commuteDay: 1,
-            outboundResolvedToday: false,
-            outboundArrivedToday: false,
-            returnResolvedToday: false,
-            returnedHomeToday: false,
-          },
-          {
-            id: "sim-002",
-            home: { x: 2, y: 1 },
-            position: { x: 2, y: 1 },
-            workerProfile: "nonWorker",
-            commuteDay: 1,
-            outboundResolvedToday: false,
-            outboundArrivedToday: false,
-            returnResolvedToday: false,
-            returnedHomeToday: false,
-          },
-        ],
-      }),
-    );
+  it("formats Rust frame clock and population rows", () => {
+    const state = createTestGameState({
+      day: 1,
+      clockMinutes: 9 * 60 + 5,
+      populationCount: 2,
+    });
 
     const shell = selectShellState(state, createUiState());
 

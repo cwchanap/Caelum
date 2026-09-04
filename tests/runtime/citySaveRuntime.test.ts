@@ -8,13 +8,15 @@ import {
   createMemoryCitySaveStoreFailureControls,
 } from "../../src/persistence/memoryCitySaveStore";
 import type {
-  DispatchResult,
   GameBackend,
+  PresentationUpdate,
+  RestoreResult,
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
-import type { SnapshotResult } from "../../src/runtime/backend/persistenceContract";
+import type { SnapshotError } from "../../src/runtime/backend/persistenceContract";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -43,18 +45,24 @@ const LOADED_CITY: CitySummary = {
 };
 
 interface TestBackend extends GameBackend {
-  setRestoreOutcome(outcome: SnapshotResult | Error | null): void;
+  setRestoreOutcome(
+    outcome:
+      | { ok: true; update: PresentationUpdate }
+      | { ok: false; error: SnapshotError }
+      | Error
+      | null,
+  ): void;
 }
 
 function backend(initial = createRustSnapshot({ paused: true })): TestBackend {
   const stubs = previewBackendStubs();
   let current = initial;
-  let restoreOutcome: SnapshotResult | Error | null = null;
-  const dispatchResult = (
-    snapshot: RustGameSnapshot,
-    applied: boolean,
-  ): DispatchResult => ({
-    snapshot,
+  let restoreOutcome:
+    | Awaited<ReturnType<GameBackend["restoreSnapshot"]>>
+    | Error
+    | null = null;
+  const dispatchResult = (applied: boolean) => ({
+    update: createPresentationUpdate(current, applied),
     applied,
     rejection: null,
   });
@@ -64,31 +72,28 @@ function backend(initial = createRustSnapshot({ paused: true })): TestBackend {
     setRestoreOutcome(outcome) {
       restoreOutcome = outcome;
     },
-    async snapshot() {
-      return current;
-    },
     async dispatch(intent) {
       const before = current;
       if (intent.type === "setBudget") {
         current = { ...current, budget: intent.budget };
       }
-      return dispatchResult(current, current !== before);
+      return dispatchResult(current !== before);
     },
     async tick() {
-      return dispatchResult(current, false);
+      return dispatchResult(false);
     },
     async reset() {
       current = createRustSnapshot({ paused: true });
-      return { ok: true, snapshot: current };
+      return { ok: true, update: createPresentationUpdate(current) };
     },
     async snapshotForSave() {
       return { ok: true, snapshot: { ...current, paused: true } };
     },
-    async restoreSnapshot(snapshot) {
+    async restoreSnapshot(snapshot): Promise<RestoreResult> {
       if (restoreOutcome instanceof Error) throw restoreOutcome;
       if (restoreOutcome !== null) return restoreOutcome;
       current = snapshot as RustGameSnapshot;
-      return { ok: true, snapshot: current };
+      return { ok: true, update: createPresentationUpdate(current) };
     },
   };
 }

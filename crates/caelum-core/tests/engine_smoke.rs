@@ -200,7 +200,7 @@ fn no_op_tick_returns_unapplied_snapshot() {
 
     assert!(!result.applied);
     assert!(result.rejection.is_none());
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
 }
 
 #[test]
@@ -223,7 +223,7 @@ fn invalid_intent_returns_rejection_and_unchanged_snapshot() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     let rejection = result.rejection.expect("missing route should reject");
     assert_eq!(rejection.code, RejectionCode::RouteNotFound);
     assert_eq!(rejection.context.route_id.as_deref(), Some("missing-route"));
@@ -239,10 +239,10 @@ fn set_paused_applies_without_mutating_prior_snapshot() {
 
     assert!(result.applied);
     assert!(result.rejection.is_none());
-    assert!(!result.snapshot.paused);
+    assert!(!engine.snapshot().paused);
     // The previously published snapshot is unaffected (clone-on-read discipline).
     assert!(before.paused);
-    assert_ne!(result.snapshot, before);
+    assert_ne!(engine.snapshot(), before);
 }
 
 #[test]
@@ -255,7 +255,7 @@ fn set_speed_accepts_valid_speeds_and_persists() {
         let result = engine.dispatch(GameIntent::SetSpeed { speed });
         assert!(result.applied);
         assert!(result.rejection.is_none());
-        assert_eq!(result.snapshot.speed, speed);
+        assert_eq!(engine.snapshot().speed, speed);
     }
 }
 
@@ -268,8 +268,8 @@ fn set_speed_rejects_invalid_speed_without_changing_snapshot() {
     let result = engine.dispatch(GameIntent::SetSpeed { speed: 3 });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
-    assert_eq!(result.snapshot.speed, 2);
+    assert_eq!(engine.snapshot(), before);
+    assert_eq!(engine.snapshot().speed, 2);
     assert_eq!(
         result.rejection.map(|rejection| rejection.code),
         Some(RejectionCode::InvalidSpeed)
@@ -357,9 +357,9 @@ fn set_budget_intent_is_debug_only() {
     let result = engine.dispatch(GameIntent::SetBudget { budget: before + 1 });
     if cfg!(debug_assertions) {
         assert!(result.applied);
-        assert_eq!(result.snapshot.budget, before + 1);
+        assert_eq!(engine.snapshot().budget, before + 1);
     } else {
         assert!(!result.applied);
-        assert_eq!(result.snapshot.budget, before);
+        assert_eq!(engine.snapshot().budget, before);
     }
 }

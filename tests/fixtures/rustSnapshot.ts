@@ -3,6 +3,7 @@ import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type {
   GameBackend,
+  PresentationUpdate,
   RustGameSnapshot,
   RustTransitNetwork,
 } from "../../src/runtime/backend/types";
@@ -92,6 +93,82 @@ export function createRustSnapshot(
   };
 }
 
+/**
+ * Project a raw fixture snapshot into the presentation wire the Rust engine
+ * would emit, mirroring `caelum_core::presentation::project_update` for the
+ * fields test backends need. `includeScene=false` yields the frame-only shape
+ * of ticks and rejected/no-op dispatches.
+ */
+export function createPresentationUpdate(
+  snapshot: RustGameSnapshot,
+  includeScene = true,
+): PresentationUpdate {
+  return {
+    scene: includeScene
+      ? {
+          rules: snapshot.rules,
+          map: snapshot.map,
+          buildings: snapshot.buildings,
+          stops: snapshot.transit.stops,
+          stations: snapshot.transit.stations,
+          routes: snapshot.transit.routes.map((route) => {
+            const { serviceMetrics: _serviceMetrics, ...rest } = route;
+            return {
+              ...rest,
+              targetHeadwaySeconds: route.targetHeadwaySeconds ?? null,
+            };
+          }),
+          metroLines: snapshot.transit.metroLines.map((line) => {
+            const { serviceMetrics: _serviceMetrics, ...rest } = line;
+            return {
+              ...rest,
+              targetHeadwaySeconds: line.targetHeadwaySeconds ?? null,
+            };
+          }),
+        }
+      : null,
+    frame: {
+      time: snapshot.time,
+      day: snapshot.day,
+      clockMinutes: snapshot.clockMinutes,
+      speed: snapshot.speed,
+      paused: snapshot.paused,
+      budget: snapshot.budget,
+      metrics: {
+        lateTrips: snapshot.metrics.lateTrips,
+        unservedTrips: snapshot.metrics.unservedTrips,
+        averageWaitSeconds: snapshot.metrics.averageWaitSeconds,
+        state: snapshot.metrics.state,
+      },
+      populationCount: snapshot.sims.length,
+      buildingOccupancy: [],
+      platformOccupancy: [],
+      trafficFlow: [],
+      demandFlow: [],
+      vehicles: snapshot.transit.vehicles.map((vehicle) => {
+        const {
+          capacity: _capacity,
+          passengerIds: _passengerIds,
+          ...rest
+        } = vehicle;
+        return rest;
+      }),
+      serviceMetrics: [
+        ...snapshot.transit.routes.flatMap((route) =>
+          route.serviceMetrics
+            ? [{ lineId: route.id, metrics: route.serviceMetrics }]
+            : [],
+        ),
+        ...snapshot.transit.metroLines.flatMap((line) =>
+          line.serviceMetrics
+            ? [{ lineId: line.id, metrics: line.serviceMetrics }]
+            : [],
+        ),
+      ],
+    },
+  };
+}
+
 export function createRustSnapshotWithRoadAccess(): RustGameSnapshot {
   const snapshot = createRustSnapshot();
   snapshot.transit.stops.push({
@@ -110,6 +187,7 @@ export function createRustSnapshotWithRoadAccess(): RustGameSnapshot {
 
 export function previewBackendStubs(): Pick<
   GameBackend,
+  | "presentation"
   | "snapshotForSave"
   | "buildSandboxSnapshot"
   | "restoreSnapshot"
@@ -117,6 +195,9 @@ export function previewBackendStubs(): Pick<
   | "previewRoadMutation"
 > {
   return {
+    presentation() {
+      return Promise.resolve(createPresentationUpdate(createRustSnapshot()));
+    },
     async buildSandboxSnapshot(request) {
       const snapshot = createRustSnapshot({
         budget: request.startingCapital,
@@ -140,7 +221,7 @@ export function previewBackendStubs(): Pick<
     async restoreSnapshot(snapshot) {
       return {
         ok: true,
-        snapshot: snapshot as RustGameSnapshot,
+        update: createPresentationUpdate(snapshot as RustGameSnapshot),
       };
     },
     async previewRoute(request) {
@@ -215,7 +296,7 @@ export function persistenceBackendStubs(): {
       async tick() {
         counters.tickCalls += 1;
         return {
-          snapshot: createRustSnapshot(),
+          update: createPresentationUpdate(createRustSnapshot(), false),
           applied: false,
           rejection: null,
         };

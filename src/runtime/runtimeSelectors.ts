@@ -11,7 +11,6 @@ import type {
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
-import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { resolveNodeAtTile } from "../ui/actions";
 import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
@@ -40,9 +39,7 @@ const OVERLAY_LABELS: Record<Overlay, string> = {
   coverage: "Coverage",
   crowding: "Crowding",
   demand: "Demand",
-  lateness: "Lateness",
   traffic: "Traffic",
-  growth: "Growth",
 };
 
 const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
@@ -140,12 +137,13 @@ function buildInspector(
   );
   if (resolved !== null) {
     const node = resolved.node;
-    const occupancy = selectPlatformOccupancy(state);
 
     const platforms: ShellPlatform[] = node.platforms.map((platform) => ({
       id: platform.id,
       label: platform.label,
-      occupancy: occupancy.get(platform.id)?.count ?? 0,
+      occupancy:
+        state.platformOccupancy.find((row) => row.platformId === platform.id)
+          ?.count ?? 0,
       capacity: platform.capacity,
       routes: platform.routeIds.map((routeId) => {
         const { name, color } = routeNameAndColor(state, routeId);
@@ -190,17 +188,9 @@ function buildInspector(
     return null;
   }
 
-  const membershipPoint =
-    metricLabel === "Residents"
-      ? (sim: NonNullable<GameState["sims"]>[number]) => sim.home
-      : (sim: NonNullable<GameState["sims"]>[number]) => sim.workplace;
-  const occupancy = (state.sims ?? []).filter((sim) => {
-    const memberPoint = membershipPoint(sim);
-    return (
-      memberPoint !== undefined &&
-      includesPoint(building.occupiedTiles, memberPoint)
-    );
-  }).length;
+  const occupancy =
+    state.buildingOccupancy.find((row) => row.buildingId === building.id)
+      ?.occupancy ?? 0;
 
   return {
     kind: "building",
@@ -692,7 +682,7 @@ export function selectShellState(
       budget: formatBudget(state.budget),
       dailyOperatingCost: formatBudget(dailyOperatingCost),
       time: formatSnapshotClock(state),
-      population: `${state.sims?.length ?? 0}`,
+      population: `${state.populationCount}`,
       late: `${state.metrics.lateTrips}`,
       unserved: `${state.metrics.unservedTrips}`,
       networkSummary,
@@ -706,7 +696,7 @@ export function selectShellState(
           : "Standard Sandbox",
       template: templateLabel,
       simulation: state.paused ? "Paused" : "Running",
-      population: `${state.sims?.length ?? 0}`,
+      population: `${state.populationCount}`,
       lineCount: `${lineCount}`,
       networkSummary,
     },

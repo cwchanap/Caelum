@@ -43,10 +43,10 @@ fn new_and_reset_cache_match_the_serialized_authored_map() {
     );
 
     lay_an_extra_road(&mut engine);
-    let reset = engine.reset().unwrap();
+    engine.reset().unwrap();
     assert_eq!(
         engine.road_topology_for_test(),
-        &RoadTopology::compile(&reset.map).unwrap()
+        &RoadTopology::compile(&engine.snapshot().map).unwrap()
     );
 }
 
@@ -57,7 +57,7 @@ fn accepted_network_dispatch_commits_snapshot_and_cache_together() {
     assert!(result.applied);
     assert_eq!(
         engine.road_topology_for_test(),
-        &RoadTopology::compile(&result.snapshot.map).unwrap()
+        &RoadTopology::compile(&engine.snapshot().map).unwrap()
     );
 }
 
@@ -89,15 +89,21 @@ fn partial_stroke_commits_one_topology_for_the_applied_subset() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.snapshot.map.tile(point(2, 2)).unwrap().kind, "road");
-    assert_eq!(result.snapshot.map.tile(point(3, 2)).unwrap().kind, "road");
     assert_eq!(
-        result.snapshot.map.tile(point(4, 2)),
+        engine.snapshot().map.tile(point(2, 2)).unwrap().kind,
+        "road"
+    );
+    assert_eq!(
+        engine.snapshot().map.tile(point(3, 2)).unwrap().kind,
+        "road"
+    );
+    assert_eq!(
+        engine.snapshot().map.tile(point(4, 2)),
         before.map.tile(point(4, 2))
     );
     assert_eq!(
         engine.road_topology_for_test(),
-        &RoadTopology::compile(&result.snapshot.map).unwrap()
+        &RoadTopology::compile(&engine.snapshot().map).unwrap()
     );
 }
 

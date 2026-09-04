@@ -3,6 +3,7 @@ import type { GameBackend } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -42,27 +43,25 @@ vi.mock("../../src/runtime/previewCoordinator", () => ({
 function createBackend(): GameBackend {
   return {
     ...previewBackendStubs(),
-    async snapshot() {
-      return createRustSnapshot();
-    },
     async dispatch(_intent) {
-      const snapshot = createRustSnapshot();
       return {
-        snapshot,
+        update: createPresentationUpdate(createRustSnapshot()),
         applied: true,
         rejection: null,
       };
     },
     async tick() {
-      const snapshot = createRustSnapshot();
       return {
-        snapshot,
+        update: createPresentationUpdate(createRustSnapshot(), false),
         applied: false,
         rejection: null,
       };
     },
     async reset() {
-      return { ok: true, snapshot: createRustSnapshot() };
+      return {
+        ok: true,
+        update: createPresentationUpdate(createRustSnapshot()),
+      };
     },
   };
 }

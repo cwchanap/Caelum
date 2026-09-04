@@ -193,9 +193,9 @@ fn restored_creative_snapshot_immediately_applies_nominal_road_cost_without_dedu
     });
 
     assert!(result.applied);
-    assert_eq!(result.snapshot.budget, restored_before.budget);
+    assert_eq!(restored.snapshot().budget, restored_before.budget);
     assert_eq!(
-        result.snapshot.rules.economy_preset,
+        restored.snapshot().rules.economy_preset,
         EconomyPreset::Creative
     );
     assert_eq!(result, direct_result);

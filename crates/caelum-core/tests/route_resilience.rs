@@ -163,7 +163,7 @@ fn moving_vehicle_with_rider_fixture() -> BrokenServiceFixture {
         "fixture vehicle should apply: {assigned:?}"
     );
 
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     let path = state.transit.routes[0].legs[0]
         .current_path
         .as_ref()
@@ -588,9 +588,9 @@ fn already_broken_route_rebases_parked_bus_when_live_stop_access_is_demolished()
         broken.applied,
         "route-breaking removal should apply: {broken:?}"
     );
-    assert!(route(&broken.snapshot, "route-001").path_broken);
+    assert!(route(&engine.snapshot(), "route-001").path_broken);
     assert_eq!(
-        vehicle(&broken.snapshot, "vehicle-001").parked_position,
+        vehicle(&engine.snapshot(), "vehicle-001").parked_position,
         Some(point(2, 5).into())
     );
 
@@ -599,16 +599,16 @@ fn already_broken_route_rebases_parked_bus_when_live_stop_access_is_demolished()
         access_loss.applied,
         "old stop access removal should apply: {access_loss:?}"
     );
-    assert!(route(&access_loss.snapshot, "route-001").path_broken);
+    assert!(route(&engine.snapshot(), "route-001").path_broken);
     assert_eq!(
-        access_loss.snapshot.transit.stops[0]
+        engine.snapshot().transit.stops[0]
             .road_access
             .expect("the north access remains live")
             .road_point,
         point(2, 3)
     );
     assert_eq!(
-        vehicle(&access_loss.snapshot, "vehicle-001").parked_position,
+        vehicle(&engine.snapshot(), "vehicle-001").parked_position,
         Some(point(2, 3).into())
     );
 }
@@ -643,8 +643,8 @@ fn referenced_demolition_preserves_shared_node_and_route_identity() {
     let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 4) });
 
     assert!(removed.applied);
-    let preserved = removed
-        .snapshot
+    let snapshot = engine.snapshot();
+    let preserved = snapshot
         .transit
         .stops
         .iter()
@@ -654,8 +654,8 @@ fn referenced_demolition_preserves_shared_node_and_route_identity() {
     assert_eq!(preserved.position, point(6, 4));
     assert_eq!(preserved.platforms, original_platforms);
     assert_eq!(
-        removed
-            .snapshot
+        engine
+            .snapshot()
             .transit
             .routes
             .iter()
@@ -663,7 +663,7 @@ fn referenced_demolition_preserves_shared_node_and_route_identity() {
             .collect::<Vec<_>>(),
         vec!["route-001", "route-002"]
     );
-    assert!(removed.snapshot.transit.routes.iter().all(|route| {
+    assert!(engine.snapshot().transit.routes.iter().all(|route| {
         route.path_broken
             && route
                 .legs
@@ -688,8 +688,8 @@ fn same_kind_same_anchor_rebuild_restores_shared_node_once() {
     let restored = engine.dispatch(GameIntent::AddBusStop { point: point(6, 4) });
 
     assert!(restored.applied, "restore should apply: {restored:?}");
-    let matching: Vec<_> = restored
-        .snapshot
+    let snapshot = engine.snapshot();
+    let matching: Vec<_> = snapshot
         .transit
         .stops
         .iter()
@@ -699,8 +699,8 @@ fn same_kind_same_anchor_rebuild_restores_shared_node_once() {
     assert_eq!(matching[0].id, "stop-002");
     assert_eq!(matching[0].status, TransitNodeStatus::Present);
     assert_eq!(matching[0].platforms, original_platforms);
-    assert!(restored
-        .snapshot
+    assert!(engine
+        .snapshot()
         .transit
         .routes
         .iter()
@@ -717,7 +717,7 @@ fn unreferenced_node_deletes_instead_of_tombstoning() {
     let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 4) });
 
     assert!(removed.applied);
-    assert!(removed.snapshot.transit.stops.is_empty());
+    assert!(engine.snapshot().transit.stops.is_empty());
 }
 
 #[test]
@@ -725,21 +725,21 @@ fn removing_last_route_reference_garbage_collects_tombstone() {
     let mut engine = shared_stop_route_engine();
     engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 4) });
 
-    let first = engine.dispatch(GameIntent::DeleteRoute {
+    let _first = engine.dispatch(GameIntent::DeleteRoute {
         route_id: "route-001".to_string(),
     });
-    assert!(first
-        .snapshot
+    assert!(engine
+        .snapshot()
         .transit
         .stops
         .iter()
         .any(|stop| stop.id == "stop-002"));
 
-    let second = engine.dispatch(GameIntent::DeleteRoute {
+    let _second = engine.dispatch(GameIntent::DeleteRoute {
         route_id: "route-002".to_string(),
     });
-    assert!(second
-        .snapshot
+    assert!(engine
+        .snapshot()
         .transit
         .stops
         .iter()
@@ -826,8 +826,8 @@ fn metro_station_tombstone_rebuild_via_add_intent_restores_node_and_line() {
     let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 4) });
     assert!(removed.applied);
     assert_eq!(
-        removed
-            .snapshot
+        engine
+            .snapshot()
             .transit
             .stations
             .iter()
@@ -836,7 +836,7 @@ fn metro_station_tombstone_rebuild_via_add_intent_restores_node_and_line() {
             .status,
         TransitNodeStatus::Missing
     );
-    assert!(removed.snapshot.transit.metro_lines[0].path_broken);
+    assert!(engine.snapshot().transit.metro_lines[0].path_broken);
 
     // Top up budget for the station rebuild; Metro creation is fleet-free.
     engine.set_budget_for_test(50_000);
@@ -844,8 +844,8 @@ fn metro_station_tombstone_rebuild_via_add_intent_restores_node_and_line() {
     // Rebuild via AddMetroStation intent — the same path the e2e exercises.
     let restored = engine.dispatch(GameIntent::AddMetroStation { point: point(2, 4) });
     assert!(restored.applied, "restore should apply: {restored:?}");
-    let station = restored
-        .snapshot
+    let snapshot = engine.snapshot();
+    let station = snapshot
         .transit
         .stations
         .iter()
@@ -853,7 +853,7 @@ fn metro_station_tombstone_rebuild_via_add_intent_restores_node_and_line() {
         .expect("station-001 restored");
     assert_eq!(station.status, TransitNodeStatus::Present);
     assert_eq!(station.platforms, original_platforms);
-    assert!(!restored.snapshot.transit.metro_lines[0].path_broken);
+    assert!(!engine.snapshot().transit.metro_lines[0].path_broken);
 }
 
 #[test]
@@ -893,7 +893,7 @@ fn shuttle_parking_prefers_visit_matching_previous_leg_direction() {
 
     // Place the vehicle on the return leg (itinerary index 4 = return
     // direction) approaching the interior stop (stop-002 at (6,4)).
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     let route_ref = &state.transit.routes[0];
     // Find the return leg that arrives at stop-002.
     let return_leg_index = route_ref
@@ -958,8 +958,8 @@ fn missing_shuttle_terminal_stays_missing_without_a_turnaround_diagnosis() {
         "terminal removal should apply: {removed:?}"
     );
     assert_eq!(
-        removed
-            .snapshot
+        engine
+            .snapshot()
             .transit
             .stops
             .iter()
@@ -968,7 +968,8 @@ fn missing_shuttle_terminal_stays_missing_without_a_turnaround_diagnosis() {
             .status,
         TransitNodeStatus::Missing
     );
-    let route = route(&removed.snapshot, "route-001");
+    let snapshot = engine.snapshot();
+    let route = route(&snapshot, "route-001");
     let missing_terminal = route
         .legs
         .iter()

@@ -2,19 +2,19 @@ import init, { WasmGameEngine } from "../../generated/caelum_wasm/caelum_wasm";
 import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 import { runRestoreOperation, runSnapshotOperation } from "./persistence";
 import {
-  normalizeDispatchResult,
+  normalizeUpdateResult,
   normalizeRoadMutationPreviewResponse,
   normalizeRoutePreviewResponse,
 } from "./shared";
 import type {
-  DispatchResult,
   GameBackend,
   GameIntent,
+  GameplayUpdateResult,
+  PresentationUpdate,
   RoadMutationPreviewRequest,
   RoadMutationPreviewResponse,
   RoutePreviewRequest,
   RoutePreviewResponse,
-  RustGameSnapshot,
   SandboxCreationRequest,
 } from "./types";
 
@@ -54,8 +54,8 @@ export async function createWasmBackend(): Promise<GameBackend> {
   const engine = new WasmGameEngine();
 
   return {
-    async snapshot() {
-      return engine.snapshot() as RustGameSnapshot;
+    presentation() {
+      return Promise.resolve(engine.presentation() as PresentationUpdate);
     },
     snapshotForSave() {
       return runSnapshotOperation(() => engine.snapshot_for_save());
@@ -75,17 +75,19 @@ export async function createWasmBackend(): Promise<GameBackend> {
       }
     },
     async dispatch(intent: GameIntent) {
-      return normalizeDispatchResult(engine.dispatch(intent) as DispatchResult);
+      return normalizeUpdateResult(
+        engine.dispatch(intent) as GameplayUpdateResult,
+      );
     },
     async tick(deltaSeconds: number) {
-      return normalizeDispatchResult(
-        engine.tick(deltaSeconds) as DispatchResult,
+      return normalizeUpdateResult(
+        engine.tick(deltaSeconds) as GameplayUpdateResult,
       );
     },
     async reset() {
       try {
-        const snapshot = engine.reset() as RustGameSnapshot;
-        return { ok: true, snapshot } as const;
+        const update = engine.reset() as PresentationUpdate;
+        return { ok: true, update } as const;
       } catch (error: unknown) {
         if (isSandboxResetError(error)) {
           return { ok: false, error } as const;

@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import { runtimeSnapshot } from "./helpers";
 
 interface StoredCityRecord {
@@ -66,7 +67,7 @@ test("creates a default city through real WASM and IndexedDB", async ({
   expect(stored).not.toBeNull();
   expect(stored!).toMatchObject({ city: { id: cityId, name: cityName } });
   expect(stored!.snapshot.budget).toBe(after.state.budget);
-  expect(stored!.snapshot.schemaVersion).toBe(after.state.schemaVersion);
+  expect(stored!.snapshot.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
 });
 
 test("creates Small Town through the real WASM New City flow", async ({
@@ -82,14 +83,21 @@ test("creates Small Town through the real WASM New City flow", async ({
 
   const snapshot = await runtimeSnapshot(page);
   expect(snapshot.state.rules.sandbox.templateId).toBe("smallTown");
-  expect(snapshot.state.scenario.name).toBe("Small Town");
   expect(snapshot.state.paused).toBe(true);
   expect(snapshot.state.buildings).toHaveLength(4);
-  expect(snapshot.state.sims).toEqual([]);
-  expect(snapshot.state.activeTrips).toEqual([]);
+  expect(snapshot.state.populationCount).toBe(0);
   expect(snapshot.state.transit.stops).toEqual([]);
   expect(snapshot.state.transit.stations).toEqual([]);
   expect(snapshot.state.transit.routes).toEqual([]);
   expect(snapshot.state.transit.metroLines).toEqual([]);
   expect(snapshot.state.transit.vehicles).toEqual([]);
+
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  const topbar = page.getByTestId("topbar");
+  await expect(topbar).toBeVisible();
+  await expect(topbar.getByText("$120,000")).toBeVisible();
+  const populationReadout = topbar.locator(".readout", {
+    hasText: "Population",
+  });
+  await expect(populationReadout.getByText("0")).toBeVisible();
 });

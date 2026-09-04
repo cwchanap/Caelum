@@ -1,5 +1,5 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
-import { isPresentTransitNode } from "../runtime/snapshotView";
+import { isPresentTransitNode } from "../runtime/presentationView";
 import {
   applyRouteNodeClick,
   cancelDraftRoute,

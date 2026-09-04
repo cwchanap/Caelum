@@ -322,11 +322,11 @@ fn add_bus_stop_uses_empty_anchor_and_adjacent_road_access() {
     let result = engine.dispatch(GameIntent::AddBusStop { point: point(4, 4) });
 
     assert!(result.applied, "{result:?}");
-    let stop = &result.snapshot.transit.stops[0];
+    let stop = &engine.snapshot().transit.stops[0];
     assert_eq!(stop.position, point(4, 4));
     assert_eq!(stop.road_access.unwrap().road_point, point(4, 5));
     assert_eq!(
-        result.snapshot.map.tile(stop.position).unwrap().kind,
+        engine.snapshot().map.tile(stop.position).unwrap().kind,
         "empty"
     );
 }
@@ -361,7 +361,7 @@ fn bus_terminal_derives_access_from_a_far_edge_of_its_footprint() {
     });
 
     assert!(result.applied, "{result:?}");
-    let terminal = &result.snapshot.transit.stops[0];
+    let terminal = &engine.snapshot().transit.stops[0];
     assert_eq!(terminal.position, point(2, 4));
     assert_eq!(terminal.road_access.unwrap().road_point, point(3, 6));
 }
@@ -379,7 +379,7 @@ fn bus_terminal_restore_with_new_rotation_derives_fresh_access() {
     });
     assert!(placed.applied, "{placed:?}");
     assert_eq!(
-        placed.snapshot.transit.stops[0]
+        engine.snapshot().transit.stops[0]
             .road_access
             .unwrap()
             .road_point,
@@ -396,9 +396,9 @@ fn bus_terminal_restore_with_new_rotation_derives_fresh_access() {
     });
     assert!(route.applied, "{route:?}");
 
-    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 4) });
+    let _removed = engine.dispatch(GameIntent::RemoveAtTile { point: point(2, 4) });
     assert_eq!(
-        removed.snapshot.transit.stops[0].status,
+        engine.snapshot().transit.stops[0].status,
         TransitNodeStatus::Missing
     );
     for x in 2..=10 {
@@ -412,8 +412,8 @@ fn bus_terminal_restore_with_new_rotation_derives_fresh_access() {
     });
 
     assert!(restored.applied, "{restored:?}");
-    let terminal = restored
-        .snapshot
+    let snapshot = engine.snapshot();
+    let terminal = snapshot
         .transit
         .stops
         .iter()
@@ -442,7 +442,7 @@ fn bus_terminal_access_re_derived_when_replacement_road_touches_non_origin_footp
         rotation: 0,
     });
     assert!(placed.applied, "{placed:?}");
-    let terminal = &placed.snapshot.transit.stops[0];
+    let terminal = &engine.snapshot().transit.stops[0];
     assert_eq!(terminal.position, point(2, 4));
     let original_road_point = terminal.road_access.unwrap().road_point;
     assert_eq!(original_road_point, point(3, 6));
@@ -508,7 +508,7 @@ fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
     });
     assert!(placed.applied, "{placed:?}");
     assert_eq!(
-        placed.snapshot.transit.routes[0].legs[0].status,
+        engine.snapshot().transit.routes[0].legs[0].status,
         RouteLegStatus::Connected
     );
 
@@ -516,7 +516,7 @@ fn placement_and_removal_use_normal_reroute_break_and_repair_lifecycle() {
         point: (6, 5).into(),
     });
     assert!(removed.applied, "{removed:?}");
-    let broken = &removed.snapshot.transit.routes[0];
+    let broken = &engine.snapshot().transit.routes[0];
     assert_eq!(broken.legs[0].status, RouteLegStatus::NetworkDisconnected);
     assert!(broken.legs[0].last_valid_path.is_some());
 
@@ -724,13 +724,13 @@ fn adds_bus_stop_on_empty_roadside_anchor_and_charges_budget() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.snapshot.transit.stops.len(), 1);
-    let stop = &result.snapshot.transit.stops[0];
+    assert_eq!(engine.snapshot().transit.stops.len(), 1);
+    let stop = &engine.snapshot().transit.stops[0];
     assert_eq!(stop.id, "stop-001");
     assert_eq!(stop.kind, BusStopKind::BusStop);
     assert_eq!(stop.position, point(4, 3));
     assert_eq!(stop.platforms[0].capacity, 50);
-    assert_eq!(result.snapshot.budget, 117_800);
+    assert_eq!(engine.snapshot().budget, 117_800);
 }
 
 #[test]
@@ -774,8 +774,8 @@ fn duplicate_stop_route_is_rejected_atomically() {
         result.rejection.expect("duplicate rejection").code,
         RejectionCode::DuplicateRouteNodes
     );
-    assert!(result.snapshot.transit.routes.is_empty());
-    assert!(!result.snapshot.transit.stops[0].platforms[0]
+    assert!(engine.snapshot().transit.routes.is_empty());
+    assert!(!engine.snapshot().transit.stops[0].platforms[0]
         .route_ids
         .contains(&"route-001".to_string()));
 }
@@ -806,39 +806,39 @@ fn disconnected_metro_creation_is_rejected_atomically() {
         line.rejection.expect("disconnected rejection").code,
         RejectionCode::DisconnectedLeg
     );
-    assert!(line.snapshot.transit.metro_lines.is_empty());
-    assert!(line.snapshot.transit.vehicles.is_empty());
+    assert!(engine.snapshot().transit.metro_lines.is_empty());
+    assert!(engine.snapshot().transit.vehicles.is_empty());
 }
 
 #[test]
 fn route_mutators_apply_to_bus_and_delete_route_scrubs_vehicle_and_platforms() {
     let mut engine = two_stop_bus_engine();
 
-    let renamed = engine.dispatch(GameIntent::RenameRoute {
+    let _renamed = engine.dispatch(GameIntent::RenameRoute {
         route_id: "route-001".to_string(),
         name: "Airport Express".to_string(),
     });
-    assert_eq!(renamed.snapshot.transit.routes[0].name, "Airport Express");
+    assert_eq!(engine.snapshot().transit.routes[0].name, "Airport Express");
 
-    let recolored = engine.dispatch(GameIntent::RecolorRoute {
+    let _recolored = engine.dispatch(GameIntent::RecolorRoute {
         route_id: "route-001".to_string(),
         color: "#123456".to_string(),
     });
-    assert_eq!(recolored.snapshot.transit.routes[0].color, "#123456");
+    assert_eq!(engine.snapshot().transit.routes[0].color, "#123456");
 
-    let inactive = engine.dispatch(GameIntent::SetRouteActive {
+    let _inactive = engine.dispatch(GameIntent::SetRouteActive {
         route_id: "route-001".to_string(),
         active: false,
     });
-    assert!(!inactive.snapshot.transit.routes[0].active);
+    assert!(!engine.snapshot().transit.routes[0].active);
 
-    let deleted = engine.dispatch(GameIntent::DeleteRoute {
+    let _deleted = engine.dispatch(GameIntent::DeleteRoute {
         route_id: "route-001".to_string(),
     });
-    assert!(deleted.snapshot.transit.routes.is_empty());
-    assert!(deleted.snapshot.transit.vehicles.is_empty());
-    assert!(!deleted
-        .snapshot
+    assert!(engine.snapshot().transit.routes.is_empty());
+    assert!(engine.snapshot().transit.vehicles.is_empty());
+    assert!(!engine
+        .snapshot()
         .transit
         .stops
         .iter()
@@ -880,19 +880,22 @@ fn terminal_routes_spread_to_least_loaded_platforms_and_can_be_reassigned() {
     let route_1_revision = snapshot.transit.routes[0].revision;
     let route_2_revision = snapshot.transit.routes[1].revision;
 
-    let moved = engine.dispatch(GameIntent::AssignRouteToPlatform {
+    let _moved = engine.dispatch(GameIntent::AssignRouteToPlatform {
         node_id: "stop-001".to_string(),
         route_id: "route-001".to_string(),
         platform_id: "stop-001-p2".to_string(),
     });
-    let terminal = &moved.snapshot.transit.stops[0];
+    let terminal = &engine.snapshot().transit.stops[0];
     assert!(terminal.platforms[0].route_ids.is_empty());
     assert_eq!(terminal.platforms[2].route_ids, vec!["route-001"]);
     assert_eq!(
-        moved.snapshot.transit.routes[0].revision,
+        engine.snapshot().transit.routes[0].revision,
         route_1_revision + 1
     );
-    assert_eq!(moved.snapshot.transit.routes[1].revision, route_2_revision);
+    assert_eq!(
+        engine.snapshot().transit.routes[1].revision,
+        route_2_revision
+    );
 }
 
 #[test]
@@ -914,11 +917,11 @@ fn bus_stop_building_rebuild_restores_stable_node_and_route() {
     });
     let original_platforms = engine.snapshot().transit.stops[0].platforms.clone();
 
-    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+    let _removed = engine.dispatch(GameIntent::RemoveAtTile {
         point: (2, 4).into(),
     });
     assert_eq!(
-        removed.snapshot.transit.stops[0].status,
+        engine.snapshot().transit.stops[0].status,
         TransitNodeStatus::Missing
     );
 
@@ -929,21 +932,21 @@ fn bus_stop_building_rebuild_restores_stable_node_and_route() {
     });
 
     assert!(restored.applied, "restore should apply: {restored:?}");
-    assert_eq!(restored.snapshot.transit.stops.len(), 2);
-    assert_eq!(restored.snapshot.transit.stops[0].id, "stop-001");
+    assert_eq!(engine.snapshot().transit.stops.len(), 2);
+    assert_eq!(engine.snapshot().transit.stops[0].id, "stop-001");
     assert_eq!(
-        restored.snapshot.transit.stops[0].status,
+        engine.snapshot().transit.stops[0].status,
         TransitNodeStatus::Present
     );
     assert_eq!(
-        restored.snapshot.transit.stops[0].platforms,
+        engine.snapshot().transit.stops[0].platforms,
         original_platforms
     );
     assert_eq!(
-        restored.snapshot.buildings[0].transit_node_id.as_deref(),
+        engine.snapshot().buildings[0].transit_node_id.as_deref(),
         Some("stop-001")
     );
-    assert!(!restored.snapshot.transit.routes[0].path_broken);
+    assert!(!engine.snapshot().transit.routes[0].path_broken);
 }
 
 #[test]
@@ -964,12 +967,12 @@ fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
         waypoint_ids: ids(&["stop-001", "stop-002"]),
     });
 
-    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+    let _removed = engine.dispatch(GameIntent::RemoveAtTile {
         point: (4, 5).into(),
     });
 
-    let terminal = removed
-        .snapshot
+    let snapshot = engine.snapshot();
+    let terminal = snapshot
         .transit
         .stops
         .iter()
@@ -977,7 +980,7 @@ fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
         .expect("referenced terminal tombstone remains");
     assert_eq!(terminal.position, (2, 4).into());
     assert_eq!(terminal.status, TransitNodeStatus::Missing);
-    assert!(removed.snapshot.buildings.is_empty());
+    assert!(engine.snapshot().buildings.is_empty());
 
     let obstruction = engine.dispatch(GameIntent::LayTrack {
         point: (2, 4).into(),
@@ -993,7 +996,7 @@ fn terminal_demolition_uses_canonical_origin_and_obstruction_blocks_restore() {
         Some(&RejectionCode::BlockedFootprint)
     );
     assert_eq!(
-        rejected.snapshot.transit.stops[0].status,
+        engine.snapshot().transit.stops[0].status,
         TransitNodeStatus::Missing
     );
 }
@@ -1027,8 +1030,8 @@ fn bus_terminal_rebuild_restores_stable_node_and_route() {
     });
 
     assert!(restored.applied, "restore should apply: {restored:?}");
-    let terminal = restored
-        .snapshot
+    let snapshot = engine.snapshot();
+    let terminal = snapshot
         .transit
         .stops
         .iter()
@@ -1037,7 +1040,7 @@ fn bus_terminal_rebuild_restores_stable_node_and_route() {
     assert_eq!(terminal.kind, BusStopKind::BusTerminal);
     assert_eq!(terminal.status, TransitNodeStatus::Present);
     assert_eq!(terminal.platforms, original_platforms);
-    assert!(!restored.snapshot.transit.routes[0].path_broken);
+    assert!(!engine.snapshot().transit.routes[0].path_broken);
 }
 
 #[test]
@@ -1058,11 +1061,11 @@ fn metro_station_building_rebuild_restores_stable_node_and_line() {
     });
     let original_platforms = engine.snapshot().transit.stations[0].platforms.clone();
 
-    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+    let _removed = engine.dispatch(GameIntent::RemoveAtTile {
         point: (2, 4).into(),
     });
     assert_eq!(
-        removed.snapshot.transit.stations[0].status,
+        engine.snapshot().transit.stations[0].status,
         TransitNodeStatus::Missing
     );
     engine.set_budget_for_test(25_000);
@@ -1074,16 +1077,16 @@ fn metro_station_building_rebuild_restores_stable_node_and_line() {
     });
 
     assert!(restored.applied, "restore should apply: {restored:?}");
-    assert_eq!(restored.snapshot.transit.stations[0].id, "station-001");
+    assert_eq!(engine.snapshot().transit.stations[0].id, "station-001");
     assert_eq!(
-        restored.snapshot.transit.stations[0].status,
+        engine.snapshot().transit.stations[0].status,
         TransitNodeStatus::Present
     );
     assert_eq!(
-        restored.snapshot.transit.stations[0].platforms,
+        engine.snapshot().transit.stations[0].platforms,
         original_platforms
     );
-    assert!(!restored.snapshot.transit.metro_lines[0].path_broken);
+    assert!(!engine.snapshot().transit.metro_lines[0].path_broken);
 }
 
 #[test]
@@ -1103,12 +1106,12 @@ fn cycling_road_direction_breaks_and_restores_route() {
     });
     assert!(!engine.snapshot().transit.routes[0].path_broken);
 
-    let broken = engine.dispatch(GameIntent::CycleRoadDirection {
+    let _broken = engine.dispatch(GameIntent::CycleRoadDirection {
         point: (4, 5).into(),
     });
     assert_eq!(
-        broken
-            .snapshot
+        engine
+            .snapshot()
             .map
             .tiles
             .iter()
@@ -1118,7 +1121,7 @@ fn cycling_road_direction_breaks_and_restores_route() {
             .map(|h| h.as_str()),
         Some("north")
     );
-    assert!(broken.snapshot.transit.routes[0].path_broken);
+    assert!(engine.snapshot().transit.routes[0].path_broken);
 
     for _ in 0..4 {
         engine.dispatch(GameIntent::CycleRoadDirection {
@@ -1148,9 +1151,9 @@ fn lay_road_line_one_way_sets_axis_direction_and_charges_new_tiles() {
 
     assert!(result.applied);
     assert_eq!(result.rejection, None);
-    assert_eq!(result.snapshot.budget, 120_000 - 3 * 100);
-    let directions: Vec<Option<&str>> = result
-        .snapshot
+    assert_eq!(engine.snapshot().budget, 120_000 - 3 * 100);
+    let directions: Vec<Option<&str>> = engine
+        .snapshot()
         .map
         .tiles
         .iter()
@@ -1174,18 +1177,18 @@ fn lay_road_line_dual_bidirectional_rejects_existing_reverse_lane_contact_atomic
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
     );
     assert_eq!(engine.snapshot().budget, before.budget);
     assert_eq!(
-        result.snapshot.map.tile((1, 0).into()),
+        engine.snapshot().map.tile((1, 0).into()),
         before.map.tile((1, 0).into())
     );
     assert_eq!(
-        result.snapshot.map.tile((1, 1).into()).unwrap().kind,
+        engine.snapshot().map.tile((1, 1).into()).unwrap().kind,
         "empty"
     );
 }
@@ -1197,20 +1200,16 @@ fn lay_road_line_dual_bidirectional_reverse_lane_is_drag_order_invariant() {
     // canonical-direction fix, a westward drag offset the reverse lane to the
     // opposite side (south) of an eastward drag (north), so extending a
     // corridor with an opposite-direction drag flipped the carriageway mid-line.
-    let east = {
-        let mut engine = GameEngine::new();
-        engine.dispatch(GameIntent::LayRoadLine {
-            points: vec![(1, 5).into(), (2, 5).into(), (3, 5).into()],
-            preset: RoadPreset::DualBidirectional,
-        })
-    };
-    let west = {
-        let mut engine = GameEngine::new();
-        engine.dispatch(GameIntent::LayRoadLine {
-            points: vec![(3, 5).into(), (2, 5).into(), (1, 5).into()],
-            preset: RoadPreset::DualBidirectional,
-        })
-    };
+    let mut east = GameEngine::new();
+    east.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 5).into(), (2, 5).into(), (3, 5).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+    let mut west = GameEngine::new();
+    west.dispatch(GameIntent::LayRoadLine {
+        points: vec![(3, 5).into(), (2, 5).into(), (1, 5).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
 
     let one_way_at = |snap: &caelum_core::GameSnapshot, x: i32, y: i32| {
         snap.map
@@ -1224,29 +1223,29 @@ fn lay_road_line_dual_bidirectional_reverse_lane_is_drag_order_invariant() {
     // east) carry the same directions in both drag orders.
     for x in 1..=3 {
         assert_eq!(
-            one_way_at(&east.snapshot, x, 5).map(|h| h.as_str()),
+            one_way_at(&east.snapshot(), x, 5).map(|h| h.as_str()),
             Some("east"),
             "eastward forward lane at ({x},5)"
         );
         assert_eq!(
-            one_way_at(&west.snapshot, x, 5).map(|h| h.as_str()),
+            one_way_at(&west.snapshot(), x, 5).map(|h| h.as_str()),
             Some("east"),
             "westward drag must still place east forward lane at ({x},5)"
         );
         assert_eq!(
-            one_way_at(&east.snapshot, x, 4).map(|h| h.as_str()),
+            one_way_at(&east.snapshot(), x, 4).map(|h| h.as_str()),
             Some("west"),
             "eastward reverse lane at ({x},4)"
         );
         assert_eq!(
-            one_way_at(&west.snapshot, x, 4).map(|h| h.as_str()),
+            one_way_at(&west.snapshot(), x, 4).map(|h| h.as_str()),
             Some("west"),
             "westward drag must place the reverse lane on the SAME side (north) at ({x},4)"
         );
         // The opposite side (y=6, south) must stay empty in both cases.
         assert!(
-            one_way_at(&east.snapshot, x, 6).is_none()
-                && one_way_at(&west.snapshot, x, 6).is_none(),
+            one_way_at(&east.snapshot(), x, 6).is_none()
+                && one_way_at(&west.snapshot(), x, 6).is_none(),
             "no reverse lane should leak to the south side at ({x},6)"
         );
     }
@@ -1260,10 +1259,10 @@ fn lay_track_line_and_remove_at_tiles_skip_invalid_tiles_but_apply_valid_tiles()
     });
 
     assert!(track.applied);
-    assert_eq!(track.snapshot.budget, 120_000 - 2 * 500);
+    assert_eq!(engine.snapshot().budget, 120_000 - 2 * 500);
     assert!(
-        track
-            .snapshot
+        engine
+            .snapshot()
             .map
             .tiles
             .iter()
@@ -1278,8 +1277,8 @@ fn lay_track_line_and_remove_at_tiles_skip_invalid_tiles_but_apply_valid_tiles()
 
     assert!(removed.applied);
     assert!(
-        !removed
-            .snapshot
+        !engine
+            .snapshot()
             .map
             .tiles
             .iter()
@@ -1299,11 +1298,11 @@ fn bulldozes_track_before_road_on_crossing_tile() {
         point: (4, 4).into(),
     });
 
-    let first = engine.dispatch(GameIntent::RemoveAtTile {
+    let _first = engine.dispatch(GameIntent::RemoveAtTile {
         point: (4, 4).into(),
     });
-    let tile = first
-        .snapshot
+    let snapshot = engine.snapshot();
+    let tile = snapshot
         .map
         .tiles
         .iter()
@@ -1312,11 +1311,11 @@ fn bulldozes_track_before_road_on_crossing_tile() {
     assert_eq!(tile.kind, "road");
     assert!(!tile.has_track);
 
-    let second = engine.dispatch(GameIntent::RemoveAtTile {
+    let _second = engine.dispatch(GameIntent::RemoveAtTile {
         point: (4, 4).into(),
     });
-    let tile = second
-        .snapshot
+    let snapshot = engine.snapshot();
+    let tile = snapshot
         .map
         .tiles
         .iter()
@@ -1333,7 +1332,7 @@ fn vehicles_advance_by_duration_over_path_steps() {
     let ticked = engine.tick(1.0);
 
     assert!(ticked.applied);
-    let progress = ticked.snapshot.transit.vehicles[0].step_progress;
+    let progress = engine.snapshot().transit.vehicles[0].step_progress;
     assert!((progress - 0.8).abs() < 0.000_001);
 }
 
@@ -1381,7 +1380,7 @@ fn vehicle_time_through_roundabout_matches_authoritative_path_duration() {
     });
     assert!(placed.applied, "{placed:?}");
 
-    let state = placed.snapshot;
+    let state = engine.snapshot();
     let route = &state.transit.routes[0];
     let expected = route.legs[0]
         .current_path
@@ -1423,15 +1422,15 @@ fn one_tick_consumes_multiple_short_steps_without_losing_remainder() {
 fn removing_road_marks_route_broken_and_relaying_restores_it() {
     let mut engine = two_stop_bus_engine();
 
-    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+    let _removed = engine.dispatch(GameIntent::RemoveAtTile {
         point: (6, 5).into(),
     });
-    assert!(removed.snapshot.transit.routes[0].path_broken);
+    assert!(engine.snapshot().transit.routes[0].path_broken);
 
-    let restored = engine.dispatch(GameIntent::LayRoad {
+    let _restored = engine.dispatch(GameIntent::LayRoad {
         point: (6, 5).into(),
     });
-    assert!(!restored.snapshot.transit.routes[0].path_broken);
+    assert!(!engine.snapshot().transit.routes[0].path_broken);
 }
 
 #[test]
@@ -1839,11 +1838,11 @@ fn connected_metro_line_creation_is_fleet_free() {
     });
 
     assert!(created.applied);
-    assert!(created.snapshot.transit.metro_lines[0]
+    assert!(engine.snapshot().transit.metro_lines[0]
         .vehicle_ids
         .is_empty());
-    assert!(created.snapshot.transit.vehicles.is_empty());
-    assert_eq!(created.snapshot.budget, before.budget);
+    assert!(engine.snapshot().transit.vehicles.is_empty());
+    assert_eq!(engine.snapshot().budget, before.budget);
 }
 
 #[test]
@@ -2042,7 +2041,7 @@ fn lay_road_line_one_way_rejects_idempotent_existing_road_contact_atomically() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -2064,18 +2063,18 @@ fn lay_road_line_dual_bidirectional_rejects_occupied_reverse_lane_atomically() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
     );
     assert_eq!(engine.snapshot().budget, before.budget);
     assert_eq!(
-        result.snapshot.map.tile((2, 0).into()),
+        engine.snapshot().map.tile((2, 0).into()),
         before.map.tile((2, 0).into())
     );
     assert_eq!(
-        result.snapshot.map.tile((1, 1).into()).unwrap().kind,
+        engine.snapshot().map.tile((1, 1).into()).unwrap().kind,
         "empty"
     );
 }
@@ -2085,20 +2084,16 @@ fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
     // A vertical dual-bidirectional line must canonicalize the forward lane
     // to "south" (and the reverse to "north") regardless of drag order,
     // mirroring the horizontal canonical-east behavior.
-    let south = {
-        let mut engine = GameEngine::new();
-        engine.dispatch(GameIntent::LayRoadLine {
-            points: vec![(5, 1).into(), (5, 2).into(), (5, 3).into()],
-            preset: RoadPreset::DualBidirectional,
-        })
-    };
-    let north = {
-        let mut engine = GameEngine::new();
-        engine.dispatch(GameIntent::LayRoadLine {
-            points: vec![(5, 3).into(), (5, 2).into(), (5, 1).into()],
-            preset: RoadPreset::DualBidirectional,
-        })
-    };
+    let mut south = GameEngine::new();
+    south.dispatch(GameIntent::LayRoadLine {
+        points: vec![(5, 1).into(), (5, 2).into(), (5, 3).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
+    let mut north = GameEngine::new();
+    north.dispatch(GameIntent::LayRoadLine {
+        points: vec![(5, 3).into(), (5, 2).into(), (5, 1).into()],
+        preset: RoadPreset::DualBidirectional,
+    });
 
     let one_way_at = |snap: &caelum_core::GameSnapshot, x: i32, y: i32| {
         snap.map
@@ -2111,30 +2106,30 @@ fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
     for y in 1..=3 {
         // Forward lane (x=5) is south in both drag orders.
         assert_eq!(
-            one_way_at(&south.snapshot, 5, y).map(|h| h.as_str()),
+            one_way_at(&south.snapshot(), 5, y).map(|h| h.as_str()),
             Some("south"),
             "southward forward lane at (5,{y})"
         );
         assert_eq!(
-            one_way_at(&north.snapshot, 5, y).map(|h| h.as_str()),
+            one_way_at(&north.snapshot(), 5, y).map(|h| h.as_str()),
             Some("south"),
             "northward drag must still place south forward lane at (5,{y})"
         );
         // Reverse lane (x=6, east/right of south) is north in both drag orders.
         assert_eq!(
-            one_way_at(&south.snapshot, 6, y).map(|h| h.as_str()),
+            one_way_at(&south.snapshot(), 6, y).map(|h| h.as_str()),
             Some("north"),
             "southward reverse lane at (6,{y})"
         );
         assert_eq!(
-            one_way_at(&north.snapshot, 6, y).map(|h| h.as_str()),
+            one_way_at(&north.snapshot(), 6, y).map(|h| h.as_str()),
             Some("north"),
             "northward drag must place the reverse lane on the SAME side at (6,{y})"
         );
         // The opposite side (x=4, west) must stay empty.
         assert!(
-            one_way_at(&south.snapshot, 4, y).is_none()
-                && one_way_at(&north.snapshot, 4, y).is_none(),
+            one_way_at(&south.snapshot(), 4, y).is_none()
+                && one_way_at(&north.snapshot(), 4, y).is_none(),
             "no reverse lane should leak to the west side at (4,{y})"
         );
     }
@@ -2144,18 +2139,15 @@ fn lay_road_line_dual_bidirectional_vertical_uses_canonical_south() {
 fn lay_road_line_one_way_vertical_uses_drag_direction() {
     // OneWay follows the drag direction (not canonical), so a southward drag
     // sets "south" and a northward drag sets "north".
-    let south = {
-        let mut engine = GameEngine::new();
-        engine.dispatch(GameIntent::LayRoadLine {
-            points: vec![(5, 1).into(), (5, 2).into(), (5, 3).into()],
-            preset: RoadPreset::OneWay,
-        })
-    };
-    assert!(south.applied);
+    let mut south = GameEngine::new();
+    south.dispatch(GameIntent::LayRoadLine {
+        points: vec![(5, 1).into(), (5, 2).into(), (5, 3).into()],
+        preset: RoadPreset::OneWay,
+    });
     for y in 1..=3 {
         assert_eq!(
             south
-                .snapshot
+                .snapshot()
                 .map
                 .tiles
                 .iter()
@@ -2166,18 +2158,15 @@ fn lay_road_line_one_way_vertical_uses_drag_direction() {
         );
     }
 
-    let north = {
-        let mut engine = GameEngine::new();
-        engine.dispatch(GameIntent::LayRoadLine {
-            points: vec![(5, 3).into(), (5, 2).into(), (5, 1).into()],
-            preset: RoadPreset::OneWay,
-        })
-    };
-    assert!(north.applied);
+    let mut north = GameEngine::new();
+    north.dispatch(GameIntent::LayRoadLine {
+        points: vec![(5, 3).into(), (5, 2).into(), (5, 1).into()],
+        preset: RoadPreset::OneWay,
+    });
     for y in 1..=3 {
         assert_eq!(
             north
-                .snapshot
+                .snapshot()
                 .map
                 .tiles
                 .iter()
@@ -2262,7 +2251,7 @@ fn lay_road_line_single_point_is_a_no_op_unchanged() {
         preset: RoadPreset::TwoWay,
     });
     assert!(result.applied);
-    assert_eq!(result.snapshot.budget, 120_000 - 100);
+    assert_eq!(engine.snapshot().budget, 120_000 - 100);
 }
 
 #[test]
@@ -2304,8 +2293,8 @@ fn lay_track_line_all_invalid_tiles_is_unchanged() {
         Some(&RejectionCode::InvalidTrackStroke)
     );
     assert_eq!(standard_result.rejection, creative_result.rejection);
-    assert_eq!(standard_result.snapshot, standard_before);
-    assert_eq!(creative_result.snapshot, creative_before);
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
     assert_eq!(standard.road_topology_for_test(), &standard_topology);
     assert_eq!(creative.road_topology_for_test(), &creative_topology);
 }
@@ -2350,7 +2339,7 @@ fn lay_road_line_one_way_rejects_repaint_and_single_tile_direction_cycle_remains
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -2407,9 +2396,12 @@ fn road_stroke_applies_valid_tiles_and_deducts_budget() {
     });
 
     assert!(result.applied);
-    assert_eq!(result.snapshot.map.tile(changed).unwrap().kind, "road");
-    assert_eq!(result.snapshot.map.tile(skipped), before.map.tile(skipped));
-    assert_eq!(result.snapshot.budget, before.budget - 100);
+    assert_eq!(engine.snapshot().map.tile(changed).unwrap().kind, "road");
+    assert_eq!(
+        engine.snapshot().map.tile(skipped),
+        before.map.tile(skipped)
+    );
+    assert_eq!(engine.snapshot().budget, before.budget - 100);
 }
 
 #[test]
@@ -2424,9 +2416,12 @@ fn track_stroke_applies_valid_tiles_and_deducts_budget() {
     });
 
     assert!(result.applied);
-    assert!(result.snapshot.map.tile(changed).unwrap().has_track);
-    assert_eq!(result.snapshot.map.tile(skipped), before.map.tile(skipped));
-    assert_eq!(result.snapshot.budget, before.budget - 500);
+    assert!(engine.snapshot().map.tile(changed).unwrap().has_track);
+    assert_eq!(
+        engine.snapshot().map.tile(skipped),
+        before.map.tile(skipped)
+    );
+    assert_eq!(engine.snapshot().budget, before.budget - 500);
 }
 
 fn policy_engine(snapshot: GameSnapshot, preset: EconomyPreset, budget: i32) -> GameEngine {
@@ -2452,44 +2447,18 @@ fn track_stroke_charges_each_unique_new_tile_and_creative_ignores_budget() {
 
     assert!(standard_result.applied, "{standard_result:?}");
     assert_eq!(
-        standard_result.snapshot.budget,
+        standard.snapshot().budget,
         standard_before.budget - transit::TRACK_COST
     );
-    assert!(
-        standard_result
-            .snapshot
-            .map
-            .tile(point(2, 2))
-            .unwrap()
-            .has_track
-    );
+    assert!(standard.snapshot().map.tile(point(2, 2)).unwrap().has_track);
     assert_eq!(
-        standard_result
-            .snapshot
-            .map
-            .tile(point(3, 2))
-            .unwrap()
-            .has_track,
+        standard.snapshot().map.tile(point(3, 2)).unwrap().has_track,
         standard_before.map.tile(point(3, 2)).unwrap().has_track
     );
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
-    assert!(
-        creative_result
-            .snapshot
-            .map
-            .tile(point(2, 2))
-            .unwrap()
-            .has_track
-    );
-    assert!(
-        creative_result
-            .snapshot
-            .map
-            .tile(point(3, 2))
-            .unwrap()
-            .has_track
-    );
+    assert_eq!(creative.snapshot().budget, creative_before.budget);
+    assert!(creative.snapshot().map.tile(point(2, 2)).unwrap().has_track);
+    assert!(creative.snapshot().map.tile(point(3, 2)).unwrap().has_track);
 }
 
 #[test]
@@ -2515,8 +2484,8 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
         creative_track_result.rejection.unwrap().code,
         RejectionCode::OutOfBounds
     );
-    assert_eq!(standard_track_result.snapshot, standard_track_before);
-    assert_eq!(creative_track_result.snapshot, creative_track_before);
+    assert_eq!(standard_track.snapshot(), standard_track_before);
+    assert_eq!(creative_track.snapshot(), creative_track_before);
     assert_eq!(
         standard_track.road_topology_for_test(),
         &standard_track_topology
@@ -2544,8 +2513,8 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
         creative_stop_result.rejection.unwrap().code,
         RejectionCode::NoRoadAccess
     );
-    assert_eq!(standard_stop_result.snapshot, standard_stop_before);
-    assert_eq!(creative_stop_result.snapshot, creative_stop_before);
+    assert_eq!(standard_stop.snapshot(), standard_stop_before);
+    assert_eq!(creative_stop.snapshot(), creative_stop_before);
     assert_eq!(
         standard_stop.road_topology_for_test(),
         &standard_stop_topology
@@ -2573,8 +2542,8 @@ fn construction_cost_checks_precede_track_and_node_geometry_in_standard_only() {
         creative_station_result.rejection.unwrap().code,
         RejectionCode::TrackRequired
     );
-    assert_eq!(standard_station_result.snapshot, standard_station_before);
-    assert_eq!(creative_station_result.snapshot, creative_station_before);
+    assert_eq!(standard_station.snapshot(), standard_station_before);
+    assert_eq!(creative_station.snapshot(), creative_station_before);
     assert_eq!(
         standard_station.road_topology_for_test(),
         &standard_station_topology
@@ -2596,13 +2565,13 @@ fn track_stroke_continues_after_invalid_points_against_the_running_candidate() {
 
     assert!(result.applied, "{result:?}");
     assert_eq!(
-        result.snapshot.budget,
+        standard.snapshot().budget,
         before.budget - 2 * transit::TRACK_COST
     );
-    assert!(result.snapshot.map.tile(point(2, 2)).unwrap().has_track);
-    assert!(result.snapshot.map.tile(point(3, 2)).unwrap().has_track);
+    assert!(standard.snapshot().map.tile(point(2, 2)).unwrap().has_track);
+    assert!(standard.snapshot().map.tile(point(3, 2)).unwrap().has_track);
     assert_eq!(
-        result.snapshot.map.tile(point(999, 999)),
+        standard.snapshot().map.tile(point(999, 999)),
         before.map.tile(point(999, 999))
     );
 }
@@ -2626,11 +2595,11 @@ fn area_stroke_applies_only_empty_tiles() {
 
     assert!(result.applied);
     assert_eq!(
-        result.snapshot.map.tile(changed).unwrap().area.as_deref(),
+        engine.snapshot().map.tile(changed).unwrap().area.as_deref(),
         Some("residential")
     );
     for point in skipped {
-        assert_eq!(result.snapshot.map.tile(point), before.map.tile(point));
+        assert_eq!(engine.snapshot().map.tile(point), before.map.tile(point));
     }
 }
 
@@ -2678,9 +2647,12 @@ fn removal_stroke_applies_partial_result_and_breaks_affected_route() {
     });
 
     assert!(result.applied);
-    assert_ne!(result.snapshot.map.tile(changed).unwrap().kind, "road");
-    assert_eq!(result.snapshot.map.tile(skipped), before.map.tile(skipped));
-    assert!(result.snapshot.transit.routes[0].path_broken);
+    assert_ne!(engine.snapshot().map.tile(changed).unwrap().kind, "road");
+    assert_eq!(
+        engine.snapshot().map.tile(skipped),
+        before.map.tile(skipped)
+    );
+    assert!(engine.snapshot().transit.routes[0].path_broken);
 }
 
 #[test]
@@ -2735,8 +2707,8 @@ fn lay_road_line_one_way_duplicate_points_yield_no_direction() {
         preset: RoadPreset::OneWay,
     });
     assert!(result.applied);
-    let tile = result
-        .snapshot
+    let snapshot = engine.snapshot();
+    let tile = snapshot
         .map
         .tiles
         .iter()
@@ -2745,7 +2717,7 @@ fn lay_road_line_one_way_duplicate_points_yield_no_direction() {
     assert_eq!(tile.kind, "road");
     assert_eq!(tile.one_way, None);
     // Only one tile placed (the second point is a no-op match).
-    assert_eq!(result.snapshot.budget, 120_000 - 100);
+    assert_eq!(engine.snapshot().budget, 120_000 - 100);
 }
 
 #[test]
@@ -2759,8 +2731,8 @@ fn lay_road_line_dual_bidirectional_duplicate_points_yield_no_reverse_lane() {
         preset: RoadPreset::DualBidirectional,
     });
     assert!(result.applied);
-    let forward = result
-        .snapshot
+    let snapshot = engine.snapshot();
+    let forward = snapshot
         .map
         .tiles
         .iter()
@@ -2770,14 +2742,14 @@ fn lay_road_line_dual_bidirectional_duplicate_points_yield_no_reverse_lane() {
     assert_eq!(forward.one_way, None);
     // canonical_line_direction returned None, so no reverse carriageway was
     // computed: the reverse-lane offset tile (1,0) is not a road.
-    let reverse_offset = result
-        .snapshot
+    let snapshot = engine.snapshot();
+    let reverse_offset = snapshot
         .map
         .tiles
         .iter()
         .find(|tile| tile.x == 1 && tile.y == 0);
     assert!(reverse_offset.is_none_or(|tile| tile.kind != "road"));
-    assert_eq!(result.snapshot.budget, 120_000 - 100);
+    assert_eq!(engine.snapshot().budget, 120_000 - 100);
 }
 
 /// `AddMetroStation` must reject placement on a structure-owned tile (e.g.,

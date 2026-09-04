@@ -21,10 +21,8 @@ import type {
   TransitPath,
   Vehicle,
 } from "../../src/domain/types";
-import { normalizeRustSnapshot } from "../../src/runtime/snapshotView";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
 
 function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
@@ -260,11 +258,43 @@ function routeLegs(
 export function createTestGameState(
   overrides: Partial<GameState> = {},
 ): GameState {
-  const base = normalizeRustSnapshot(
-    createRustSnapshot({
-      map: createEmptyMap(),
-    }),
-  );
+  const base: GameState = {
+    rules: {
+      gameMode: "sandbox",
+      economyPreset: "standard",
+      sandbox: {
+        templateId: "crossroads",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+      },
+    },
+    time: 0,
+    day: 0,
+    clockMinutes: 0,
+    speed: 1,
+    paused: true,
+    budget: 120_000,
+    map: createEmptyMap(),
+    buildings: [],
+    transit: {
+      stops: [],
+      stations: [],
+      routes: [],
+      metroLines: [],
+      vehicles: [],
+    },
+    metrics: {
+      lateTrips: 0,
+      unservedTrips: 0,
+      averageWaitSeconds: 0,
+      state: "running",
+    },
+    populationCount: 0,
+    buildingOccupancy: [],
+    platformOccupancy: [],
+    trafficFlow: [],
+    demandFlow: [],
+  };
   return {
     ...base,
     ...overrides,
@@ -276,10 +306,6 @@ export function createTestGameState(
       overrides.transit === undefined
         ? base.transit
         : { ...base.transit, ...overrides.transit },
-    scenario:
-      overrides.scenario === undefined
-        ? base.scenario
-        : { ...base.scenario, ...overrides.scenario },
   };
 }
 
@@ -419,8 +445,6 @@ export function assignTestVehicle(
     id,
     mode,
     lineId,
-    capacity: mode === "bus" ? 30 : 120,
-    passengerIds: [],
     itineraryIndex: 0,
     pathStepIndex: 0,
     stepProgress: 0,

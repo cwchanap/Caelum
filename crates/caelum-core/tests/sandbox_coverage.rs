@@ -80,8 +80,7 @@ fn reset_replays_validated_rules_for_all_templates_without_entering_error_mapper
             point: Point { x: 3, y: 3 },
         });
 
-        let reset = engine.reset().unwrap();
-        assert_eq!(reset, expected);
+        engine.reset().unwrap();
         assert_eq!(engine.snapshot(), expected);
     }
 }

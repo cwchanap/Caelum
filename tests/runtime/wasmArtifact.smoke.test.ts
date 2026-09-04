@@ -5,7 +5,7 @@ import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 describe("WASM artifact smoke test", () => {
   it("loads the generated artifact and preserves state on invalid restore", async () => {
     const backend = await createWasmBackend();
-    const original = await backend.snapshot();
+    const original = await backend.presentation();
     const saved = await backend.snapshotForSave();
 
     expect(saved.ok).toBe(true);
@@ -21,6 +21,6 @@ describe("WASM artifact smoke test", () => {
       ok: false,
       error: { code: "invalidSnapshot" },
     });
-    expect(await backend.snapshot()).toEqual(original);
+    expect(await backend.presentation()).toEqual(original);
   });
 });

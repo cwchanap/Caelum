@@ -133,7 +133,7 @@ fn bus_commute_fixture(detour: bool) -> (GameSnapshot, RoadTopology, Point, Poin
         "fixture vehicle should apply: {assigned:?}"
     );
 
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     state.buildings = vec![
         commute_building("home", home),
         commute_building("work", workplace),

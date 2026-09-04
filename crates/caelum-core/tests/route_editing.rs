@@ -144,8 +144,8 @@ fn create_route(
     });
     assert!(created.applied, "fixture create should apply: {created:?}");
     if mode == TransitMode::Bus {
-        let route_id = created
-            .snapshot
+        let route_id = engine
+            .snapshot()
             .transit
             .routes
             .last()
@@ -578,17 +578,20 @@ fn create_bus_route_is_fleet_free_and_budget_free() {
     });
 
     assert!(result.applied, "{result:?}");
-    assert_eq!(result.snapshot.transit.routes.len(), 1);
-    assert!(result.snapshot.transit.vehicles.is_empty());
-    assert_eq!(result.snapshot.budget, before.budget);
-    let created = route(&result.snapshot, "route-001");
+    assert_eq!(engine.snapshot().transit.routes.len(), 1);
+    assert!(engine.snapshot().transit.vehicles.is_empty());
+    assert_eq!(engine.snapshot().budget, before.budget);
+    let snapshot = engine.snapshot();
+    let created = route(&snapshot, "route-001");
     assert!(created.vehicle_ids.is_empty());
     assert_eq!(created.pattern, ServicePattern::Loop);
     assert!(!created.path_broken);
-    assert!(created
-        .stop_ids
-        .iter()
-        .all(|id| route_platform_id(&result.snapshot, id, &created.id).is_some()));
+    assert!(created.stop_ids.iter().all(|id| route_platform_id(
+        &engine.snapshot(),
+        id,
+        &created.id
+    )
+    .is_some()));
 }
 
 #[test]
@@ -602,8 +605,8 @@ fn bus_route_creation_does_not_require_vehicle_budget() {
     });
 
     assert!(result.applied, "{result:?}");
-    assert_eq!(result.snapshot.budget, before.budget);
-    assert!(result.snapshot.transit.routes[0].vehicle_ids.is_empty());
+    assert_eq!(engine.snapshot().budget, before.budget);
+    assert!(engine.snapshot().transit.routes[0].vehicle_ids.is_empty());
 }
 
 #[test]
@@ -639,7 +642,7 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
         line_id: "route-001".into(),
     });
     assert!(deployed.applied, "{deployed:?}");
-    let before = route(&deployed.snapshot, "route-001").clone();
+    let before = route(&engine.snapshot(), "route-001").clone();
 
     let edited = engine.dispatch(GameIntent::UpdateRoute {
         route_id: "route-001".into(),
@@ -648,11 +651,12 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
         waypoint_ids: ids(&["stop-001", "stop-005", "stop-002", "stop-003", "stop-004"]),
     });
     assert!(edited.applied, "{edited:?}");
-    let after = route(&edited.snapshot, "route-001");
+    let snapshot = engine.snapshot();
+    let after = route(&snapshot, "route-001");
     assert_eq!(after.vehicle_ids, before.vehicle_ids);
     assert_eq!(
-        edited
-            .snapshot
+        engine
+            .snapshot()
             .transit
             .vehicles
             .iter()
@@ -663,8 +667,8 @@ fn deployed_fleet_survives_structural_route_edit_without_respace_or_resize() {
     assert_eq!(after.target_headway_seconds, Some(60));
     // UpdateRoute rebases surviving vehicles: itinerary_index is recomputed
     // while path_step_index and step_progress reset to their parked values.
-    for vehicle in edited
-        .snapshot
+    for vehicle in engine
+        .snapshot()
         .transit
         .vehicles
         .iter()
@@ -874,7 +878,7 @@ fn stale_update_rejects_without_mutating_latest_metadata() {
         rejection.context.actual_revision,
         Some(route(&before, "route-001").revision)
     );
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
 }
 
 #[test]
@@ -948,7 +952,8 @@ fn update_preserves_latest_name_color_active_and_vehicle_set() {
         waypoint_ids: ids(&["stop-001", "stop-003"]),
     });
     assert!(result.applied, "{result:?}");
-    let updated = route(&result.snapshot, &captured.id);
+    let snapshot = engine.snapshot();
+    let updated = route(&snapshot, &captured.id);
     assert_eq!(updated.name, "Latest name");
     assert_eq!(updated.color, "#123456");
     assert!(!updated.active);
@@ -975,7 +980,8 @@ fn identical_update_leaves_structural_revision_unchanged() {
     // True structural no-ops leave the snapshot equal (no vehicle rebase), so
     // the engine may report applied=false while still accepting the save.
     assert!(result.rejection.is_none(), "{result:?}");
-    let updated = route(&result.snapshot, &before.id);
+    let snapshot = engine.snapshot();
+    let updated = route(&snapshot, &before.id);
     assert_eq!(updated.revision, before.revision);
     assert_eq!(updated.stop_ids, before.stop_ids);
     assert_eq!(updated.pattern, before.pattern);
@@ -1015,15 +1021,15 @@ fn update_applies_platform_delta_and_one_revision_increment() {
         waypoint_ids: ids(&["station-001", "station-003"]),
     });
     assert!(result.applied, "{result:?}");
-    let updated = &result.snapshot.transit.metro_lines[0];
+    let updated = &engine.snapshot().transit.metro_lines[0];
     assert_eq!(updated.revision, old_revision + 1);
     assert_eq!(
-        route_platform_id(&result.snapshot, "station-001", "metro-001").as_deref(),
+        route_platform_id(&engine.snapshot(), "station-001", "metro-001").as_deref(),
         Some("station-001-p0")
     );
-    assert!(route_platform_id(&result.snapshot, "station-002", "metro-001").is_none());
+    assert!(route_platform_id(&engine.snapshot(), "station-002", "metro-001").is_none());
     assert_eq!(
-        route_platform_id(&result.snapshot, "station-003", "metro-001").as_deref(),
+        route_platform_id(&engine.snapshot(), "station-003", "metro-001").as_deref(),
         Some("station-003-p1")
     );
 }
@@ -1099,7 +1105,7 @@ fn exhausted_platform_revision_rejects_without_reassigning_the_platform() {
     assert_eq!(rejection.code, RejectionCode::RouteRevisionExhausted);
     assert_eq!(rejection.context.route_id.as_deref(), Some("metro-001"));
     assert_eq!(rejection.context.actual_revision, Some(u32::MAX));
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(engine.snapshot(), before);
 }
 
@@ -1126,8 +1132,8 @@ fn only_identical_preexisting_broken_directional_legs_may_carry_forward() {
     // Identical Save is not a DisconnectedLeg rejection; pure structural no-op
     // may report applied=false and leaves the revision alone.
     assert!(unchanged.rejection.is_none(), "{unchanged:?}");
-    assert_eq!(route(&unchanged.snapshot, "route-001").revision, revision);
-    assert!(route(&unchanged.snapshot, "route-001").path_broken);
+    assert_eq!(route(&engine.snapshot(), "route-001").revision, revision);
+    assert!(route(&engine.snapshot(), "route-001").path_broken);
 
     for (pattern, waypoint_ids) in [
         (ServicePattern::Loop, ids(&["stop-003", "stop-002"])),

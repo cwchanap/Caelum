@@ -46,7 +46,7 @@ fn shuttle_state() -> caelum_core::model::GameSnapshot {
         assigned.applied,
         "fixture vehicle should apply: {assigned:?}"
     );
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     let topology = RoadTopology::compile(&state.map).unwrap();
     let stop_ids = state.transit.routes[0].stop_ids.clone();
     state.transit.routes[0].pattern = ServicePattern::Shuttle;
@@ -93,7 +93,7 @@ fn metro_shuttle_state() -> caelum_core::model::GameSnapshot {
         assigned.applied,
         "metro fixture vehicle should apply: {assigned:?}"
     );
-    assigned.snapshot
+    engine.snapshot()
 }
 
 fn transit_plan(

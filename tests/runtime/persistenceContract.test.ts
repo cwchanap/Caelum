@@ -5,7 +5,10 @@ import {
   runSnapshotOperation,
   snapshotError,
 } from "../../src/runtime/backend/persistence";
-import { createRustSnapshot } from "../fixtures/rustSnapshot";
+import {
+  createPresentationUpdate,
+  createRustSnapshot,
+} from "../fixtures/rustSnapshot";
 
 describe("snapshot persistence mapping", () => {
   it("maps a schema rejection without an operation field", async () => {
@@ -55,11 +58,12 @@ describe("snapshot persistence mapping", () => {
     ).rejects.toThrow("IPC unavailable");
   });
 
-  it("resolves a successful restore as the returned snapshot", async () => {
+  it("resolves a successful restore as the returned presentation update", async () => {
     const snapshot = createRustSnapshot();
-    await expect(runRestoreOperation(() => snapshot)).resolves.toEqual({
+    const update = createPresentationUpdate(snapshot);
+    await expect(runRestoreOperation(() => update)).resolves.toEqual({
       ok: true,
-      snapshot,
+      update,
     });
   });
 

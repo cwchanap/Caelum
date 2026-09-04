@@ -48,9 +48,9 @@ fn zone_build_and_route_sequence_has_stable_counts() {
     });
     assert!(supermarket.applied);
 
-    assert_eq!(supermarket.snapshot.buildings.len(), 2);
-    assert_eq!(supermarket.snapshot.sims.len(), 0);
-    assert_eq!(supermarket.snapshot.budget, 108_000);
+    assert_eq!(engine.snapshot().buildings.len(), 2);
+    assert_eq!(engine.snapshot().sims.len(), 0);
+    assert_eq!(engine.snapshot().budget, 108_000);
 }
 
 // --- Multi-tick golden traces ------------------------------------------------
@@ -113,7 +113,7 @@ fn full_day_commute_trace_has_stable_golden_metrics() {
     let mut engine = nearby_walker_engine();
 
     let result = engine.tick(900.0);
-    let snapshot = &result.snapshot;
+    let snapshot = &engine.snapshot();
 
     assert!(result.applied);
     assert_eq!(snapshot.day, 0);
@@ -137,11 +137,14 @@ fn large_tick_matches_stepped_tick_for_full_commute() {
     let mut large = nearby_walker_engine();
     let mut stepped = nearby_walker_engine();
 
-    let large_snapshot = large.tick(900.0).snapshot;
+    large.tick(900.0);
+    let large_snapshot = large.snapshot();
 
-    let mut stepped_snapshot = stepped.tick(0.0).snapshot;
+    stepped.tick(0.0);
+    let mut stepped_snapshot = stepped.snapshot();
     while stepped_snapshot.time < 900.0 {
-        stepped_snapshot = stepped.tick(1.0).snapshot;
+        stepped.tick(1.0);
+        stepped_snapshot = stepped.snapshot();
     }
 
     assert_eq!(
@@ -164,11 +167,11 @@ fn won_via_real_tick_pipeline() {
     let mut engine = nearby_walker_campaign_engine();
 
     // Tick past the survival threshold with real completed demand in the pipeline.
-    let result = engine.tick(clock::GAME_DAY_SECONDS + 1.0);
+    let _result = engine.tick(clock::GAME_DAY_SECONDS + 1.0);
 
-    assert_eq!(result.snapshot.metrics.state, MetricsState::Won);
-    assert_eq!(result.snapshot.metrics.loss_reason, None);
-    assert!(result.snapshot.metrics.completed_trips > 0);
+    assert_eq!(engine.snapshot().metrics.state, MetricsState::Won);
+    assert_eq!(engine.snapshot().metrics.loss_reason, None);
+    assert!(engine.snapshot().metrics.completed_trips > 0);
 }
 
 #[test]
@@ -176,7 +179,8 @@ fn commute_respawns_across_day_boundary() {
     let mut engine = nearby_walker_engine();
 
     // Run all of day 0 to completion without crossing the survival win at 1200s.
-    let mut snapshot = engine.tick(clock::GAME_DAY_SECONDS - 1.0).snapshot;
+    engine.tick(clock::GAME_DAY_SECONDS - 1.0);
+    let mut snapshot = engine.snapshot();
     assert_eq!(snapshot.day, 0);
     assert_eq!(snapshot.metrics.state, MetricsState::Running);
     assert!(snapshot.active_trips.is_empty());
@@ -247,7 +251,7 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
         "metro fixture vehicle should apply: {assigned:?}"
     );
 
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
 
     // Sanity: the densest boundary really is the 0.625s vehicle stop arrival, so
@@ -307,7 +311,7 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
             assigned.applied,
             "metro fixture vehicle should apply: {assigned:?}"
         );
-        let mut state = assigned.snapshot;
+        let mut state = engine.snapshot();
         state.paused = false;
         state
     };
@@ -373,7 +377,7 @@ fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
         targeted.applied,
         "perimeter target should apply: {targeted:?}"
     );
-    let required = targeted.snapshot.transit.routes[0]
+    let required = engine.snapshot().transit.routes[0]
         .service_metrics
         .as_ref()
         .and_then(|metrics| metrics.required_fleet)
@@ -395,7 +399,7 @@ fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
         deployed.applied,
         "perimeter fleet should deploy: {deployed:?}"
     );
-    let mut state = deployed.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state
 }
@@ -492,7 +496,7 @@ fn deployed_metro_snapshot() -> caelum_core::GameSnapshot {
         targeted.applied,
         "serpentine target should apply: {targeted:?}"
     );
-    let required = targeted.snapshot.transit.metro_lines[0]
+    let required = engine.snapshot().transit.metro_lines[0]
         .service_metrics
         .as_ref()
         .and_then(|metrics| metrics.required_fleet)
@@ -514,7 +518,7 @@ fn deployed_metro_snapshot() -> caelum_core::GameSnapshot {
         deployed.applied,
         "serpentine fleet should deploy: {deployed:?}"
     );
-    let mut state = deployed.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state
 }
@@ -619,7 +623,7 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
     // Sanity: the route really does circulate through the roundabout — without
     // this, the golden below would silently degrade to a straight-line bus test
     // and stop pinning the new movement kinds.
-    let route = &placed.snapshot.transit.routes[0];
+    let route = &engine.snapshot().transit.routes[0];
     let path = route.legs[0]
         .current_path
         .as_ref()
@@ -631,7 +635,7 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
         "bus path must enter the roundabout"
     );
 
-    let mut state = placed.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state
 }

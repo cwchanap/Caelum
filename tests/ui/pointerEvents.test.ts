@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { samePoint, type GameMap, type Point } from "../../src/domain/types";
 import type {
-  DispatchResult,
   GameBackend,
   GameIntent,
   RustGameSnapshot,
@@ -11,6 +10,7 @@ import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/canvas";
 import { createTestGameState } from "../helpers/gameState";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -175,20 +175,17 @@ function backendSpy(): GameBackend {
 
   return {
     ...previewBackendStubs(),
-    async snapshot() {
-      return snapshot;
-    },
-    async dispatch(intent): Promise<DispatchResult> {
+    async dispatch(intent) {
       snapshot = applyIntent(snapshot, intent);
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot),
         applied: true,
         rejection: null,
       };
     },
-    async tick(): Promise<DispatchResult> {
+    async tick() {
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot, false),
         applied: false,
         rejection: null,
       };
@@ -198,7 +195,7 @@ function backendSpy(): GameBackend {
         map: initial.map,
         budget: initial.budget,
       });
-      return { ok: true, snapshot };
+      return { ok: true, update: createPresentationUpdate(snapshot) };
     },
   };
 }

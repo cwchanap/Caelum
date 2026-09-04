@@ -269,7 +269,7 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
         "bus fixture vehicle should apply: {assigned:?}"
     );
 
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     state.buildings = vec![
         commute_endpoint("home", "supermarket", home),
         commute_endpoint("work", "supermarket", workplace),
@@ -337,7 +337,7 @@ fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
         "bus fixture vehicle should apply: {assigned:?}"
     );
 
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state.sims.clear();
     let bus_path = state.transit.routes[0].legs[0]
@@ -935,11 +935,11 @@ fn stale_plan_cannot_board_a_route_with_a_disconnected_leg() {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    let assigned = engine.dispatch(GameIntent::AssignVehicle {
+    let _assigned = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
     });
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     state.transit.routes[0].path_broken = false;
     state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
     state.transit.routes[0].legs[0].current_path = None;
@@ -1196,12 +1196,12 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+    let _vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
     });
 
-    let mut state = vehicle.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
@@ -1268,12 +1268,12 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+    let _vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
     });
 
-    let mut state = vehicle.snapshot;
+    let mut state = engine.snapshot();
     let starting_budget = state.budget;
     state.paused = false;
     state.active_trips = vec![ActiveTrip {
@@ -1359,12 +1359,12 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+    let _vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
     });
 
-    let mut state = vehicle.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state.active_trips = vec![ActiveTrip {
         id: "trip-001".to_string(),
@@ -1441,12 +1441,12 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+    let _vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
     });
 
-    let mut state = vehicle.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state.transit.vehicles[0].step_progress = 0.2;
     state.active_trips = vec![ActiveTrip {
@@ -1497,12 +1497,12 @@ fn cursor_resets_progress_at_path_step_boundary() {
         pattern: ServicePattern::Loop,
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
-    let vehicle = engine.dispatch(GameIntent::AssignVehicle {
+    let _vehicle = engine.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
     });
 
-    let mut state = vehicle.snapshot;
+    let mut state = engine.snapshot();
     state.paused = false;
     state.transit.vehicles[0].step_progress = 0.6;
     state.active_trips = vec![ActiveTrip {

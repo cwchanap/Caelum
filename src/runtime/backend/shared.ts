@@ -1,6 +1,6 @@
 import type { GameplayRejection, RouteLegPath } from "../../domain/types";
 import type {
-  DispatchResult,
+  GameplayUpdateResult,
   RoadMutationPreviewResponse,
   RoutePreviewResponse,
   RustRouteLegPath,
@@ -44,20 +44,20 @@ export function normalizeRoutePreviewResponse(
   };
 }
 
-// Both the WASM and Tauri backends round-trip `DispatchResult` through a
+// Both the WASM and Tauri backends round-trip `GameplayUpdateResult` through a
 // serialization boundary (wasm-bindgen / Tauri IPC). A rejection that the Rust
 // core emits as `None` can arrive as `undefined` on the JS side; normalize it to
 // `null` so the runtime can treat `rejection` as a typed nullable value.
-export function normalizeDispatchResult(
-  result: DispatchResult,
-): DispatchResult {
+export function normalizeUpdateResult(
+  result: GameplayUpdateResult,
+): GameplayUpdateResult {
   return {
     ...result,
     rejection: normalizeGameplayRejection(result.rejection),
   };
 }
 
-// Same normalization concern as `normalizeDispatchResult` and
+// Same normalization concern as `normalizeUpdateResult` and
 // `normalizeRoutePreviewResponse`: serde-wasm-bindgen may omit a Rust `None`
 // rejection, while Tauri JSON emits `null`. Normalize to `null` so the runtime
 // can treat `rejection` as a typed nullable value.
