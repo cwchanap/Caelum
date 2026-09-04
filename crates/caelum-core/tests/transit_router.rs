@@ -76,7 +76,7 @@ fn bus_single_step_state() -> caelum_core::GameSnapshot {
         assigned.applied,
         "bus fixture vehicle should apply: {assigned:?}"
     );
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     let path = one_step_road_path((2, 5).into(), 1.25);
     state.transit.routes[0].legs[0].current_path = Some(path.clone());
     state.transit.routes[0].legs[0].last_valid_path = Some(path);
@@ -110,7 +110,7 @@ fn metro_single_step_state() -> caelum_core::GameSnapshot {
         assigned.applied,
         "metro fixture vehicle should apply: {assigned:?}"
     );
-    let mut state = assigned.snapshot;
+    let mut state = engine.snapshot();
     let path = TransitPath::Track {
         steps: vec![caelum_core::model::TrackPathStep {
             position: (2, 4).into(),
@@ -320,10 +320,10 @@ fn bus_route_vehicle_carries_commute_trip() {
         assigned.applied,
         "bus fixture vehicle should apply: {assigned:?}"
     );
-    assert!(!assigned.snapshot.transit.routes[0].path_broken);
-    assert_eq!(assigned.snapshot.transit.vehicles.len(), 1);
+    assert!(!engine.snapshot().transit.routes[0].path_broken);
+    assert_eq!(engine.snapshot().transit.vehicles.len(), 1);
 
-    let mut snapshot = assigned.snapshot;
+    let mut snapshot = engine.snapshot();
     snapshot.active_trips.push(ActiveTrip {
         id: "trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -402,7 +402,7 @@ fn removing_road_marks_route_broken() {
     });
 
     assert!(removed.applied);
-    assert!(removed.snapshot.transit.routes[0].path_broken);
+    assert!(engine.snapshot().transit.routes[0].path_broken);
 }
 
 #[test]
@@ -421,7 +421,7 @@ fn routing_ignores_a_route_with_any_disconnected_leg() {
         waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
     });
     assert!(route.applied, "{route:?}");
-    let mut state = route.snapshot;
+    let mut state = engine.snapshot();
     state.transit.routes[0].path_broken = false;
     state.transit.routes[0].legs[0].status = RouteLegStatus::NetworkDisconnected;
     state.transit.routes[0].legs[0].current_path = None;
@@ -454,7 +454,7 @@ fn shuttle_route_resolves_outbound_and_return_service_legs_on_two_way_road() {
     });
 
     assert!(created.applied, "shuttle route should apply: {created:?}");
-    let route = &created.snapshot.transit.routes[0];
+    let route = &engine.snapshot().transit.routes[0];
     let service_legs: Vec<_> = route
         .legs
         .iter()
@@ -682,7 +682,7 @@ fn terminal_turnaround_recovers_after_a_roundabout_is_placed() {
         waypoint_ids,
     });
     assert!(saved.applied, "recovered route should save: {saved:?}");
-    assert!(saved.snapshot.transit.routes[0]
+    assert!(engine.snapshot().transit.routes[0]
         .legs
         .iter()
         .all(|leg| leg.status == RouteLegStatus::Connected && leg.current_path.is_some()));

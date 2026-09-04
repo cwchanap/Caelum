@@ -7,7 +7,6 @@ import {
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import type {
-  ActiveTrip,
   Point,
   RoadStructure,
   RouteLegPath,
@@ -157,38 +156,13 @@ const stop: Stop = {
   ],
 };
 
-function waiter(): ActiveTrip {
-  return {
-    id: "c1",
-    simId: "sim-c1",
-    purpose: "commuteOutbound",
-    origin: { x: 3, y: 3 },
-    destination: { x: 9, y: 9 },
-    position: { x: 3, y: 3 },
-    status: "waiting",
-    patienceRemaining: 100,
-    deadline: 9_999,
-    routePlan: {
-      estimatedSeconds: 100,
-      legs: [
-        {
-          mode: "bus",
-          from: { x: 3, y: 3 },
-          to: { x: 9, y: 9 },
-          lineId: "route-001",
-          serviceDirection: "loop",
-          boardItineraryIndex: 0,
-          alightItineraryIndex: 0,
-        },
-      ],
-    },
-    currentLegIndex: 0,
-    currentLegWaitSeconds: 0,
-    privateCarTrip: null,
-  };
+function waitingRow(count: number, capacity = 1) {
+  return { platformId: "stop-001-p0", count, capacity };
 }
 
-function crowdingState(activeTrips: ActiveTrip[]) {
+function crowdingState(
+  rows: Array<{ platformId: string; count: number; capacity: number }>,
+) {
   return {
     ...createTestGameState(),
     transit: {
@@ -198,7 +172,7 @@ function crowdingState(activeTrips: ActiveTrip[]) {
       metroLines: [],
       vehicles: [],
     },
-    activeTrips,
+    platformOccupancy: rows,
   };
 }
 
@@ -224,7 +198,7 @@ function withBuildingAt(
 
 describe("crowding overlay", () => {
   it("fills a node tile when a platform is at capacity", () => {
-    const state = crowdingState([waiter()]);
+    const state = crowdingState([waitingRow(1)]);
     const ui = { ...createUiState(), activeOverlay: "crowding" as const };
 
     const ctx = fakeCtx();
@@ -249,40 +223,20 @@ describe("crowding overlay", () => {
   });
 });
 
-function activeTrip(
-  status: ActiveTrip["status"],
-  position: { x: number; y: number },
-  destination: { x: number; y: number },
-): ActiveTrip {
-  return {
-    id: `trip-${status}`,
-    simId: "sim-001",
-    purpose: "commuteOutbound",
-    origin: { x: 0, y: 0 },
-    destination,
-    position,
-    status,
-    deadline: 9_999,
-    routePlan: null,
-    currentLegIndex: 0,
-    patienceRemaining: 100,
-    currentLegWaitSeconds: 0,
-    privateCarTrip: null,
-  };
-}
-
-describe("Rust trip overlays", () => {
-  it("renders demand from active trip destinations when citizens are absent", () => {
+describe("demand overlay", () => {
+  it("renders each demand destination once from the Rust demand rows", () => {
     const state = {
       ...createTestGameState(),
-      activeTrips: [activeTrip("walking", { x: 2, y: 2 }, { x: 9, y: 4 })],
+      demandFlow: [{ point: { x: 9, y: 4 }, count: 3 }],
     };
     const ui = { ...createUiState(), activeOverlay: "demand" as const };
 
     const ctx = fakeCtx();
     renderOverlays(ctx, state, ui);
 
-    expect(ctx.fillRect as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+    const fillRect = ctx.fillRect as ReturnType<typeof vi.fn>;
+    expect(fillRect).toHaveBeenCalledTimes(1);
+    expect(fillRect).toHaveBeenCalledWith(
       9 * tileSize,
       4 * tileSize,
       tileSize,
@@ -290,38 +244,19 @@ describe("Rust trip overlays", () => {
     );
   });
 
-  it("renders lateness from late and unserved active trips when citizens are absent", () => {
+  it("saturates repeated demand instead of overdrawing", () => {
     const state = {
       ...createTestGameState(),
-      activeTrips: [
-        activeTrip("late", { x: 2, y: 2 }, { x: 9, y: 4 }),
-        activeTrip("unserved", { x: 3, y: 2 }, { x: 10, y: 4 }),
-        activeTrip("walking", { x: 4, y: 2 }, { x: 11, y: 4 }),
-      ],
+      demandFlow: [{ point: { x: 9, y: 4 }, count: 3 }],
     };
-    const ui = { ...createUiState(), activeOverlay: "lateness" as const };
+    const ui = { ...createUiState(), activeOverlay: "demand" as const };
 
-    const ctx = fakeCtx();
+    const { ctx, fills } = trafficCtx();
     renderOverlays(ctx, state, ui);
 
-    expect(ctx.fillRect as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      2 * tileSize,
-      2 * tileSize,
-      tileSize,
-      tileSize,
-    );
-    expect(ctx.fillRect as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
-      3 * tileSize,
-      2 * tileSize,
-      tileSize,
-      tileSize,
-    );
-    expect(ctx.fillRect as ReturnType<typeof vi.fn>).not.toHaveBeenCalledWith(
-      4 * tileSize,
-      2 * tileSize,
-      tileSize,
-      tileSize,
-    );
+    // 1 - (1 - 0.24)^3: repeated destinations darken smoothly toward 1.
+    expect(fills).toHaveLength(1);
+    expect(fills[0].globalAlpha).toBeCloseTo(1 - Math.pow(0.76, 3));
   });
 });
 
@@ -669,60 +604,10 @@ function trafficCtx() {
   return { ctx, fills };
 }
 
-function roadDrivingTrip(id: string, point: Point): ActiveTrip {
-  return {
-    id,
-    simId: `sim-${id}`,
-    purpose: "commuteOutbound",
-    origin: { x: 0, y: 0 },
-    destination: { x: 9, y: 9 },
-    position: point,
-    status: "driving",
-    deadline: 9_999,
-    routePlan: null,
-    currentLegIndex: 0,
-    patienceRemaining: 100,
-    currentLegWaitSeconds: 0,
-    privateCarTrip: {
-      path: {
-        kind: "road",
-        steps: [
-          {
-            position: point,
-            enteringHeading: "east",
-            leavingHeading: "east",
-            movement: "straight",
-            geometry: {
-              kind: "line",
-              from: point,
-              to: { x: point.x + 1, y: point.y },
-            },
-            travelSeconds: 1,
-          },
-        ],
-        totalTravelSeconds: 1,
-      },
-      arrivalTime: 100,
-    },
-  };
-}
-
 function trafficState(flow: number, point: Point = { x: 2, y: 0 }) {
-  const state = createTestGameState();
-  const map = {
-    ...state.map,
-    tiles: state.map.tiles.map((tile) =>
-      tile.x === point.x && tile.y === point.y
-        ? { ...tile, kind: "road" as const }
-        : tile,
-    ),
-  };
   return {
-    ...state,
-    map,
-    activeTrips: Array.from({ length: flow }, (_, index) =>
-      roadDrivingTrip(`car-${index}`, point),
-    ),
+    ...createTestGameState(),
+    trafficFlow: [{ point, flow }],
   };
 }
 
@@ -750,30 +635,6 @@ describe("traffic overlay", () => {
       },
     ]);
     expect(ctx.globalAlpha).toBe(1);
-  });
-
-  it("does not paint a historical point after its tile stops being a road", () => {
-    const point = { x: 2, y: 0 };
-    const state = trafficState(1, point);
-    const historicalState = {
-      ...state,
-      map: {
-        ...state.map,
-        tiles: state.map.tiles.map((tile) =>
-          tile.x === point.x && tile.y === point.y
-            ? { ...tile, kind: "empty" as const }
-            : tile,
-        ),
-      },
-    };
-    const { ctx, fills } = trafficCtx();
-
-    renderOverlays(ctx, historicalState, {
-      ...createUiState(),
-      activeOverlay: "traffic",
-    });
-
-    expect(fills).toHaveLength(0);
   });
 });
 
@@ -1331,146 +1192,6 @@ describe("coverage overlay", () => {
   });
 });
 
-describe("growth overlay", () => {
-  it("fills tiles for unapplied growth waves and skips applied ones", () => {
-    const ctx = fakeCtx();
-    const state = {
-      ...createTestGameState(),
-      rules: { ...createTestGameState().rules, gameMode: "campaign" as const },
-      scenario: {
-        ...createTestGameState().scenario,
-        growthWaves: [
-          {
-            id: "wave-001",
-            triggerTime: 100,
-            message: "Wave 1",
-            applied: false,
-            actions: [
-              {
-                type: "paintAreaRectangle" as const,
-                area: "residential" as const,
-                start: { x: 5, y: 5 },
-                end: { x: 6, y: 5 },
-              },
-            ],
-          },
-          {
-            id: "wave-002",
-            triggerTime: 200,
-            message: "Wave 2",
-            applied: true,
-            actions: [
-              {
-                type: "paintAreaRectangle" as const,
-                area: "commercial" as const,
-                start: { x: 7, y: 5 },
-                end: { x: 7, y: 5 },
-              },
-            ],
-          },
-        ],
-      },
-    };
-    const ui = { ...createUiState(), activeOverlay: "growth" as const };
-    renderOverlays(ctx, state, ui);
-    expect(ctx.fillRect).toHaveBeenCalledWith(
-      5 * tileSize,
-      5 * tileSize,
-      tileSize,
-      tileSize,
-    );
-    expect(ctx.fillRect).toHaveBeenCalledWith(
-      6 * tileSize,
-      5 * tileSize,
-      tileSize,
-      tileSize,
-    );
-    // The applied wave's tile must not be filled.
-    expect(ctx.fillRect).not.toHaveBeenCalledWith(
-      7 * tileSize,
-      5 * tileSize,
-      tileSize,
-      tileSize,
-    );
-  });
-
-  it("fills footprint tiles for placeBuilding actions in unapplied waves", () => {
-    const ctx = fakeCtx();
-    const state = {
-      ...createTestGameState(),
-      rules: { ...createTestGameState().rules, gameMode: "campaign" as const },
-      scenario: {
-        ...createTestGameState().scenario,
-        growthWaves: [
-          {
-            id: "wave-build",
-            triggerTime: 0,
-            message: "",
-            applied: false,
-            actions: [
-              {
-                type: "placeBuilding" as const,
-                buildingType: "smallHouse" as const,
-                origin: { x: 10, y: 5 },
-                rotation: 0 as const,
-              },
-            ],
-          },
-        ],
-      },
-    };
-    const ui = { ...createUiState(), activeOverlay: "growth" as const };
-    renderOverlays(ctx, state, ui);
-    // smallHouse is 2x1 at rotation 0 → tiles (10,5) and (11,5).
-    expect(ctx.fillRect).toHaveBeenCalledWith(
-      10 * tileSize,
-      5 * tileSize,
-      tileSize,
-      tileSize,
-    );
-    expect(ctx.fillRect).toHaveBeenCalledWith(
-      11 * tileSize,
-      5 * tileSize,
-      tileSize,
-      tileSize,
-    );
-  });
-
-  it("does not paint growth waves in sandbox mode even when the list is non-empty", () => {
-    const ctx = fakeCtx();
-    // Sandbox snapshots may carry a non-empty growthWaves list, but Rust only
-    // applies waves in campaign mode (`growth::apply_due_growth_waves` returns
-    // early otherwise). The overlay must not preview changes Rust will never
-    // make.
-    const state = {
-      ...createTestGameState(),
-      rules: { ...createTestGameState().rules, gameMode: "sandbox" as const },
-      scenario: {
-        ...createTestGameState().scenario,
-        growthWaves: [
-          {
-            id: "wave-sandbox",
-            triggerTime: 100,
-            message: "Never applied",
-            applied: false,
-            actions: [
-              {
-                type: "paintAreaRectangle" as const,
-                area: "residential" as const,
-                start: { x: 5, y: 5 },
-                end: { x: 6, y: 5 },
-              },
-            ],
-          },
-        ],
-      },
-    };
-    const ui = { ...createUiState(), activeOverlay: "growth" as const };
-    renderOverlays(ctx, state, ui);
-    expect(ctx.fillRect).not.toHaveBeenCalled();
-  });
-});
-
 describe("building preview", () => {
   it("renders a valid placement in the valid tint over an empty residential tile", () => {
     const { ctx, fillStyles } = recordingFillCtx();
@@ -1555,7 +1276,7 @@ describe("building preview", () => {
 
 describe("crowding overlay ratios", () => {
   it("uses the lower globalAlpha (0.3) when crowding is between 50% and 100%", () => {
-    // capacity 4, 3 waiters -> 75% -> maxRatio in (0.5, 1) -> globalAlpha 0.3.
+    // capacity 4, 3 waiting -> 75% -> maxRatio in (0.5, 1) -> globalAlpha 0.3.
     const crowdedStop: Stop = {
       id: "stop-001",
       kind: "busStop",
@@ -1574,7 +1295,7 @@ describe("crowding overlay ratios", () => {
         metroLines: [],
         vehicles: [],
       },
-      activeTrips: [waiter(), waiter(), waiter()],
+      platformOccupancy: [waitingRow(3, 4)],
     };
     const ui = { ...createUiState(), activeOverlay: "crowding" as const };
     const ctx = fakeCtx();
@@ -1589,16 +1310,16 @@ describe("crowding overlay ratios", () => {
   });
 
   it("uses the higher globalAlpha (0.55) when crowding is at or above 100%", () => {
-    // capacity 1, 2 waiters -> 200% -> maxRatio >= 1 -> globalAlpha 0.55.
+    // capacity 1, 2 waiting -> 200% -> maxRatio >= 1 -> globalAlpha 0.55.
     const ctx = fakeCtx();
-    const state = crowdingState([waiter(), waiter()]);
+    const state = crowdingState([waitingRow(2)]);
     const ui = { ...createUiState(), activeOverlay: "crowding" as const };
     renderOverlays(ctx, state, ui);
     expect(ctx.globalAlpha).toBe(0.55);
   });
 
   it("does not fill when crowding is at or below 50%", () => {
-    // capacity 4, 2 waiters -> 50% -> maxRatio <= 0.5 -> skip.
+    // capacity 4, 2 waiting -> 50% -> maxRatio <= 0.5 -> skip.
     const quietStop: Stop = {
       id: "stop-001",
       kind: "busStop",
@@ -1617,7 +1338,7 @@ describe("crowding overlay ratios", () => {
         metroLines: [],
         vehicles: [],
       },
-      activeTrips: [waiter(), waiter()],
+      platformOccupancy: [{ platformId: "stop-001-p0", count: 2, capacity: 4 }],
     };
     const ui = { ...createUiState(), activeOverlay: "crowding" as const };
     const ctx = fakeCtx();
@@ -1626,7 +1347,7 @@ describe("crowding overlay ratios", () => {
   });
 
   it("uses the max ratio across multiple platforms on a single node", () => {
-    // Two platforms: p0 (cap 10, 3 waiters = 30%) and p1 (cap 10, 6 waiters = 60%).
+    // Two platforms: p0 (cap 10, 3 waiting = 30%) and p1 (cap 10, 6 waiting = 60%).
     // maxRatio = 0.6 -> globalAlpha 0.3.
     const multiStop: Stop = {
       id: "stop-001",
@@ -1648,23 +1369,6 @@ describe("crowding overlay ratios", () => {
         },
       ],
     };
-    const waiterOn = (lineId: string): ActiveTrip => ({
-      ...waiter(),
-      routePlan: {
-        estimatedSeconds: 100,
-        legs: [
-          {
-            mode: "bus",
-            from: { x: 3, y: 3 },
-            to: { x: 9, y: 9 },
-            lineId,
-            serviceDirection: "loop",
-            boardItineraryIndex: 0,
-            alightItineraryIndex: 0,
-          },
-        ],
-      },
-    });
     const state = {
       ...createTestGameState(),
       transit: {
@@ -1674,9 +1378,9 @@ describe("crowding overlay ratios", () => {
         metroLines: [],
         vehicles: [],
       },
-      activeTrips: [
-        ...Array.from({ length: 3 }, () => waiterOn("route-001")),
-        ...Array.from({ length: 6 }, () => waiterOn("route-002")),
+      platformOccupancy: [
+        { platformId: "stop-001-p0", count: 3, capacity: 10 },
+        { platformId: "stop-001-p1", count: 6, capacity: 10 },
       ],
     };
     const ui = { ...createUiState(), activeOverlay: "crowding" as const };

@@ -593,7 +593,7 @@ fn dual_bidirectional_route_uses_the_legal_left_turn_and_lane() {
         waypoint_ids,
     });
     assert!(committed.applied, "route should save: {committed:?}");
-    assert_eq!(route(&committed.snapshot).legs, preview.legs);
+    assert_eq!(route(&engine.snapshot()).legs, preview.legs);
 }
 
 #[test]

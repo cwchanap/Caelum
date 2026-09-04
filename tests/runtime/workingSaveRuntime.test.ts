@@ -9,17 +9,22 @@ import {
 } from "../../src/persistence/memoryCitySaveStore";
 import type {
   GameBackend,
+  PresentationUpdate,
   RustGameSnapshot,
   SandboxCreationRequest,
   SandboxCreationResult,
 } from "../../src/runtime/backend/types";
-import type { SnapshotResult } from "../../src/runtime/backend/persistenceContract";
+import type {
+  SnapshotError,
+  SnapshotResult,
+} from "../../src/runtime/backend/persistenceContract";
 import {
   createWorkingSaveRuntime,
   type WorkingSaveRuntime,
 } from "../../src/runtime/workingSaveRuntime";
 import { createDelayedCitySaveStore } from "./delayedCitySaveStore";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -42,19 +47,17 @@ const NEW_CITY_REQUEST = {
 
 function backendStub(): GameBackend {
   const snapshot = createRustSnapshot({ paused: true });
+  const update = createPresentationUpdate(snapshot, false);
   return {
     ...previewBackendStubs(),
-    async snapshot() {
-      return snapshot;
-    },
     async dispatch() {
-      return { snapshot, applied: false, rejection: null };
+      return { update, applied: false, rejection: null };
     },
     async tick() {
-      return { snapshot, applied: false, rejection: null };
+      return { update, applied: false, rejection: null };
     },
     async reset() {
-      return { ok: true, snapshot };
+      return { ok: true, update: createPresentationUpdate(snapshot) };
     },
   };
 }
@@ -80,7 +83,13 @@ interface TestBackend extends GameBackend {
   calls: string[];
   sandboxRequests: SandboxCreationRequest[];
   setSnapshotForSaveOutcome(outcome: SnapshotResult | Error | null): void;
-  setRestoreOutcome(outcome: SnapshotResult | Error | null): void;
+  setRestoreOutcome(
+    outcome:
+      | { ok: true; update: PresentationUpdate }
+      | { ok: false; error: SnapshotError }
+      | Error
+      | null,
+  ): void;
   setSandboxOutcome(outcome: SandboxCreationResult | Error | null): void;
 }
 
@@ -91,7 +100,10 @@ function createTestBackend(
   const base = previewBackendStubs();
   let current = initial;
   let snapshotForSaveOutcome: SnapshotResult | Error | null = null;
-  let restoreOutcome: SnapshotResult | Error | null = null;
+  let restoreOutcome:
+    | Awaited<ReturnType<GameBackend["restoreSnapshot"]>>
+    | Error
+    | null = null;
   let sandboxOutcome: SandboxCreationResult | Error | null = null;
   const calls: string[] = [];
   const sandboxRequests: SandboxCreationRequest[] = [];
@@ -108,9 +120,6 @@ function createTestBackend(
     },
     setSandboxOutcome(outcome) {
       sandboxOutcome = outcome;
-    },
-    async snapshot() {
-      return current;
     },
     async snapshotForSave() {
       calls.push("snapshotForSave");
@@ -135,20 +144,31 @@ function createTestBackend(
       events?.push("restoreSnapshot");
       if (restoreOutcome instanceof Error) throw restoreOutcome;
       if (restoreOutcome !== null) {
-        if (restoreOutcome.ok) current = restoreOutcome.snapshot;
+        if (restoreOutcome.ok) {
+          // Presentation-only success: the durable snapshot is unchanged.
+          current = createRustSnapshot();
+        }
         return restoreOutcome;
       }
       current = snapshot as RustGameSnapshot;
-      return { ok: true, snapshot: current };
+      return { ok: true, update: createPresentationUpdate(current) };
     },
     async dispatch() {
-      return { snapshot: current, applied: false, rejection: null };
+      return {
+        update: createPresentationUpdate(current, false),
+        applied: false,
+        rejection: null,
+      };
     },
     async tick() {
-      return { snapshot: current, applied: false, rejection: null };
+      return {
+        update: createPresentationUpdate(current, false),
+        applied: false,
+        rejection: null,
+      };
     },
     async reset() {
-      return { ok: true, snapshot: current };
+      return { ok: true, update: createPresentationUpdate(current) };
     },
   };
 }
@@ -159,7 +179,7 @@ interface RuntimeFixture {
   saveStore: CitySaveStore | undefined;
   events: string[];
   readonly publications: number;
-  readonly installedSnapshot: RustGameSnapshot | null;
+  readonly installedUpdate: PresentationUpdate | null;
   killRuntime(): void;
   failNextInstall(error: Error): void;
 }
@@ -184,7 +204,7 @@ function createRuntimeFixture(
       ? createMemoryCitySaveStore()
       : options.saveStore;
   let publications = 0;
-  let installedSnapshot: RustGameSnapshot | null = null;
+  let installedUpdate: PresentationUpdate | null = null;
   let runtimeDead = false;
   let installError: Error | null = null;
   const runtime = createWorkingSaveRuntime({
@@ -198,13 +218,13 @@ function createRuntimeFixture(
       (async () => {
         events.push("awaitGameplayIdle");
       }),
-    installRestoredGameplay(snapshot) {
+    installRestoredGameplay(update) {
       if (installError) {
         const error = installError;
         installError = null;
         throw error;
       }
-      installedSnapshot = snapshot;
+      installedUpdate = update;
       events.push("installRestoredGameplay");
     },
     publish() {
@@ -221,8 +241,8 @@ function createRuntimeFixture(
     get publications() {
       return publications;
     },
-    get installedSnapshot() {
-      return installedSnapshot;
+    get installedUpdate() {
+      return installedUpdate;
     },
     killRuntime() {
       runtimeDead = true;
@@ -599,7 +619,9 @@ describe("working save runtime loads", () => {
       ok: true,
       value: loadedCity,
     });
-    expect(fixture.installedSnapshot).toEqual(loadedSnapshot);
+    expect(fixture.installedUpdate).toEqual(
+      createPresentationUpdate(loadedSnapshot),
+    );
     expect(fixture.runtime.getView().activeCity).toEqual(loadedCity);
     expect(fixture.runtime.getView().dirty).toBe(false);
   });
@@ -645,7 +667,7 @@ describe("working save runtime loads", () => {
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
     expect(fixture.runtime.getView().dirty).toBe(false);
-    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.installedUpdate).toBeNull();
   });
 
   it("detaches after a thrown ambiguous restore and prevents a later save", async () => {
@@ -767,7 +789,7 @@ describe("working save runtime loads", () => {
       error: { kind: "unavailable" },
     });
     expect(fixture.backend.calls).not.toContain("restoreSnapshot");
-    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.installedUpdate).toBeNull();
     expect(fixture.publications).toBe(publicationsBeforeDispose);
   });
 });
@@ -924,7 +946,7 @@ describe("working save runtime new cities", () => {
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
     expect(fixture.runtime.getView().dirty).toBe(false);
-    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.installedUpdate).toBeNull();
   });
 
   it("keeps the created record but detaches after a thrown new-city activation", async () => {
@@ -1014,7 +1036,7 @@ describe("working save runtime drain-race guard", () => {
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
     expect(fixture.runtime.getView().dirty).toBe(true);
-    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.installedUpdate).toBeNull();
   });
 
   it("refuses createCity after the gameplay drain marks the active city dirty", async () => {
@@ -1032,7 +1054,7 @@ describe("working save runtime drain-race guard", () => {
     });
     expect(fixture.runtime.getView().activeCity).toEqual(ACTIVE_CITY);
     expect(fixture.runtime.getView().dirty).toBe(true);
-    expect(fixture.installedSnapshot).toBeNull();
+    expect(fixture.installedUpdate).toBeNull();
     expect(fixture.backend.calls).not.toContain("buildSandboxSnapshot");
   });
 });

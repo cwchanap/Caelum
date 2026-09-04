@@ -12,6 +12,7 @@ import type {
   LegFailureReason,
   MetroLine,
   PlacedBuilding,
+  PresentationMetrics,
   PrivateCarTrip,
   Point,
   RoundaboutSize,
@@ -24,14 +25,20 @@ import type {
   RouteLegPath,
   ServicePattern,
   Sim,
+  Stop,
+  Station,
   TransitPath,
   TransitMode,
   TripOutcomeKind,
   TripPosition,
   TransitNetwork,
   Vehicle,
+  BuildingOccupancyView,
+  PlatformOccupancyView,
+  TrafficFlowView,
+  DemandFlowView,
 } from "../../domain/types";
-import type { SnapshotResult } from "./persistenceContract";
+import type { SnapshotError, SnapshotResult } from "./persistenceContract";
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
 
 export interface RustTripOutcome {
@@ -72,7 +79,12 @@ export interface RustMetroLine extends Omit<
   targetHeadwaySeconds?: number | null;
 }
 
-export interface RustVehicle extends Omit<Vehicle, "parkedPosition"> {
+export interface RustVehicle extends Omit<
+  Vehicle,
+  "parkedPosition" | "capacity" | "passengerIds"
+> {
+  capacity: number;
+  passengerIds: string[];
   parkedPosition: TripPosition | null | undefined;
 }
 
@@ -219,10 +231,98 @@ export type GameIntent =
     }
   | { type: "setBudget"; budget: number };
 
-export interface DispatchResult {
-  snapshot: RustGameSnapshot;
+// ---------------------------------------------------------------------------
+// Presentation wire (ordinary current view / tick / dispatch / reset / restore
+// success). Unversioned by contract; Rust persistence stays authoritative for
+// restore validation.
+// ---------------------------------------------------------------------------
+
+/** Scene bus-route row: durable line data without the derived `serviceMetrics`. */
+export interface PresentationRoute extends Omit<
+  Route,
+  "legs" | "serviceMetrics"
+> {
+  legs: RustRouteLegPath[];
+}
+
+/** Scene metro-line row: durable line data without the derived `serviceMetrics`. */
+export interface PresentationMetroLine extends Omit<
+  MetroLine,
+  "legs" | "serviceMetrics"
+> {
+  legs: RustRouteLegPath[];
+}
+
+/** Frame vehicle row: cursor data without latent passenger/capacity payloads. */
+export interface PresentationVehicle extends Omit<Vehicle, "parkedPosition"> {
+  parkedPosition: TripPosition | null | undefined;
+}
+
+export interface ServiceMetricsRow {
+  lineId: string;
+  metrics: ServiceMetrics;
+}
+
+export interface PresentationScene {
+  rules: GameRules;
+  map: GameMap;
+  buildings: PlacedBuilding[];
+  stops: Stop[];
+  stations: Station[];
+  routes: PresentationRoute[];
+  metroLines: PresentationMetroLine[];
+}
+
+export interface PresentationFrame {
+  time: number;
+  day: number;
+  clockMinutes: number;
+  speed: 0 | 1 | 2 | 4;
+  paused: boolean;
+  budget: number;
+  metrics: PresentationMetrics;
+  populationCount: number;
+  buildingOccupancy: BuildingOccupancyView[];
+  platformOccupancy: PlatformOccupancyView[];
+  trafficFlow: TrafficFlowView[];
+  demandFlow: DemandFlowView[];
+  vehicles: PresentationVehicle[];
+  serviceMetrics: ServiceMetricsRow[];
+}
+
+export interface PresentationUpdate {
+  scene: PresentationScene | null;
+  frame: PresentationFrame;
+}
+
+export interface GameplayUpdateResult {
+  update: PresentationUpdate;
   applied: boolean;
   rejection: GameplayRejection | null;
+}
+
+export type RestoreResult =
+  | { ok: true; update: PresentationUpdate }
+  | { ok: false; error: SnapshotError };
+
+export type SandboxResetPresentationResult =
+  | { ok: true; update: PresentationUpdate }
+  | { ok: false; error: SandboxResetError };
+
+export interface GameBackend {
+  presentation(): Promise<PresentationUpdate>;
+  snapshotForSave(): Promise<SnapshotResult>;
+  buildSandboxSnapshot(
+    request: SandboxCreationRequest,
+  ): Promise<SandboxCreationResult>;
+  restoreSnapshot(snapshot: unknown): Promise<RestoreResult>;
+  dispatch(intent: GameIntent): Promise<GameplayUpdateResult>;
+  tick(deltaSeconds: number): Promise<GameplayUpdateResult>;
+  reset(): Promise<SandboxResetPresentationResult>;
+  previewRoute(request: RoutePreviewRequest): Promise<RoutePreviewResponse>;
+  previewRoadMutation(
+    request: RoadMutationPreviewRequest,
+  ): Promise<RoadMutationPreviewResponse>;
 }
 
 export type RoadMutation =
@@ -344,23 +444,3 @@ export interface SandboxResetError {
 export type SandboxCreationResult =
   | { ok: true; snapshot: RustGameSnapshot }
   | { ok: false; error: SandboxCreationError };
-
-export type SandboxResetResult =
-  | { ok: true; snapshot: RustGameSnapshot }
-  | { ok: false; error: SandboxResetError };
-
-export interface GameBackend {
-  snapshot(): Promise<RustGameSnapshot>;
-  snapshotForSave(): Promise<SnapshotResult>;
-  buildSandboxSnapshot(
-    request: SandboxCreationRequest,
-  ): Promise<SandboxCreationResult>;
-  restoreSnapshot(snapshot: unknown): Promise<SnapshotResult>;
-  dispatch(intent: GameIntent): Promise<DispatchResult>;
-  tick(deltaSeconds: number): Promise<DispatchResult>;
-  reset(): Promise<SandboxResetResult>;
-  previewRoute(request: RoutePreviewRequest): Promise<RoutePreviewResponse>;
-  previewRoadMutation(
-    request: RoadMutationPreviewRequest,
-  ): Promise<RoadMutationPreviewResponse>;
-}

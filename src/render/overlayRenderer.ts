@@ -1,6 +1,5 @@
 import {
   ROAD_DIRECTION_OFFSET,
-  type ActiveTrip,
   type GameState,
   type Point,
   type RoadStructure,
@@ -20,7 +19,6 @@ import type {
 } from "../runtime/types";
 import { getBuildingFootprint } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
-import { selectPlatformOccupancy } from "../domain/platformOccupancy";
 import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
 import { tileSize, type BoardTransform } from "./canvas";
@@ -33,13 +31,12 @@ import {
   isBuildingAffordableForPresentation,
   isAreaPaintable,
 } from "./placementValidation";
-import {
-  MAX_CONGESTION_MULTIPLIER,
-  ROAD_FLOW_CAPACITY,
-  selectTrafficFlow,
-} from "../domain/traffic";
 
 const previewStrokeInset = 2;
+
+/** Presentation flow is derived in Rust against the same road-capacity model. */
+const ROAD_FLOW_CAPACITY = 4;
+const MAX_CONGESTION_MULTIPLIER = 3;
 
 type RoundaboutStructure = Extract<RoadStructure, { kind: "roundabout" }>;
 
@@ -54,8 +51,10 @@ function planAreaPaintPreview(
   }));
 }
 
-function overlayTrips(state: GameState): ActiveTrip[] {
-  return state.activeTrips ?? [];
+/** Repeated demand saturates: each additional destination multiplies the
+ *  remaining opacity, so stacks darken smoothly instead of overdrawing. */
+function demandAlpha(count: number): number {
+  return 1 - Math.pow(1 - 0.24, count);
 }
 
 function fillTile(ctx: CanvasRenderingContext2D, point: Point): void {
@@ -645,40 +644,32 @@ export function renderOverlays(
     }
   }
 
-  if (ui.activeOverlay === "lateness") {
-    ctx.fillStyle = colors.lateness;
-
-    for (const trip of overlayTrips(state)) {
-      if (trip.status === "late" || trip.status === "unserved") {
-        fillTile(ctx, trip.position);
-      }
-    }
-  }
-
   if (ui.activeOverlay === "demand") {
     ctx.fillStyle = colors.demand;
 
-    for (const trip of overlayTrips(state)) {
-      if (trip.status !== "arrived") {
-        fillTile(ctx, trip.destination);
-      }
+    for (const row of state.demandFlow) {
+      ctx.globalAlpha = demandAlpha(row.count);
+      fillTile(ctx, row.point);
     }
+    ctx.globalAlpha = 1;
   }
 
   if (ui.activeOverlay === "traffic") {
     const fullScaleFlow = ROAD_FLOW_CAPACITY * MAX_CONGESTION_MULTIPLIER;
 
     ctx.save();
-    for (const { point, flow } of selectTrafficFlow(state)) {
-      ctx.globalAlpha = Math.min(flow / fullScaleFlow, 1);
+    for (const row of state.trafficFlow) {
+      ctx.globalAlpha = Math.min(row.flow / fullScaleFlow, 1);
       ctx.fillStyle = colors.traffic;
-      fillTile(ctx, point);
+      fillTile(ctx, row.point);
     }
     ctx.restore();
   }
 
   if (ui.activeOverlay === "crowding") {
-    const occupancy = selectPlatformOccupancy(state);
+    const occupancyByPlatform = new Map(
+      state.platformOccupancy.map((row) => [row.platformId, row]),
+    );
     const nodes = [...state.transit.stops, ...state.transit.stations].filter(
       (node) => node.status === "present",
     );
@@ -686,7 +677,7 @@ export function renderOverlays(
     for (const node of nodes) {
       let maxRatio = 0;
       for (const platform of node.platforms) {
-        const entry = occupancy.get(platform.id);
+        const entry = occupancyByPlatform.get(platform.id);
         if (entry !== undefined && entry.capacity > 0) {
           maxRatio = Math.max(maxRatio, entry.count / entry.capacity);
         }
@@ -701,41 +692,6 @@ export function renderOverlays(
       ctx.fillStyle = colors.crowding;
       fillTile(ctx, node.position);
       ctx.restore();
-    }
-  }
-
-  // Rust only applies growth waves in campaign mode
-  // (`growth::apply_due_growth_waves` returns early otherwise), so the overlay
-  // must also gate on campaign mode — otherwise a sandbox snapshot carrying a
-  // non-empty `growthWaves` list would preview changes Rust will never make.
-  if (ui.activeOverlay === "growth" && state.rules.gameMode === "campaign") {
-    ctx.fillStyle = colors.growth;
-
-    for (const wave of state.scenario.growthWaves) {
-      if (wave.applied) {
-        continue;
-      }
-      for (const action of wave.actions) {
-        if (action.type === "paintAreaRectangle") {
-          const minX = Math.min(action.start.x, action.end.x);
-          const maxX = Math.max(action.start.x, action.end.x);
-          const minY = Math.min(action.start.y, action.end.y);
-          const maxY = Math.max(action.start.y, action.end.y);
-          for (let y = minY; y <= maxY; y += 1) {
-            for (let x = minX; x <= maxX; x += 1) {
-              fillTile(ctx, { x, y });
-            }
-          }
-        } else if (action.type === "placeBuilding") {
-          for (const tile of getBuildingFootprint(
-            action.buildingType,
-            action.origin,
-            action.rotation,
-          )) {
-            fillTile(ctx, tile);
-          }
-        }
-      }
     }
   }
 

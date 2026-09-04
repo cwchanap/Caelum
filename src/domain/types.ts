@@ -83,13 +83,7 @@ export type Tool =
   | "track"
   | "remove";
 export type RoadPreset = "twoWay" | "oneWay" | "dualBidirectional";
-export type Overlay =
-  | "coverage"
-  | "crowding"
-  | "demand"
-  | "lateness"
-  | "traffic"
-  | "growth";
+export type Overlay = "coverage" | "crowding" | "demand" | "traffic";
 
 export interface Point {
   x: number;
@@ -360,8 +354,6 @@ export interface Vehicle {
   id: string;
   mode: "bus" | "metro";
   lineId: string;
-  capacity: number;
-  passengerIds: string[];
   itineraryIndex: number;
   pathStepIndex: number;
   stepProgress: number;
@@ -443,31 +435,35 @@ export interface GrowthWave {
   actions: GrowthAction[];
 }
 
-export interface Scenario {
-  name: string;
-  growthWaves: GrowthWave[];
-  objectives: ObjectiveThresholds | null;
-}
-
 export type TripOutcomeKind = "arrived" | "late" | "unserved";
 
-export interface TripOutcome {
-  outcome: TripOutcomeKind;
-  waitSeconds?: number;
-  time: number;
+/** Live presentation metrics row (frame data from the Rust projection). */
+export interface PresentationMetrics {
+  lateTrips: number;
+  unservedTrips: number;
+  averageWaitSeconds: number;
+  state: "running" | "won" | "lost";
 }
 
-export interface Metrics {
-  lateTrips: number;
-  completedTrips: number;
-  unservedTrips: number;
-  totalWaitSeconds: number;
-  waitingCitizenCount: number;
-  waitingTripCount?: number;
-  averageWaitSeconds: number;
-  tripOutcomes: TripOutcome[];
-  state: "running" | "won" | "lost";
-  lossReason: string | null;
+export interface BuildingOccupancyView {
+  buildingId: string;
+  occupancy: number;
+}
+
+export interface PlatformOccupancyView {
+  platformId: string;
+  count: number;
+  capacity: number;
+}
+
+export interface TrafficFlowView {
+  point: Point;
+  flow: number;
+}
+
+export interface DemandFlowView {
+  point: Point;
+  count: number;
 }
 
 export interface TransitNetwork {
@@ -478,8 +474,8 @@ export interface TransitNetwork {
   vehicles: Vehicle[];
 }
 
+/** Flat, unversioned live view over the Rust presentation wire. */
 export interface GameState {
-  schemaVersion: typeof SNAPSHOT_SCHEMA_VERSION;
   rules: GameRules;
   time: number;
   day: number;
@@ -489,11 +485,11 @@ export interface GameState {
   budget: number;
   map: GameMap;
   buildings: PlacedBuilding[];
-  scenario: Scenario;
   transit: TransitNetwork;
-  sims?: Sim[];
-  activeTrips?: ActiveTrip[];
-  tripSequenceDay?: number;
-  nextTripSequence?: number;
-  metrics: Metrics;
+  metrics: PresentationMetrics;
+  populationCount: number;
+  buildingOccupancy: BuildingOccupancyView[];
+  platformOccupancy: PlatformOccupancyView[];
+  trafficFlow: TrafficFlowView[];
+  demandFlow: DemandFlowView[];
 }

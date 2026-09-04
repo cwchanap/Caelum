@@ -116,7 +116,8 @@ fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let filled = engine.tick(600.0).snapshot;
+    engine.tick(600.0);
+    let filled = engine.snapshot();
     assert_eq!(filled.sims.len(), 8);
 
     // Task 4 owns finite workplace allocation. Set the intended precondition
@@ -158,13 +159,13 @@ fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
         point: (2, 3).into(),
     });
     assert!(removed.applied, "{removed:?}");
-    assert_eq!(removed.snapshot.sims.len(), 4);
-    assert!(removed.snapshot.sims.iter().all(|sim| {
+    assert_eq!(engine.snapshot().sims.len(), 4);
+    assert!(engine.snapshot().sims.iter().all(|sim| {
         second_house_tiles.contains(&sim.home) && sim.worker_profile == WorkerProfile::Worker
     }));
     assert_eq!(
-        removed
-            .snapshot
+        engine
+            .snapshot()
             .sims
             .iter()
             .filter(|sim| {
@@ -213,7 +214,8 @@ fn demolishing_housing_runs_one_refill_pass_after_over_capacity_first_workplace(
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let filled = engine.tick(600.0).snapshot;
+    engine.tick(600.0);
+    let filled = engine.snapshot();
     assert_eq!(filled.sims.len(), 8);
 
     let first_workplace_tiles = filled
@@ -276,10 +278,10 @@ fn demolishing_housing_runs_one_refill_pass_after_over_capacity_first_workplace(
         point: (2, 3).into(),
     });
     assert!(removed.applied, "{removed:?}");
-    assert_eq!(removed.snapshot.sims.len(), 4);
+    assert_eq!(engine.snapshot().sims.len(), 4);
     assert_eq!(
-        removed
-            .snapshot
+        engine
+            .snapshot()
             .sims
             .iter()
             .filter_map(|sim| sim.workplace)
@@ -287,7 +289,7 @@ fn demolishing_housing_runs_one_refill_pass_after_over_capacity_first_workplace(
         expected_workplaces,
         "survivors match one post-removal assignment pass"
     );
-    assert!(removed.snapshot.sims.iter().all(|sim| {
+    assert!(engine.snapshot().sims.iter().all(|sim| {
         sim.workplace
             .is_some_and(|workplace| !second_workplace_tiles.contains(&workplace))
     }));
@@ -337,7 +339,8 @@ fn two_small_houses_and_supermarket_assign_only_four_workers() {
             .applied
     );
 
-    let snapshot = engine.tick(600.0).snapshot;
+    engine.tick(600.0);
+    let snapshot = engine.snapshot();
     let workers: Vec<_> = snapshot
         .sims
         .iter()
@@ -388,7 +391,8 @@ fn factory_assigns_six_workers_when_more_than_capacity() {
             .applied
     );
 
-    let snapshot = engine.tick(600.0).snapshot;
+    engine.tick(600.0);
+    let snapshot = engine.snapshot();
     let workers: Vec<_> = snapshot
         .sims
         .iter()
@@ -424,10 +428,10 @@ fn sandbox_move_ins_start_on_first_running_tick() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let first_tick = engine.tick(1.0);
+    let _first_tick = engine.tick(1.0);
 
-    assert_eq!(first_tick.snapshot.sims.len(), 1);
-    assert_eq!(first_tick.snapshot.sims[0].id, "sim-001");
+    assert_eq!(engine.snapshot().sims.len(), 1);
+    assert_eq!(engine.snapshot().sims[0].id, "sim-001");
 }
 
 #[test]
@@ -442,10 +446,12 @@ fn sandbox_move_ins_are_partition_independent_for_small_house() {
         );
     }
 
-    let coarse_snapshot = coarse.tick(150.0).snapshot;
+    coarse.tick(150.0);
+    let coarse_snapshot = coarse.snapshot();
     let _ = fine.tick(50.0);
     let _ = fine.tick(50.0);
-    let fine_snapshot = fine.tick(50.0).snapshot;
+    fine.tick(50.0);
+    let fine_snapshot = fine.snapshot();
 
     assert_eq!(coarse_snapshot.sims.len(), 4);
     assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
@@ -456,10 +462,13 @@ fn sandbox_move_ins_preserve_commute_set_across_coarse_and_fine_ticks() {
     let mut coarse = assigned_workplace_engine();
     let mut fine = assigned_workplace_engine();
 
-    let coarse_snapshot = coarse.tick(900.0).snapshot;
-    let mut fine_snapshot = fine.tick(0.0).snapshot;
+    coarse.tick(900.0);
+    let coarse_snapshot = coarse.snapshot();
+    fine.tick(0.0);
+    let mut fine_snapshot = fine.snapshot();
     for _ in 0..18 {
-        fine_snapshot = fine.tick(50.0).snapshot;
+        fine.tick(50.0);
+        fine_snapshot = fine.snapshot();
     }
 
     assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
@@ -504,10 +513,12 @@ fn sandbox_large_house_fills_to_capacity_and_stops() {
             .applied
     );
 
-    let filled = engine.tick(600.0).snapshot;
+    engine.tick(600.0);
+    let filled = engine.snapshot();
     assert_eq!(filled.sims.len(), 10);
 
-    let later = engine.tick(600.0).snapshot;
+    engine.tick(600.0);
+    let later = engine.snapshot();
     assert_eq!(later.sims.len(), 10);
 }
 
@@ -564,7 +575,8 @@ fn move_in_after_departure_skips_today_but_commutes_next_day() {
     // The first move-in is due at the building's placement timestamp. It is
     // strictly after today's outbound departure, so no retroactive commute may
     // be created for day 0.
-    let due = engine.tick(0.0).snapshot;
+    engine.tick(0.0);
+    let due = engine.snapshot();
     assert_eq!(due.sims.len(), 1);
     assert!(due.active_trips.iter().all(|trip| {
         !(trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
@@ -572,7 +584,8 @@ fn move_in_after_departure_skips_today_but_commutes_next_day() {
 
     let next_day_departure = scheduled_time_seconds(1, departure);
     let until_next_departure = next_day_departure - due.time;
-    let next_day = engine.tick(until_next_departure).snapshot;
+    engine.tick(until_next_departure);
+    let next_day = engine.snapshot();
     assert!(next_day
         .active_trips
         .iter()
@@ -629,7 +642,8 @@ fn move_in_at_exact_departure_spawns_today() {
             .applied
     );
 
-    let due = engine.tick(0.0).snapshot;
+    engine.tick(0.0);
+    let due = engine.snapshot();
     let sim = due
         .sims
         .iter()

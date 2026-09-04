@@ -1,6 +1,7 @@
 use serde::{Deserialize, Serialize};
 
 use crate::model::{GameSnapshot, Point, RoundaboutSize, ServicePattern, TransitMode};
+use crate::presentation::{project_update, PresentationUpdate};
 use crate::rejection::GameplayRejection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -120,10 +121,12 @@ pub enum GameIntent {
     },
 }
 
+/// Public engine-facade result: presentation only. Applied dispatches include
+/// the full scene; tick results and rejected/no-op dispatches are frame-only.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
-pub struct DispatchResult {
-    pub snapshot: GameSnapshot,
+pub struct GameplayUpdateResult {
+    pub update: PresentationUpdate,
     pub applied: bool,
     pub rejection: Option<GameplayRejection>,
 }
@@ -135,26 +138,28 @@ pub(crate) struct DispatchContext {
     pub(crate) cost: i32,
 }
 
-impl DispatchResult {
-    pub fn applied(snapshot: GameSnapshot) -> Self {
+impl GameplayUpdateResult {
+    /// Result of an applied dispatch: full presentation with scene.
+    pub fn present(snapshot: &GameSnapshot) -> Self {
         Self {
-            snapshot,
+            update: project_update(snapshot, true),
             applied: true,
             rejection: None,
         }
     }
 
-    pub fn unchanged(snapshot: GameSnapshot) -> Self {
+    /// Frame-only result (ticks, rejected/no-op dispatches).
+    pub fn frame_only(snapshot: &GameSnapshot, applied: bool) -> Self {
         Self {
-            snapshot,
-            applied: false,
+            update: project_update(snapshot, false),
+            applied,
             rejection: None,
         }
     }
 
-    pub fn rejected(snapshot: GameSnapshot, rejection: GameplayRejection) -> Self {
+    pub fn rejected(snapshot: &GameSnapshot, rejection: GameplayRejection) -> Self {
         Self {
-            snapshot,
+            update: project_update(snapshot, false),
             applied: false,
             rejection: Some(rejection),
         }

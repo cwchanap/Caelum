@@ -28,7 +28,7 @@ function deferredBackend() {
   };
 
   const backend = {
-    snapshot: unused as unknown as GameBackend["snapshot"],
+    presentation: unused as unknown as GameBackend["presentation"],
     snapshotForSave: unused as unknown as GameBackend["snapshotForSave"],
     restoreSnapshot: unused as unknown as GameBackend["restoreSnapshot"],
     buildSandboxSnapshot:

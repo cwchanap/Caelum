@@ -195,12 +195,12 @@ fn preview_and_committed_route_use_identical_leg_paths() {
     assert_eq!(preview.generation, 9);
     assert!(preview.rejection.is_none(), "{preview:?}");
 
-    let committed = engine.dispatch(GameIntent::CreateRoute {
+    let _committed = engine.dispatch(GameIntent::CreateRoute {
         mode: request.mode,
         pattern: request.pattern,
         waypoint_ids: request.waypoint_ids,
     });
-    assert_eq!(newest_route(&committed.snapshot).legs, preview.legs);
+    assert_eq!(newest_route(&engine.snapshot()).legs, preview.legs);
 }
 
 #[test]
@@ -242,7 +242,8 @@ fn shared_access_shuttle_preview_and_commit_match_zero_step_terminal_legs() {
         waypoint_ids: request.waypoint_ids,
     });
     assert!(committed.applied, "{committed:?}");
-    let committed_legs = &newest_route(&committed.snapshot).legs;
+    let snapshot = engine.snapshot();
+    let committed_legs = &newest_route(&snapshot).legs;
     assert_eq!(preview.total_travel_seconds, 0.0);
     assert_eq!(
         preview.total_travel_seconds,
@@ -301,7 +302,8 @@ fn existing_route_update_preview_and_commit_match_failures_and_zero_step_legs() 
         waypoint_ids: request.waypoint_ids,
     });
     assert!(committed.rejection.is_none(), "{committed:?}");
-    let committed_legs = &newest_route(&committed.snapshot).legs;
+    let snapshot = engine.snapshot();
+    let committed_legs = &newest_route(&snapshot).legs;
     assert_eq!(preview.legs.len(), committed_legs.len());
     for (preview_leg, committed_leg) in preview.legs.iter().zip(committed_legs) {
         assert_exact_leg_shape(preview_leg, committed_leg);
@@ -404,13 +406,13 @@ fn roundabout_preview_matches_commit_footprint_cost_structure_and_route_impact()
         size: RoundaboutSize::Standard3x3,
     });
     assert!(committed.applied, "{committed:?}");
-    assert_eq!(committed.snapshot.budget, before_budget - preview.cost);
+    assert_eq!(engine.snapshot().budget, before_budget - preview.cost);
     assert_eq!(
-        committed.snapshot.map.road_structures.len(),
+        engine.snapshot().map.road_structures.len(),
         before_structure_count + preview.generated_structures.len()
     );
     assert_eq!(
-        newest_route(&committed.snapshot).revision,
+        newest_route(&engine.snapshot()).revision,
         before_route.revision + 1
     );
 }
@@ -468,7 +470,8 @@ fn already_broken_route_still_reports_a_changed_connected_leg_with_commit_parity
         size: RoundaboutSize::Standard3x3,
     });
     assert!(committed.applied, "{committed:?}");
-    let after = newest_route(&committed.snapshot);
+    let snapshot = engine.snapshot();
+    let after = newest_route(&snapshot);
     assert_eq!(after.revision, before.revision + 1);
     assert!(after.path_broken);
     assert_eq!(
@@ -532,7 +535,8 @@ fn unrelated_road_preview_does_not_reroute_already_broken_route() {
         point: point(3, 12),
     });
     assert!(committed.applied, "{committed:?}");
-    let after = newest_route(&committed.snapshot);
+    let snapshot = engine.snapshot();
+    let after = newest_route(&snapshot);
     assert_eq!(after.legs, before.legs);
     assert_eq!(after.revision, before.revision);
 }
@@ -564,7 +568,8 @@ fn whole_roundabout_removal_preview_matches_commit_and_route_revision() {
 
     let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
     assert!(committed.applied, "{committed:?}");
-    let after = newest_route(&committed.snapshot);
+    let snapshot = engine.snapshot();
+    let after = newest_route(&snapshot);
     assert_eq!(after.revision, before.revision + 1);
     assert!(after.path_broken);
 }
@@ -786,9 +791,9 @@ fn retained_tombstone_is_missing_in_preview_but_edit_save_is_allowed() {
         waypoint_ids: route.stop_ids,
     });
     assert!(committed.rejection.is_none(), "{committed:?}");
-    assert!(newest_route(&committed.snapshot).path_broken);
+    assert!(newest_route(&engine.snapshot()).path_broken);
     assert_eq!(
-        committed.snapshot.transit.stops[0].status,
+        engine.snapshot().transit.stops[0].status,
         caelum_core::model::TransitNodeStatus::Missing
     );
 }
@@ -921,8 +926,8 @@ fn road_preview_preserves_candidate_connection_order() {
     });
     assert!(committed.applied, "{committed:?}");
     assert_eq!(
-        committed
-            .snapshot
+        engine
+            .snapshot()
             .map
             .tile(point(3, 2))
             .unwrap()
@@ -958,8 +963,8 @@ fn endpoint_connection_preview_and_commit_include_the_reciprocal_neighbor() {
     let committed = engine.dispatch(GameIntent::LayRoad { point: point(4, 2) });
     assert!(committed.applied, "{committed:?}");
     assert_eq!(
-        committed
-            .snapshot
+        engine
+            .snapshot()
             .map
             .tile(point(3, 2))
             .unwrap()
@@ -1001,7 +1006,8 @@ fn roundabout_removal_preview_and_commit_include_reciprocal_port_neighbors() {
             .iter()
             .find(|tile| tile.point == *point)
             .expect("every changed map tile has an authored preview");
-        let committed_tile = committed.snapshot.map.tile(*point).unwrap();
+        let committed_snapshot = engine.snapshot();
+        let committed_tile = committed_snapshot.map.tile(*point).unwrap();
         assert_eq!(authored.road_connections, committed_tile.road_connections);
     }
 }

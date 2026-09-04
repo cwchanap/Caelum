@@ -170,7 +170,7 @@ fn partial_same_axis_overlap_rejects_before_building_the_empty_tail() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -194,7 +194,7 @@ fn dual_reverse_lane_road_contact_rejects_before_forward_authoring() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -216,7 +216,8 @@ fn perpendicular_through_crossing_remains_legal() {
     });
 
     assert!(result.applied, "crossing should apply: {result:?}");
-    let tile = result.snapshot.map.tile(point(6, 5)).unwrap();
+    let snapshot = engine.snapshot();
+    let tile = snapshot.map.tile(point(6, 5)).unwrap();
     for heading in [Heading::North, Heading::East, Heading::South, Heading::West] {
         assert!(tile.road_connections.contains(&heading));
     }
@@ -232,7 +233,8 @@ fn perpendicular_endpoint_contact_forms_a_t_junction() {
     });
 
     assert!(result.applied, "T-junction should apply: {result:?}");
-    let tile = result.snapshot.map.tile(point(6, 5)).unwrap();
+    let snapshot = engine.snapshot();
+    let tile = snapshot.map.tile(point(6, 5)).unwrap();
     assert!(tile.road_connections.contains(&Heading::North));
     assert!(tile.road_connections.contains(&Heading::West));
     assert!(!tile.road_connections.contains(&Heading::South));
@@ -248,15 +250,15 @@ fn adjacent_empty_road_extension_remains_legal() {
     });
 
     assert!(result.applied, "extension should apply: {result:?}");
-    assert!(result
-        .snapshot
+    assert!(engine
+        .snapshot()
         .map
         .tile(point(6, 5))
         .unwrap()
         .road_connections
         .contains(&Heading::East));
-    assert!(result
-        .snapshot
+    assert!(engine
+        .snapshot()
         .map
         .tile(point(7, 5))
         .unwrap()
@@ -366,7 +368,7 @@ fn standalone_one_way_spacing_is_three_tiles_and_longitudinally_local() {
             result.rejection.as_ref().map(|rejection| &rejection.code),
             Some(&RejectionCode::OneWayParallelTooClose),
         );
-        assert_eq!(result.snapshot, before);
+        assert_eq!(engine.snapshot(), before);
     }
 
     let mut distance_three = one_way_engine((3..=10).map(|x| point(x, 5)).collect());
@@ -422,7 +424,7 @@ fn standalone_one_way_checks_existing_dual_lane_but_dual_self_authoring_remains_
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::OneWayParallelTooClose),
     );
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
 }
 
 #[test]
@@ -440,7 +442,7 @@ fn one_way_overlay_is_checked_before_merge_lane_direction() {
         preset: RoadPreset::OneWay,
     });
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -475,7 +477,7 @@ fn one_way_spacing_rejection_matches_preview_and_commit() {
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::OneWayParallelTooClose),
     );
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
 }
 
 #[test]
@@ -515,7 +517,7 @@ fn dual_reverse_lane_overlap_preview_and_commit_share_rejection_and_footprint() 
         preset: RoadPreset::DualBidirectional,
     });
     assert!(!committed.applied);
-    assert_eq!(committed.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(committed.rejection, preview.rejection);
 }
 
@@ -756,7 +758,7 @@ fn cycling_a_structure_tile_is_a_silent_no_op() {
 
     assert!(!result.applied);
     assert!(result.rejection.is_none());
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
 }
 
 #[test]
@@ -822,7 +824,7 @@ fn road_line_contact_with_automatic_junction_is_rejected_atomically() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),
@@ -865,7 +867,7 @@ fn road_line_contact_with_roundabout_is_rejected_atomically() {
     });
 
     assert!(!result.applied);
-    assert_eq!(result.snapshot, before);
+    assert_eq!(engine.snapshot(), before);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::BlockedTile),

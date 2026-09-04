@@ -48,8 +48,8 @@ fn low_budget_single_road_rejects_standard_and_applies_creative_without_deductio
     assert_eq!(standard.snapshot(), standard_before);
 
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
-    assert_eq!(creative.snapshot(), creative_result.snapshot);
+    assert_eq!(creative.snapshot().budget, creative_before.budget);
+    assert_eq!(creative.snapshot(), creative.snapshot());
 }
 
 #[test]
@@ -63,9 +63,9 @@ fn funded_single_road_has_world_parity_and_equal_nominal_cost() {
 
     assert!(standard_result.applied, "{standard_result:?}");
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(standard_result.snapshot.budget, 0);
-    assert_eq!(creative_result.snapshot.budget, ROAD_COST);
-    assert_world_equal_ignoring_cost_policy(&standard_result.snapshot, &creative_result.snapshot);
+    assert_eq!(standard.snapshot().budget, 0);
+    assert_eq!(creative.snapshot().budget, ROAD_COST);
+    assert_world_equal_ignoring_cost_policy(&standard.snapshot(), &creative.snapshot());
 }
 
 #[test]
@@ -94,7 +94,7 @@ fn low_budget_roundabouts_reject_standard_and_apply_creative_without_deduction()
         assert_eq!(standard.snapshot(), standard_before);
 
         assert!(creative_result.applied, "{creative_result:?}");
-        assert_eq!(creative_result.snapshot.budget, creative_before.budget);
+        assert_eq!(creative.snapshot().budget, creative_before.budget);
     }
 }
 
@@ -114,12 +114,9 @@ fn funded_roundabouts_have_world_parity_and_equal_nominal_cost() {
 
         assert!(standard_result.applied, "{standard_result:?}");
         assert!(creative_result.applied, "{creative_result:?}");
-        assert_eq!(standard_result.snapshot.budget, 0);
-        assert_eq!(creative_result.snapshot.budget, cost);
-        assert_world_equal_ignoring_cost_policy(
-            &standard_result.snapshot,
-            &creative_result.snapshot,
-        );
+        assert_eq!(standard.snapshot().budget, 0);
+        assert_eq!(creative.snapshot().budget, cost);
+        assert_world_equal_ignoring_cost_policy(&standard.snapshot(), &creative.snapshot());
     }
 }
 
@@ -258,9 +255,9 @@ fn assert_low_budget_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32
             .map(|rejection| &rejection.code),
         Some(&RejectionCode::InsufficientBudget),
     );
-    assert_eq!(standard_result.snapshot, standard_before);
+    assert_eq!(standard.snapshot(), standard_before);
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
+    assert_eq!(creative.snapshot().budget, creative_before.budget);
 }
 
 fn assert_funded_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
@@ -273,12 +270,9 @@ fn assert_funded_pair(prepared: &GameSnapshot, intent: GameIntent, cost: i32) {
 
     assert!(standard_result.applied, "{standard_result:?}");
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(
-        standard_result.snapshot.budget,
-        standard_before.budget - cost,
-    );
-    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
-    assert_world_equal_ignoring_cost_policy(&standard_result.snapshot, &creative_result.snapshot);
+    assert_eq!(standard.snapshot().budget, standard_before.budget - cost,);
+    assert_eq!(creative.snapshot().budget, creative_before.budget);
+    assert_world_equal_ignoring_cost_policy(&standard.snapshot(), &creative.snapshot());
 }
 
 fn assert_funded_paired_rejection(
@@ -306,8 +300,8 @@ fn assert_funded_paired_rejection(
         Some(&expected)
     );
     assert_eq!(standard_result.rejection, creative_result.rejection);
-    assert_eq!(standard_result.snapshot, standard_before);
-    assert_eq!(creative_result.snapshot, creative_before);
+    assert_eq!(standard.snapshot(), standard_before);
+    assert_eq!(creative.snapshot(), creative_before);
     assert_eq!(standard.road_topology_for_test(), &standard_topology);
     assert_eq!(creative.road_topology_for_test(), &creative_topology);
 }
@@ -476,10 +470,10 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
     });
     assert!(funded.applied, "exact budget buys all buses: {funded:?}");
     assert_eq!(
-        funded.snapshot.transit.routes[0].vehicle_ids.len(),
+        exact.snapshot().transit.routes[0].vehicle_ids.len(),
         required
     );
-    assert_eq!(funded.snapshot.budget, 0);
+    assert_eq!(exact.snapshot().budget, 0);
 
     let mut short = engine_for(
         &setup.snapshot_for_save(),
@@ -493,9 +487,9 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InsufficientBudget),
     );
-    assert!(rejected.snapshot.transit.routes[0].vehicle_ids.is_empty());
-    assert!(rejected.snapshot.transit.vehicles.is_empty());
-    assert_eq!(rejected.snapshot.budget, fleet_cost - 1);
+    assert!(short.snapshot().transit.routes[0].vehicle_ids.is_empty());
+    assert!(short.snapshot().transit.vehicles.is_empty());
+    assert_eq!(short.snapshot().budget, fleet_cost - 1);
 
     let mut creative = engine_for(&setup.snapshot_for_save(), EconomyPreset::Creative, 0);
     let free = creative.dispatch(GameIntent::DeployInitialFleet {
@@ -505,8 +499,11 @@ fn deployed_bus_fleet_is_atomic_and_respects_standard_vs_creative_costs() {
         free.applied,
         "creative buys the same fleet for free: {free:?}"
     );
-    assert_eq!(free.snapshot.transit.routes[0].vehicle_ids.len(), required);
-    assert_eq!(free.snapshot.budget, 0);
+    assert_eq!(
+        creative.snapshot().transit.routes[0].vehicle_ids.len(),
+        required
+    );
+    assert_eq!(creative.snapshot().budget, 0);
 }
 
 #[test]
@@ -523,9 +520,9 @@ fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
             result.applied,
             "bus creation is free in {preset:?}: {result:?}"
         );
-        assert!(result.snapshot.transit.routes[0].vehicle_ids.is_empty());
-        assert!(result.snapshot.transit.vehicles.is_empty());
-        assert_eq!(result.snapshot.budget, 0);
+        assert!(engine.snapshot().transit.routes[0].vehicle_ids.is_empty());
+        assert!(engine.snapshot().transit.vehicles.is_empty());
+        assert_eq!(engine.snapshot().budget, 0);
     }
 
     let metro_network = prepared_metro_route_network();
@@ -541,11 +538,11 @@ fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
             result.applied,
             "metro creation is free in {preset:?}: {result:?}"
         );
-        assert!(result.snapshot.transit.metro_lines[0]
+        assert!(engine.snapshot().transit.metro_lines[0]
             .vehicle_ids
             .is_empty());
-        assert!(result.snapshot.transit.vehicles.is_empty());
-        assert_eq!(result.snapshot.budget, before.budget);
+        assert!(engine.snapshot().transit.vehicles.is_empty());
+        assert_eq!(engine.snapshot().budget, before.budget);
     }
 
     for (mode, assignment_mode, line_id, assignment_cost) in [
@@ -564,53 +561,55 @@ fn transit_service_creation_and_assignment_follow_the_cost_policy_matrix() {
 
 #[test]
 fn dedicated_and_generic_transit_node_intents_preserve_creative_budget() {
-    let bus_dedicated = engine_for(&prepared_bus_stop(), EconomyPreset::Creative, 0)
-        .dispatch(GameIntent::AddBusStop { point: point(4, 4) });
-    let bus_generic = engine_for(&prepared_bus_stop(), EconomyPreset::Creative, 0).dispatch(
-        GameIntent::PlaceBuilding {
-            building_type: "busStop".to_string(),
-            origin: point(4, 4),
-            rotation: 0,
-        },
-    );
-    let metro_dedicated = engine_for(&prepared_metro_station(), EconomyPreset::Creative, 0)
-        .dispatch(GameIntent::AddMetroStation { point: point(4, 4) });
-    let metro_generic = engine_for(&prepared_metro_station(), EconomyPreset::Creative, 0).dispatch(
-        GameIntent::PlaceBuilding {
-            building_type: "metroStation".to_string(),
-            origin: point(4, 4),
-            rotation: 0,
-        },
-    );
+    let mut bus_dedicated_engine = engine_for(&prepared_bus_stop(), EconomyPreset::Creative, 0);
+    let bus_dedicated =
+        bus_dedicated_engine.dispatch(GameIntent::AddBusStop { point: point(4, 4) });
+    let mut bus_generic_engine = engine_for(&prepared_bus_stop(), EconomyPreset::Creative, 0);
+    let bus_generic = bus_generic_engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "busStop".to_string(),
+        origin: point(4, 4),
+        rotation: 0,
+    });
+    let mut metro_dedicated_engine =
+        engine_for(&prepared_metro_station(), EconomyPreset::Creative, 0);
+    let metro_dedicated =
+        metro_dedicated_engine.dispatch(GameIntent::AddMetroStation { point: point(4, 4) });
+    let mut metro_generic_engine =
+        engine_for(&prepared_metro_station(), EconomyPreset::Creative, 0);
+    let metro_generic = metro_generic_engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "metroStation".to_string(),
+        origin: point(4, 4),
+        rotation: 0,
+    });
 
     assert!(bus_dedicated.applied, "{bus_dedicated:?}");
     assert!(bus_generic.applied, "{bus_generic:?}");
     assert!(metro_dedicated.applied, "{metro_dedicated:?}");
     assert!(metro_generic.applied, "{metro_generic:?}");
-    assert_eq!(bus_dedicated.snapshot.budget, 0);
-    assert_eq!(bus_generic.snapshot.budget, 0);
-    assert_eq!(metro_dedicated.snapshot.budget, 0);
-    assert_eq!(metro_generic.snapshot.budget, 0);
-    assert!(bus_dedicated
-        .snapshot
+    assert_eq!(bus_dedicated_engine.snapshot().budget, 0);
+    assert_eq!(bus_generic_engine.snapshot().budget, 0);
+    assert_eq!(metro_dedicated_engine.snapshot().budget, 0);
+    assert_eq!(metro_generic_engine.snapshot().budget, 0);
+    assert!(bus_dedicated_engine
+        .snapshot()
         .transit
         .stops
         .iter()
         .any(|stop| stop.position == point(4, 4)));
-    assert!(bus_generic
-        .snapshot
+    assert!(bus_generic_engine
+        .snapshot()
         .transit
         .stops
         .iter()
         .any(|stop| stop.position == point(4, 4)));
-    assert!(metro_dedicated
-        .snapshot
+    assert!(metro_dedicated_engine
+        .snapshot()
         .transit
         .stations
         .iter()
         .any(|station| station.position == point(4, 4)));
-    assert!(metro_generic
-        .snapshot
+    assert!(metro_generic_engine
+        .snapshot()
         .transit
         .stations
         .iter()
@@ -633,61 +632,23 @@ fn over_budget_track_stroke_truncates_standard_but_creative_authors_every_valid_
 
     assert!(standard_result.applied, "{standard_result:?}");
     assert_eq!(
-        standard_result.snapshot.budget,
+        standard.snapshot().budget,
         standard_before.budget - TRACK_COST
     );
-    assert!(
-        standard_result
-            .snapshot
-            .map
-            .tile(point(2, 2))
-            .unwrap()
-            .has_track
-    );
+    assert!(standard.snapshot().map.tile(point(2, 2)).unwrap().has_track);
     assert_eq!(
-        standard_result
-            .snapshot
-            .map
-            .tile(point(3, 2))
-            .unwrap()
-            .has_track,
+        standard.snapshot().map.tile(point(3, 2)).unwrap().has_track,
         standard_before.map.tile(point(3, 2)).unwrap().has_track
     );
     assert_eq!(
-        standard_result
-            .snapshot
-            .map
-            .tile(point(4, 2))
-            .unwrap()
-            .has_track,
+        standard.snapshot().map.tile(point(4, 2)).unwrap().has_track,
         standard_before.map.tile(point(4, 2)).unwrap().has_track
     );
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
-    assert!(
-        creative_result
-            .snapshot
-            .map
-            .tile(point(2, 2))
-            .unwrap()
-            .has_track
-    );
-    assert!(
-        creative_result
-            .snapshot
-            .map
-            .tile(point(3, 2))
-            .unwrap()
-            .has_track
-    );
-    assert!(
-        creative_result
-            .snapshot
-            .map
-            .tile(point(4, 2))
-            .unwrap()
-            .has_track
-    );
+    assert_eq!(creative.snapshot().budget, creative_before.budget);
+    assert!(creative.snapshot().map.tile(point(2, 2)).unwrap().has_track);
+    assert!(creative.snapshot().map.tile(point(3, 2)).unwrap().has_track);
+    assert!(creative.snapshot().map.tile(point(4, 2)).unwrap().has_track);
 }
 
 #[test]

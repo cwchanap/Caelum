@@ -128,10 +128,10 @@ fn departure_jitter_uses_full_suffix_modulo_not_truncated_u16() {
 fn outbound_requirement_spawns_for_assigned_workers() {
     let mut engine = assigned_worker_engine();
 
-    let result = engine.tick(360.0);
+    let _result = engine.tick(360.0);
 
-    assert!(result
-        .snapshot
+    assert!(engine
+        .snapshot()
         .active_trips
         .iter()
         .any(|trip| { trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound }));
@@ -143,9 +143,9 @@ fn large_tick_only_advances_outbound_after_scheduled_departure() {
     let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
     let scheduled = scheduled_time_seconds(0, departure);
 
-    let result = engine.tick(360.0);
-    let trip = result
-        .snapshot
+    let _result = engine.tick(360.0);
+    let snapshot = engine.snapshot();
+    let trip = snapshot
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
@@ -163,9 +163,9 @@ fn ticking_exactly_to_scheduled_departure_spawns_outbound_without_moving() {
     let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
     let scheduled = scheduled_time_seconds(0, departure);
 
-    let result = engine.tick(scheduled);
-    let trip = result
-        .snapshot
+    let _result = engine.tick(scheduled);
+    let snapshot = engine.snapshot();
+    let trip = snapshot
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
@@ -186,9 +186,9 @@ fn large_tick_stops_at_return_boundary_after_outbound_arrives_same_tick() {
     let scheduled_return = scheduled_time_seconds(0, return_departure);
     let post_return_elapsed = 10.0;
 
-    let result = engine.tick(scheduled_return + post_return_elapsed);
-    let trip = result
-        .snapshot
+    let _result = engine.tick(scheduled_return + post_return_elapsed);
+    let snapshot = engine.snapshot();
+    let trip = snapshot
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
@@ -210,34 +210,35 @@ fn large_tick_crossing_midnight_preserves_outbound_arrival_before_day_boundary()
     assert!(return_time < clock::GAME_DAY_SECONDS);
     assert!(clock::GAME_DAY_SECONDS < final_time);
 
-    let large_result = large_tick.tick(final_time);
-    let after_return_boundary = stepped_tick.tick(return_time);
-    assert!(!after_return_boundary
-        .snapshot
+    let _large_result = large_tick.tick(final_time);
+    let _after_return_boundary = stepped_tick.tick(return_time);
+    assert!(!stepped_tick
+        .snapshot()
         .active_trips
         .iter()
         .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn));
 
-    let mut stepped_snapshot = after_return_boundary.snapshot;
+    let mut stepped_snapshot = stepped_tick.snapshot();
     while stepped_snapshot.time < clock::GAME_DAY_SECONDS
         && !stepped_snapshot
             .active_trips
             .iter()
             .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
     {
-        stepped_snapshot = stepped_tick.tick(1.0).snapshot;
+        stepped_tick.tick(1.0);
+        stepped_snapshot = stepped_tick.snapshot();
     }
     assert!(stepped_snapshot.time < clock::GAME_DAY_SECONDS);
 
-    let stepped_result = stepped_tick.tick(final_time - stepped_snapshot.time);
-    let expected_return = stepped_result
-        .snapshot
+    let _stepped_result = stepped_tick.tick(final_time - stepped_snapshot.time);
+    let snapshot = stepped_tick.snapshot();
+    let expected_return = snapshot
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
         .unwrap();
-    let large_return = large_result
-        .snapshot
+    let snapshot = large_tick.snapshot();
+    let large_return = snapshot
         .active_trips
         .iter()
         .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
@@ -264,10 +265,10 @@ fn return_requirement_requires_successful_outbound() {
     });
     engine.dispatch(GameIntent::SetPaused { paused: false });
 
-    let evening = engine.tick(900.0);
+    let _evening = engine.tick(900.0);
 
-    assert_eq!(evening.snapshot.active_trips.len(), 0);
-    assert_eq!(evening.snapshot.metrics.unserved_trips, 0);
+    assert_eq!(engine.snapshot().active_trips.len(), 0);
+    assert_eq!(engine.snapshot().metrics.unserved_trips, 0);
 }
 
 #[test]

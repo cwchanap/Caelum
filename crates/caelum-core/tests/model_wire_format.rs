@@ -24,8 +24,8 @@ use caelum_core::road::RoadMutation;
 use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
-    DispatchResult, GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset,
-    RoutePreviewRequest, StartingCapital,
+    GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset, RoutePreviewRequest,
+    StartingCapital,
 };
 use serde_json::json;
 
@@ -43,7 +43,7 @@ fn transit_node_status_defaults_to_present_when_missing() {
     assert!(road.applied, "{road:?}");
     let stop_result = engine.dispatch(GameIntent::AddBusStop { point: point(2, 4) });
     assert!(stop_result.applied, "{stop_result:?}");
-    let mut stop_value = serde_json::to_value(&stop_result.snapshot.transit.stops[0]).unwrap();
+    let mut stop_value = serde_json::to_value(&engine.snapshot().transit.stops[0]).unwrap();
     assert_eq!(stop_value["kind"], json!("busStop"));
     assert_eq!(stop_value["status"], json!("present"));
     stop_value.as_object_mut().unwrap().remove("status");
@@ -51,9 +51,8 @@ fn transit_node_status_defaults_to_present_when_missing() {
     assert_eq!(restored.status, TransitNodeStatus::Present);
 
     engine.dispatch(GameIntent::LayTrack { point: point(5, 5) });
-    let station_result = engine.dispatch(GameIntent::AddMetroStation { point: point(5, 5) });
-    let mut station_value =
-        serde_json::to_value(&station_result.snapshot.transit.stations[0]).unwrap();
+    let _station_result = engine.dispatch(GameIntent::AddMetroStation { point: point(5, 5) });
+    let mut station_value = serde_json::to_value(&engine.snapshot().transit.stations[0]).unwrap();
     assert_eq!(station_value["status"], json!("present"));
     station_value.as_object_mut().unwrap().remove("status");
     let restored: Station = serde_json::from_value(station_value).expect("missing status defaults");
@@ -1492,37 +1491,34 @@ fn building_catalog_exposes_phase_two_resident_and_job_capacity() {
 }
 
 #[test]
-fn dispatch_result_round_trips_through_serde_json() {
-    // The Tauri host (`src-tauri/src/lib.rs`) returns `DispatchResult` from
+fn gameplay_update_result_round_trips_through_serde_json() {
+    // The Tauri host (`src-tauri/src/lib.rs`) returns `GameplayUpdateResult` from
     // `game_dispatch` / `game_tick` through Tauri's IPC, which serializes via
     // `serde_json`. The WASM host instead uses `serde-wasm-bindgen`. The two
     // serializers differ on `Option<T>` (`None` -> `null` in JSON vs `undefined`
-    // in JS, which is why `normalizeDispatchResult` exists on the TS side). This
-    // test pins the `serde_json` path specifically: a `DispatchResult` produced
-    // by the Rust core must round-trip through `serde_json::to_value` ->
-    // `serde_json::from_value` byte-for-byte, proving the Tauri IPC serializer
-    // cannot silently drop or rename a field that the WASM path handles.
+    // in JS, which is why the TS runtime normalizes nullable fields).
     //
     // Both the applied (rejection = None) and rejected (rejection = Some) cases
-    // are covered, since `Option<GameplayRejection>` is the field most likely to diverge
-    // between serializers.
+    // are covered, since `Option<GameplayRejection>` is the field most likely to
+    // diverge between serializers.
     use caelum_core::state::create_initial_snapshot;
+    use caelum_core::GameplayUpdateResult;
 
     let snapshot = create_initial_snapshot();
 
     // Applied case: rejection is None -> serializes to JSON `null`.
-    let applied = DispatchResult::applied(snapshot.clone());
+    let applied = GameplayUpdateResult::present(&snapshot);
     let value = serde_json::to_value(&applied).expect("applied result should serialize");
     assert_eq!(value["applied"], json!(true));
     assert_eq!(value["rejection"], json!(null));
-    assert_eq!(value["snapshot"]["paused"], json!(true));
-    let back: DispatchResult =
+    assert!(value["update"]["scene"].is_object());
+    let back: GameplayUpdateResult =
         serde_json::from_value(value).expect("applied result should deserialize back");
     assert_eq!(back, applied);
 
     // Rejected case: rejection is Some -> serializes to structured JSON.
-    let rejected = DispatchResult::rejected(
-        snapshot.clone(),
+    let rejected = GameplayUpdateResult::rejected(
+        &snapshot,
         GameplayRejection::new(RejectionCode::InvalidSpeed),
     );
     let value = serde_json::to_value(&rejected).expect("rejected result should serialize");
@@ -1531,15 +1527,15 @@ fn dispatch_result_round_trips_through_serde_json() {
         value["rejection"],
         json!({ "code": "invalidSpeed", "context": {} })
     );
-    assert!(value.get("context").is_none());
-    let back: DispatchResult =
+    assert!(value["update"]["scene"].is_null());
+    let back: GameplayUpdateResult =
         serde_json::from_value(value.clone()).expect("rejected result should deserialize back");
     assert_eq!(back, rejected);
 
-    // Cross-check: the serialized JSON shape matches what the TS `DispatchResult`
-    // interface expects (`{ snapshot, applied, rejection }`), so a Tauri IPC
-    // response is structurally identical to a WASM `engine.dispatch()` return.
-    assert!(value.get("context").is_none());
+    // Cross-check: the serialized JSON shape matches what the TS
+    // `GameplayUpdateResult` interface expects (`{ update, applied, rejection }`),
+    // so a Tauri IPC response is structurally identical to a WASM
+    // `engine.dispatch()` return.
     let keys: std::collections::HashSet<String> = value
         .as_object()
         .expect("serialized result is a JSON object")
@@ -1548,11 +1544,11 @@ fn dispatch_result_round_trips_through_serde_json() {
         .collect();
     assert_eq!(
         keys,
-        ["snapshot", "applied", "rejection"]
+        ["update", "applied", "rejection"]
             .into_iter()
             .map(String::from)
             .collect(),
-        "DispatchResult must serialize exactly the TS-contract keys"
+        "GameplayUpdateResult must serialize exactly the TS-contract keys"
     );
 }
 

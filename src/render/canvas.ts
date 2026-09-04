@@ -3,7 +3,6 @@ import type { UiState } from "../ui/uiState";
 import { buildRoadMutationPreview } from "../runtime/runtimeSelectors";
 import type { RoadMutationPreviewView } from "../runtime/types";
 import { renderBuildings } from "./buildingRenderer";
-import { renderCitizens } from "./citizenRenderer";
 import { renderCursorBadge } from "./cursorBadge";
 import { renderMap } from "./mapRenderer";
 import {
@@ -137,7 +136,6 @@ export function renderGame(
   renderBuildings(ctx, state);
   renderOverlays(ctx, state, ui, roadPreview);
   renderTransit(ctx, state, ui);
-  renderCitizens(ctx, state);
   renderRouteDraftHandleOverlay(ctx, state, ui);
   ctx.restore();
 

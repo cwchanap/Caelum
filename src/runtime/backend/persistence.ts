@@ -1,6 +1,10 @@
 import { SNAPSHOT_SCHEMA_VERSION } from "../../domain/types";
 import { describeHostRejection } from "../../hostDiagnostics";
-import type { RustGameSnapshot } from "./types";
+import type {
+  PresentationUpdate,
+  RestoreResult,
+  RustGameSnapshot,
+} from "./types";
 import type {
   SnapshotError,
   SnapshotErrorCode,
@@ -97,16 +101,15 @@ export async function runSnapshotOperation(
  * ambiguous: the native/WASM engine may have committed before response
  * delivery failed. Only a structured domain rejection proves that candidate
  * construction stopped before commit and may be converted to `{ ok: false }`.
+ * Success is the unversioned presentation update returned by the host —
+ * there is deliberately no second schema validation here.
  */
 export async function runRestoreOperation(
   invoke: () => Promise<unknown> | unknown,
-): Promise<SnapshotResult> {
+): Promise<RestoreResult> {
   try {
-    const value = await invoke();
-    if (!isSnapshot(value) || value.schemaVersion !== SNAPSHOT_SCHEMA_VERSION) {
-      throw new Error("host returned an invalid restore snapshot");
-    }
-    return { ok: true, snapshot: value };
+    const update = (await invoke()) as PresentationUpdate;
+    return { ok: true, update };
   } catch (error) {
     const code = definitiveRestoreFailureCode(error);
     if (code !== undefined) return snapshotFailure(code, error);
@@ -114,9 +117,6 @@ export async function runRestoreOperation(
   }
 }
 
-function snapshotFailure(
-  code: SnapshotErrorCode,
-  error?: unknown,
-): SnapshotResult {
-  return { ok: false, error: snapshotError(code, error) };
+function snapshotFailure(code: SnapshotErrorCode, error?: unknown) {
+  return { ok: false, error: snapshotError(code, error) } as const;
 }

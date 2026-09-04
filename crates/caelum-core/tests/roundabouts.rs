@@ -423,7 +423,7 @@ fn compact_and_standard_charge_rust_authoritative_flat_costs() {
         let before = engine.snapshot();
         let result = engine.dispatch(GameIntent::PlaceRoundabout { origin, size });
         assert!(result.applied, "{result:?}");
-        assert_eq!(result.snapshot.budget, before.budget - expected);
+        assert_eq!(engine.snapshot().budget, before.budget - expected);
     }
 }
 
@@ -432,7 +432,8 @@ fn replacing_bare_roads_captures_every_crossing_boundary_connection() {
     let mut engine = crossing_engine();
     let result = engine.dispatch(place_standard_roundabout());
     assert!(result.applied, "{result:?}");
-    let structure = only_roundabout(&result.snapshot);
+    let snapshot = engine.snapshot();
+    let structure = only_roundabout(&snapshot);
 
     assert_eq!(
         structure.port_keys(),
@@ -444,8 +445,8 @@ fn replacing_bare_roads_captures_every_crossing_boundary_connection() {
         ]
     );
     assert!(structure.footprint().iter().all(|point| {
-        result
-            .snapshot
+        engine
+            .snapshot()
             .map
             .tile(*point)
             .unwrap()
@@ -479,41 +480,42 @@ fn complete_automatic_junction_may_be_replaced_but_partial_overlap_rejects() {
         result.rejection.unwrap().code,
         RejectionCode::BlockedFootprint
     );
-    assert_eq!(result.snapshot, before);
+    assert_eq!(partial.snapshot(), before);
 }
 
 #[test]
 fn invalid_footprint_rejections_are_all_or_nothing() {
-    let mut fixtures = Vec::new();
-
     let mut out_of_bounds = GameEngine::new();
-    fixtures.push((
-        out_of_bounds.snapshot(),
-        out_of_bounds.dispatch(GameIntent::PlaceRoundabout {
-            origin: point(-1, 0),
-            size: RoundaboutSize::Compact2x2,
-        }),
-    ));
+    let before = out_of_bounds.snapshot();
+    let result = out_of_bounds.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(-1, 0),
+        size: RoundaboutSize::Compact2x2,
+    });
+    assert!(!result.applied);
+    assert!(result.rejection.is_some());
+    assert_eq!(out_of_bounds.snapshot(), before);
 
     // Origins near i32 extremes must reject before template arithmetic overflows.
     let mut overflowing = GameEngine::new();
-    fixtures.push((
-        overflowing.snapshot(),
-        overflowing.dispatch(GameIntent::PlaceRoundabout {
-            origin: point(i32::MAX, i32::MAX),
-            size: RoundaboutSize::Standard3x3,
-        }),
-    ));
+    let before = overflowing.snapshot();
+    let result = overflowing.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(i32::MAX, i32::MAX),
+        size: RoundaboutSize::Standard3x3,
+    });
+    assert!(!result.applied);
+    assert!(result.rejection.is_some());
+    assert_eq!(overflowing.snapshot(), before);
 
     let mut insufficient = GameEngine::new();
     insufficient.set_budget_for_test(999);
-    fixtures.push((
-        insufficient.snapshot(),
-        insufficient.dispatch(GameIntent::PlaceRoundabout {
-            origin: point(5, 5),
-            size: RoundaboutSize::Compact2x2,
-        }),
-    ));
+    let before = insufficient.snapshot();
+    let result = insufficient.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(5, 5),
+        size: RoundaboutSize::Compact2x2,
+    });
+    assert!(!result.applied);
+    assert!(result.rejection.is_some());
+    assert_eq!(insufficient.snapshot(), before);
 
     let mut existing = GameEngine::new();
     dispatch(
@@ -523,19 +525,14 @@ fn invalid_footprint_rejections_are_all_or_nothing() {
             size: RoundaboutSize::Compact2x2,
         },
     );
-    fixtures.push((
-        existing.snapshot(),
-        existing.dispatch(GameIntent::PlaceRoundabout {
-            origin: point(5, 5),
-            size: RoundaboutSize::Compact2x2,
-        }),
-    ));
-
-    for (before, result) in fixtures {
-        assert!(!result.applied);
-        assert!(result.rejection.is_some());
-        assert_eq!(result.snapshot, before);
-    }
+    let before = existing.snapshot();
+    let result = existing.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(5, 5),
+        size: RoundaboutSize::Compact2x2,
+    });
+    assert!(!result.applied);
+    assert!(result.rejection.is_some());
+    assert_eq!(existing.snapshot(), before);
 }
 
 #[test]
@@ -682,7 +679,7 @@ fn tracks_transit_nodes_and_buildings_reject_the_whole_placement() {
             result.rejection.unwrap().code,
             RejectionCode::BlockedFootprint
         );
-        assert_eq!(result.snapshot, before);
+        assert_eq!(engine.snapshot(), before);
     }
 }
 
@@ -725,15 +722,16 @@ fn removing_any_member_removes_the_structure_once_and_never_restores_old_roads()
     });
 
     assert!(result.applied, "{result:?}");
-    assert_eq!(result.snapshot.budget, budget_after_placement);
-    assert!(result
-        .snapshot
+    assert_eq!(engine.snapshot().budget, budget_after_placement);
+    assert!(engine
+        .snapshot()
         .map
         .road_structures
         .iter()
         .all(|candidate| candidate.id() != structure.id()));
     for (point, latent_area) in structure.footprint().iter().zip(latent_areas) {
-        let tile = result.snapshot.map.tile(*point).unwrap();
+        let snapshot = engine.snapshot();
+        let tile = snapshot.map.tile(*point).unwrap();
         assert!(tile.road_structure_id.is_none());
         assert_ne!(tile.kind, "road");
         assert_eq!(tile.area, latent_area);
@@ -941,7 +939,7 @@ fn every_roundabout_owned_tile_blocks_other_infrastructure_and_zoning() {
         let result = engine.dispatch(intent);
         assert!(!result.applied, "{result:?}");
         assert!(result.rejection.is_some());
-        assert_eq!(result.snapshot, before);
+        assert_eq!(engine.snapshot(), before);
     }
 }
 
@@ -990,15 +988,15 @@ fn removing_roundabout_recomputes_an_adjacent_automatic_junction_in_preview_and_
 
     let committed = engine.dispatch(GameIntent::RemoveAtTile { point: point(6, 5) });
     assert!(committed.applied, "{committed:?}");
-    assert!(committed
-        .snapshot
+    assert!(engine
+        .snapshot()
         .map
         .road_structures
         .iter()
         .all(|structure| structure.id() != old_junction.id()));
     assert_eq!(
-        committed
-            .snapshot
+        engine
+            .snapshot()
             .map
             .tile(point(4, 5))
             .unwrap()

@@ -60,12 +60,13 @@ pub mod transit_nodes;
 pub mod trips;
 
 pub use engine::{GameEngine, RoutingContext};
-pub use intent::{DispatchResult, GameIntent, RoadPreset};
+pub use intent::{GameIntent, GameplayUpdateResult, RoadPreset};
 pub use model::{
     GameSnapshot, LegFailureReason, SnapshotSchemaProbe, StartingCapital, StopRoadAccess,
     SNAPSHOT_SCHEMA_VERSION,
 };
 pub use persistence::{check_schema_version, check_snapshot_schema, SnapshotLoadError};
+pub use presentation::{PresentationFrame, PresentationScene, PresentationUpdate};
 pub use preview::{
     AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,
     RoadMutationPreviewResponse, RouteImpact, RouteImpactKind, RoutePreviewRequest,

@@ -5,10 +5,17 @@ import { createWasmBackend } from "./wasmBackend";
 export { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 export type {
   AuthoredRoadTilePreview,
-  DispatchResult,
   GameBackend,
+  GameplayUpdateResult,
   GameplayWarning,
   GameIntent,
+  PresentationFrame,
+  PresentationRoute,
+  PresentationMetroLine,
+  PresentationScene,
+  PresentationUpdate,
+  PresentationVehicle,
+  RestoreResult,
   RoadMutation,
   RoadMutationPreviewRequest,
   RoadMutationPreviewResponse,
@@ -26,7 +33,6 @@ export type {
   SandboxCreationResult,
   SandboxResetError,
   SandboxResetErrorCode,
-  SandboxResetResult,
   TurnSummary,
   WarningCode,
 } from "./types";
@@ -36,6 +42,7 @@ export type {
   SnapshotErrorCode,
   SnapshotResult,
 } from "./persistenceContract";
+export type { SandboxResetPresentationResult } from "./types";
 
 type TauriRuntimeSource = {
   __TAURI_INTERNALS__?: unknown;

@@ -47,9 +47,8 @@ fn reset_replays_the_complete_original_blank_grid_request() {
         point: Point { x: 3, y: 3 },
     });
 
-    let reset = engine.reset().unwrap();
+    engine.reset().unwrap();
 
-    assert_eq!(reset, expected);
     assert_eq!(engine.snapshot(), expected);
 }
 
@@ -64,9 +63,8 @@ fn reset_replays_the_complete_original_crossroads_request() {
         point: Point { x: 3, y: 3 },
     });
 
-    let reset = engine.reset().unwrap();
+    engine.reset().unwrap();
 
-    assert_eq!(reset, expected);
     assert_eq!(engine.snapshot(), expected);
 }
 
@@ -80,9 +78,8 @@ fn reset_replays_the_complete_original_small_town_request() {
     let _ = engine.tick(seconds_at_clock_minute(MORNING_CLOCK_MINUTE));
     engine.set_budget_for_test(7);
 
-    let reset = engine.reset().unwrap();
+    engine.reset().unwrap();
 
-    assert_eq!(reset, expected);
     assert_eq!(engine.snapshot(), expected);
 }
 

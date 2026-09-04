@@ -241,9 +241,9 @@ fn bus_route_creation_is_fleet_free_and_budget_free() {
     });
     assert!(created.applied, "fixture route should apply: {created:?}");
 
-    assert!(created.snapshot.transit.routes[0].vehicle_ids.is_empty());
-    assert!(created.snapshot.transit.vehicles.is_empty());
-    assert_eq!(created.snapshot.budget, before.budget);
+    assert!(engine.snapshot().transit.routes[0].vehicle_ids.is_empty());
+    assert!(engine.snapshot().transit.vehicles.is_empty());
+    assert_eq!(engine.snapshot().budget, before.budget);
 }
 
 #[test]
@@ -259,10 +259,10 @@ fn standard_daily_operating_cost_crosses_budget_below_zero_at_midnight() {
     let result = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
 
     assert!(result.applied);
-    assert_eq!(result.snapshot.day, 1);
-    assert_eq!(result.snapshot.budget, -1);
+    assert_eq!(engine.snapshot().day, 1);
+    assert_eq!(engine.snapshot().budget, -1);
     assert_eq!(
-        result.snapshot.metrics.state,
+        engine.snapshot().metrics.state,
         caelum_core::model::MetricsState::Running
     );
 }
@@ -275,9 +275,10 @@ fn creative_keeps_budget_across_midnight() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let result = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
-    assert_eq!(result.snapshot.budget, 399);
-    let metrics = result.snapshot.transit.routes[0]
+    let _result = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(engine.snapshot().budget, 399);
+    let snapshot = engine.snapshot();
+    let metrics = snapshot.transit.routes[0]
         .service_metrics
         .as_ref()
         .expect("creative midnight response has metrics");
@@ -294,7 +295,8 @@ fn service_metrics_split_actual_and_estimated_daily_cost() {
     });
     assert!(targeted.applied, "target should apply: {targeted:?}");
 
-    let setup = targeted.snapshot.transit.routes[0]
+    let snapshot = engine.snapshot();
+    let setup = snapshot.transit.routes[0]
         .service_metrics
         .as_ref()
         .expect("setup response has metrics");
@@ -305,7 +307,8 @@ fn service_metrics_split_actual_and_estimated_daily_cost() {
         line_id: "route-001".into(),
     });
     assert!(deployed.applied, "deployment should apply: {deployed:?}");
-    let metrics = deployed.snapshot.transit.routes[0]
+    let snapshot = engine.snapshot();
+    let metrics = snapshot.transit.routes[0]
         .service_metrics
         .as_ref()
         .expect("deployed response has metrics");
@@ -353,13 +356,13 @@ fn daily_charge_is_identical_for_coarse_and_split_ticks() {
             .applied
     );
 
-    let coarse_result = coarse.tick(caelum_core::clock::GAME_DAY_SECONDS + 60.0);
+    let _coarse_result = coarse.tick(caelum_core::clock::GAME_DAY_SECONDS + 60.0);
     let _ = split.tick(caelum_core::clock::GAME_DAY_SECONDS - 10.0);
-    let split_result = split.tick(70.0);
+    let _split_result = split.tick(70.0);
 
-    assert_eq!(coarse_result.snapshot.time, split_result.snapshot.time);
-    assert_eq!(coarse_result.snapshot.day, split_result.snapshot.day);
-    assert_eq!(coarse_result.snapshot.budget, split_result.snapshot.budget);
+    assert_eq!(coarse.snapshot().time, split.snapshot().time);
+    assert_eq!(coarse.snapshot().day, split.snapshot().day);
+    assert_eq!(coarse.snapshot().budget, split.snapshot().budget);
 }
 
 #[test]
@@ -371,8 +374,8 @@ fn restored_post_midnight_snapshot_does_not_charge_again_same_day() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let midnight = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
-    assert_eq!(midnight.snapshot.budget, 600);
+    let _midnight = engine.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(engine.snapshot().budget, 600);
 
     let saved = engine.snapshot_for_save();
     let mut restored = GameEngine::from_snapshot(saved).unwrap();
@@ -381,10 +384,10 @@ fn restored_post_midnight_snapshot_does_not_charge_again_same_day() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let later = restored.tick(10.0);
+    let _later = restored.tick(10.0);
 
-    assert_eq!(later.snapshot.day, 1);
-    assert_eq!(later.snapshot.budget, 600);
+    assert_eq!(restored.snapshot().day, 1);
+    assert_eq!(restored.snapshot().budget, 600);
 }
 
 #[test]
@@ -404,8 +407,8 @@ fn paused_route_does_not_incur_daily_operating_cost() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let result = paused_route.tick(caelum_core::clock::GAME_DAY_SECONDS);
-    assert_eq!(result.snapshot.budget, 1_000);
+    let _result = paused_route.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(paused_route.snapshot().budget, 1_000);
 }
 
 #[test]
@@ -424,8 +427,8 @@ fn broken_service_does_not_incur_daily_operating_cost() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let result = broken.tick(caelum_core::clock::GAME_DAY_SECONDS);
-    assert_eq!(result.snapshot.budget, 1_000);
+    let _result = broken.tick(caelum_core::clock::GAME_DAY_SECONDS);
+    assert_eq!(broken.snapshot().budget, 1_000);
 }
 
 #[test]
@@ -439,11 +442,11 @@ fn metro_line_creation_is_fleet_free_and_budget_free() {
     });
     assert!(created.applied, "fixture line should apply: {created:?}");
 
-    assert!(created.snapshot.transit.metro_lines[0]
+    assert!(engine.snapshot().transit.metro_lines[0]
         .vehicle_ids
         .is_empty());
-    assert!(created.snapshot.transit.vehicles.is_empty());
-    assert_eq!(created.snapshot.budget, before.budget);
+    assert!(engine.snapshot().transit.vehicles.is_empty());
+    assert_eq!(engine.snapshot().budget, before.budget);
 }
 
 #[test]
@@ -458,11 +461,11 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
     });
     assert!(applied.applied, "minimum headway should apply: {applied:?}");
     assert_eq!(
-        applied.snapshot.transit.routes[0].target_headway_seconds,
+        engine.snapshot().transit.routes[0].target_headway_seconds,
         Some(60)
     );
-    assert_eq!(applied.snapshot.transit.routes[0].revision, revision);
-    assert!(applied.snapshot.transit.routes[0].vehicle_ids.is_empty());
+    assert_eq!(engine.snapshot().transit.routes[0].revision, revision);
+    assert!(engine.snapshot().transit.routes[0].vehicle_ids.is_empty());
 
     let unchanged = engine.dispatch(GameIntent::SetServiceTargetHeadway {
         line_id: "route-001".to_string(),
@@ -473,7 +476,7 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
         "same target should be a no-op: {unchanged:?}"
     );
     assert!(unchanged.rejection.is_none());
-    assert_eq!(unchanged.snapshot.transit.routes[0].revision, revision);
+    assert_eq!(engine.snapshot().transit.routes[0].revision, revision);
 
     let invalid = engine.dispatch(GameIntent::SetServiceTargetHeadway {
         line_id: "route-001".to_string(),
@@ -484,7 +487,7 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
         Some(&RejectionCode::InvalidHeadway),
     );
     assert_eq!(
-        invalid.snapshot.transit.routes[0].target_headway_seconds,
+        engine.snapshot().transit.routes[0].target_headway_seconds,
         Some(60)
     );
 
@@ -659,7 +662,7 @@ fn metro_deployment_uses_line_id_and_metro_cost_atomically() {
         target_headway_seconds: 60,
     });
     assert!(targeted.applied, "metro target should apply: {targeted:?}");
-    let required = targeted.snapshot.transit.metro_lines[0]
+    let required = setup.snapshot().transit.metro_lines[0]
         .service_metrics
         .as_ref()
         .and_then(|metrics| metrics.required_fleet)
@@ -677,11 +680,11 @@ fn metro_deployment_uses_line_id_and_metro_cost_atomically() {
     });
     assert!(deployed.applied, "exact budget should deploy: {deployed:?}");
     assert_eq!(
-        deployed.snapshot.transit.metro_lines[0].vehicle_ids.len(),
+        exact.snapshot().transit.metro_lines[0].vehicle_ids.len(),
         required
     );
-    assert_eq!(deployed.snapshot.transit.vehicles.len(), required);
-    assert_eq!(deployed.snapshot.budget, 0);
+    assert_eq!(exact.snapshot().transit.vehicles.len(), required);
+    assert_eq!(exact.snapshot().budget, 0);
 
     let mut short = GameEngine::from_snapshot(configured.clone()).expect("short fixture loads");
     short.set_budget_for_test(total_cost - 1);
@@ -693,11 +696,11 @@ fn metro_deployment_uses_line_id_and_metro_cost_atomically() {
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InsufficientBudget),
     );
-    assert!(rejected.snapshot.transit.metro_lines[0]
+    assert!(short.snapshot().transit.metro_lines[0]
         .vehicle_ids
         .is_empty());
-    assert!(rejected.snapshot.transit.vehicles.is_empty());
-    assert_eq!(rejected.snapshot.budget, before.budget);
+    assert!(short.snapshot().transit.vehicles.is_empty());
+    assert_eq!(short.snapshot().budget, before.budget);
 
     let mut creative_state = configured;
     creative_state.rules.economy_preset = EconomyPreset::Creative;
@@ -712,12 +715,10 @@ fn metro_deployment_uses_line_id_and_metro_cost_atomically() {
         "creative deploy should be free: {creative_result:?}"
     );
     assert_eq!(
-        creative_result.snapshot.transit.metro_lines[0]
-            .vehicle_ids
-            .len(),
+        creative.snapshot().transit.metro_lines[0].vehicle_ids.len(),
         required
     );
-    assert_eq!(creative_result.snapshot.budget, creative_budget);
+    assert_eq!(creative.snapshot().budget, creative_budget);
 }
 
 #[test]
@@ -746,15 +747,15 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
     });
     assert!(deployed.applied, "exact budget should deploy: {deployed:?}");
     assert_eq!(
-        deployed.snapshot.transit.routes[0].vehicle_ids.len(),
+        exact.snapshot().transit.routes[0].vehicle_ids.len(),
         required
     );
     assert_eq!(
-        deployed.snapshot.transit.vehicles.len(),
+        exact.snapshot().transit.vehicles.len(),
         required,
         "all vehicles must be added together"
     );
-    assert_eq!(deployed.snapshot.budget, 0);
+    assert_eq!(exact.snapshot().budget, 0);
 
     let second = exact.dispatch(GameIntent::DeployInitialFleet {
         line_id: "route-001".to_string(),
@@ -782,9 +783,9 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InsufficientBudget),
     );
-    assert_eq!(rejected.snapshot.transit.routes[0].vehicle_ids.len(), 0);
-    assert_eq!(rejected.snapshot.transit.vehicles.len(), 0);
-    assert_eq!(rejected.snapshot.budget, before.budget);
+    assert_eq!(short.snapshot().transit.routes[0].vehicle_ids.len(), 0);
+    assert_eq!(short.snapshot().transit.vehicles.len(), 0);
+    assert_eq!(short.snapshot().budget, before.budget);
 
     let mut creative_state = bus_route_engine().snapshot_for_save();
     creative_state.transit.routes[0].target_headway_seconds = Some(60);
@@ -799,10 +800,10 @@ fn deployment_buys_the_whole_fleet_atomically_and_is_one_shot() {
         "creative deploy should be free: {creative_result:?}"
     );
     assert_eq!(
-        creative_result.snapshot.transit.routes[0].vehicle_ids.len(),
+        creative.snapshot().transit.routes[0].vehicle_ids.len(),
         required
     );
-    assert_eq!(creative_result.snapshot.budget, 0);
+    assert_eq!(creative.snapshot().budget, 0);
 }
 
 fn shortfall_bus_engine() -> GameEngine {
@@ -956,7 +957,7 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
         "pause should apply: {paused_result:?}"
     );
     assert_eq!(
-        paused_result.snapshot.transit.routes[0]
+        paused.snapshot().transit.routes[0]
             .service_metrics
             .as_ref()
             .expect("paused response has metrics")
@@ -971,14 +972,14 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
         line_id: "route-001".into(),
     });
     assert!(added.applied, "top-up should apply: {added:?}");
-    assert_eq!(added.snapshot.transit.vehicles.len(), existing.len() + 1);
+    assert_eq!(engine.snapshot().transit.vehicles.len(), existing.len() + 1);
     assert_eq!(
-        &added.snapshot.transit.vehicles[..existing.len()],
+        &engine.snapshot().transit.vehicles[..existing.len()],
         existing.as_slice(),
         "existing vehicles must remain byte-for-byte unchanged"
     );
-    let new_vehicle = added
-        .snapshot
+    let snapshot = engine.snapshot();
+    let new_vehicle = snapshot
         .transit
         .vehicles
         .last()
@@ -999,16 +1000,16 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
         }),
         "new vehicle cursor must occupy a distinct cycle offset"
     );
-    assert_eq!(added.snapshot.budget, before_budget - BUS_COST);
+    assert_eq!(engine.snapshot().budget, before_budget - BUS_COST);
     assert_eq!(
-        added.snapshot.transit.routes[0]
+        engine.snapshot().transit.routes[0]
             .service_metrics
             .as_ref()
             .expect("top-up response has metrics")
             .next_vehicle_cost,
         None
     );
-    let wire = serde_json::to_value(&added.snapshot).expect("top-up response serializes");
+    let wire = serde_json::to_value(engine.snapshot()).expect("top-up response serializes");
     assert_eq!(
         wire["transit"]["routes"][0]["serviceMetrics"]["nextVehicleCost"],
         serde_json::json!(null)
@@ -1049,16 +1050,17 @@ fn add_service_vehicle_is_a_free_no_op_while_paused() {
         "paused top-up must not reject: {result:?}"
     );
     assert_eq!(
-        result.snapshot.budget, before.budget,
+        engine.snapshot().budget,
+        before.budget,
         "paused top-up is free"
     );
     assert_eq!(
-        result.snapshot.transit.vehicles.len(),
+        engine.snapshot().transit.vehicles.len(),
         before.transit.vehicles.len(),
         "paused top-up appends no vehicle"
     );
     assert_eq!(
-        result.snapshot.transit.routes[0].vehicle_ids.len(),
+        engine.snapshot().transit.routes[0].vehicle_ids.len(),
         before.transit.routes[0].vehicle_ids.len()
     );
 }
@@ -1079,9 +1081,9 @@ fn add_service_vehicle_is_free_in_creative_mode() {
         line_id: "route-001".into(),
     });
     assert!(result.applied, "creative top-up should apply: {result:?}");
-    assert_eq!(result.snapshot.budget, before.budget);
+    assert_eq!(engine.snapshot().budget, before.budget);
     assert_eq!(
-        result.snapshot.transit.routes[0].vehicle_ids.len(),
+        engine.snapshot().transit.routes[0].vehicle_ids.len(),
         before.transit.routes[0].vehicle_ids.len() + 1
     );
 }
@@ -1098,9 +1100,9 @@ fn add_service_vehicle_rejects_insufficient_standard_budget_atomically() {
         result.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InsufficientBudget)
     );
-    assert_eq!(result.snapshot.budget, before.budget);
+    assert_eq!(engine.snapshot().budget, before.budget);
     assert_eq!(
-        result.snapshot.transit.vehicles.len(),
+        engine.snapshot().transit.vehicles.len(),
         before.transit.vehicles.len()
     );
 }
@@ -1127,9 +1129,9 @@ fn repeated_top_up_actions_stop_at_the_live_requirement() {
     });
     assert!(!stale.applied, "stale top-up should be a no-op: {stale:?}");
     assert!(stale.rejection.is_none());
-    assert_eq!(stale.snapshot.budget, after_first.budget);
+    assert_eq!(engine.snapshot().budget, after_first.budget);
     assert_eq!(
-        stale.snapshot.transit.routes[0].vehicle_ids.len(),
+        engine.snapshot().transit.routes[0].vehicle_ids.len(),
         before.transit.routes[0].vehicle_ids.len() + 1
     );
 }
@@ -1207,8 +1209,8 @@ fn zero_fleet_and_at_target_top_ups_are_no_ops() {
     });
     assert!(!zero_result.applied);
     assert!(zero_result.rejection.is_none());
-    assert_eq!(zero_result.snapshot.budget, zero_before.budget);
-    assert!(zero_result.snapshot.transit.vehicles.is_empty());
+    assert_eq!(zero.snapshot().budget, zero_before.budget);
+    assert!(zero.snapshot().transit.vehicles.is_empty());
 
     let mut at_target = bus_route_engine();
     assert!(
@@ -1240,9 +1242,9 @@ fn zero_fleet_and_at_target_top_ups_are_no_ops() {
     });
     assert!(!at_target_result.applied);
     assert!(at_target_result.rejection.is_none());
-    assert_eq!(at_target_result.snapshot.budget, at_target_before.budget);
+    assert_eq!(at_target.snapshot().budget, at_target_before.budget);
     assert_eq!(
-        at_target_result.snapshot.transit.vehicles.len(),
+        at_target.snapshot().transit.vehicles.len(),
         at_target_before.transit.vehicles.len()
     );
 }
@@ -1289,10 +1291,13 @@ fn metro_shortfall_adds_one_metro_vehicle_by_line_id() {
         line_id: "metro-001".into(),
     });
     assert!(result.applied, "metro top-up should apply: {result:?}");
-    assert_eq!(result.snapshot.budget, before.budget - METRO_COST);
-    assert_eq!(result.snapshot.transit.metro_lines[0].vehicle_ids.len(), 2);
-    let vehicle = result
-        .snapshot
+    assert_eq!(engine.snapshot().budget, before.budget - METRO_COST);
+    assert_eq!(
+        engine.snapshot().transit.metro_lines[0].vehicle_ids.len(),
+        2
+    );
+    let snapshot = engine.snapshot();
+    let vehicle = snapshot
         .transit
         .vehicles
         .last()

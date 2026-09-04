@@ -58,8 +58,8 @@ impl WasmGameEngine {
         to_snapshot_js_value(&snapshot)
     }
 
-    pub fn snapshot(&self) -> Result<JsValue, JsValue> {
-        to_snapshot_js_value(&self.inner.snapshot())
+    pub fn presentation(&self) -> Result<JsValue, JsValue> {
+        to_snapshot_js_value(&self.inner.presentation())
     }
 
     pub fn snapshot_for_save(&self) -> Result<JsValue, JsValue> {
@@ -85,8 +85,8 @@ impl WasmGameEngine {
     }
 
     pub fn reset(&mut self) -> Result<JsValue, JsValue> {
-        let snapshot = self.inner.reset().map_err(|error| error_js_value(&error))?;
-        to_snapshot_js_value(&snapshot)
+        let update = self.inner.reset().map_err(|error| error_js_value(&error))?;
+        to_snapshot_js_value(&update)
     }
 
     pub fn preview_route(&self, request: JsValue) -> Result<JsValue, JsValue> {

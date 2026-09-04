@@ -9,7 +9,7 @@ import {
   type Stop,
 } from "../../src/domain/types";
 import type {
-  DispatchResult,
+  GameplayUpdateResult,
   GameBackend,
   GameIntent,
   RoadMutation,
@@ -28,6 +28,7 @@ import type {
   RuntimeSnapshot,
 } from "../../src/runtime/types";
 import {
+  createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
@@ -44,6 +45,8 @@ type BackendSpy = GameBackend & {
   rejectNextDispatch(): void;
   noopNextDispatch(): void;
   setSnapshot(next: RustGameSnapshot): void;
+  /** Test-only read of the mock engine's current durable snapshot. */
+  snapshotInternal(): RustGameSnapshot;
 };
 
 type DeferredDispatchBackend = BackendSpy & {
@@ -870,13 +873,16 @@ function deferredDispatchBackend(
     setSnapshot(next) {
       snapshot = next;
     },
-    async snapshot() {
+    snapshotInternal() {
       return snapshot;
+    },
+    async presentation() {
+      return createPresentationUpdate(snapshot);
     },
     async previewRoute(request) {
       return routePreview(request.generation, request.waypointIds);
     },
-    async dispatch(intent): Promise<DispatchResult> {
+    async dispatch(intent): Promise<GameplayUpdateResult> {
       intents.push(intent);
       await new Promise<void>((resolve) => {
         pending.push(resolve);
@@ -890,19 +896,19 @@ function deferredDispatchBackend(
         const rejection = nextRejection;
         nextRejection = null;
         return {
-          snapshot,
+          update: createPresentationUpdate(snapshot, false),
           applied: false,
           rejection,
         };
       }
       snapshot = applyIntent(snapshot, intent);
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot),
         applied: true,
         rejection: null,
       };
     },
-    async tick(deltaSeconds): Promise<DispatchResult> {
+    async tick(deltaSeconds): Promise<GameplayUpdateResult> {
       const before = snapshot;
       snapshot =
         snapshot.paused || snapshot.speed === 0
@@ -912,14 +918,14 @@ function deferredDispatchBackend(
               time: snapshot.time + deltaSeconds * snapshot.speed,
             };
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot, false),
         applied: snapshot !== before,
         rejection: null,
       };
     },
     async reset() {
       snapshot = fullRustSnapshot();
-      return { ok: true, snapshot };
+      return { ok: true, update: createPresentationUpdate(snapshot) };
     },
     async resolveNext() {
       const resolve = pending.shift();
@@ -952,18 +958,21 @@ function backendSpy(
     setSnapshot(next) {
       snapshot = next;
     },
-    async snapshot() {
+    snapshotInternal() {
       return snapshot;
+    },
+    async presentation() {
+      return createPresentationUpdate(snapshot);
     },
     async previewRoute(request) {
       return routePreview(request.generation, request.waypointIds);
     },
-    async dispatch(intent): Promise<DispatchResult> {
+    async dispatch(intent): Promise<GameplayUpdateResult> {
       intents.push(intent);
       if (rejectNext) {
         rejectNext = false;
         return {
-          snapshot,
+          update: createPresentationUpdate(snapshot, false),
           applied: false,
           rejection: TEST_REJECTION,
         };
@@ -971,19 +980,19 @@ function backendSpy(
       if (noopNext) {
         noopNext = false;
         return {
-          snapshot,
+          update: createPresentationUpdate(snapshot, false),
           applied: false,
           rejection: null,
         };
       }
       snapshot = applyIntent(snapshot, intent);
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot),
         applied: true,
         rejection: null,
       };
     },
-    async tick(deltaSeconds): Promise<DispatchResult> {
+    async tick(deltaSeconds): Promise<GameplayUpdateResult> {
       const before = snapshot;
       snapshot =
         snapshot.paused || snapshot.speed === 0
@@ -993,14 +1002,14 @@ function backendSpy(
               time: snapshot.time + deltaSeconds * snapshot.speed,
             };
       return {
-        snapshot,
+        update: createPresentationUpdate(snapshot, false),
         applied: snapshot !== before,
         rejection: null,
       };
     },
     async reset() {
       snapshot = fullRustSnapshot();
-      return { ok: true, snapshot };
+      return { ok: true, update: createPresentationUpdate(snapshot) };
     },
   };
 }
@@ -1363,7 +1372,10 @@ describe("Game Runtime", () => {
       async restoreSnapshot(snapshot) {
         signalRestoreStarted();
         await restoreStarted;
-        return { ok: true, snapshot: snapshot as RustGameSnapshot };
+        return {
+          ok: true,
+          update: createPresentationUpdate(snapshot as RustGameSnapshot),
+        };
       },
     };
     const store = createMemoryCitySaveStore();
@@ -1884,7 +1896,10 @@ describe("Game Runtime", () => {
         shouldRejectReset = false;
         return { ok: false, error: resetError } as const;
       }
-      return { ok: true, snapshot: fullRustSnapshot() } as const;
+      return {
+        ok: true,
+        update: createPresentationUpdate(fullRustSnapshot()),
+      } as const;
     };
     const runtime = await createGameRuntime({
       hoverPreviewDebounceMs: 0,
@@ -2257,7 +2272,7 @@ describe("Game Runtime", () => {
         throw new Error("backend unavailable");
       }
       return {
-        snapshot: await backend.snapshot(),
+        update: createPresentationUpdate(fullRustSnapshot(), false),
         applied: true,
         rejection: null,
       };
@@ -2622,7 +2637,7 @@ describe("command destination navigation", () => {
       ...base,
       async dispatch() {
         return {
-          snapshot: await base.snapshot(),
+          update: createPresentationUpdate(snapshotWithBusRoute(), false),
           applied: false,
           rejection: {
             code: "routeChangedWhileEditing" as const,
@@ -3512,7 +3527,7 @@ describe("route creation and management", () => {
             throw new Error("host unavailable");
           }
           return {
-            snapshot: await base.snapshot(),
+            update: createPresentationUpdate(routeSnapshotWithRoute(), false),
             applied: false,
             rejection: {
               code: outcome.code,
@@ -3681,20 +3696,32 @@ describe("route creation and management", () => {
     const base = connectedRouteBackend(initial);
     const backend: GameBackend = {
       ...base,
-      async dispatch() {
-        return {
-          snapshot: latest,
-          applied: false,
-          rejection: {
-            code: "routeChangedWhileEditing",
-            context: {
-              routeId: "route-001",
-              expectedRevision: 0,
-              actualRevision: 9,
-              affectedRouteIds: ["route-001"],
+      async dispatch(intent) {
+        if (intent.type === "setRouteActive") {
+          // An applied superseding edit delivers the newest scene (revision 9);
+          // rejected dispatches are frame-only under the presentation wire.
+          return {
+            update: createPresentationUpdate(latest),
+            applied: true,
+            rejection: null,
+          };
+        }
+        if (intent.type === "updateRoute") {
+          return {
+            update: createPresentationUpdate(latest, false),
+            applied: false,
+            rejection: {
+              code: "routeChangedWhileEditing",
+              context: {
+                routeId: "route-001",
+                expectedRevision: 0,
+                actualRevision: 9,
+                affectedRouteIds: ["route-001"],
+              },
             },
-          },
-        };
+          };
+        }
+        return base.dispatch(intent);
       },
     };
     const runtime = await createGameRuntime({
@@ -3702,6 +3729,10 @@ describe("route creation and management", () => {
       backend,
     });
     runtime.startRouteEdit("route-001");
+    await flushPromises();
+    // A superseding applied edit bumps the live route revision while the
+    // stale draft (expectedRevision 0) is still open.
+    await runtime.toggleRouteActive("route-001");
     await flushPromises();
     await runtime.saveRouteDraft();
     expect(runtime.getSnapshot().ui).toMatchObject({
@@ -3755,20 +3786,31 @@ describe("route creation and management", () => {
     const base = connectedRouteBackend(initial);
     const backend: GameBackend = {
       ...base,
-      async dispatch() {
-        return {
-          snapshot: latest,
-          applied: false,
-          rejection: {
-            code: "routeChangedWhileEditing",
-            context: {
-              routeId: "route-001",
-              expectedRevision: 0,
-              actualRevision: 9,
-              affectedRouteIds: ["route-001"],
+      async dispatch(intent) {
+        if (intent.type === "setRouteActive") {
+          // Applied superseding edit: delivers the revision-9 scene.
+          return {
+            update: createPresentationUpdate(latest),
+            applied: true,
+            rejection: null,
+          };
+        }
+        if (intent.type === "updateRoute") {
+          return {
+            update: createPresentationUpdate(latest, false),
+            applied: false,
+            rejection: {
+              code: "routeChangedWhileEditing",
+              context: {
+                routeId: "route-001",
+                expectedRevision: 0,
+                actualRevision: 9,
+                affectedRouteIds: ["route-001"],
+              },
             },
-          },
-        };
+          };
+        }
+        return base.dispatch(intent);
       },
     };
     const runtime = await createGameRuntime({
@@ -3776,6 +3818,10 @@ describe("route creation and management", () => {
       backend,
     });
     runtime.startRouteEdit("route-001");
+    await flushPromises();
+    // Applied superseding edit bumps the live revision while the stale draft
+    // (expectedRevision 0) is still open.
+    await runtime.toggleRouteActive("route-001");
     await flushPromises();
     await runtime.saveRouteDraft();
     runtime.cancelRouteDraft();
@@ -3842,9 +3888,8 @@ describe("route creation and management", () => {
       point: { x: 11, y: 3 },
     });
     expect(secondStop.applied).toBe(true);
-    const waypointIds = secondStop.snapshot.transit.stops.map(
-      (stop) => stop.id,
-    );
+    const presented = await backend.presentation();
+    const waypointIds = presented.scene!.stops.map((stop) => stop.id);
     expect(waypointIds).toHaveLength(2);
 
     const runtime = await createGameRuntime({ backend });
@@ -4281,7 +4326,7 @@ describe("route creation and management", () => {
       async dispatch(intent) {
         if (intent.type === "createRoute") {
           return {
-            snapshot: await base.snapshot(),
+            update: createPresentationUpdate(base.snapshotInternal()),
             applied: true,
             rejection: null,
           };
@@ -4460,8 +4505,8 @@ describe("route creation and management", () => {
     const initial = snapshotWithMetroLine();
     const backend = backendSpy(initial);
     const dispatch = vi.fn(
-      async (_intent: GameIntent): Promise<DispatchResult> => ({
-        snapshot: initial,
+      async (_intent: GameIntent): Promise<GameplayUpdateResult> => ({
+        update: createPresentationUpdate(initial, false),
         applied: false,
         rejection: null,
       }),
@@ -5038,37 +5083,39 @@ describe("fake backend applyIntent coverage", () => {
       point: { x: 2, y: 3 },
     });
     expect(laid.applied).toBe(true);
-    expect(tileAt(laid.snapshot, 2, 3)?.hasTrack).toBe(true);
+    expect(tileAt(backend.snapshotInternal(), 2, 3)?.hasTrack).toBe(true);
 
     const removed = await backend.dispatch({
       type: "removeAtTile",
       point: { x: 2, y: 3 },
     });
     expect(removed.applied).toBe(true);
-    expect(tileAt(removed.snapshot, 2, 3)?.kind).toBe("empty");
-    expect(tileAt(removed.snapshot, 2, 3)?.hasTrack).toBe(false);
+    expect(tileAt(backend.snapshotInternal(), 2, 3)?.kind).toBe("empty");
+    expect(tileAt(backend.snapshotInternal(), 2, 3)?.hasTrack).toBe(false);
   });
 
   it("applies addMetroStation and atomic createRoute to transit", async () => {
     const backend = backendSpy();
 
-    const station = await backend.dispatch({
+    const _station = await backend.dispatch({
       type: "addMetroStation",
       point: { x: 4, y: 5 },
     });
-    expect(station.snapshot.transit.stations).toHaveLength(1);
-    expect(station.snapshot.transit.stations[0].platforms).toHaveLength(2);
+    expect(backend.snapshotInternal().transit.stations).toHaveLength(1);
+    expect(
+      backend.snapshotInternal().transit.stations[0].platforms,
+    ).toHaveLength(2);
 
-    const line = await backend.dispatch({
+    const _line = await backend.dispatch({
       type: "createRoute",
       mode: "metro",
       pattern: "loop",
       waypointIds: ["station-001"],
     });
-    expect(line.snapshot.transit.metroLines).toHaveLength(1);
-    expect(line.snapshot.transit.metroLines[0].stationIds).toEqual([
-      "station-001",
-    ]);
+    expect(backend.snapshotInternal().transit.metroLines).toHaveLength(1);
+    expect(backend.snapshotInternal().transit.metroLines[0].stationIds).toEqual(
+      ["station-001"],
+    );
   });
 
   it("applies assignRouteToPlatform to the targeted platform", async () => {
@@ -5081,15 +5128,17 @@ describe("fake backend applyIntent coverage", () => {
       waypointIds: ["stop-001"],
     });
 
-    const reassigned = await backend.dispatch({
+    const _reassigned = await backend.dispatch({
       type: "assignRouteToPlatform",
       nodeId: "stop-001",
       routeId: "route-001",
       platformId: "stop-001-p1",
     });
-    const platform = reassigned.snapshot.transit.stops[0].platforms.find(
-      (candidate) => candidate.id === "stop-001-p1",
-    );
+    const platform = backend
+      .snapshotInternal()
+      .transit.stops[0].platforms.find(
+        (candidate) => candidate.id === "stop-001-p1",
+      );
     expect(platform?.routeIds).toContain("route-001");
   });
 

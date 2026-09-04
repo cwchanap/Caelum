@@ -1,9 +1,10 @@
 use crate::areas;
 use crate::buildings;
 use crate::cost_policy::CostedMutation;
-use crate::intent::{DispatchContext, DispatchResult, GameIntent};
+use crate::intent::{DispatchContext, GameIntent, GameplayUpdateResult};
 use crate::model::{GameSnapshot, Point};
 use crate::persistence::{normalize_snapshot_for_save, prepare_snapshot, SnapshotLoadError};
+use crate::presentation::{self, PresentationUpdate};
 use crate::preview::{
     self, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
     RoutePreviewResponse,
@@ -259,21 +260,25 @@ impl GameEngine {
         snapshot
     }
 
+    pub fn presentation(&self) -> PresentationUpdate {
+        presentation::project_update(&self.snapshot(), true)
+    }
+
     pub fn restore_snapshot(
         &mut self,
         snapshot: GameSnapshot,
-    ) -> Result<GameSnapshot, SnapshotLoadError> {
+    ) -> Result<PresentationUpdate, SnapshotLoadError> {
         let candidate = Self::from_snapshot(snapshot)?;
-        let restored = candidate.snapshot();
+        let restored = candidate.presentation();
         *self = candidate;
         Ok(restored)
     }
 
-    pub fn reset(&mut self) -> Result<GameSnapshot, SandboxResetError> {
+    pub fn reset(&mut self) -> Result<PresentationUpdate, SandboxResetError> {
         let candidate = sandbox_candidate_from_persisted_rules(&self.snapshot.rules)?;
         self.snapshot = candidate.snapshot;
         self.road_topology = candidate.road_topology;
-        Ok(self.snapshot())
+        Ok(self.presentation())
     }
 
     pub(crate) fn routing_context(&self) -> RoutingContext<'_> {
@@ -327,11 +332,10 @@ impl GameEngine {
     }
 
     /// Advance the simulation by `delta_seconds` of game time (scaled by the current
-    /// speed) and run objective evaluation. Returns the resulting snapshot. If the tick
-    /// produced no change (e.g. paused, speed 0, or a zero-delta substep), the previous
-    /// snapshot is returned unchanged with `applied == false` — this reference-equality
-    /// dispatch is the engine's commit discipline.
-    pub fn tick(&mut self, delta_seconds: f64) -> DispatchResult {
+    /// speed) and run objective evaluation. Tick results are frame-only. If the tick
+    /// produced no change (e.g. paused, speed 0, or a zero-delta substep), `applied ==
+    /// false` — this reference-equality dispatch is the engine's commit discipline.
+    pub fn tick(&mut self, delta_seconds: f64) -> GameplayUpdateResult {
         // Topology invariant: `tick` never recompiles `self.road_topology`
         // because the tick pipeline (trips + growth waves) never modifies road
         // fields. Growth waves only paint areas and place buildings
@@ -358,17 +362,17 @@ impl GameEngine {
             "tick modified road fields without recompiling topology"
         );
         if next == self.snapshot {
-            return DispatchResult::unchanged(self.snapshot());
+            return GameplayUpdateResult::frame_only(&self.snapshot(), false);
         }
 
         self.snapshot = next;
-        DispatchResult::applied(self.snapshot())
+        GameplayUpdateResult::frame_only(&self.snapshot(), true)
     }
 
     /// Apply a single player [`GameIntent`] (build, paint, transit edit, speed/pause,
     /// etc.) to the current snapshot. Returns the resulting snapshot plus an `applied`
     /// flag and a rejection reason when the intent was invalid.
-    pub fn dispatch(&mut self, intent: GameIntent) -> DispatchResult {
+    pub fn dispatch(&mut self, intent: GameIntent) -> GameplayUpdateResult {
         match intent {
             GameIntent::SetPaused { paused } => {
                 let mut next = self.snapshot.clone();
@@ -377,8 +381,8 @@ impl GameEngine {
             }
             GameIntent::SetSpeed { speed } => {
                 if !matches!(speed, 0 | 1 | 2 | 4) {
-                    return DispatchResult::rejected(
-                        self.snapshot(),
+                    return GameplayUpdateResult::rejected(
+                        &self.snapshot(),
                         GameplayRejection::new(RejectionCode::InvalidSpeed),
                     );
                 }
@@ -541,7 +545,7 @@ impl GameEngine {
             // Unit tests use `set_budget_for_test`; e2e uses debug WASM builds.
             GameIntent::SetBudget { budget } => {
                 if !cfg!(debug_assertions) {
-                    return DispatchResult::unchanged(self.snapshot());
+                    return GameplayUpdateResult::frame_only(&self.snapshot(), false);
                 }
                 let mut next = self.snapshot.clone();
                 next.budget = budget;
@@ -550,17 +554,17 @@ impl GameEngine {
         }
     }
 
-    fn commit_result(&mut self, result: GameplayResult<CostedMutation>) -> DispatchResult {
+    fn commit_result(&mut self, result: GameplayResult<CostedMutation>) -> GameplayUpdateResult {
         match result {
             Ok(mutation) => {
                 let next = mutation.into_snapshot();
                 if next == self.snapshot {
-                    return DispatchResult::unchanged(self.snapshot());
+                    return GameplayUpdateResult::frame_only(&self.snapshot(), false);
                 }
                 self.snapshot = next;
-                DispatchResult::applied(self.snapshot())
+                GameplayUpdateResult::present(&self.snapshot())
             }
-            Err(rejection) => DispatchResult::rejected(self.snapshot(), rejection),
+            Err(rejection) => GameplayUpdateResult::rejected(&self.snapshot(), rejection),
         }
     }
 
@@ -574,10 +578,10 @@ impl GameEngine {
     fn commit_network_mutation(
         &mut self,
         candidate: GameplayResult<NetworkCandidate>,
-    ) -> DispatchResult {
+    ) -> GameplayUpdateResult {
         let mut network_candidate = match candidate {
             Ok(candidate) => candidate,
-            Err(rejection) => return DispatchResult::rejected(self.snapshot(), rejection),
+            Err(rejection) => return GameplayUpdateResult::rejected(&self.snapshot(), rejection),
         };
         let map_changed = self.snapshot.map != network_candidate.snapshot.map;
         if map_changed {
@@ -602,7 +606,7 @@ impl GameEngine {
             match RoadTopology::compile(&network_candidate.snapshot.map) {
                 Ok(topology) => topology,
                 Err(error) => {
-                    return DispatchResult::rejected(self.snapshot(), error.into());
+                    return GameplayUpdateResult::rejected(&self.snapshot(), error.into());
                 }
             }
         };
@@ -620,12 +624,12 @@ impl GameEngine {
         &mut self,
         snapshot: GameSnapshot,
         road_topology: RoadTopology,
-    ) -> DispatchResult {
+    ) -> GameplayUpdateResult {
         if snapshot == self.snapshot {
-            return DispatchResult::unchanged(self.snapshot());
+            return GameplayUpdateResult::frame_only(&self.snapshot(), false);
         }
         self.snapshot = snapshot;
         self.road_topology = road_topology;
-        DispatchResult::applied(self.snapshot())
+        GameplayUpdateResult::present(&self.snapshot())
     }
 }

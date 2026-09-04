@@ -3,14 +3,15 @@ import { invoke } from "@tauri-apps/api/core";
 import { isSandboxCreationError, isSandboxResetError } from "./sandboxErrors";
 import { runRestoreOperation, runSnapshotOperation } from "./persistence";
 import {
-  normalizeDispatchResult,
+  normalizeUpdateResult,
   normalizeRoadMutationPreviewResponse,
   normalizeRoutePreviewResponse,
 } from "./shared";
 import type {
-  DispatchResult,
   GameBackend,
   GameIntent,
+  GameplayUpdateResult,
+  PresentationUpdate,
   RoadMutationPreviewRequest,
   RoadMutationPreviewResponse,
   RoutePreviewRequest,
@@ -25,18 +26,18 @@ export async function createTauriBackend(): Promise<GameBackend> {
   // managed native engine.
   const session = await invoke<{
     runtimeEpoch: number;
-    snapshot: RustGameSnapshot;
+    update: PresentationUpdate;
   }>("game_begin_runtime");
   const runtimeEpoch = session.runtimeEpoch;
-  let initialSnapshotPending = true;
+  let initialUpdatePending = true;
 
   return {
-    async snapshot() {
-      if (initialSnapshotPending) {
-        initialSnapshotPending = false;
-        return session.snapshot;
+    presentation() {
+      if (initialUpdatePending) {
+        initialUpdatePending = false;
+        return Promise.resolve(session.update);
       }
-      return invoke<RustGameSnapshot>("game_snapshot");
+      return invoke<PresentationUpdate>("game_presentation");
     },
     snapshotForSave() {
       return runSnapshotOperation(() =>
@@ -66,25 +67,25 @@ export async function createTauriBackend(): Promise<GameBackend> {
       }
     },
     async dispatch(intent: GameIntent) {
-      const result = await invoke<DispatchResult>("game_dispatch", {
+      const result = await invoke<GameplayUpdateResult>("game_dispatch", {
         intent,
         runtimeEpoch,
       });
-      return normalizeDispatchResult(result);
+      return normalizeUpdateResult(result);
     },
     async tick(deltaSeconds: number) {
-      const result = await invoke<DispatchResult>("game_tick", {
+      const result = await invoke<GameplayUpdateResult>("game_tick", {
         deltaSeconds,
         runtimeEpoch,
       });
-      return normalizeDispatchResult(result);
+      return normalizeUpdateResult(result);
     },
     async reset() {
       try {
-        const snapshot = await invoke<RustGameSnapshot>("game_reset", {
+        const update = await invoke<PresentationUpdate>("game_reset", {
           runtimeEpoch,
         });
-        return { ok: true, snapshot } as const;
+        return { ok: true, update } as const;
       } catch (error: unknown) {
         if (isSandboxResetError(error)) {
           return { ok: false, error } as const;

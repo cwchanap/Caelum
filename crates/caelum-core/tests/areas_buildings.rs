@@ -20,8 +20,8 @@ fn paint_area_rectangle_skips_starter_roads() {
     });
 
     assert!(result.applied);
-    let road = result
-        .snapshot
+    let snapshot = engine.snapshot();
+    let road = snapshot
         .map
         .tiles
         .iter()
@@ -30,8 +30,8 @@ fn paint_area_rectangle_skips_starter_roads() {
     assert_eq!(road.kind, "road");
     assert_eq!(road.area, None);
 
-    let empty = result
-        .snapshot
+    let snapshot = engine.snapshot();
+    let empty = snapshot
         .map
         .tiles
         .iter()
@@ -67,15 +67,16 @@ fn housing_requires_residential_area_and_creates_deterministic_sims() {
     });
 
     assert!(placed.applied);
-    assert_eq!(placed.snapshot.buildings.len(), 1);
-    assert!(placed.snapshot.sims.is_empty());
+    assert_eq!(engine.snapshot().buildings.len(), 1);
+    assert!(engine.snapshot().sims.is_empty());
 
     assert!(
         engine
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let moved_in = engine.tick(500.0).snapshot;
+    engine.tick(500.0);
+    let moved_in = engine.snapshot();
     assert_eq!(moved_in.sims.len(), 10);
     assert_eq!(moved_in.sims[0].id, "sim-001");
     assert_eq!(moved_in.sims[0].home.x, 2);
@@ -110,8 +111,8 @@ fn destination_assigns_workplaces_to_unassigned_workers() {
     });
 
     assert!(result.applied);
-    let assigned = result
-        .snapshot
+    let assigned = engine
+        .snapshot()
         .sims
         .iter()
         .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
@@ -152,7 +153,8 @@ fn destination_placed_before_housing_assigns_new_workers() {
             .dispatch(GameIntent::SetPaused { paused: false })
             .applied
     );
-    let assigned_snapshot = engine.tick(500.0).snapshot;
+    engine.tick(500.0);
+    let assigned_snapshot = engine.snapshot();
     let assigned = assigned_snapshot
         .sims
         .iter()
@@ -193,7 +195,7 @@ fn place_building_rejects_invalid_rotation_without_placing() {
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InvalidBuildingPlacement)
     );
-    assert!(rejected.snapshot.buildings.is_empty());
+    assert!(engine.snapshot().buildings.is_empty());
 }
 
 #[test]
@@ -207,10 +209,10 @@ fn place_bus_stop_building_creates_linked_stop() {
     });
 
     assert!(placed.applied);
-    assert_eq!(placed.snapshot.buildings.len(), 1);
-    assert_eq!(placed.snapshot.transit.stops.len(), 1);
-    let building = &placed.snapshot.buildings[0];
-    let stop = &placed.snapshot.transit.stops[0];
+    assert_eq!(engine.snapshot().buildings.len(), 1);
+    assert_eq!(engine.snapshot().transit.stops.len(), 1);
+    let building = &engine.snapshot().buildings[0];
+    let stop = &engine.snapshot().transit.stops[0];
     assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
     assert_eq!(stop.id, "stop-001");
     assert_eq!(stop.kind, BusStopKind::BusStop);
@@ -236,10 +238,10 @@ fn place_bus_terminal_building_creates_terminal_stop_platforms() {
     });
 
     assert!(placed.applied);
-    assert_eq!(placed.snapshot.buildings.len(), 1);
-    assert_eq!(placed.snapshot.transit.stops.len(), 1);
-    let building = &placed.snapshot.buildings[0];
-    let stop = &placed.snapshot.transit.stops[0];
+    assert_eq!(engine.snapshot().buildings.len(), 1);
+    assert_eq!(engine.snapshot().transit.stops.len(), 1);
+    let building = &engine.snapshot().buildings[0];
+    let stop = &engine.snapshot().transit.stops[0];
     assert_eq!(building.transit_node_id.as_deref(), Some("stop-001"));
     assert_eq!(stop.kind, BusStopKind::BusTerminal);
     assert_eq!(stop.position, building.origin);
@@ -277,8 +279,8 @@ fn remove_transit_building_removes_linked_stop() {
     });
 
     assert!(removed.applied);
-    assert!(removed.snapshot.buildings.is_empty());
-    assert!(removed.snapshot.transit.stops.is_empty());
+    assert!(engine.snapshot().buildings.is_empty());
+    assert!(engine.snapshot().transit.stops.is_empty());
 }
 
 #[test]
@@ -417,10 +419,10 @@ fn place_metro_station_building_requires_track_and_creates_linked_station() {
     });
 
     assert!(placed.applied);
-    assert_eq!(placed.snapshot.buildings.len(), 1);
-    assert_eq!(placed.snapshot.transit.stations.len(), 1);
-    let building = &placed.snapshot.buildings[0];
-    let station = &placed.snapshot.transit.stations[0];
+    assert_eq!(engine.snapshot().buildings.len(), 1);
+    assert_eq!(engine.snapshot().transit.stations.len(), 1);
+    let building = &engine.snapshot().buildings[0];
+    let station = &engine.snapshot().transit.stations[0];
     assert_eq!(building.transit_node_id.as_deref(), Some("station-001"));
     assert_eq!(station.id, "station-001");
     assert_eq!(station.position, building.origin);
@@ -492,8 +494,8 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
         point: (5, 4).into(),
     });
     assert!(road_removed.applied, "{road_removed:?}");
-    let tombstone = road_removed
-        .snapshot
+    let snapshot = engine.snapshot();
+    let tombstone = snapshot
         .transit
         .stops
         .iter()
@@ -504,8 +506,8 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
         caelum_core::model::TransitNodeStatus::Missing
     );
     assert_eq!(tombstone.position, (5, 3).into());
-    let cleared = road_removed
-        .snapshot
+    let snapshot = engine.snapshot();
+    let cleared = snapshot
         .map
         .tiles
         .iter()
@@ -522,8 +524,8 @@ fn paint_area_rectangle_zones_missing_transit_node_anchor() {
         painted.applied,
         "missing stop anchor should be paintable: {painted:?}"
     );
-    let tile = painted
-        .snapshot
+    let snapshot = engine.snapshot();
+    let tile = snapshot
         .map
         .tiles
         .iter()
@@ -567,7 +569,7 @@ fn paint_area_rectangle_clips_i32_range_to_map_bounds() {
 
     // The map has empty (non-road) tiles, so clamping paints them residential.
     assert!(result.applied);
-    assert!(result.snapshot.map.tiles.iter().any(|tile| tile
+    assert!(engine.snapshot().map.tiles.iter().any(|tile| tile
         .area
         .as_deref()
         .is_some_and(|area| area == "residential")));
@@ -592,7 +594,7 @@ fn place_building_rejects_overflowing_origin_without_panicking() {
         rejected.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InvalidBuildingPlacement)
     );
-    assert!(rejected.snapshot.buildings.is_empty());
+    assert!(engine.snapshot().buildings.is_empty());
 }
 
 // Contract: a worker already holding a workplace must not be reshuffled by a
@@ -687,9 +689,9 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
         standard_result.rejection.unwrap().code,
         RejectionCode::InsufficientBudget
     );
-    assert_eq!(standard_result.snapshot, standard_before);
+    assert_eq!(standard.snapshot(), standard_before);
     assert!(creative_result.applied, "{creative_result:?}");
-    assert_eq!(creative_result.snapshot.budget, creative_before.budget);
+    assert_eq!(creative.snapshot().budget, creative_before.budget);
 
     let mut terminal_fixture = GameEngine::new();
     assert!(
@@ -709,7 +711,7 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
         rotation: 0,
     });
     assert!(terminal_result.applied, "{terminal_result:?}");
-    assert_eq!(terminal_result.snapshot.budget, terminal_before.budget);
+    assert_eq!(creative_terminal.snapshot().budget, terminal_before.budget);
 
     let invalid_base = GameEngine::new().snapshot();
     let mut invalid_standard = policy_engine(invalid_base.clone(), EconomyPreset::Standard, 0);
@@ -727,10 +729,10 @@ fn creative_building_construction_preserves_budget_and_standard_is_budget_first(
         invalid_standard_result.rejection.unwrap().code,
         RejectionCode::InsufficientBudget
     );
-    assert_eq!(invalid_standard_result.snapshot, invalid_standard_before);
+    assert_eq!(invalid_standard.snapshot(), invalid_standard_before);
     assert_eq!(
         invalid_creative_result.rejection.unwrap().code,
         RejectionCode::InvalidBuildingPlacement
     );
-    assert_eq!(invalid_creative_result.snapshot, invalid_creative_before);
+    assert_eq!(invalid_creative.snapshot(), invalid_creative_before);
 }
