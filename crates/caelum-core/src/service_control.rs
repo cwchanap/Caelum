@@ -430,40 +430,60 @@ pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u3
     ((round_trip_seconds / f64::from(target_headway_seconds)).ceil() as usize).max(1)
 }
 
-/// Fill every route and metro line's `service_metrics` on an output snapshot
-/// clone. Derives the `RoadFlow` once for both modes.
-pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
+/// Derive per-line service metrics keyed by line ID for both transit modes.
+/// Durable snapshot population and presentation projection consume the same
+/// derivation. Returns no entry for a line whose metrics are unavailable.
+pub(crate) fn service_metrics_by_line(
+    snapshot: &GameSnapshot,
+) -> std::collections::BTreeMap<String, ServiceMetrics> {
     let flow = crate::traffic::derive_road_flow(snapshot);
     let waiting_health = waiting_health_by_line(snapshot);
-    for route in &mut snapshot.transit.routes {
+    let mut result = std::collections::BTreeMap::new();
+
+    for route in &snapshot.transit.routes {
         let health = waiting_health.get(&route.id).copied().unwrap_or_default();
-        let route_active = route.active;
-        let globally_paused = snapshot.paused;
-        route.service_metrics = metrics(
-            route_active,
-            globally_paused,
+        if let Some(value) = metrics(
+            route.active,
+            snapshot.paused,
             &route.legs,
             TransitMode::Bus,
             &flow,
             route.vehicle_ids.len(),
             route.target_headway_seconds,
             health,
-        );
+        ) {
+            result.insert(route.id.clone(), value);
+        }
     }
-    for line in &mut snapshot.transit.metro_lines {
+
+    for line in &snapshot.transit.metro_lines {
         let health = waiting_health.get(&line.id).copied().unwrap_or_default();
-        let route_active = line.active;
-        let globally_paused = snapshot.paused;
-        line.service_metrics = metrics(
-            route_active,
-            globally_paused,
+        if let Some(value) = metrics(
+            line.active,
+            snapshot.paused,
             &line.legs,
             TransitMode::Metro,
             &flow,
             line.vehicle_ids.len(),
             line.target_headway_seconds,
             health,
-        );
+        ) {
+            result.insert(line.id.clone(), value);
+        }
+    }
+
+    result
+}
+
+/// Fill every route and metro line's `service_metrics` on an output snapshot
+/// clone. Derives the `RoadFlow` once for both modes.
+pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
+    let metrics_by_line = service_metrics_by_line(snapshot);
+    for route in &mut snapshot.transit.routes {
+        route.service_metrics = metrics_by_line.get(&route.id).cloned();
+    }
+    for line in &mut snapshot.transit.metro_lines {
+        line.service_metrics = metrics_by_line.get(&line.id).cloned();
     }
 }
 
