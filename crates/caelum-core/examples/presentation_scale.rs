@@ -1,9 +1,10 @@
 use std::time::Instant;
 
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, PlacedBuilding, Point, Sim, TripPosition, TripPurpose, TripStatus,
-    WorkerProfile,
+    ActiveTrip, GameSnapshot, PlacedBuilding, Point, Sim, TransitMode, TripPosition, TripPurpose,
+    TripStatus, Vehicle, WorkerProfile,
 };
+use caelum_core::presentation::project_update;
 use caelum_core::GameEngine;
 
 fn sim(index: usize) -> Sim {
@@ -66,6 +67,23 @@ fn occupancy_building(index: usize) -> PlacedBuilding {
     }
 }
 
+fn vehicle(index: usize) -> Vehicle {
+    Vehicle {
+        id: format!("vehicle-{index:06}"),
+        mode: TransitMode::Bus,
+        line_id: "route-scale".to_string(),
+        capacity: 30,
+        passenger_ids: Vec::new(),
+        itinerary_index: 0,
+        path_step_index: 0,
+        step_progress: (index % 100) as f64 / 100.0,
+        parked_position: Some(TripPosition::from(Point {
+            x: (index % 28) as i32,
+            y: ((index / 28) % 18) as i32,
+        })),
+    }
+}
+
 fn measure_snapshot(label: &str, snapshot: &GameSnapshot) {
     let started = Instant::now();
     let bytes = serde_json::to_vec(snapshot).expect("snapshot serialization");
@@ -80,25 +98,57 @@ fn measure_snapshot(label: &str, snapshot: &GameSnapshot) {
     );
 }
 
+fn measure_presentation(label: &str, snapshot: &GameSnapshot) {
+    let started = Instant::now();
+    let update = project_update(snapshot, true);
+    let projection_us = started.elapsed().as_micros();
+
+    let started = Instant::now();
+    let update_bytes = serde_json::to_vec(&update).expect("presentation serialization");
+    let serialize_us = started.elapsed().as_micros();
+    let frame_bytes = serde_json::to_vec(&update.frame)
+        .expect("frame serialization")
+        .len();
+
+    println!(
+        "{label}\tpresentation_bytes={}\tframe_bytes={}\tprojection_us={}\tpresentation_serialize_us={}",
+        update_bytes.len(),
+        frame_bytes,
+        projection_us,
+        serialize_us,
+    );
+}
+
 fn main() {
     let baseline = GameEngine::new().snapshot();
     measure_snapshot("current", &baseline);
+    measure_presentation("current", &baseline);
 
     for count in [10_000, 50_000, 200_000] {
         let mut fixture = baseline.clone();
         fixture.sims = (0..count).map(sim).collect();
         measure_snapshot(&format!("sims-{count}"), &fixture);
+        measure_presentation(&format!("sims-{count}"), &fixture);
     }
 
     for count in [1_000, 5_000, 20_000] {
         let mut fixture = baseline.clone();
         fixture.active_trips = (0..count).map(|index| active_trip(index, 504)).collect();
         measure_snapshot(&format!("trips-{count}"), &fixture);
+        measure_presentation(&format!("trips-{count}"), &fixture);
     }
 
     for count in [1_000, 5_000, 20_000] {
         let mut fixture = baseline.clone();
         fixture.buildings = (0..count).map(occupancy_building).collect();
         measure_snapshot(&format!("buildings-{count}"), &fixture);
+        measure_presentation(&format!("buildings-{count}"), &fixture);
+    }
+
+    for count in [1_000, 5_000] {
+        let mut fixture = baseline.clone();
+        fixture.transit.vehicles = (0..count).map(vehicle).collect();
+        measure_snapshot(&format!("vehicles-{count}"), &fixture);
+        measure_presentation(&format!("vehicles-{count}"), &fixture);
     }
 }

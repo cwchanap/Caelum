@@ -15,7 +15,7 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 - `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde used by the active WASM and Tauri host boundaries.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
 
-The crate is deterministic: no `SystemTime`/`Instant`/`rand`; HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
+The crate is deterministic: no `SystemTime`/`Instant`/`rand` in library source (`Instant` exists only in native example tooling, such as `examples/presentation_scale.rs`); HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
 ### Purchase cost policy
 
@@ -42,7 +42,9 @@ cost behavior remains the read-only building-hover helper.
 
 Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, animation scheduling, host backend calls, canvas mounting, and snapshot publication.
 
-- It stores the latest Rust-derived `GameState` snapshot and local `UiState`.
+Three models, three jobs. The Rust `GameSnapshot` is the durable/core authority — the only thing persistence saves and restores. `PresentationUpdate` is the ordinary Rust host wire for view/tick/dispatch/reset/restore success. The TypeScript `GameState` is the flat presentation view that `applyPresentationUpdate` folds every update into — not a save model and never persisted. Rust owns the occupancy/crowding/traffic/aggregate-demand/service projection into that wire (`caelum_core::presentation`); individual citizen rendering and the lateness/growth shipped overlays are removed, so the UI draws frame rows (building occupancy, platform crowding, traffic and demand flow, vehicle cursors) plus aggregate late/unserved counts.
+
+- It stores the latest `PresentationUpdate` fold as a flat `GameState` plus local `UiState`.
 - It applies local-only UI intents such as tool changes, overlays, selection, and UI reset.
 - It dispatches gameplay intents and ticks to the selected host backend.
 - It publishes runtime snapshots for the Svelte shell.
@@ -51,7 +53,7 @@ Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, an
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
 The two host adapters implement exactly the nine-method `GameBackend` contract:
-`snapshot`, `snapshotForSave`, `buildSandboxSnapshot`, `restoreSnapshot`,
+`presentation`, `snapshotForSave`, `buildSandboxSnapshot`, `restoreSnapshot`,
 `dispatch`, `tick`, `reset`, `previewRoute`, and `previewRoadMutation`. The
 contract is deliberately a shared runtime seam, not a plugin or host-platform
 API. Neither adapter exposes a runtime identity, session object, validation
@@ -127,12 +129,13 @@ the impact data consumed by the UI. Dispatch impact was removed from the public
 host wire, not from the internal mutation or preview paths.
 
 Persistence responses use a JSON-compatible serializer only on the persistence
-path. Ordinary `snapshot`, `dispatch`, and `tick` retain their existing host
-wire serialization. Persistence adapters therefore return the canonical raw
-`RustGameSnapshot` and never view-normalize it. The shared runtime-view boundary
-uses `normalizeRustSnapshot` to recursively turn host-specific
-`undefined`/`null` option representations into the equal read-only `GameState`
-view consumed by UI and rendering.
+path. Ordinary `presentation`, `dispatch`, and `tick` traffic crosses the
+boundary as `PresentationUpdate`: ticks and rejected/no-op dispatches are
+frame-only, an applied dispatch may resend the scene, and no scene comparator
+or cache exists — the fold falls back to the current scene rows when a
+frame-only update arrives. Persistence adapters return the canonical raw
+`RustGameSnapshot`, which stays both save format and restore-validation input;
+a successful restore installs a `PresentationUpdate`, not a snapshot.
 
 `workingSaveRuntime.ts` owns runtime persistence: one active city, one busy gate,
 one dirty boolean, one current persistence error, and the six-operation
@@ -379,8 +382,12 @@ Host bootstrap failures stay in the shell layer, while gameplay validation remai
 
 1. Svelte components emit user intents to the runtime.
 2. The runtime applies local UI intents directly and sends gameplay intents to the host backend.
-3. The Rust `GameEngine` advances suburb growth, transit movement, and objectives.
+3. The Rust `GameEngine` advances suburb growth, transit movement, and objectives, projecting each result into a `PresentationUpdate`.
 4. The imperative canvas renderer draws from runtime-owned state.
 5. Svelte rerenders from the latest runtime snapshot.
+
+The canvas `requestAnimationFrame` loop remains the tick owner until HPA-640
+revisits cadence/interpolation; HPA-347 introduces the load-bearing standalone
+Bevy ECS.
 
 The Growing Suburb scenario remains deterministic for tests: initial state, growth thresholds, generated citizens, identifiers, and objective evaluation stay stable across repeated runs.
