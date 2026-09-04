@@ -15,6 +15,17 @@ pub fn resident_occupancy(state: &GameSnapshot, building: &PlacedBuilding) -> us
         .count()
 }
 
+pub(crate) fn job_occupancy(state: &GameSnapshot, building: &PlacedBuilding) -> usize {
+    state
+        .sims
+        .iter()
+        .filter(|sim| {
+            sim.workplace
+                .is_some_and(|workplace| building.occupied_tiles.contains(&workplace))
+        })
+        .count()
+}
+
 pub fn apply_due_move_ins(state: &mut GameSnapshot) {
     if state.rules.game_mode != GameMode::Sandbox {
         return;
@@ -93,4 +104,68 @@ pub fn apply_due_move_ins(state: &mut GameSnapshot) {
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
     f64::from(day) * GAME_DAY_SECONDS
         + (f64::from(minute) / f64::from(MINUTES_PER_DAY)) * GAME_DAY_SECONDS
+}
+
+#[cfg(test)]
+mod tests {
+    use super::job_occupancy;
+    use crate::model::{PlacedBuilding, Point, Sim, WorkerProfile};
+    use crate::state::create_initial_snapshot;
+
+    #[test]
+    fn job_occupancy_counts_workplace_membership() {
+        let mut snapshot = create_initial_snapshot();
+        let building = PlacedBuilding {
+            id: "building-001".to_string(),
+            building_type: "supermarket".to_string(),
+            origin: Point::from((4, 4)),
+            rotation: 0,
+            occupied_tiles: vec![Point::from((4, 4)), Point::from((5, 4))],
+            placed_at: 0.0,
+            transit_node_id: None,
+        };
+        snapshot.sims = vec![
+            Sim {
+                id: "sim-inside".to_string(),
+                home: Point::from((0, 0)),
+                position: Point::from((0, 0)),
+                worker_profile: WorkerProfile::Worker,
+                shift_template: None,
+                workplace: Some(Point::from((5, 4))),
+                commute_day: 0,
+                outbound_resolved_today: false,
+                outbound_arrived_today: false,
+                return_resolved_today: false,
+                returned_home_today: false,
+            },
+            Sim {
+                id: "sim-outside".to_string(),
+                home: Point::from((0, 0)),
+                position: Point::from((0, 0)),
+                worker_profile: WorkerProfile::Worker,
+                shift_template: None,
+                workplace: Some(Point::from((9, 9))),
+                commute_day: 0,
+                outbound_resolved_today: false,
+                outbound_arrived_today: false,
+                return_resolved_today: false,
+                returned_home_today: false,
+            },
+            Sim {
+                id: "sim-none".to_string(),
+                home: Point::from((0, 0)),
+                position: Point::from((0, 0)),
+                worker_profile: WorkerProfile::Worker,
+                shift_template: None,
+                workplace: None,
+                commute_day: 0,
+                outbound_resolved_today: false,
+                outbound_arrived_today: false,
+                return_resolved_today: false,
+                returned_home_today: false,
+            },
+        ];
+
+        assert_eq!(job_occupancy(&snapshot, &building), 1);
+    }
 }

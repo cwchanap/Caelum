@@ -156,6 +156,22 @@ pub fn on_platform_trip_ids(state: &GameSnapshot) -> HashSet<String> {
     on_platform
 }
 
+pub(crate) fn platform_waiting_occupancy(
+    state: &GameSnapshot,
+) -> std::collections::BTreeMap<String, (u32, u16)> {
+    let mut result = platform_capacities(state)
+        .into_iter()
+        .map(|(platform_id, capacity)| (platform_id, (0, capacity)))
+        .collect::<std::collections::BTreeMap<String, (u32, u16)>>();
+
+    for (_, _, platform_id) in platform_waiter_candidates(state) {
+        if let Some((count, _)) = result.get_mut(&platform_id) {
+            *count = count.saturating_add(1);
+        }
+    }
+    result
+}
+
 fn platform_waiter_candidates(state: &GameSnapshot) -> Vec<(&ActiveTrip, String, String)> {
     let index = platform_index(state);
     state
@@ -451,5 +467,34 @@ mod tests {
         // Only admitted riders appear; overflow riders a1/a2 are excluded.
         assert_eq!(route_001_ids, vec!["a3"]);
         assert_eq!(route_002_ids, vec!["b1"]);
+    }
+
+    #[test]
+    fn waiting_occupancy_counts_overflow_beyond_boarding_capacity() {
+        let point = Point::from((5, 5));
+        let mut snapshot = create_initial_snapshot();
+        snapshot.transit.stops.push(Stop {
+            id: "stop-001".to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position: point,
+            platforms: vec![Platform {
+                id: "stop-001-p0".to_string(),
+                label: "A".to_string(),
+                capacity: 1,
+                route_ids: vec!["route-001".to_string()],
+            }],
+            road_access: None,
+        });
+        snapshot.active_trips = vec![
+            waiting_trip_for_line("trip-a", point, "route-001", 10.0),
+            waiting_trip_for_line("trip-b", point, "route-001", 20.0),
+        ];
+
+        assert_eq!(
+            platform_waiting_occupancy(&snapshot).get("stop-001-p0"),
+            Some(&(2, 1)),
+        );
+        assert_eq!(on_platform_trip_ids(&snapshot).len(), 1);
     }
 }

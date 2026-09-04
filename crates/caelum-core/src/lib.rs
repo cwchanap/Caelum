@@ -38,6 +38,7 @@ pub(crate) mod operating_cost;
 pub(crate) mod persistence;
 pub mod platforms;
 pub mod population;
+pub mod presentation;
 pub mod preview;
 pub mod rejection;
 pub mod road;
