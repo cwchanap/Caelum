@@ -29,7 +29,7 @@ export const colors = {
   unserved: "#6f2c8f",
   coverage: "rgba(40, 103, 178, 0.18)",
   crowding: "rgba(224, 79, 57, 0.2)",
-  demand: "rgba(216, 180, 95, 0.24)",
+  demand: "rgb(216, 180, 95)",
   traffic: "rgba(224, 79, 57, 0.24)",
   previewValid: "rgba(200, 255, 92, 0.32)",
   previewInvalid: "rgba(255, 91, 91, 0.32)",

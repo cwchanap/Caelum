@@ -261,7 +261,7 @@ impl GameEngine {
     }
 
     pub fn presentation(&self) -> PresentationUpdate {
-        presentation::project_update(&self.snapshot(), true)
+        presentation::project_update(&self.snapshot, true)
     }
 
     pub fn restore_snapshot(
@@ -362,16 +362,17 @@ impl GameEngine {
             "tick modified road fields without recompiling topology"
         );
         if next == self.snapshot {
-            return GameplayUpdateResult::frame_only(&self.snapshot(), false);
+            return GameplayUpdateResult::frame_only(&self.snapshot, false);
         }
 
         self.snapshot = next;
-        GameplayUpdateResult::frame_only(&self.snapshot(), true)
+        GameplayUpdateResult::frame_only(&self.snapshot, true)
     }
 
     /// Apply a single player [`GameIntent`] (build, paint, transit edit, speed/pause,
-    /// etc.) to the current snapshot. Returns the resulting snapshot plus an `applied`
-    /// flag and a rejection reason when the intent was invalid.
+    /// etc.) to the current snapshot. Returns a `GameplayUpdateResult` holding the
+    /// presentation update, an `applied` flag, and a rejection reason when the intent
+    /// was invalid.
     pub fn dispatch(&mut self, intent: GameIntent) -> GameplayUpdateResult {
         match intent {
             GameIntent::SetPaused { paused } => {
@@ -382,7 +383,7 @@ impl GameEngine {
             GameIntent::SetSpeed { speed } => {
                 if !matches!(speed, 0 | 1 | 2 | 4) {
                     return GameplayUpdateResult::rejected(
-                        &self.snapshot(),
+                        &self.snapshot,
                         GameplayRejection::new(RejectionCode::InvalidSpeed),
                     );
                 }
@@ -545,7 +546,7 @@ impl GameEngine {
             // Unit tests use `set_budget_for_test`; e2e uses debug WASM builds.
             GameIntent::SetBudget { budget } => {
                 if !cfg!(debug_assertions) {
-                    return GameplayUpdateResult::frame_only(&self.snapshot(), false);
+                    return GameplayUpdateResult::frame_only(&self.snapshot, false);
                 }
                 let mut next = self.snapshot.clone();
                 next.budget = budget;
@@ -559,12 +560,12 @@ impl GameEngine {
             Ok(mutation) => {
                 let next = mutation.into_snapshot();
                 if next == self.snapshot {
-                    return GameplayUpdateResult::frame_only(&self.snapshot(), false);
+                    return GameplayUpdateResult::frame_only(&self.snapshot, false);
                 }
                 self.snapshot = next;
-                GameplayUpdateResult::present(&self.snapshot())
+                GameplayUpdateResult::present(&self.snapshot)
             }
-            Err(rejection) => GameplayUpdateResult::rejected(&self.snapshot(), rejection),
+            Err(rejection) => GameplayUpdateResult::rejected(&self.snapshot, rejection),
         }
     }
 
@@ -581,7 +582,7 @@ impl GameEngine {
     ) -> GameplayUpdateResult {
         let mut network_candidate = match candidate {
             Ok(candidate) => candidate,
-            Err(rejection) => return GameplayUpdateResult::rejected(&self.snapshot(), rejection),
+            Err(rejection) => return GameplayUpdateResult::rejected(&self.snapshot, rejection),
         };
         let map_changed = self.snapshot.map != network_candidate.snapshot.map;
         if map_changed {
@@ -606,7 +607,7 @@ impl GameEngine {
             match RoadTopology::compile(&network_candidate.snapshot.map) {
                 Ok(topology) => topology,
                 Err(error) => {
-                    return GameplayUpdateResult::rejected(&self.snapshot(), error.into());
+                    return GameplayUpdateResult::rejected(&self.snapshot, error.into());
                 }
             }
         };
@@ -626,10 +627,10 @@ impl GameEngine {
         road_topology: RoadTopology,
     ) -> GameplayUpdateResult {
         if snapshot == self.snapshot {
-            return GameplayUpdateResult::frame_only(&self.snapshot(), false);
+            return GameplayUpdateResult::frame_only(&self.snapshot, false);
         }
         self.snapshot = snapshot;
         self.road_topology = road_topology;
-        GameplayUpdateResult::present(&self.snapshot())
+        GameplayUpdateResult::present(&self.snapshot)
     }
 }

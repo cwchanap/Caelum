@@ -2245,6 +2245,25 @@ describe("Game Runtime", () => {
     expect(afterTime).toBe(beforeTime);
   });
 
+  it("does not publish or replace state when a tick is a no-op", async () => {
+    const runtime = await createGameRuntime({
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    const listener = vi.fn();
+    runtime.subscribe(listener);
+    const before = runtime.getSnapshot().state;
+    listener.mockClear();
+
+    // Paused tick: the backend reports applied === false, so enqueueTick
+    // commits the same state/ui references — commit's reference-equality
+    // guard must skip publish and the live GameState object must survive.
+    await runtime.tick(1);
+
+    expect(runtime.getSnapshot().state).toBe(before);
+    expect(listener).not.toHaveBeenCalled();
+  });
+
   it("captures backend errors and stops the runtime", async () => {
     const backend = backendSpy();
     backend.tick = vi.fn(async () => {
