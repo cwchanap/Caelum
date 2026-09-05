@@ -96,6 +96,7 @@ fn valid_restore_swaps_snapshot_and_topology_together() {
     let restored = target.restore_snapshot(expected_snapshot.clone()).unwrap();
 
     assert!(restored.scene.is_some());
+    assert_eq!(restored, target.presentation());
     assert_eq!(target.snapshot(), expected_snapshot);
     assert_eq!(target.road_topology_for_test(), &expected_topology);
 }
