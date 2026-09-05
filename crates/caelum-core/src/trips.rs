@@ -1521,7 +1521,7 @@ fn apply_commute_resolution_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) 
     }
 }
 
-fn is_terminal_status(status: TripStatus) -> bool {
+pub(crate) fn is_terminal_status(status: TripStatus) -> bool {
     matches!(
         status,
         TripStatus::Arrived | TripStatus::Late | TripStatus::Unserved
