@@ -6,121 +6,101 @@
 
 ## Context
 
-HPA-544 is complete. The frontend now consumes the compact `PresentationUpdate { scene, frame }` contract and no longer needs one wire row per latent citizen. Its scale harness shows the presentation payload stays roughly flat even when a synthetic durable snapshot contains 200,000 sims.
+HPA-544 is complete. Ordinary frontend traffic now crosses the compact `PresentationUpdate { scene, frame }` boundary, so the browser no longer needs one wire row per latent citizen. The remaining scale problem is inside `caelum-core`: `GameSnapshot.sims` is still the live population store and ordinary ticking repeatedly clones or scans it.
 
-That removed the browser serialization bottleneck, but the simulation core still treats every citizen as ordinary `GameSnapshot` state:
+Today the high-cardinality work is concrete:
 
-- `GameEngine` owns `GameSnapshot` and clones it through tick/dispatch paths.
-- `population::apply_due_move_ins`, resident/job occupancy, and `buildings::assign_workplaces` walk `snapshot.sims`.
-- `trips::spawn_due_commute_trips`, `reset_daily_commute_flags`, and `next_boundary_after` scan all sims during ordinary simulation work.
-- `max_tick_substeps` derives its event budget from `sims.len()`.
-- trip completion mutates a matching `Sim` by searching the vector.
-- building removal/reassignment reaches into `snapshot.sims` from `transit.rs`.
+- `population::apply_due_move_ins` and occupancy helpers scan `snapshot.sims`;
+- `buildings::assign_workplaces` scans the population;
+- `trips::spawn_due_commute_trips`, `reset_daily_commute_flags`, and `next_boundary_after` scan every sim;
+- `max_tick_substeps` derives part of its budget from population count;
+- terminal trip handling searches `snapshot.sims` by citizen ID;
+- building removal/reassignment mutates citizens from snapshot-only helpers in `transit.rs`.
 
-At the target scale, 200,000 dormant citizens therefore still participate in snapshot cloning and repeated scheduling scans even when almost none of them are due to do anything.
+At about 200,000 citizens, dormant population therefore participates in ordinary substep cost even when very few citizens are due to act.
 
-HPA-347 is the first load-bearing Bevy slice. It is not a framework experiment and it is not a full engine rewrite.
+HPA-347 is the first load-bearing Bevy slice. It is not a Bevy proof-of-concept and not a whole-engine rewrite.
 
 ## Goals
 
-1. Make standalone `bevy_ecs` the sole live owner of latent citizens and their activity schedule.
-2. Keep durable save/restore identity in Caelum domain IDs; Bevy `Entity` values never cross persistence or presentation boundaries.
-3. Advance a 200,000-citizen population without scanning all citizens at each trip substep.
-4. Batch same-time activity wakeups through a time-indexed scheduler and emit deterministic `TripDemand` records into the existing routing/trip pipeline.
-5. Support regular work, school, return-home, day-off, and bounded optional outing routines without per-frame citizen AI.
-6. Preserve housing capacity, finite workplace capacity, move-in timing, stable workplace assignment, demolition cleanup, and the compact HPA-544 presentation wire.
-7. Keep save/restore candidate-first and deterministic.
-8. Deliver the dependency/toolchain change, runtime migration, tests, and scale evidence in this one HPA-347 PR.
+1. Make standalone `bevy_ecs` the sole live owner of latent citizens and their next scheduled activity.
+2. Keep durable identity in stable Caelum string IDs; Bevy `Entity` values remain runtime-only.
+3. Advance a 200,000-citizen fixture without scanning all citizens on an ordinary quiet substep.
+4. Wake citizens through time buckets and emit deterministic `TripDemand` rows into the existing route/private-car pipeline.
+5. Support work, school, return-home, one deterministic day off, and one bounded optional outing without per-frame citizen AI.
+6. Preserve delayed housing move-in, finite workplace capacity, stable assignment, demolition cleanup, and current trip semantics.
+7. Preserve HPA-544 `PresentationUpdate` shape; the frontend never learns about ECS or latent citizen rows.
+8. Keep save/restore candidate-first and deterministic.
+9. Deliver dependency/toolchain change, runtime migration, persistence cutover, tests, and scale evidence in this one PR.
 
 ## Non-goals
 
-- Moving route graphs, transit vehicles, active-trip movement, traffic aggregation, economy, or catalogs into ECS.
+- Moving map/route graphs, transit vehicles, active-trip movement, traffic aggregation, economy, or catalogs into ECS.
 - Per-citizen pathfinding while dormant.
-- Batched route choice/traffic demand processing; HPA-348 owns that next optimization.
-- WebGPU, render cadence, viewport/LOD, interpolation, or GPU batching; HPA-640 owns those.
+- Batched route choice or traffic-demand routing; HPA-348 owns that next.
+- WebGPU, viewport/LOD extraction, publication cadence, or interpolation; HPA-640 owns those.
 - Rendered citizens or private-car entities.
-- Household, needs/mood, social, education-capacity, or visitor-capacity simulation.
-- A generic simulation framework/plugin layer around Bevy.
-- A compatibility loader for old development saves. This cutover may bump the snapshot schema and replace the old `Sim` persistence shape directly.
+- Households, needs/mood, social simulation, school enrollment capacity, or visitor capacity.
+- A generic Bevy plugin/framework layer.
+- Backward compatibility with schema-v9 development saves.
 
-## Approaches considered
+## Chosen architecture
 
-### A. Put the existing snapshot inside an ECS resource
+### Rejected: store the existing snapshot as an ECS resource
 
-Create a Bevy `World`, insert `GameSnapshot` as a resource, and run the existing functions as systems.
+This adds a Bevy layer but leaves all 200,000 `Sim` rows in the same clone/scan paths. It does not solve the target bottleneck.
 
-This has the smallest diff, but it is not load-bearing ECS. The 200,000 `Sim` rows would still be cloned/scanned exactly as today and there would be two layers without a performance win.
+### Rejected: move the whole simulation to ECS now
 
-**Reject.**
+This expands one scale ticket across mature route, vehicle, economy, traffic, and rendering seams. It makes parity failures harder to isolate and duplicates work already scoped to HPA-348/HPA-640.
 
-### B. Move the whole simulation to ECS in one PR
-
-Convert citizens, active trips, vehicles, routes, road/track topology, buildings, traffic, and economy to components/resources at once.
-
-This would eventually be coherent, but it expands HPA-347 across unrelated mature seams, obscures the actual performance target, and makes parity failures hard to isolate. HPA-348 and HPA-640 already own later scale slices.
-
-**Reject.**
-
-### C. ECS owns latent population; existing Rust modules own active transport and city systems
-
-`GameEngine` owns a Bevy `World` and one explicitly ordered population schedule. Citizen entities live only in that world. The ordinary runtime `GameSnapshot` becomes the shell for map/buildings/transit/active trips/economy/etc. and intentionally carries an empty `sims` vector. Full `Sim[]` is reconstructed only for durable snapshots.
-
-A time-bucket resource wakes only due population events. Those systems emit small `TripDemand` records, and the existing trip/router/traffic code turns those demands into active trips. Trip terminal results are fed back into the ECS citizen so its next activity can be scheduled.
-
-This removes the high-cardinality dormant scan without forcing unrelated systems into ECS.
-
-**Choose C.**
-
-## Dependency and toolchain
-
-Use standalone `bevy_ecs` only:
-
-```toml
-bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
-```
-
-`bevy_ecs 0.19.1` requires Rust 1.95.0. Raise `rust-version` from `1.77.2` to `1.95` in all three workspace packages (`caelum-core`, `caelum-wasm`, and `src-tauri`) so the workspace advertises one honest floor.
-
-Do not add full `bevy`, `bevy_app`, reflection, serialization, async executor, or `multi_threaded` in this slice. The ECS schedule is deliberately single-threaded and explicitly ordered first; HPA-347 needs deterministic load-bearing ownership more than scheduler parallelism. A later benchmark may justify enabling Bevy multithreading, but it is not required to remove the O(population) idle scan.
-
-Do not add `rand`. Seeded optional-activity variation can use a tiny deterministic integer mixer over stable citizen ordinal + day + salt.
-
-## Runtime ownership
+### Chosen: ECS owns latent population; existing Rust owns active transport and city systems
 
 After the cutover:
 
 ```rust
 pub struct GameEngine {
-    snapshot: GameSnapshot,        // live shell; snapshot.sims is always empty
+    snapshot: GameSnapshot,
     road_topology: RoadTopology,
     world: bevy_ecs::world::World,
     population_schedule: bevy_ecs::schedule::Schedule,
 }
 ```
 
-The invariant is intentional:
+`GameEngine.snapshot.sims` is always empty. The ownership contract is:
 
-- **live population authority:** ECS components/resources in `world`;
-- **live active transport authority:** existing `snapshot.active_trips` and transit state;
-- **durable population authority:** reconstructed `GameSnapshot.sims` returned by `snapshot()` / `snapshot_for_save()`;
-- **presentation authority:** existing `PresentationUpdate` wire, sourced from shell state plus ECS aggregate indexes.
+- **live latent population:** ECS components/resources in `world`;
+- **live active transport:** existing `snapshot.active_trips` + transit state;
+- **durable population:** `GameSnapshot.sims`, reconstructed from ECS only by explicit snapshot/save operations;
+- **presentation:** existing HPA-544 scene/frame wire, with population aggregates read from ECS indexes.
 
-There is never a live `Vec<Sim>` mirroring the ECS citizens.
+There is no live `Vec<Sim>` mirror beside ECS.
 
-`GameEngine` should no longer derive `Clone`. Current clone uses are test-fixture conveniences. Retarget them through explicit fixture construction/durable snapshots rather than defining a production contract that deep-clones a 200,000-entity world.
+`GameEngine` stops implementing `Clone`. Current clone uses are test-fixture conveniences and should reconstruct an independent engine from a durable fixture when needed.
 
-## Durable citizen model
+## Dependency and toolchain
 
-The existing four daily commute booleans exist mainly because every day is rediscovered by scanning `Vec<Sim>`. Replace that persistence shape when moving to scheduled activities.
+Use only standalone ECS:
 
-Keep the `sims` wire key and stable string `Sim.id`, but make each row a compact durable projection of the ECS-owned citizen:
+```toml
+bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
+```
+
+`bevy_ecs 0.19.1` requires Rust 1.95.0, so set `rust-version = "1.95"` in all three Rust packages: `caelum-core`, `caelum-wasm`, and `src-tauri`.
+
+Do not add full `bevy`, `bevy_app`, reflection, Bevy serialization, async executor, `multi_threaded`, or `rand`. This slice uses one explicitly ordered schedule. Parallel execution can be considered only after the new runtime shape is measured.
+
+## Durable schema v10
+
+The current commute-day booleans exist because each day is rediscovered by scanning the population. Replace them with one persisted next activity.
 
 ```rust
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
 pub enum CitizenRoutine {
     Worker {
         shift_template: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
         workplace: Option<Point>,
     },
     Student,
@@ -152,15 +132,15 @@ pub struct Sim {
 }
 ```
 
-`position` is the last settled location. While the citizen is travelling, movement authority stays in `ActiveTrip`; `next_activity` is `None`. When a terminal trip resolves, the ECS citizen updates its settled position and schedules the next activity.
+`position` is the last settled location. While travelling, movement authority is the matching `ActiveTrip` and `next_activity` is `None`.
 
-Extend `TripPurpose` with `OptionalOutbound` and `OptionalReturn`. Keep the existing `CommuteOutbound`/`CommuteReturn` names for worker and student primary trips so the mature trip scoring/routing path needs minimal semantic churn.
+Extend `TripPurpose` with `OptionalOutbound` and `OptionalReturn`. Keep `CommuteOutbound` / `CommuteReturn` for the primary worker/student round trip so the mature trip pipeline changes minimally.
 
-Bump `SNAPSHOT_SCHEMA_VERSION` from 9 to 10. No v9 migration layer is added.
+Bump `SNAPSHOT_SCHEMA_VERSION` from 9 to 10 and reject v9. Do not add a migration layer.
 
 ## ECS components
 
-Use a small set of data-oriented components; do not create behavior traits or one component per boolean:
+Keep the component set small and data-oriented:
 
 ```rust
 #[derive(Component)]
@@ -193,17 +173,13 @@ struct BuildingAssignment {
 }
 ```
 
-The runtime-only building IDs make occupancy/reassignment/removal indexed operations. The durable `Sim` projection keeps point-based home/workplace fields because routing and the existing save contract are point-oriented.
+Runtime building IDs make occupancy, reassignment, and demolition targeted. Durable `Sim` remains point-oriented because routing/save contracts already use points.
 
-A citizen with no `NextActivity` must have an active trip. Persistence validation should reject a saved citizen that simultaneously has an active trip and a scheduled next activity.
-
-## ECS resources
-
-Keep the resources focused and few:
+## Runtime resources
 
 ### `PopulationClock`
 
-Current simulation timestamp supplied by the trip substep driver before the population schedule runs.
+The current simulation timestamp supplied by the trip substep driver before the population schedule runs.
 
 ### `PopulationScheduler`
 
@@ -213,9 +189,7 @@ struct PopulationScheduler {
 }
 ```
 
-A key is one in-game-minute bucket. Convert a due timestamp to the **first bucket boundary at or after** that timestamp, so bucketing never executes an activity early. One-minute bucketing bounds population scheduling boundaries by time, not citizen count, while shifting an event by less than one in-game minute at most.
-
-Events are either:
+Each key is one in-game-minute bucket. Convert an exact due time to the first bucket boundary at or after it, so an activity is never executed early. The exact `ScheduledActivity.due_time` remains on the citizen and is used as `TripDemand.scheduled_time`; bucketing only determines when the citizen wakes.
 
 ```rust
 enum PopulationEvent {
@@ -224,62 +198,64 @@ enum PopulationEvent {
 }
 ```
 
-The queue may hold runtime `Entity` IDs because it is never serialized. Stable ordering is recovered from `CitizenId` before demand emission.
+Runtime `Entity` is allowed inside this non-serialized queue. Deterministic external order is always recovered from stable `CitizenId` before demand emission.
 
 ### `PopulationIndex`
 
-One derived resource owns the indexes needed to avoid whole-population scans:
+One rebuildable resource owns the indexes needed to avoid global scans:
 
-- stable `CitizenId -> Entity` lookup;
+- `CitizenId -> Entity` lookup;
 - next citizen ordinal for O(1) `sim-NNN` allocation;
-- housing/building metadata derived from `PlacedBuilding` + the existing catalog;
+- building metadata needed by population logic;
 - residents by housing building;
 - workers by workplace building;
-- deterministic unassigned-worker set;
+- deterministic unassigned-worker IDs;
 - free workplace slots in stable building-ID order;
-- current school buildings and optional-outing destination buildings.
+- placed school buildings;
+- placed optional-outing destination buildings.
 
-The index is runtime-only and fully rebuildable from the durable snapshot. It is not a second authoritative population model.
+Use BTree-backed collections wherever iteration order affects assignment/demand. The index is derived runtime data, not a second population authority.
 
-### `DuePopulationEvents` and `PendingTripDemands`
+### Mailboxes
 
-Short-lived vectors cleared each population schedule run. They are mailboxes between explicitly ordered systems, not persistent state.
+`DuePopulationEvents` and `PendingTripDemands` are short-lived vectors cleared each schedule run. They are ordering seams between systems, not persisted state.
 
-## Explicit schedule order
+## Schedule order
 
-Create one Bevy schedule owned by `GameEngine` with explicit chained system sets:
+Own one standalone schedule with explicit chained sets:
 
 ```text
 CollectDue -> ApplyDue -> EmitTripDemand
 ```
 
-- **CollectDue:** drain scheduler buckets whose boundary is `<= PopulationClock.now`.
-- **ApplyDue:** process move-ins and target only the due citizen entities; create/update `NextActivity` state as needed.
-- **EmitTripDemand:** sort due citizen activities by stable citizen ID and append deterministic `TripDemand` rows.
+- **CollectDue:** drain buckets whose boundary is `<= PopulationClock.now`.
+- **ApplyDue:** process only the drained move-in/citizen events.
+- **EmitTripDemand:** stable-sort due citizens by `CitizenId` and append demand rows.
 
-No system in these sets queries every citizen. Due citizen entities come from the drained bucket and are accessed directly by `Entity`/stable-ID index.
+None of these systems queries every citizen. `run_due` may rerun the schedule if processing creates another event in the already-current bucket; this closes same-time work without a population scan.
 
-`population::run_due(...)` may rerun the schedule while a system schedules another event into the already-current bucket (for example an exactly-due activity created by a move-in). This closes same-timestamp work without an all-citizen scan.
+## Routine rules
 
-## Routine model
+The routine model is deterministic and intentionally bounded.
 
-Keep routine generation deterministic and intentionally small.
+### Worker/student split
 
-### Worker profile
+Preserve the current effective ratio: every tenth citizen ordinal becomes `Student`; the other 90% become `Worker`. Worker shift selection and outbound/return windows reuse the existing `shift_template_for_id` / `departure_minute_for_sim` rules.
 
-Preserve the current effective worker ratio: every 10th stable citizen ordinal is a student; the other 90% are workers. Worker shift-template distribution and commute departure windows reuse the existing `shift_template_for_id` / `departure_minute_for_sim` logic.
+Finite workplace capacity remains. Assign workers to free slots in sorted workplace-building order with stable citizen ID as the tie-breaker. Unassigned workers remain in a sorted runtime set until a slot opens.
 
-Finite workplace capacity is unchanged. Workers are assigned to free slots in sorted workplace-ID order, with citizen IDs as the stable tie-breaker. Unassigned workers stay unassigned until capacity exists.
+### Students
 
-### Student profile
+Students select among placed `school` buildings in stable building-ID order using the citizen/day seed. This ticket does not model school enrollment capacity.
 
-Students choose a school from currently placed `school` buildings in stable building-ID order, with the citizen/day seed selecting among them. This slice does **not** add enrollment capacity. If there is no school, that citizen has no primary trip that day.
+- outbound window: 07:30–08:30;
+- return window: 15:00–16:00.
 
-Use a school outbound window of 07:30–08:30 and a return window of 15:00–16:00, with deterministic citizen/day jitter.
+If there is no school, there is no primary trip that day.
 
 ### Day off
 
-Each citizen gets exactly one deterministic day off in a seven-day cycle:
+Each citizen has exactly one deterministic day off in seven:
 
 ```text
 day % 7 == numeric_id_suffix(citizen_id) % 7
@@ -289,33 +265,42 @@ A day off suppresses the primary work/school trip.
 
 ### Optional outing
 
-On a day off, at most one optional outing may be emitted. Use a stable citizen/day seed; only one in four eligible day-off citizens takes an outing. Eligible destination building types in this slice are:
+On a day off, at most one optional outing is possible. Only one in four eligible citizens takes it, selected by a stable citizen/day integer mixer.
+
+Eligible building types:
 
 - `supermarket`
 - `cinema`
 - `clinic`
 - `parkPlaza`
 
-Pick from placed eligible buildings in stable ID order and then choose a footprint tile deterministically. Depart between 11:00 and 15:00. After successful arrival, schedule `OptionalReturn` after 120 in-game minutes. No visitor capacity, shopping economy, or additional stops are modeled.
+Choose a placed building in stable ID order from the seed, then a footprint tile deterministically.
 
-This gives seeded variation and non-work demand without becoming a needs simulator.
+- outbound window: 11:00–15:00;
+- dwell after successful arrival: 120 in-game minutes;
+- then emit `OptionalReturn`.
 
-### Next-activity state machine
+No visitor capacity, shopping economy, or chained leisure stops are added.
 
-A citizen owns only one scheduled activity at a time:
+### State machine
+
+A citizen has at most one `NextActivity` and no next activity while an active trip exists.
 
 1. `DailyRoutine` wakes the citizen for that day.
-2. If primary work/school applies, emit `CommuteOutbound`; otherwise optionally emit `OptionalOutbound`; otherwise schedule the next day's `DailyRoutine`.
-3. When a primary outbound trip arrives, schedule `PrimaryReturn` at that routine's return time, or the current bucket if already late.
-4. When an optional outbound trip arrives, schedule `OptionalReturn` after the fixed dwell.
-5. A return arrival schedules the next day's `DailyRoutine`.
-6. An unserved outbound/return schedules the next sensible daily wake/return without creating a phantom zero-distance trip.
+2. If the citizen is away from home from a previous failed return, emit a return-home trip before considering new work/school/outing activity.
+3. Otherwise, if a primary work/school trip applies, emit `CommuteOutbound`.
+4. Otherwise, optionally emit `OptionalOutbound`; if not, schedule the next day's `DailyRoutine`.
+5. Successful primary outbound arrival schedules `PrimaryReturn` at the routine return time, or the current bucket if that time already passed.
+6. Successful optional outbound arrival schedules `OptionalReturn` after 120 in-game minutes.
+7. Successful return arrival settles the citizen at home and schedules the next day's `DailyRoutine`.
+8. Unserved outbound leaves settled position unchanged and schedules the next daily wake.
+9. Unserved return leaves the citizen at the current settled location and schedules the next daily wake; rule 2 retries home before a new outbound routine.
 
-This replaces the global daily flag reset.
+This replaces the global daily flag reset and avoids retry loops inside one broken time bucket.
 
 ## Trip-demand bridge
 
-Add one plain Rust value owned by the population module:
+The ECS population does not route.
 
 ```rust
 struct TripDemand {
@@ -327,13 +312,13 @@ struct TripDemand {
 }
 ```
 
-The ECS systems do not route. `trips.rs` drains `PendingTripDemands` and feeds each row through the existing `build_commute_trip` / route-plan / private-car choice logic. Same-time demands are already stable-sorted before this bridge, so trip sequence allocation remains deterministic.
+`trips.rs` drains these rows and routes them sequentially through the existing route-plan/private-car path. Same-time demands are sorted by `(scheduled_time, citizen_id, explicit purpose rank)` before trip sequence allocation.
 
-This intentionally leaves route-choice cost proportional to the number of due demands. HPA-348 owns batching that next; HPA-347 only removes dormant-citizen work from that path.
+Route choice remains O(number of due demands) in HPA-347. If that becomes the measured wave bottleneck, HPA-348 owns the batching optimization.
 
 ## Trip resolution back into ECS
 
-Refactor the active-trip result pass to collect compact terminal resolution rows before terminal trips are removed:
+Before terminal active trips are removed, collect:
 
 ```rust
 struct PopulationTripResolution {
@@ -345,192 +330,177 @@ struct PopulationTripResolution {
 }
 ```
 
-The substep driver applies those rows through `population::apply_trip_resolutions(...)`:
+Apply those rows to ECS after each substep:
 
-- arriving outbound updates `SettledPosition` and schedules a return;
-- arriving return updates position to home and schedules next daily wake;
-- unserved trips leave settled position unchanged and schedule the appropriate future activity;
-- a terminal resolution clears the implicit travelling state by inserting the next `NextActivity`.
+- `Arrived` and `Late` count as arrival for settled-position/activity scheduling;
+- `Unserved` preserves settled position and schedules the recovery described above.
 
-Delete `apply_arrival_to_sim` and `apply_commute_resolution_to_sim`; there is no live `snapshot.sims` to mutate.
+Delete `apply_arrival_to_sim` and `apply_commute_resolution_to_sim`; no live snapshot citizen remains to mutate.
 
 ## Time-boundary integration
 
-Replace population-dependent scans in `trips.rs` with scheduler queries:
+Replace population-dependent trip scans with scheduler queries:
 
-- `spawn_due_commute_trips` -> drain/route `PendingTripDemands`;
+- `spawn_due_commute_trips` becomes pending-demand routing;
 - delete `reset_daily_commute_flags`;
-- `next_boundary_after` asks `PopulationScheduler` for its next bucket boundary;
-- `max_tick_substeps` adds the number of scheduled population buckets in the tick window, not `sims.len() * events_per_day`;
-- remove `remaining_move_in_slots`; move-ins already occupy scheduler buckets.
+- `next_boundary_after` asks `PopulationScheduler` for its next populated bucket;
+- `max_tick_substeps` counts populated scheduler buckets inside the tick window instead of `sims.len() * events_per_day`;
+- remove `remaining_move_in_slots`; move-ins are already scheduler events.
 
-The active-trip and vehicle boundary logic remains unchanged.
+Active-trip, vehicle, growth, objective, and traffic boundaries remain in their existing modules.
 
-## Move-in and building capacity
+## Move-in and building reconciliation
 
-Housing move-ins remain building-driven and delayed while paused.
+Housing move-ins remain building-driven and paused with the engine.
 
-When the runtime is built or a housing building is placed, derive currently occupied slots from `PopulationIndex` and schedule the remaining slot events from `PlacedBuilding.placed_at` using the existing `MOVE_IN_INTERVAL_SECONDS`. A move-in event:
+When a runtime is built or housing is added, derive occupied slots from `PopulationIndex` and schedule the remaining slots from `PlacedBuilding.placed_at` using the existing `MOVE_IN_INTERVAL_SECONDS`. A move-in event:
 
-1. verifies the housing building still exists and the slot is still open;
-2. allocates the next stable `sim-NNN` ID from the runtime sequence;
-3. spawns one ECS citizen entity;
-4. assigns worker capacity if applicable;
-5. updates reverse occupancy indexes;
-6. schedules the citizen's first `DailyRoutine` (skipping today's already-passed primary departure, matching the current late-move-in rule).
+1. verifies the housing building still exists and the slot remains open;
+2. allocates the next stable `sim-NNN` ordinal from the index;
+3. spawns one citizen entity;
+4. assigns a workplace if capacity exists;
+5. updates reverse indexes;
+6. schedules the first `DailyRoutine`, skipping an already-passed primary departure for today as current behavior does.
 
-No move-in event scans all existing citizens.
+Pure `buildings.rs` / `transit.rs` snapshot mutation helpers become shell-only because preview code also calls them. Once `GameEngine` accepts a building-changing candidate, a focused ECS reconciliation receives before/after building lists plus the candidate active trips/vehicles.
 
-## Building mutation reconciliation
+Targeted reconciliation rules:
 
-Population-dependent mutation must leave `buildings.rs`/`transit.rs` snapshot helpers because those helpers are also used by preview code and the live snapshot no longer owns citizens.
+- added housing -> schedule missing move-in slots;
+- added workplace -> fill free slots from sorted unassigned-worker IDs;
+- removed housing -> find residents through `residents_by_building`, despawn them, remove their active trips, and scrub vehicle passenger IDs;
+- removed workplace -> find workers through `workers_by_building`, clear/reassign them, and retarget/drop affected outbound trips using the existing Idle/patience/deadline reset semantics;
+- removed school/optional destination -> cancel only affected outbound trips and schedule the citizen's next sensible activity.
 
-Pure snapshot mutation continues to produce the shell candidate. After `GameEngine` commits a candidate whose building set changed, call a focused ECS reconciliation with the before/after building lists and the live active-trip/vehicle collections.
-
-Use the runtime indexes so the common mutations are targeted:
-
-- **new housing:** schedule remaining move-in slots;
-- **new workplace:** fill slots from the stable unassigned-worker set;
-- **removed housing:** find residents through `residents_by_building`, despawn them, and remove their active trips/passenger references;
-- **removed workplace:** find assigned workers through `workers_by_building`, clear/reassign them in stable order, and retarget/drop affected outbound trips using the current patience/deadline reset semantics;
-- **removed school/optional destination:** retarget or cancel only outbound trips whose destination disappeared; schedule the next appropriate activity if cancellation leaves the citizen idle.
-
-Growth-wave building additions use the same reconciliation after growth mutates the shell. Do not introduce a second growth path.
-
-Direct pure-function tests for `transit::remove_at_tile` should stop asserting population mutation. Population semantics belong to `GameEngine` integration tests after this cutover.
+Growth-wave building additions use the same reconciliation after the existing growth executor mutates the shell. Do not add a second growth path.
 
 ## Presentation
 
 Do not change the HPA-544 wire.
 
-Keep `presentation::project_update(&GameSnapshot, include_scene)` as the pure durable-snapshot projector used by parity tests and the existing baseline harness.
+Keep `presentation::project_update(&GameSnapshot, include_scene)` as the pure durable-snapshot projector used by parity tests and the existing snapshot harness.
 
-Add a runtime projection path used by `GameEngine` that takes the live shell plus ECS aggregate population data. Factor only the small shared input needed by `project_frame`; do not duplicate the whole projector and do not construct a 200,000-row durable snapshot just to render a frame.
+Add a runtime projector used by `GameEngine` that takes the live shell plus ECS population aggregates. Factor one shared frame builder so all non-population presentation remains single-source.
 
-Runtime population presentation comes from `PopulationIndex`:
+Runtime population fields come from `PopulationIndex`:
 
-- `populationCount` = indexed citizen count;
-- residential building occupancy = indexed residents for that building;
-- job building occupancy = indexed assigned workers for that building.
+- `populationCount` = citizen count;
+- residential building occupancy = indexed resident count;
+- job building occupancy = indexed assigned-worker count.
 
-Students do not change the existing job-occupancy meaning of the school building row in this slice.
+Students do not redefine the existing job-occupancy meaning of school rows in this ticket.
 
-Platform occupancy, traffic flow, demand flow, vehicles, service metrics, map, buildings, routes, and stations remain sourced exactly as HPA-544 does today.
+Platform occupancy, traffic flow, demand flow, vehicles, service metrics, scene map/buildings/routes/stations remain exactly as HPA-544 defines them.
 
-Refactor `GameplayUpdateResult` constructors to accept a precomputed `PresentationUpdate` rather than internally calling the pure snapshot projector; otherwise tick/dispatch would accidentally rebuild a full durable population.
+`GameplayUpdateResult` constructors take a precomputed `PresentationUpdate`; they must not call the durable projector and accidentally reconstruct 200,000 sims on every tick/dispatch.
 
 ## Save and restore
 
-### Save / full snapshot
+### Explicit durable snapshot/save
 
-`GameEngine::snapshot()` and `snapshot_for_save()` are explicitly expensive durable/debug operations:
+`GameEngine::snapshot()` and `snapshot_for_save()` are intentionally expensive debug/persistence operations:
 
 1. clone the live shell;
 2. query all citizen entities;
-3. project each entity into durable `Sim`;
+3. project each to durable `Sim`;
 4. sort by stable `Sim.id`;
-5. install that vector into the cloned snapshot;
-6. normalize derived save fields as today.
+5. install the vector into the clone;
+6. populate/normalize the same derived save fields as today.
 
-Ordinary tick/dispatch/presentation must never call this path.
+Ordinary tick, dispatch, and presentation never call this path.
 
-### Restore
+### Candidate-first restore
 
-Keep candidate-first restore:
+1. schema-probe and deserialize v10;
+2. validate the full durable snapshot;
+3. compile topology/normalize shell fields;
+4. build a fresh ECS world, indexes, scheduler buckets, and population schedule from the validated candidate;
+5. validate runtime population invariants;
+6. clear `candidate.sims` to make the live shell;
+7. replace the current engine only after all candidate work succeeds.
 
-1. probe/check schema;
-2. deserialize and validate the full v10 `GameSnapshot`, including sims and active-trip references;
-3. compile road topology and normalize derived shell fields;
-4. build a fresh `World`, `PopulationIndex`, scheduler buckets, and schedule from the validated candidate;
-5. verify runtime population invariants;
-6. clear `candidate.sims` to create the live shell;
-7. replace the current engine only after the entire candidate is ready.
+Runtime `Entity` handles are never serialized or compared across restores. Save/restore equivalence is defined entirely by stable Caelum IDs and durable/presentation values.
 
-Bevy `Entity` values are allocated afresh and are never persisted.
+Add persistence validation for:
 
-Persistence validation should additionally enforce:
+- `Sim.home` resolving to a residential building footprint;
+- worker workplace, when present, resolving to a job-capacity building footprint;
+- finite/non-negative `next_activity.due_time`;
+- a sim with an active trip having `next_activity == None`;
+- a sim without an active trip having a next activity;
+- unique stable sim IDs (existing entity validation).
 
-- `Sim.home` resolves to a residential building footprint;
-- worker workplace, when present, resolves to a job-capacity building;
-- `next_activity.due_time` is finite/non-negative;
-- a sim referenced by an active trip has `next_activity == None`;
-- a sim without an active trip has exactly one future/current `next_activity`;
-- stable sim IDs remain unique.
+Use the existing structured persistence error model: new `SnapshotField::SimNextActivityDueTime` plus `AssignmentError::{SimHomeNotResidential, SimWorkplaceNotJob, ScheduledWhileTraveling, MissingNextActivity}`.
 
 ## Determinism
 
-Determinism must not depend on Bevy entity allocation or hash-map iteration.
+Determinism must not depend on Bevy entity allocation or hash iteration.
 
-Use these tie-breakers everywhere:
+Tie-breakers:
 
-1. scheduled bucket;
-2. stable `CitizenId` string;
-3. explicit activity-purpose rank where one citizen can emit more than one transition at the same timestamp.
+1. scheduler bucket / exact scheduled time;
+2. stable citizen ID;
+3. explicit purpose rank.
 
-Use `BTreeMap`/`BTreeSet` for population indexes whose iteration order affects assignment or demand emission. Runtime `Entity` is only a lookup handle.
-
-The ECS schedule sets are explicit and chained. `multi_threaded` is disabled in this slice.
+Use BTree-backed indexes for deterministic assignment and output. The schedule sets are explicit and chained, and `multi_threaded` stays disabled in this slice.
 
 ## Performance evidence
 
-Extend the HPA-544 native harness shape instead of creating a benchmark framework.
+Extend the HPA-544 native harness shape instead of adding a benchmark framework.
 
-Keep the existing presentation measurements and add runtime population rows for 10k / 50k / 200k citizens:
+For 10k / 50k / 200k populations, record on one reference machine:
 
-- candidate snapshot -> ECS runtime construction time;
+- durable candidate -> ECS runtime construction;
 - quiet tick with all next activities in the future;
-- population schedule run with a representative due bucket;
-- full `snapshot()` reconstruction cost (documented as save/debug-only);
-- runtime presentation projection size/time.
+- runtime presentation projection;
+- explicit full `snapshot()` reconstruction.
 
-Also measure representative demand waves (for example 1k / 5k / 20k due citizens) and explicitly separate:
+For 1k / 5k / 20k due-demand waves, separately record:
 
-- ECS wake/demand-emission time;
-- existing route-choice/active-trip creation time.
+- ECS wake + demand emission;
+- existing route/private-car trip creation.
 
-The latter may become the recorded bottleneck that HPA-348 addresses. Wall-clock values remain reference evidence, not brittle CI thresholds.
+Wall-clock values are evidence, not CI thresholds.
 
-Structural CI assertions should prove:
+Structural tests prove:
 
-- runtime `snapshot.sims` is empty;
-- 200k citizens exist in ECS and project a `populationCount` of 200k;
-- quiet advancement does not emit demand or grow active trips;
-- only citizens in due buckets are touched/emitted;
-- same fixture + same seed produces identical demand order and durable save snapshot;
-- save -> restore -> save uses stable Caelum IDs but different runtime `Entity` IDs;
-- HPA-544 presentation wire remains unchanged.
+- the live engine shell has empty `sims` while ECS owns 200,000 citizens;
+- runtime presentation reports `populationCount == 200_000` without serializing citizen rows;
+- a quiet tick emits no demand/active trips;
+- a due bucket emits exactly the citizens scheduled in that bucket in stable order;
+- same durable fixture produces identical demand order and save snapshot;
+- save -> restore -> save preserves stable Caelum IDs and durable values while ignoring runtime Entity handles;
+- HPA-544 presentation wire shape is unchanged.
 
 ## File boundaries
 
-Prefer focused files without creating a framework:
-
-- `crates/caelum-core/src/population.rs` — durable/runtime conversion, building-capacity reconciliation, public population helpers.
-- `crates/caelum-core/src/population/components.rs` — citizen components only.
+- `crates/caelum-core/src/population/mod.rs` — durable/runtime conversion, population indexes, building reconciliation, public population seams.
+- `crates/caelum-core/src/population/components.rs` — citizen ECS components only.
 - `crates/caelum-core/src/population/schedule.rs` — scheduler resources, system sets, routine wake/demand emission.
-- `crates/caelum-core/src/model.rs` — v10 durable `Sim`/routine/activity and optional trip-purpose wire types.
-- `crates/caelum-core/src/engine.rs` — owns `World`/`Schedule`, candidate commit/reconcile, runtime presentation, durable snapshot reconstruction.
-- `crates/caelum-core/src/trips.rs` — population boundary query, `TripDemand` routing bridge, terminal-resolution collection.
-- `crates/caelum-core/src/buildings.rs` / `transit.rs` — remove direct `Sim` ownership assumptions.
-- `crates/caelum-core/src/persistence/*` — validate v10 durable citizen state before runtime build.
-- `crates/caelum-core/src/presentation.rs` — one shared frame projector plus snapshot/runtime population sources.
-- `crates/caelum-core/examples/presentation_scale.rs` and `docs/performance/hpa-347-ecs-population.md` — reference scale evidence.
-- `src/domain/types.ts` / `src/runtime/backend/types.ts` — durable v10 save wire only; no reintroduction of sims to live `GameState`.
+- `crates/caelum-core/src/model.rs` — v10 durable citizen/activity/purpose types.
+- `crates/caelum-core/src/engine.rs` — world/schedule ownership, candidate commit, durable snapshot reconstruction, runtime presentation.
+- `crates/caelum-core/src/trips.rs` — scheduler boundary integration, demand routing, terminal resolution collection.
+- `crates/caelum-core/src/buildings.rs` / `transit.rs` — shell-only mutation, no latent-population authority.
+- `crates/caelum-core/src/persistence/*` — v10 validation before ECS build.
+- `crates/caelum-core/src/presentation.rs` — shared frame projector plus durable/runtime population sources.
+- `crates/caelum-core/examples/presentation_scale.rs` + `docs/performance/hpa-347-ecs-population.md` — scale evidence.
+- `src/domain/types.ts` / `src/runtime/backend/types.ts` — durable v10 host wire only; live `GameState` stays aggregate.
 
-The two population submodules are justified because the current single `population.rs` would otherwise accumulate ECS component definitions, scheduler systems, persistence conversion, capacity assignment, and mutation reconciliation in one large file. Do not split further unless implementation proves another responsibility is independently large.
+The two population submodules are the only planned split. Do not build a generic ECS framework or further layer the code unless implementation proves a focused file has another independently large responsibility.
 
 ## Acceptance mapping
 
-HPA-347 is done when:
+HPA-347 is complete when:
 
-- the 200k citizen fixture is actually held as ECS entities;
-- ordinary ticks/presentation do not reconstruct or scan a full `Sim[]`;
-- future-away citizens cost only scheduler/index bookkeeping until their bucket is due;
-- due work/school/optional routines produce stable ordered `TripDemand` rows;
-- active trips still use the existing route/transit/private-car pipeline;
+- the 200k fixture is actually ECS-owned;
+- ordinary tick/presentation does not reconstruct or scan full `Sim[]`;
+- future-away citizens cost scheduler/index bookkeeping only until due;
+- work/school/day-off/optional routines emit stable `TripDemand` rows;
+- active trips still use the current route/transit/private-car pipeline;
 - terminal trips schedule the citizen's next ECS activity;
-- move-in/workplace/demolition semantics run through indexed ECS authority;
-- save/restore reconstructs by stable Caelum IDs and never persists Bevy entities;
-- the HPA-544 presentation contract remains byte-shape compatible;
-- v9 development saves are rejected rather than migrated;
-- performance evidence records construction, quiet-tick, due-bucket, save, and demand-wave costs;
-- any remaining scale bottleneck is named precisely for HPA-348/HPA-640 rather than hidden behind another abstraction.
+- move-in/workplace/demolition semantics use indexed ECS authority;
+- save/restore reconstructs via stable Caelum IDs and never persists Bevy entities;
+- schema-v9 dev saves are rejected;
+- HPA-544 presentation shape stays compatible;
+- reference evidence records construction, quiet tick, due-bucket emission, route-spawn, save, and presentation costs;
+- any remaining route-wave/rendering bottleneck is named for HPA-348/HPA-640 rather than hidden behind another abstraction.
