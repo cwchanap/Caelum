@@ -1,6 +1,6 @@
 use bevy_ecs::prelude::*;
 
-use crate::model::Point;
+use crate::model::{Point, ScheduledActivity};
 
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(super) struct CitizenId(pub(super) String);
@@ -28,6 +28,11 @@ pub(super) enum Routine {
     },
     Student,
 }
+
+/// Durable next scheduled activity. The component is authoritative citizen
+/// state; the exact-time scheduler bucket entry is only its wake-up.
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(super) struct NextActivity(pub(super) ScheduledActivity);
 
 #[derive(Component, Clone, Debug, PartialEq)]
 pub(super) struct LegacyDayState {

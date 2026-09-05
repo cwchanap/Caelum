@@ -220,6 +220,24 @@ pub enum WorkerProfile {
     NonWorker,
 }
 
+/// Final scheduled-activity kinds. Introduced internally ahead of the v10
+/// durable schema so the ECS scheduler can already speak the final vocabulary.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ScheduledActivityKind {
+    DailyRoutine,
+    PrimaryReturn,
+    OptionalReturn,
+}
+
+/// One scheduled citizen activity with its exact validated due timestamp.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ScheduledActivity {
+    pub kind: ScheduledActivityKind,
+    pub due_time: f64,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct GameSnapshot {

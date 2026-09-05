@@ -126,7 +126,7 @@ mod tests {
     use crate::sandbox::{create_sandbox_snapshot, SandboxCreationRequest};
     use crate::state::create_initial_snapshot;
 
-    fn population_fixture() -> GameSnapshot {
+    pub(super) fn population_fixture() -> GameSnapshot {
         let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
             template_id: "smallTown".to_string(),
             economy_preset: "standard".to_string(),
