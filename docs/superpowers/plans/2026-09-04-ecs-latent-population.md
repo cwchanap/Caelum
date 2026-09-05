@@ -4,7 +4,7 @@
 
 **Goal:** Move latent citizen/activity scheduling into a load-bearing standalone Bevy ECS world so Caelum can hold and advance about 200,000 citizens without scanning or cloning every citizen on ordinary simulation substeps.
 
-**Architecture:** `GameEngine` will own a `bevy_ecs::World` plus one explicitly ordered population `Schedule`. The live `GameSnapshot` becomes the non-population shell (`sims` intentionally empty); ECS systems wake only time-bucketed citizens and emit deterministic `TripDemand` rows into the existing routing/active-trip pipeline. Full `Sim[]` is reconstructed only for durable snapshot/save operations, while HPA-544 presentation reads population counts/occupancy from runtime indexes.
+**Architecture:** `GameEngine` will own a `bevy_ecs::World` plus one explicitly ordered population `Schedule`. The live `GameSnapshot` becomes the non-population shell (`sims` intentionally empty); ECS wakes only time-bucketed citizens and emits deterministic `TripDemand` rows into the existing routing/active-trip pipeline. Full `Sim[]` is reconstructed only for durable snapshot/save operations, while HPA-544 presentation reads population counts/occupancy from runtime indexes.
 
 **Tech Stack:** Rust 1.95+, `bevy_ecs` 0.19.1 (`default-features = false`, `std` only), serde/serde_json, existing Caelum router/transit/traffic modules, TypeScript/Bun persistence host tests.
 
@@ -12,18 +12,19 @@
 
 ## Global Constraints
 
-- This is one HPA-347 PR. Do not create a second implementation PR after the planning commits.
-- `bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }`; do not add full `bevy`, reflection, serialization, async executor, `multi_threaded`, or `rand`.
-- Set `rust-version = "1.95"` in `crates/caelum-core/Cargo.toml`, `crates/caelum-wasm/Cargo.toml`, and `src-tauri/Cargo.toml`.
-- ECS is the sole live owner of latent citizens. Never keep a runtime `GameSnapshot.sims` mirror.
-- Stable Caelum string IDs are durable. Bevy `Entity` is runtime-only and must never be serialized or exposed in `PresentationUpdate`.
-- Keep road/transit graphs, routing, active-trip movement, aggregate traffic, economy, building catalog, and presentation wire outside ECS.
-- Keep route choice sequential in this ticket; HPA-348 owns batching it.
-- Keep HPA-544 `PresentationUpdate` JSON shape unchanged.
-- Bump the durable schema directly from v9 to v10; reject old dev saves instead of writing a migration path.
-- Determinism must use scheduler bucket -> stable citizen ID -> explicit purpose rank, never Bevy entity order or hash-map iteration.
-- Population schedule sets are explicitly ordered `CollectDue -> ApplyDue -> EmitTripDemand`.
-- Wall-clock scale numbers are reference evidence only, never CI thresholds.
+- One HPA-347 PR only. Keep implementation commits on this same draft PR.
+- `bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }`.
+- Set `rust-version = "1.95"` in `caelum-core`, `caelum-wasm`, and `src-tauri`.
+- Do not add full `bevy`, `bevy_app`, Bevy reflection/serialization, async executor, `multi_threaded`, or `rand`.
+- ECS is the sole final live owner of latent citizens; never finish with a runtime `GameSnapshot.sims` mirror.
+- Stable Caelum string IDs are durable. Bevy `Entity` is runtime-only and never serialized/presented.
+- Keep route graphs, routing, active-trip movement, traffic aggregation, economy, catalogs, and HPA-544 presentation wire outside ECS.
+- Route choice remains sequential in this ticket; HPA-348 owns batching.
+- Final durable schema is v10. Reject v9 instead of implementing a compatibility migration.
+- Deterministic ordering is scheduler bucket/exact time -> stable citizen ID -> explicit purpose rank.
+- Schedule sets are explicitly ordered `CollectDue -> ApplyDue -> EmitTripDemand`.
+- Wall-clock scale data is reference evidence only, never a CI threshold.
+- Tasks 1-4 may use the current v9 `Sim` only as an implementation adapter while bringing ECS online. Task 5 removes that adapter and performs the final v10 break; this is not a supported compatibility path.
 
 ---
 
@@ -34,12 +35,12 @@
 - Create: `docs/performance/hpa-347-ecs-population.md`
 
 **Interfaces:**
-- Consumes: current `GameSnapshot`, `RoadTopology`, `trips::tick_trips`, and the HPA-544 synthetic sim fixture.
-- Produces: retained `measure_population_tick(...)` harness rows and a before-cutover table used for the final comparison in Task 8.
+- Consumes: current `GameSnapshot`, `RoadTopology`, `trips::tick_trips`, existing HPA-544 synthetic sim fixture.
+- Produces: retained pre-cutover 10k/50k/200k quiet-tick evidence for Task 6 comparison.
 
-- [ ] **Step 1: Add one native timing helper around the current trip tick**
+- [ ] **Step 1: Add the baseline timing helper**
 
-Add imports for `caelum_core::trips` and `caelum_core::road_topology::RoadTopology`, then add:
+Add `RoadTopology` and `trips` imports and this helper:
 
 ```rust
 fn measure_population_tick(label: &str, snapshot: &GameSnapshot, delta_seconds: f64) {
@@ -59,47 +60,23 @@ fn measure_population_tick(label: &str, snapshot: &GameSnapshot, delta_seconds: 
 }
 ```
 
-Call it for the existing `sims-10000`, `sims-50000`, and `sims-200000` fixtures with a small quiet delta that does not intentionally route a commute wave.
+Call it for the existing 10k, 50k, and 200k sim fixtures using a quiet delta that does not intentionally cross a commute departure.
 
-- [ ] **Step 2: Run the current release harness before any ECS dependency/model edit**
+- [ ] **Step 2: Capture the reference machine and before values**
 
 Run:
 
 ```bash
+uname -a
+rustc --version
 cargo run --release -p caelum-core --example presentation_scale
 ```
 
-Expected: existing HPA-544 rows plus `population_tick_us` rows for 10k/50k/200k sims. The absolute time is machine-dependent; the useful evidence is that current quiet tick cost increases with `sims.len()`.
+Create `docs/performance/hpa-347-ecs-population.md` containing the exact command outputs needed to identify OS/CPU/Rust and a table with one row for each `sims-10000`, `sims-50000`, and `sims-200000` `population_tick_us` value. End the section with: `Wall-clock values are reference evidence, not CI thresholds.`
 
-- [ ] **Step 3: Record exact environment and pre-cutover values**
+Do not pre-seed the document with blank or synthetic measurements; copy the literal run output.
 
-Create `docs/performance/hpa-347-ecs-population.md` with:
-
-```markdown
-# HPA-347 ECS Population Baseline
-
-## Command
-`cargo run --release -p caelum-core --example presentation_scale`
-
-## Reference environment
-- OS: <copy `uname -a` output>
-- CPU: <copy machine CPU description>
-- Rust: <copy `rustc --version` output>
-- Build: `--release`
-
-## Before ECS cutover
-| Fixture | Sims | Population tick µs |
-| --- | ---: | ---: |
-| sims-10000 | 10000 | <measured value> |
-| sims-50000 | 50000 | <measured value> |
-| sims-200000 | 200000 | <measured value> |
-
-Wall-clock values are reference evidence, not CI thresholds.
-```
-
-Replace each angle-bracket field with the literal output from this run before committing; the final document must contain no placeholders.
-
-- [ ] **Step 4: Verify the baseline change is measurement-only**
+- [ ] **Step 3: Verify the baseline change is measurement-only**
 
 Run:
 
@@ -108,9 +85,9 @@ cargo test -p caelum-core --lib
 cargo run --release -p caelum-core --example presentation_scale
 ```
 
-Expected: tests PASS; the example emits the original snapshot/presentation rows unchanged plus population tick rows.
+Expected: tests PASS and the existing snapshot/presentation rows remain, with the three new quiet-tick rows appended.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 4: Commit**
 
 ```bash
 git add crates/caelum-core/examples/presentation_scale.rs docs/performance/hpa-347-ecs-population.md
@@ -119,233 +96,13 @@ git commit -m "perf: record HPA-347 population tick baseline"
 
 ---
 
-### Task 1: Raise the Rust floor and replace the durable daily-flag Sim schema
+### Task 1: Add standalone Bevy ECS and the indexed citizen world behind the current save adapter
 
 **Files:**
 - Modify: `crates/caelum-core/Cargo.toml`
 - Modify: `crates/caelum-wasm/Cargo.toml`
 - Modify: `src-tauri/Cargo.toml`
 - Modify: `Cargo.lock`
-- Modify: `crates/caelum-core/src/model.rs`
-- Modify: `crates/caelum-core/src/commute.rs`
-- Modify: `crates/caelum-core/src/persistence/trips.rs`
-- Modify: `crates/caelum-core/src/persistence/entities.rs`
-- Modify: `crates/caelum-core/tests/common/persistence_fixtures.rs`
-- Modify: current Rust test/example files returned by `rg -l 'WorkerProfile|worker_profile|commute_day|outbound_resolved_today|outbound_arrived_today|return_resolved_today|returned_home_today' crates/caelum-core`
-
-**Interfaces:**
-- Produces: `CitizenRoutine`, `ScheduledActivityKind`, `ScheduledActivity`, v10 `Sim`, four-value `TripPurpose`, `routine_for_new_citizen`, and persistence validation for the new shape.
-- Consumes: existing `numeric_id_suffix`, `shift_template_for_id`, `departure_minute_for_sim`, `Point`, and active-trip ownership validation.
-
-- [ ] **Step 1: Write model serialization tests for the v10 citizen contract**
-
-In the `model.rs` test module, add a worker fixture and assert the exact JSON keys:
-
-```rust
-#[test]
-fn sim_v10_serializes_routine_and_next_activity_without_daily_flags() {
-    let sim = Sim {
-        id: "sim-001".to_string(),
-        home: Point { x: 2, y: 3 },
-        position: Point { x: 2, y: 3 },
-        routine: CitizenRoutine::Worker {
-            shift_template: "standard".to_string(),
-            workplace: Some(Point { x: 8, y: 4 }),
-        },
-        next_activity: Some(ScheduledActivity {
-            kind: ScheduledActivityKind::DailyRoutine,
-            due_time: 120.0,
-        }),
-    };
-
-    let value = serde_json::to_value(sim).unwrap();
-    assert_eq!(value["routine"]["worker"]["shiftTemplate"], "standard");
-    assert_eq!(value["nextActivity"]["kind"], "dailyRoutine");
-    assert!(value.get("commuteDay").is_none());
-    assert!(value.get("outboundResolvedToday").is_none());
-}
-```
-
-Also add a serde round-trip for `CitizenRoutine::Student` and `TripPurpose::OptionalOutbound` / `OptionalReturn`.
-
-- [ ] **Step 2: Run the focused model test and confirm it fails**
-
-Run:
-
-```bash
-cargo test -p caelum-core sim_v10_serializes_routine_and_next_activity_without_daily_flags -- --exact
-```
-
-Expected: FAIL because the new types/fields do not exist.
-
-- [ ] **Step 3: Add the dependency/MSRV and v10 model**
-
-Apply these manifest changes:
-
-```toml
-# crates/caelum-core/Cargo.toml
-rust-version = "1.95"
-
-[dependencies]
-bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
-serde = { version = "1.0.177", features = ["derive"] }
-serde_json = "1.0"
-```
-
-Set the same `rust-version = "1.95"` in `caelum-wasm` and `src-tauri`, then run `cargo update -p bevy_ecs --precise 0.19.1` (or `cargo check` if the lock has no Bevy entry yet) so `Cargo.lock` records the dependency.
-
-In `model.rs`:
-
-```rust
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 10;
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum CitizenRoutine {
-    Worker {
-        shift_template: String,
-        #[serde(skip_serializing_if = "Option::is_none")]
-        workplace: Option<Point>,
-    },
-    Student,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum ScheduledActivityKind {
-    DailyRoutine,
-    PrimaryReturn,
-    OptionalReturn,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct ScheduledActivity {
-    pub kind: ScheduledActivityKind,
-    pub due_time: f64,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Sim {
-    pub id: String,
-    pub home: Point,
-    pub position: Point,
-    pub routine: CitizenRoutine,
-    pub next_activity: Option<ScheduledActivity>,
-}
-```
-
-Change `TripPurpose` to:
-
-```rust
-pub enum TripPurpose {
-    CommuteOutbound,
-    CommuteReturn,
-    OptionalOutbound,
-    OptionalReturn,
-}
-```
-
-Delete `WorkerProfile` after its callers move to the new routine helper.
-
-- [ ] **Step 4: Replace worker-profile derivation with a new-citizen routine helper**
-
-Keep `numeric_id_suffix`, `shift_template_for_id`, and `departure_minute_for_sim`. Replace `worker_profile_for_id` with:
-
-```rust
-pub fn routine_for_new_citizen(id: &str) -> CitizenRoutine {
-    if numeric_id_suffix(id) % 10 == 0 {
-        CitizenRoutine::Student
-    } else {
-        CitizenRoutine::Worker {
-            shift_template: shift_template_for_id(id)
-                .expect("worker ids have a shift template")
-                .to_string(),
-            workplace: None,
-        }
-    }
-}
-```
-
-No `rand` or second profile table is added.
-
-- [ ] **Step 5: Replace persistence normalization of profile flags with v10 activity validation**
-
-Remove the old `normalize_direct_fields` writes that overwrite `worker_profile` / `shift_template` from ID. In persistence validation, add finite/non-negative validation for `next_activity.due_time` and enforce the active-trip scheduling invariant:
-
-```rust
-let active_sim_ids: HashSet<&str> = snapshot
-    .active_trips
-    .iter()
-    .map(|trip| trip.sim_id.as_str())
-    .collect();
-
-for sim in &snapshot.sims {
-    if active_sim_ids.contains(sim.id.as_str()) {
-        if sim.next_activity.is_some() {
-            return Err(PersistenceError::InvalidAssignment { /* use the existing typed assignment error variant */ });
-        }
-    } else if sim.next_activity.is_none() {
-        return Err(PersistenceError::InvalidAssignment { /* same existing typed assignment family */ });
-    }
-}
-```
-
-Use the repository's existing `AssignmentError` / `EntityRef` typed error pattern rather than adding a string error. Add exact enum variants such as `AssignmentError::ScheduledWhileTraveling` and `AssignmentError::MissingNextActivity` if the current family has no suitable variant.
-
-- [ ] **Step 6: Migrate the shared persistence fixture first, then remaining compile failures**
-
-Change `crates/caelum-core/tests/common/persistence_fixtures.rs::sim` to construct the v10 worker row:
-
-```rust
-Sim {
-    id: id.to_string(),
-    home,
-    position: home,
-    routine: CitizenRoutine::Worker {
-        shift_template: "standard".to_string(),
-        workplace,
-    },
-    next_activity: Some(ScheduledActivity {
-        kind: ScheduledActivityKind::DailyRoutine,
-        due_time: 0.0,
-    }),
-}
-```
-
-Then run:
-
-```bash
-rg -l 'WorkerProfile|worker_profile|commute_day|outbound_resolved_today|outbound_arrived_today|return_resolved_today|returned_home_today' crates/caelum-core
-```
-
-For each current source/test/example result, replace assertions with `CitizenRoutine` / `next_activity` equivalents. The production results expected before Task 2 are `model.rs`, `commute.rs`, `population.rs`, `buildings.rs`, `trips.rs`, and persistence modules; the latter three may temporarily retain behavior logic until their owning tasks below, but they must compile against the v10 types.
-
-- [ ] **Step 7: Verify model/persistence compile before ECS ownership work**
-
-Run:
-
-```bash
-cargo +stable fmt --all --check
-cargo +stable test -p caelum-core --lib
-cargo +stable test -p caelum-core --test persistence
-```
-
-Expected: PASS on Rust >=1.95. Schema-v9 fixture tests now expect `UnsupportedSchema { expected: 10, actual: 9 }`.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add Cargo.toml Cargo.lock crates/caelum-core crates/caelum-wasm/Cargo.toml src-tauri/Cargo.toml
-git commit -m "feat: define v10 citizen schedule state"
-```
-
----
-
-### Task 2: Build the load-bearing ECS citizen world and indexes
-
-**Files:**
 - Move: `crates/caelum-core/src/population.rs` -> `crates/caelum-core/src/population/mod.rs`
 - Create: `crates/caelum-core/src/population/components.rs`
 - Create: `crates/caelum-core/src/population/schedule.rs`
@@ -353,58 +110,73 @@ git commit -m "feat: define v10 citizen schedule state"
 
 **Interfaces:**
 - Produces:
-  - `pub(crate) fn build_world(snapshot: &GameSnapshot) -> World`
+  - `pub(crate) fn build_world_v9(snapshot: &GameSnapshot) -> World`
   - `pub(crate) fn build_schedule() -> Schedule`
-  - `pub(crate) fn snapshot_sims(world: &World) -> Vec<Sim>`
+  - `pub(crate) fn snapshot_sims_v9(world: &World, day: u32) -> Vec<Sim>`
   - `pub(crate) fn population_count(world: &World) -> u32`
-  - `pub(crate) fn resident_occupancy_for_building(world: &World, building_id: &str) -> u32`
-  - `pub(crate) fn job_occupancy_for_building(world: &World, building_id: &str) -> u32`
-- Consumes: v10 `Sim`, `PlacedBuilding`, `building_definition`, stable building/citizen IDs.
+  - indexed resident/job occupancy helpers.
+- Consumes: current v9 `Sim`, `PlacedBuilding`, `building_definition`, current commute ID/shift helpers.
 
-- [ ] **Step 1: Write ECS round-trip/index tests inside `population/mod.rs`**
+- [ ] **Step 1: Add the dependency and synchronized MSRV**
 
-Add tests using a snapshot with two valid housing residents and one workplace assignment:
+In `crates/caelum-core/Cargo.toml` add:
+
+```toml
+bevy_ecs = { version = "0.19.1", default-features = false, features = ["std"] }
+```
+
+Set:
+
+```toml
+rust-version = "1.95"
+```
+
+in all three Rust package manifests. Run:
+
+```bash
+cargo check --workspace
+```
+
+Expected: lockfile adds `bevy_ecs` 0.19.1 and the workspace compiles on the current Rust >=1.95 toolchain.
+
+- [ ] **Step 2: Write RED round-trip/index tests before implementation**
+
+Move `population.rs` to `population/mod.rs` without changing its existing public API yet. Add tests that create a valid snapshot with two residents and one assigned worker, then require:
 
 ```rust
 #[test]
-fn world_projection_round_trips_durable_citizens_in_stable_id_order() {
+fn ecs_world_round_trips_current_durable_sims_in_stable_id_order() {
     let snapshot = population_fixture();
-    let world = build_world(&snapshot);
+    let world = build_world_v9(&snapshot);
 
     assert_eq!(population_count(&world), snapshot.sims.len() as u32);
-    assert_eq!(snapshot_sims(&world), snapshot.sims);
+    assert_eq!(snapshot_sims_v9(&world, snapshot.day), snapshot.sims);
 }
 
 #[test]
-fn occupancy_reads_runtime_indexes_not_snapshot_sim_rows() {
+fn ecs_occupancy_comes_from_indexes() {
     let snapshot = population_fixture();
-    let world = build_world(&snapshot);
+    let world = build_world_v9(&snapshot);
 
     assert_eq!(resident_occupancy_for_building(&world, "building-home"), 2);
     assert_eq!(job_occupancy_for_building(&world, "building-work"), 1);
 }
 ```
 
-Ensure the fixture's `Sim` rows are sorted by ID so exact projection comparison is meaningful.
-
-- [ ] **Step 2: Run the focused tests and confirm they fail**
-
 Run:
 
 ```bash
-cargo test -p caelum-core population::tests::world_projection_round_trips_durable_citizens_in_stable_id_order
-cargo test -p caelum-core population::tests::occupancy_reads_runtime_indexes_not_snapshot_sim_rows
+cargo test -p caelum-core population::tests::ecs_world_round_trips_current_durable_sims_in_stable_id_order
+cargo test -p caelum-core population::tests::ecs_occupancy_comes_from_indexes
 ```
 
-Expected: FAIL because `World` construction/index helpers do not exist.
+Expected: FAIL because the ECS seams do not exist.
 
-- [ ] **Step 3: Split components from runtime orchestration**
+- [ ] **Step 3: Define only the needed components**
 
-`components.rs` should define only:
+`components.rs` owns:
 
 ```rust
-use bevy_ecs::prelude::*;
-
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(super) struct CitizenId(pub(super) String);
 
@@ -433,14 +205,20 @@ pub(super) enum Routine {
 }
 
 #[derive(Component, Clone, Debug, PartialEq)]
-pub(super) struct NextActivity(pub(super) ScheduledActivity);
+pub(super) struct LegacyDayState {
+    pub(super) commute_day: u32,
+    pub(super) outbound_resolved: bool,
+    pub(super) outbound_arrived: bool,
+    pub(super) return_resolved: bool,
+    pub(super) returned_home: bool,
+}
 ```
 
-Do not add methods that duplicate scheduler behavior here.
+`LegacyDayState` exists only so Tasks 1-4 can round-trip the current v9 save contract while ECS ownership is introduced. Task 5 deletes it.
 
-- [ ] **Step 4: Add one deterministic `PopulationIndex` resource**
+- [ ] **Step 4: Add one deterministic population index**
 
-In `population/mod.rs`, define a `Resource` with BTree-backed ordering for any iteration that affects assignment:
+In `population/mod.rs` define:
 
 ```rust
 #[derive(Resource, Default)]
@@ -454,107 +232,111 @@ pub(super) struct PopulationIndex {
 }
 ```
 
-`PopulationBuilding` holds only the existing building ID/type/footprint and catalog capacities needed by population assignment. Do not copy the map, route graph, or full `PlacedBuilding` model into ECS.
+`PopulationBuilding` contains only building ID/type/footprint and catalog population/job capacities. Resolve current `Sim.home` / worker workplace to building IDs while constructing the world. Compute `next_citizen_ordinal` once from the maximum stable sim suffix.
 
-While building the index:
+Use BTree collections for every iteration that affects assignment/output order.
 
-- resolve each `Sim.home` to its containing residential building;
-- resolve worker `workplace` to its containing job-capacity building;
-- put workers without a workplace in `unassigned_workers`;
-- compute `next_citizen_ordinal = max(numeric_id_suffix(sim.id)) + 1` once.
+- [ ] **Step 5: Build/project the v9 adapter**
 
-- [ ] **Step 5: Spawn v10 sims into the world and project them back**
+`build_world_v9` maps current v9 durable rows to components:
 
-Implement `build_world` by inserting index/scheduler mailbox resources, then spawning one entity per durable `Sim`. `snapshot_sims` iterates entities, converts runtime `Routine` back to `CitizenRoutine`, preserves `NextActivity`/`None`, and sorts by `id`.
+- `WorkerProfile::Worker` -> `Routine::Worker` with current shift/workplace;
+- `WorkerProfile::NonWorker` -> `Routine::Student` (temporary name; no school routine is emitted before Task 5);
+- daily booleans -> `LegacyDayState`;
+- map home/workplace points to runtime building assignments.
 
-The serialized projection must contain no Bevy entity value. Do not assert that two separate worlds produce numerically different `Entity` handles; only assert that durable/presentation values are independent of them.
+`snapshot_sims_v9` performs the inverse mapping and sorts by `Sim.id`. Never serialize an `Entity`.
 
-- [ ] **Step 6: Run module tests and a 200k construction smoke test**
+- [ ] **Step 6: Add a 200k structural world smoke test**
 
-Add a module test that directly spawns 200,000 simple valid citizen entities/index rows through a test fixture builder and asserts:
+Inside the population module test (where private components are available), spawn/index 200,000 simple citizens through the same component/index helper used by `build_world_v9`, then assert:
 
 ```rust
 assert_eq!(population_count(&world), 200_000);
 assert_eq!(world.resource::<PopulationIndex>().by_id.len(), 200_000);
 ```
 
-This is a correctness smoke test, not a duration assertion.
+No duration assertion is added.
+
+- [ ] **Step 7: Verify and commit**
 
 Run:
 
 ```bash
+cargo fmt --all --check
 cargo test -p caelum-core population::tests
+cargo test --workspace
 ```
 
-Expected: PASS.
+Expected: PASS; production `GameEngine` still uses the snapshot population at this checkpoint.
 
-- [ ] **Step 7: Commit**
+Commit:
 
 ```bash
-git add crates/caelum-core/src/population.rs crates/caelum-core/src/population
-git commit -m "feat: add ECS citizen world and indexes"
+git add Cargo.lock crates/caelum-core crates/caelum-wasm/Cargo.toml src-tauri/Cargo.toml
+git commit -m "feat: add indexed Bevy ECS population world"
 ```
 
 ---
 
-### Task 3: Add deterministic time buckets and routine demand emission
+### Task 2: Add due-event buckets and existing commute demand generation
 
 **Files:**
 - Modify: `crates/caelum-core/src/population/schedule.rs`
 - Modify: `crates/caelum-core/src/population/mod.rs`
 - Modify: `crates/caelum-core/src/commute.rs`
-- Modify: `crates/caelum-core/src/model.rs` only if helper methods on `TripPurpose` are needed
 
 **Interfaces:**
 - Produces:
-  - `pub(crate) struct TripDemand { citizen_id, purpose, origin, destination, scheduled_time }`
-  - `pub(crate) fn run_due(world: &mut World, schedule: &mut Schedule, now: f64)`
-  - `pub(crate) fn drain_trip_demands(world: &mut World) -> Vec<TripDemand>`
-  - `pub(crate) fn next_population_boundary(world: &World, after: f64) -> Option<f64>`
-  - `pub(crate) fn population_boundary_count_until(world: &World, final_time: f64) -> usize`
-- Consumes: `PopulationIndex`, `NextActivity`, worker shift helpers, school/optional building lists.
+  - runtime `NextActivity`
+  - `TripDemand`
+  - `run_due`
+  - `drain_trip_demands`
+  - `next_population_boundary`
+  - `population_boundary_count_until`.
+- Consumes: Task 1 world/index, existing worker shift/departure rules, current v9 flags to initialize the temporary adapter.
 
-- [ ] **Step 1: Write a RED test proving only the due bucket emits**
+- [ ] **Step 1: Define scheduler data and one activity component**
 
-In `schedule.rs` tests, create three citizens with next activities in bucket 10, 10, and 100. Run at bucket 10 and assert:
-
-```rust
-run_due(&mut world, &mut schedule, bucket_time(10));
-let demands = drain_trip_demands(&mut world);
-
-assert_eq!(demands.iter().map(|d| d.citizen_id.as_str()).collect::<Vec<_>>(), [
-    "sim-001",
-    "sim-002",
-]);
-assert!(world.get::<NextActivity>(entity_for(&world, "sim-100")).is_some());
-```
-
-The fixture should give sim-001/sim-002 valid worker destinations and keep sim-100 far in the future.
-
-- [ ] **Step 2: Write deterministic routine tests before implementation**
-
-Add these exact behavior tests:
+In `schedule.rs` add:
 
 ```rust
-#[test]
-fn same_seed_and_day_emit_identical_optional_outing() { /* build two equivalent worlds; compare TripDemand */ }
+const POPULATION_BUCKET_SECONDS: f64 =
+    GAME_DAY_SECONDS / MINUTES_PER_DAY as f64;
 
-#[test]
-fn one_day_off_per_seven_days_suppresses_primary_trip() {
-    for day in 0..7 {
-        let is_off = is_day_off("sim-001", day);
-        assert_eq!(is_off, day == 1);
-    }
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(super) struct NextActivity {
+    pub(super) kind: ActivityKind,
+    pub(super) due_time: f64,
 }
 
-#[test]
-fn student_without_school_schedules_next_daily_wake_without_trip() { /* no schools -> no demand */ }
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ActivityKind {
+    PrimaryOutbound,
+    PrimaryReturn,
+}
 
-#[test]
-fn optional_outing_is_at_most_one_round_trip_on_day_off() { /* one outbound only; return waits for resolution */ }
+#[derive(Resource, Default)]
+pub(super) struct PopulationScheduler {
+    buckets: BTreeMap<u64, Vec<PopulationEvent>>,
+}
+
+pub(crate) struct TripDemand {
+    pub(crate) citizen_id: String,
+    pub(crate) purpose: TripPurpose,
+    pub(crate) origin: Point,
+    pub(crate) destination: Point,
+    pub(crate) scheduled_time: f64,
+}
 ```
 
-- [ ] **Step 3: Run scheduler tests and confirm they fail**
+Use `ceil(due_time / POPULATION_BUCKET_SECONDS)` so wakeup never occurs before the exact due time.
+
+- [ ] **Step 2: Write RED due-bucket/order tests**
+
+Create a world with three workers whose exact next activities map to buckets 10, 10, and 100. Run bucket 10 and assert the drained demand citizen IDs are exactly `sim-001`, then `sim-002`, while the far-future citizen retains `NextActivity`.
+
+Add another test that inserts the two same-time events into the scheduler in reverse runtime-entity order and still expects `sim-001`, `sim-002` output. This pins stable-ID ordering rather than Bevy allocation order.
 
 Run:
 
@@ -562,28 +344,9 @@ Run:
 cargo test -p caelum-core population::schedule::tests
 ```
 
-Expected: FAIL on missing scheduler/systems.
+Expected: FAIL before systems are implemented.
 
-- [ ] **Step 4: Implement one-minute time bucketing**
-
-Use:
-
-```rust
-const POPULATION_BUCKET_SECONDS: f64 =
-    GAME_DAY_SECONDS / f64::from(MINUTES_PER_DAY);
-
-fn bucket_for_due_time(time: f64) -> u64 {
-    (time / POPULATION_BUCKET_SECONDS).ceil() as u64
-}
-
-fn bucket_time(bucket: u64) -> f64 {
-    bucket as f64 * POPULATION_BUCKET_SECONDS
-}
-```
-
-`PopulationScheduler` is a `BTreeMap<u64, Vec<PopulationEvent>>`. `next_population_boundary` reads the first bucket whose boundary is strictly after `after` (within the existing `EPSILON` convention). `population_boundary_count_until` counts populated keys through the target bucket; it does not inspect citizen components.
-
-- [ ] **Step 5: Configure the explicit Bevy schedule**
+- [ ] **Step 3: Configure the one explicit schedule**
 
 Define:
 
@@ -596,69 +359,59 @@ enum PopulationSet {
 }
 ```
 
-Build a standalone `Schedule` whose sets are chained in that order. Add only the three focused systems. Do not use `App`, plugins, observers, or a second schedule.
+Configure those sets as a chained sequence and add one focused system per set. Do not use `App`, plugins, observers, or another schedule.
 
-- [ ] **Step 6: Implement deterministic primary/day-off/optional selection**
+`CollectDue` drains populated buckets through `PopulationClock.now`. `ApplyDue` accesses only entities referenced by drained events. `EmitTripDemand` sorts by exact due time, stable citizen ID, then explicit purpose rank before appending to `PendingTripDemands`.
 
-Keep the rules from the spec exact:
+- [ ] **Step 4: Initialize the temporary v9 adapter's next activity without scanning during ticks**
 
-- student iff `numeric_id_suffix(id) % 10 == 0`;
-- day off iff `day % 7 == numeric_id_suffix(id) % 7`;
-- worker windows continue through `departure_minute_for_sim` and current return windows;
-- student outbound 07:30–08:30, return 15:00–16:00;
-- optional outing only on day off and only when `stable_seed(id, day, OPTIONAL_SALT) % 4 == 0`;
-- optional building types are `supermarket`, `cinema`, `clinic`, `parkPlaza`;
-- optional outbound window 11:00–15:00;
-- successful optional arrival later schedules return after 120 in-game minutes.
+During `build_world_v9`, derive one `NextActivity` from the current v9 `LegacyDayState`, active-trip membership, current day/time, current worker workplace, and existing shift helper:
 
-Add a local integer mixer such as SplitMix64 in `commute.rs`:
+- active trip exists -> no `NextActivity`;
+- unresolved outbound still due today -> `PrimaryOutbound` at current exact departure time;
+- outbound arrived and return unresolved -> `PrimaryReturn` at the existing return window;
+- otherwise -> next day's `PrimaryOutbound`;
+- non-worker or unassigned worker -> next day's wake with no emitted trip at this stage.
 
-```rust
-pub fn stable_daily_seed(id: &str, day: u32, salt: u64) -> u64 {
-    let mut x = numeric_id_suffix(id) as u64
-        ^ (u64::from(day).wrapping_mul(0x9E37_79B9_7F4A_7C15))
-        ^ salt;
-    x = (x ^ (x >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    x = (x ^ (x >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    x ^ (x >> 31)
-}
-```
+This adapter exists only until Task 5 and must not introduce a second per-tick population scan.
 
-- [ ] **Step 7: Stable-sort demands before exposing them**
+- [ ] **Step 5: Add scheduler boundary helpers**
 
-Before `drain_trip_demands` returns, sort by:
+Implement:
 
 ```rust
-(
-    demand.scheduled_time.to_bits(),
-    demand.citizen_id.as_str(),
-    purpose_rank(demand.purpose),
-)
+pub(crate) fn next_population_boundary(world: &World, after: f64) -> Option<f64>;
+pub(crate) fn population_boundary_count_until(world: &World, final_time: f64) -> usize;
+pub(crate) fn run_due(world: &mut World, schedule: &mut Schedule, now: f64);
+pub(crate) fn drain_trip_demands(world: &mut World) -> Vec<TripDemand>;
 ```
 
-All scheduled times are validated non-negative/finite, so bit ordering is safe for equal/time-ordered values in this domain. `purpose_rank` is an explicit match, not enum discriminant casting.
+Boundary helpers inspect scheduler BTree keys only, never citizen queries.
 
-- [ ] **Step 8: Verify scheduler behavior**
+`run_due` reruns the schedule while processing creates another event in the current bucket; break once no due bucket remains.
+
+- [ ] **Step 6: Verify scheduler structural behavior and commit**
 
 Run:
 
 ```bash
 cargo test -p caelum-core population::schedule::tests
 cargo test -p caelum-core population::tests
+cargo test --workspace
 ```
 
-Expected: PASS, including far-future and deterministic ordering cases.
+Expected: PASS; existing gameplay still uses snapshot commute logic until Task 4.
 
-- [ ] **Step 9: Commit**
+Commit:
 
 ```bash
-git add crates/caelum-core/src/population crates/caelum-core/src/commute.rs crates/caelum-core/src/model.rs
-git commit -m "feat: schedule deterministic citizen activities"
+git add crates/caelum-core/src/population crates/caelum-core/src/commute.rs
+git commit -m "feat: schedule ECS commute demand by due bucket"
 ```
 
 ---
 
-### Task 4: Move housing/workplace lifecycle into indexed ECS reconciliation
+### Task 3: Move move-in/workplace/demolition semantics into indexed ECS reconciliation
 
 **Files:**
 - Modify: `crates/caelum-core/src/population/mod.rs`
@@ -671,51 +424,6 @@ git commit -m "feat: schedule deterministic citizen activities"
 
 **Interfaces:**
 - Produces:
-  - `pub(crate) fn reconcile_buildings(world, before, after, active_trips, vehicles, now)`
-  - indexed move-in scheduling and O(1)-sequence citizen ID allocation.
-- Consumes: `PopulationIndex`, `PopulationScheduler`, current building catalog capacities, current active-trip retarget reset rules.
-
-- [ ] **Step 1: Port the existing capacity behavior to engine-independent ECS tests**
-
-Add tests in `population/mod.rs` for:
-
-```rust
-#[test]
-fn two_four_resident_houses_with_four_job_slots_assign_exactly_four_workers() { /* 8 residents, 4 assignments */ }
-
-#[test]
-fn removing_employed_house_frees_slots_for_surviving_unassigned_workers() { /* preserve current population.rs contract */ }
-
-#[test]
-fn adding_workplace_fills_unassigned_workers_in_citizen_id_order() { /* no world-wide reassignment scan */ }
-```
-
-Assert both the durable `snapshot_sims(&world)` assignments and `job_occupancy_for_building` counts.
-
-- [ ] **Step 2: Add delayed move-in tests**
-
-Create a housing building at time 0 with capacity 4, run population due work before/at successive `MOVE_IN_INTERVAL_SECONDS` boundaries, and assert counts `1,2,3,4` exactly as the current sandbox behavior expects. Add a paused-engine integration assertion later in Task 6; this unit test only verifies scheduling math.
-
-- [ ] **Step 3: Run the new tests and confirm they fail**
-
-Run:
-
-```bash
-cargo test -p caelum-core population::tests::two_four_resident_houses_with_four_job_slots_assign_exactly_four_workers
-cargo test -p caelum-core population::tests::adding_workplace_fills_unassigned_workers_in_citizen_id_order
-```
-
-Expected: FAIL because reconciliation/move-in logic still lives on `GameSnapshot.sims`.
-
-- [ ] **Step 4: Implement indexed workplace slots and O(1) citizen sequence allocation**
-
-Use `PopulationIndex.next_citizen_ordinal` instead of `next_entity_id(...state.sims...)` for sims. When a move-in creates a worker, assign the first free workplace slot by sorted workplace building ID, then slot index. When no slot exists, add the stable citizen ID to `unassigned_workers`.
-
-When a slot opens, pop the lexicographically first unassigned citizen ID and resolve it through `by_id`.
-
-- [ ] **Step 5: Implement `reconcile_buildings` around before/after building IDs**
-
-Signature:
 
 ```rust
 pub(crate) fn reconcile_buildings(
@@ -725,30 +433,56 @@ pub(crate) fn reconcile_buildings(
     active_trips: &mut Vec<ActiveTrip>,
     vehicles: &mut Vec<Vehicle>,
     now: f64,
-)
+);
 ```
 
-The function must:
+- Consumes: Task 1 index, Task 2 scheduler, current building catalog capacities, current trip reset constants.
 
-- schedule remaining move-in slots for added housing;
-- add/free workplace slot metadata and fill `unassigned_workers`;
-- despawn residents of removed housing through `residents_by_building` and scrub their active trip IDs from vehicles;
-- clear/reassign workers of removed workplaces through `workers_by_building`;
-- retarget an affected outbound commute to a replacement workplace with `status = Idle`, `route_plan = None`, `private_car_trip = None`, `current_leg_index = 0`, `current_leg_wait_seconds = 0`, fresh 240s patience, and `deadline = trip_deadline_seconds(now)`;
-- drop an outbound trip if its destination vanished and no replacement exists, then schedule that citizen's next `DailyRoutine` rather than leaving it permanently activity-less;
-- similarly cancel/retarget student/optional outbound trips whose destination building disappeared.
+- [ ] **Step 1: Port capacity semantics into ECS-level RED tests**
 
-Do not scan all citizens to perform any of these removal paths.
+Add focused population tests with exact assertions:
 
-- [ ] **Step 6: Make snapshot building helpers shell-only**
+1. two four-resident houses + one four-job supermarket -> 8 residents and exactly 4 assigned workers;
+2. removing the employed house frees four slots and the four surviving stable-ID workers fill those slots;
+3. adding a workplace to an existing unassigned population fills slots in stable citizen-ID order;
+4. removing a workplace reassigns to the next stable free workplace before leaving workers unassigned.
 
-Delete `buildings::assign_workplaces` and the calls to it from `place_building_core`, `population.rs` legacy logic, and `transit.rs` cleanup.
+Run the four new tests and confirm they fail before reconciliation is implemented.
 
-Delete population ownership from `transit.rs` helpers (`cleanup_removed_resident_references`, citizen workplace clearing/reassignment). Keep generic active-trip/vehicle route invalidation that is not population-specific.
+- [ ] **Step 2: Move sim ID allocation to the index**
 
-Pure `transit::remove_at_tile` now mutates the shell only. Update direct `transit_build.rs` assertions accordingly. Preserve population behavior in `tests/population.rs` through `GameEngine` once Task 6 cuts ownership over.
+Stop deriving new sim IDs by scanning a vector. Use `PopulationIndex.next_citizen_ordinal`, incrementing once per successful move-in. Preserve current `sim-{number:03}` formatting through the existing ID helper.
 
-- [ ] **Step 7: Verify indexed lifecycle tests**
+- [ ] **Step 3: Schedule delayed move-ins by building/slot**
+
+Add `PopulationEvent::MoveIn { building_id, slot }`. When housing is indexed, schedule only unoccupied slots from `PlacedBuilding.placed_at` using current `MOVE_IN_INTERVAL_SECONDS`.
+
+A move-in event rechecks that the building still exists and the slot is still free, spawns one citizen, assigns the first stable workplace slot if the citizen is a worker, updates reverse indexes, and installs its first `NextActivity`.
+
+Add a test for capacity 4 whose due processing reaches resident counts 1, 2, 3, 4 on successive move-in boundaries.
+
+- [ ] **Step 4: Implement targeted `reconcile_buildings`**
+
+Compare before/after building IDs and handle only changed buildings:
+
+- added housing -> index + schedule remaining slots;
+- added workplace -> index slots and fill sorted unassigned workers;
+- removed housing -> read `residents_by_building`, despawn those entities, remove their active trips, scrub their trip IDs from every vehicle passenger list, free their workplace slots, refill those slots from sorted unassigned workers;
+- removed workplace -> read `workers_by_building`, clear/reassign affected workers, and retarget affected outbound commute trips;
+- outbound retarget -> `Idle`, `route_plan = None`, `private_car_trip = None`, leg index/wait reset to zero, patience reset to `WAIT_PATIENCE_SECONDS`, deadline reset with `trip_deadline_seconds(now)`;
+- if no replacement workplace exists, drop the affected outbound trip and schedule that citizen's next wake rather than leaving it permanently unscheduled.
+
+No case above iterates every citizen.
+
+- [ ] **Step 5: Make snapshot mutation helpers shell-only**
+
+Delete population mutation from `buildings::assign_workplaces` callers and from `transit.rs::{cleanup_removed_destination_references, cleanup_removed_resident_references}`. Keep route/vehicle cleanup that is independent of latent population.
+
+Pure `transit::remove_at_tile` / preview behavior becomes shell-only. Update direct pure-function tests in `areas_buildings.rs` / `transit_build.rs` to stop expecting citizen mutation; keep final population behavior assertions for `GameEngine` integration in Task 4.
+
+Delete `buildings::assign_workplaces` once no production caller remains.
+
+- [ ] **Step 6: Verify and commit**
 
 Run:
 
@@ -756,126 +490,155 @@ Run:
 cargo test -p caelum-core population::tests
 cargo test -p caelum-core --test areas_buildings
 cargo test -p caelum-core --test transit_build
+cargo test --workspace
 ```
 
-Expected: PASS for the new runtime-unit semantics and shell-only direct mutation semantics.
+Expected: PASS.
 
-- [ ] **Step 8: Commit**
+Commit:
 
 ```bash
 git add crates/caelum-core/src/population crates/caelum-core/src/buildings.rs crates/caelum-core/src/transit.rs crates/caelum-core/tests
-git commit -m "feat: reconcile building population through ECS indexes"
+git commit -m "feat: reconcile population through ECS indexes"
 ```
 
 ---
 
-### Task 5: Bridge due ECS demand into the existing trip loop and feed terminal results back
+### Task 4: Make ECS the live population authority and bridge it into trips/presentation
 
 **Files:**
+- Modify: `crates/caelum-core/src/engine.rs`
+- Modify: `crates/caelum-core/src/intent.rs`
 - Modify: `crates/caelum-core/src/trips.rs`
-- Modify: `crates/caelum-core/src/population/mod.rs`
-- Modify: `crates/caelum-core/src/population/schedule.rs`
+- Modify: `crates/caelum-core/src/presentation.rs`
+- Modify: `crates/caelum-core/src/growth.rs` only where building-change reconciliation needs a seam
+- Modify: `crates/caelum-core/tests/population.rs`
 - Modify: `crates/caelum-core/tests/commute_requirements.rs`
 - Modify: `crates/caelum-core/tests/trip_lifecycle.rs`
-- Modify: other trip tests returned by `rg -l 'CommuteOutbound|CommuteReturn' crates/caelum-core/tests`
+- Modify: `crates/caelum-core/tests/presentation_contract.rs`
+- Modify: `crates/caelum-core/tests/presentation_scale.rs`
+- Modify: `crates/caelum-core/tests/service_control.rs`
+- Modify: `src-tauri/src/lib.rs` test fixtures using `engine.clone()`
 
 **Interfaces:**
-- Changes:
+- `GameEngine` becomes `{ snapshot, road_topology, world, population_schedule }`.
+- `GameEngine.snapshot.sims` is empty after construction/restore.
+- Explicit `snapshot()` temporarily reconstructs current v9 durable sims via Task 1 adapter; Task 5 replaces this with v10.
+- `trips` accepts `&mut World` + `&mut Schedule` and routes Task 2 `TripDemand`.
+- runtime presentation reads ECS counts/indexed occupancy without reconstructing durable sims.
+
+- [ ] **Step 1: Write the engine ownership invariant test**
+
+Inside `engine.rs` tests add:
 
 ```rust
-pub fn tick_trips_with_objectives(
-    state: &GameSnapshot,
-    road_topology: &RoadTopology,
-    world: &mut World,
-    population_schedule: &mut Schedule,
-    delta_seconds: f64,
-) -> GameSnapshot;
-```
+#[test]
+fn live_engine_shell_does_not_mirror_population() {
+    let engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
 
-- Produces: internal `PopulationTripResolution` rows and applies them through `population::apply_trip_resolutions`.
-- Consumes: Task 3 `run_due`, `drain_trip_demands`, scheduler boundary functions.
-
-- [ ] **Step 1: Write a RED integration test for a due worker without scanning snapshot sims**
-
-Build a valid shell + ECS world fixture where the shell's `sims` is empty, one worker is due, and a walkable destination exists. Call the new tick API and assert:
-
-```rust
-assert!(shell.sims.is_empty());
-let next = tick_trips_with_objectives(
-    &shell,
-    &topology,
-    &mut world,
-    &mut schedule,
-    due_delta,
-);
-assert_eq!(next.active_trips.len(), 1);
-assert_eq!(next.active_trips[0].sim_id, "sim-001");
-```
-
-- [ ] **Step 2: Write RED terminal-resolution tests**
-
-Cover:
-
-- primary outbound arrival -> ECS position becomes destination and `PrimaryReturn` is scheduled;
-- primary return arrival -> ECS position becomes home and next `DailyRoutine` is scheduled;
-- unserved outbound -> position stays at origin/home and next daily wake exists;
-- optional outbound arrival -> `OptionalReturn` due after 120 in-game minutes.
-
-Assert through `snapshot_sims(&world)`; do not add public debug component getters.
-
-- [ ] **Step 3: Replace `spawn_due_commute_trips` with demand routing**
-
-Delete the `state.sims.clone()` loop. After `population::run_due(...)`, drain stable-sorted demands and create trips via the existing `build_commute_trip` path:
-
-```rust
-fn spawn_pending_trip_demands(
-    state: &mut GameSnapshot,
-    road_topology: &RoadTopology,
-    road_flow: &mut traffic::RoadFlow,
-    demands: Vec<TripDemand>,
-) {
-    for demand in demands {
-        let trip = build_commute_trip(
-            state,
-            road_topology,
-            road_flow,
-            &demand.citizen_id,
-            demand.purpose,
-            demand.origin,
-            demand.destination,
-            demand.scheduled_time,
-        );
-        state.active_trips.push(trip);
-    }
+    assert!(engine.snapshot.sims.is_empty());
+    assert_eq!(population::population_count(&engine.world), 2);
+    assert_eq!(engine.snapshot().sims.len(), 2);
 }
 ```
 
-Keep current private-car admission updating the same `road_flow` so same-time demand order remains deterministic.
+Add another private test asserting `engine.presentation().frame.population_count == 2` while the live shell `sims` remains empty.
 
-- [ ] **Step 4: Remove all-citizen substep boundaries**
+Run both and confirm RED.
 
-Delete `reset_daily_commute_flags`, the sim loop in `next_boundary_after`, `SIM_SHIFT_BOUNDARIES_PER_DAY`, and `remaining_move_in_slots`.
+- [ ] **Step 2: Cut constructors/restore to candidate-first ECS ownership**
 
-Add scheduler boundary candidates instead:
+Change the engine struct to:
 
 ```rust
-if let Some(population_boundary) = population::next_population_boundary(world, state.time) {
-    track_next_boundary(&mut next, population_boundary, state.time);
+pub struct GameEngine {
+    snapshot: GameSnapshot,
+    road_topology: RoadTopology,
+    world: World,
+    population_schedule: Schedule,
 }
 ```
 
-In `max_tick_substeps`, replace sim-derived event budget with:
+For `from_snapshot` at this checkpoint:
 
 ```rust
-let population_bucket_bound =
-    population::population_boundary_count_until(world, final_time);
+let PreparedSnapshot {
+    mut snapshot,
+    road_topology,
+} = prepare_snapshot(snapshot)?;
+let world = population::build_world_v9(&snapshot);
+let population_schedule = population::build_schedule();
+snapshot.sims.clear();
+Ok(Self {
+    snapshot,
+    road_topology,
+    world,
+    population_schedule,
+})
 ```
 
-and add that bound to the existing per-second/vehicle/growth/outcome terms.
+Use the same candidate-first construction for `new`, sandbox factory/reset, and restore. Do not touch the current engine until the replacement shell/topology/world/schedule all exist.
 
-- [ ] **Step 5: Collect terminal results before dropping terminal trips**
+Remove `#[derive(Clone)]` from `GameEngine`.
 
-Define internal:
+- [ ] **Step 3: Reconstruct population only for explicit durable snapshots**
+
+At this checkpoint implement:
+
+```rust
+pub fn snapshot(&self) -> GameSnapshot {
+    let mut snapshot = self.snapshot.clone();
+    snapshot.sims = population::snapshot_sims_v9(&self.world, snapshot.day);
+    populate_service_metrics(&mut snapshot);
+    snapshot
+}
+```
+
+`snapshot_for_save()` may call `snapshot()`; ordinary tick, dispatch, and presentation must not.
+
+- [ ] **Step 4: Change trip ticking to drain due ECS demand**
+
+Change both `tick_trips` and `tick_trips_with_objectives` to accept:
+
+```rust
+world: &mut World,
+population_schedule: &mut Schedule,
+```
+
+Delete `spawn_due_commute_trips`'s `state.sims.clone()` loop. At each current/substep timestamp:
+
+1. apply growth to the shell;
+2. reconcile any building delta into ECS;
+3. `population::run_due(world, population_schedule, state.time)`;
+4. drain stable-sorted demands;
+5. feed each demand through a refactored `build_commute_trip` taking citizen ID/purpose/origin/destination/scheduled time rather than `&Sim`;
+6. continue existing route/private-car/traffic behavior.
+
+Keep one mutable `RoadFlow` for the whole same-time demand batch exactly as current spawning does, so admitted cars affect later same-time route choices deterministically.
+
+- [ ] **Step 5: Replace all population-derived trip boundaries**
+
+Delete:
+
+- `reset_daily_commute_flags`;
+- sim iteration in `next_boundary_after`;
+- `SIM_SHIFT_BOUNDARIES_PER_DAY`;
+- `remaining_move_in_slots`;
+- sim-count cap widening.
+
+Use `next_population_boundary(world, state.time)` and `population_boundary_count_until(world, final_time)` instead. Active-trip/vehicle/outcome/growth terms remain.
+
+Run:
+
+```bash
+rg 'state\.sims|snapshot\.sims|for sim in .*sims|sims\.len' crates/caelum-core/src/trips.rs
+```
+
+Expected: no matches.
+
+- [ ] **Step 6: Feed terminal trip results back to ECS**
+
+Before terminal trips are dropped, collect:
 
 ```rust
 pub(crate) struct PopulationTripResolution {
@@ -887,240 +650,324 @@ pub(crate) struct PopulationTripResolution {
 }
 ```
 
-While processing `TripTickResult`, append one resolution when a trip transitions terminal. After the new snapshot/metrics are assembled, call `population::apply_trip_resolutions(world, resolutions, state.time)`.
-
-Delete `apply_arrival_to_sim` and `apply_commute_resolution_to_sim` completely.
-
-- [ ] **Step 6: Reconcile growth-wave building additions before due population work**
-
-Where `growth::apply_due_growth_waves` mutates the shell, detect a changed building set and invoke `population::reconcile_buildings` with the previous/next building lists before running the population schedule at that timestamp. Do not add another growth executor.
-
-- [ ] **Step 7: Verify no production trip path scans `GameSnapshot.sims`**
-
-Run:
-
-```bash
-rg 'state\.sims|snapshot\.sims|for sim in .*sims|sims\.len' crates/caelum-core/src/trips.rs
-```
-
-Expected: no matches.
-
-Then run:
-
-```bash
-cargo test -p caelum-core --test commute_requirements
-cargo test -p caelum-core --test trip_lifecycle
-cargo test -p caelum-core trips::
-```
-
-Expected: PASS.
-
-- [ ] **Step 8: Commit**
-
-```bash
-git add crates/caelum-core/src/trips.rs crates/caelum-core/src/population crates/caelum-core/tests
-git commit -m "feat: route ECS population demand through trip simulation"
-```
-
----
-
-### Task 6: Cut `GameEngine` over to sole ECS population ownership and runtime presentation
-
-**Files:**
-- Modify: `crates/caelum-core/src/engine.rs`
-- Modify: `crates/caelum-core/src/intent.rs`
-- Modify: `crates/caelum-core/src/presentation.rs`
-- Modify: `crates/caelum-core/src/persistence/mod.rs`
-- Modify: `crates/caelum-core/tests/presentation_contract.rs`
-- Modify: `crates/caelum-core/tests/presentation_scale.rs`
-- Modify: `crates/caelum-core/tests/population.rs`
-- Modify: `crates/caelum-core/tests/service_control.rs`
-- Modify: `src-tauri/src/lib.rs` test fixtures that use `engine.clone()`
-
-**Interfaces:**
-- `GameEngine` becomes `{ snapshot, road_topology, world, population_schedule }`.
-- `GameEngine::snapshot()` reconstructs durable sims.
-- `GameEngine::presentation()` reads shell + runtime population indexes.
-- `GameplayUpdateResult::{present, frame_only, rejected}` consume a precomputed `PresentationUpdate`.
-
-- [ ] **Step 1: Write private engine invariant tests first**
-
-In `engine.rs` tests:
+Add:
 
 ```rust
-#[test]
-fn live_engine_shell_does_not_mirror_ecs_sims() {
-    let engine = GameEngine::from_snapshot(populated_snapshot()).unwrap();
-    assert!(engine.snapshot.sims.is_empty());
-    assert_eq!(population::population_count(&engine.world), 2);
-    assert_eq!(engine.snapshot().sims.len(), 2);
-}
-
-#[test]
-fn runtime_presentation_reads_ecs_population_without_reconstructing_sims() {
-    let engine = GameEngine::from_snapshot(populated_snapshot()).unwrap();
-    assert!(engine.snapshot.sims.is_empty());
-    assert_eq!(engine.presentation().frame.population_count, 2);
-}
+pub(crate) fn apply_trip_resolutions(
+    world: &mut World,
+    resolutions: Vec<PopulationTripResolution>,
+);
 ```
 
-- [ ] **Step 2: Make constructors build ECS candidate-first**
+Use each row's `resolved_at`. `Arrived | Late` updates settled position and schedules the next activity; `Unserved` leaves settled position unchanged and schedules recovery. Delete `apply_arrival_to_sim` and `apply_commute_resolution_to_sim`.
 
-Update `GameEngine`:
+- [ ] **Step 7: Reconcile committed player building mutations**
 
-```rust
-pub struct GameEngine {
-    snapshot: GameSnapshot,
-    road_topology: RoadTopology,
-    world: World,
-    population_schedule: Schedule,
-}
-```
+When an applied dispatch changes `buildings`, call Task 3 `reconcile_buildings` against the candidate active trips/vehicles before installing the candidate shell. Rejected/no-op dispatches leave both shell and world untouched.
 
-In `from_snapshot`:
+Pure previews remain snapshot-only.
 
-```rust
-let PreparedSnapshot { mut snapshot, road_topology } = prepare_snapshot(snapshot)?;
-let world = population::build_world(&snapshot);
-let population_schedule = population::build_schedule();
-snapshot.sims.clear();
-Ok(Self { snapshot, road_topology, world, population_schedule })
-```
+- [ ] **Step 8: Add runtime presentation without changing wire shape**
 
-Apply the same candidate construction to `new`, sandbox-request construction/reset, and restore. Do not mutate the current engine until the entire replacement candidate exists.
+Keep `presentation::project_update(&GameSnapshot, include_scene)` for durable snapshot tests/harness.
 
-Remove `#[derive(Clone)]` from `GameEngine`.
-
-- [ ] **Step 3: Reconstruct only explicit durable snapshots**
-
-Implement:
+Add:
 
 ```rust
-pub fn snapshot(&self) -> GameSnapshot {
-    let mut snapshot = self.snapshot.clone();
-    snapshot.sims = population::snapshot_sims(&self.world);
-    populate_service_metrics(&mut snapshot);
-    snapshot
-}
-```
-
-`snapshot_for_save()` continues to call `snapshot()`, pause/normalize the clone, and return the full v10 durable snapshot.
-
-No ordinary tick, dispatch, or presentation path may call `snapshot()`.
-
-- [ ] **Step 4: Use runtime presentation population data without changing the wire**
-
-Refactor `presentation.rs` into one shared frame builder with two population sources:
-
-```rust
-pub fn project_update(snapshot: &GameSnapshot, include_scene: bool) -> PresentationUpdate {
-    let population = snapshot_population_frame_data(snapshot);
-    project_update_with_population(snapshot, include_scene, population)
-}
-
 pub(crate) fn project_runtime_update(
     snapshot: &GameSnapshot,
     world: &World,
     include_scene: bool,
-) -> PresentationUpdate {
-    let population = population::runtime_population_frame_data(snapshot, world);
-    project_update_with_population(snapshot, include_scene, population)
+) -> PresentationUpdate;
+```
+
+Factor one shared frame builder so only population source differs. Runtime population count/residential/job occupancy come from `PopulationIndex`; every other HPA-544 scene/frame field uses existing projection code.
+
+Change `GameplayUpdateResult` constructors to accept a precomputed update:
+
+```rust
+pub fn present(update: PresentationUpdate) -> Self {
+    Self {
+        update,
+        applied: true,
+        rejection: None,
+    }
+}
+
+pub fn frame_only(update: PresentationUpdate, applied: bool) -> Self {
+    Self {
+        update,
+        applied,
+        rejection: None,
+    }
+}
+
+pub fn rejected(update: PresentationUpdate, rejection: GameplayRejection) -> Self {
+    Self {
+        update,
+        applied: false,
+        rejection: Some(rejection),
+    }
 }
 ```
 
-`project_update_with_population` must leave every existing HPA-544 field/serde name unchanged.
+`GameEngine` tick/dispatch/presentation uses `project_runtime_update`; none calls `snapshot()`.
 
-Change `GameEngine::presentation()` and tick/dispatch result production to `project_runtime_update`.
+- [ ] **Step 9: Remove `GameEngine::Clone` fixture dependency**
 
-- [ ] **Step 5: Make `GameplayUpdateResult` wrap precomputed updates**
-
-Use:
+Replace test-only `engine.clone()` uses with explicit independent construction. When a test genuinely needs the exact durable state:
 
 ```rust
-pub fn present(update: PresentationUpdate) -> Self { /* applied true */ }
-pub fn frame_only(update: PresentationUpdate, applied: bool) -> Self { /* no rejection */ }
-pub fn rejected(update: PresentationUpdate, rejection: GameplayRejection) -> Self { /* applied false */ }
+let durable = engine.snapshot();
+let mut copy = GameEngine::from_snapshot(durable).expect("fixture snapshot is valid");
 ```
 
-Delete the `GameSnapshot` dependency/import from `intent.rs` if no longer otherwise needed.
+Then set paused/running state explicitly for that test. Do not implement deep runtime clone.
 
-- [ ] **Step 6: Reconcile population on committed building mutations**
-
-Before installing an applied shell candidate, compare the old/new building vectors. When changed, call `population::reconcile_buildings` against the **candidate** active trips/vehicles, then install the candidate.
-
-Rejected and no-op dispatches do not mutate the world. Pure preview remains snapshot-only.
-
-This is the engine integration that makes Task 4's demolition/assignment tests authoritative again.
-
-- [ ] **Step 7: Retarget `GameEngine::Clone` test conveniences**
-
-Replace current `engine.clone()` uses in `src-tauri/src/lib.rs` and `crates/caelum-core/tests/service_control.rs` with explicit independent fixture creation. If a test needs the exact current durable state, use:
-
-```rust
-let snapshot = engine.snapshot();
-let mut copy = GameEngine::from_snapshot(snapshot).expect("fixture snapshot is valid");
-```
-
-and explicitly set paused/running state required by that test afterward. Do not add a production `Clone` implementation that reconstructs the ECS world.
-
-Use:
+Guard:
 
 ```bash
-rg 'engine\.clone\(\)|GameEngine.*Clone|derive\(Clone\).*GameEngine' crates/caelum-core src-tauri
+rg 'engine\.clone\(\)|derive\(Clone\).*GameEngine' crates/caelum-core src-tauri
 ```
 
-Expected after edits: no production `GameEngine` clone contract.
+Expected: no production clone contract.
 
-- [ ] **Step 8: Restore integration parity for population lifecycle**
+- [ ] **Step 10: Restore existing gameplay parity at the engine level**
 
-Update `tests/population.rs` to assert through `engine.snapshot()` that:
+Update integration tests to assert through `engine.snapshot()` and `engine.presentation()`:
 
-- paused housing remains empty;
-- due move-ins fill capacity;
-- workplace capacity remains finite;
-- housing demolition removes residents/active trips;
-- workplace demolition reassigns/cancels outbound demand correctly.
-
-Also assert `engine.presentation().frame.population_count` and building occupancy match the durable snapshot values.
-
-- [ ] **Step 9: Verify presentation and engine tests**
+- paused housing does not move residents in;
+- due move-ins fill current catalog capacity;
+- finite workplace allocation stays deterministic;
+- housing demolition removes residents/trips/passenger references;
+- workplace demolition reassigns or cancels affected outbound trips;
+- existing commute lifecycle/route/private-car outcomes remain equivalent;
+- presentation contract has no sim rows and aggregate values match durable snapshot values.
 
 Run:
 
 ```bash
 cargo test -p caelum-core --test population
+cargo test -p caelum-core --test commute_requirements
+cargo test -p caelum-core --test trip_lifecycle
 cargo test -p caelum-core --test presentation_contract
 cargo test -p caelum-core --test presentation_scale
 cargo test -p caelum-core --test service_control
-cargo test -p caelum-core engine::
+cargo test --workspace
 ```
 
-Expected: PASS.
+Expected: PASS with ECS now the live authority, still using v9 only as explicit save adapter.
 
-- [ ] **Step 10: Commit**
+- [ ] **Step 11: Commit**
 
 ```bash
-git add crates/caelum-core/src/engine.rs crates/caelum-core/src/intent.rs crates/caelum-core/src/presentation.rs crates/caelum-core/src/persistence/mod.rs crates/caelum-core/tests src-tauri/src/lib.rs
+git add crates/caelum-core src-tauri/src/lib.rs
 git commit -m "feat: make ECS the live population authority"
 ```
 
 ---
 
-### Task 7: Update the durable host wire without reintroducing citizens to live UI state
+### Task 5: Replace the temporary v9 adapter with v10 scheduled routines, school/day-off/optional trips, and host persistence types
 
 **Files:**
+- Modify: `crates/caelum-core/src/model.rs`
+- Modify: `crates/caelum-core/src/commute.rs`
+- Modify: `crates/caelum-core/src/population/components.rs`
+- Modify: `crates/caelum-core/src/population/schedule.rs`
+- Modify: `crates/caelum-core/src/population/mod.rs`
+- Modify: `crates/caelum-core/src/persistence/error.rs`
+- Modify: `crates/caelum-core/src/persistence/trips.rs`
+- Modify: `crates/caelum-core/src/persistence/entities.rs` only for v10 reference validation/index use
+- Modify: `crates/caelum-core/tests/common/persistence_fixtures.rs`
+- Modify: Rust test/example fixtures returned by `rg -l 'WorkerProfile|worker_profile|commute_day|outbound_resolved_today|outbound_arrived_today|return_resolved_today|returned_home_today' crates/caelum-core`
 - Modify: `src/domain/types.ts`
 - Modify: `src/runtime/backend/types.ts`
-- Modify: persistence/restore tests returned by `rg -l 'schemaVersion|RustSim|workerProfile|commuteDay|commuteOutbound|commuteReturn' src tests`
-- Modify: WASM/core cross-host snapshot fixtures that assert schema 9
+- Modify: persistence/restore tests returned by `rg -l 'schemaVersion|RustSim|workerProfile|commuteDay' src tests crates/caelum-wasm src-tauri`
 
 **Interfaces:**
-- Consumes: v10 Rust serde shape from Task 1.
-- Produces: TypeScript durable snapshot types that accept v10 `CitizenRoutine`, `ScheduledActivity`, and optional trip purposes. Live `GameState` / `PresentationUpdate` stays exactly HPA-544 shaped.
+- Deletes: `LegacyDayState`, `build_world_v9`, `snapshot_sims_v9`, `WorkerProfile`, daily commute flags.
+- Produces: final v10 `CitizenRoutine`, `ScheduledActivityKind`, `ScheduledActivity`, compact durable `Sim`, optional trip purposes, `build_world`, `snapshot_sims`.
 
-- [ ] **Step 1: Update the TS durable domain types**
+- [ ] **Step 1: Write exact v10 serde RED tests**
 
-Replace `WorkerProfile` and old `Sim` daily flags with:
+In `model.rs` tests add:
+
+```rust
+#[test]
+fn sim_v10_serializes_worker_schedule_without_daily_flags() {
+    let sim = Sim {
+        id: "sim-001".to_string(),
+        home: Point { x: 2, y: 3 },
+        position: Point { x: 2, y: 3 },
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(Point { x: 8, y: 4 }),
+        },
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: 120.0,
+        }),
+    };
+
+    let value = serde_json::to_value(sim).unwrap();
+    assert_eq!(value["routine"]["worker"]["shiftTemplate"], "standard");
+    assert_eq!(value["nextActivity"]["kind"], "dailyRoutine");
+    assert!(value.get("commuteDay").is_none());
+    assert!(value.get("outboundResolvedToday").is_none());
+}
+```
+
+Add round-trips for `CitizenRoutine::Student`, `TripPurpose::OptionalOutbound`, and `TripPurpose::OptionalReturn`.
+
+Run the tests and confirm RED.
+
+- [ ] **Step 2: Replace the durable model and bump schema directly**
+
+Set:
+
+```rust
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 10;
+```
+
+Add the exact types from the design spec, including:
+
+```rust
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum CitizenRoutine { /* Worker fields + Student */ }
+```
+
+Implement the enum with exactly these variants/fields:
+
+- `Worker { shift_template: String, workplace: Option<Point> }`
+- `Student`
+
+Implement `ScheduledActivityKind::{DailyRoutine, PrimaryReturn, OptionalReturn}` and `ScheduledActivity { kind, due_time }`.
+
+Final `Sim` fields are exactly `id`, `home`, `position`, `routine`, `next_activity`.
+
+Final `TripPurpose` is exactly `CommuteOutbound`, `CommuteReturn`, `OptionalOutbound`, `OptionalReturn`.
+
+Delete `WorkerProfile` after all callers in this task are migrated. Do not add v9 deserialization aliases/defaults.
+
+- [ ] **Step 3: Replace temporary runtime day state with final `NextActivity` projection**
+
+Delete `LegacyDayState`. `build_world(snapshot)` now maps each durable v10 `Sim` directly into `Routine`, `SettledPosition`, and optional `NextActivity`; it schedules the activity when present.
+
+`snapshot_sims(world)` maps components back to v10 and sorts by stable ID. Runtime `BuildingAssignment` is projected back to worker workplace point only.
+
+Update `GameEngine::{from_snapshot,snapshot}` to call these final names.
+
+- [ ] **Step 4: Add structured persistence validation for final activity ownership**
+
+In `SnapshotField`, remove the old sim worker/shift/commute/day-flag fields and add:
+
+```rust
+SimRoutine,
+SimWorkplace,
+SimNextActivity,
+SimNextActivityDueTime,
+```
+
+Add exact `AssignmentError` variants:
+
+```rust
+SimHomeNotResidential,
+SimWorkplaceNotJob,
+ScheduledWhileTraveling,
+MissingNextActivity,
+```
+
+In `validate_sims`:
+
+- validate home/position points;
+- require home point inside a placed housing building footprint;
+- for worker workplace `Some`, require it inside a placed building whose catalog `job_capacity > 0`;
+- validate `next_activity.due_time` with existing `finite_non_negative` and `SnapshotField::SimNextActivityDueTime`.
+
+After active-trip references are indexed, build a `BTreeSet<&str>` of active `sim_id`s and enforce:
+
+```rust
+if active_sim_ids.contains(sim.id.as_str()) && sim.next_activity.is_some() {
+    return Err(PersistenceError::InvalidAssignment {
+        entity: entity_ref(EntityKind::Sim, &sim.id),
+        reason: AssignmentError::ScheduledWhileTraveling,
+    });
+}
+if !active_sim_ids.contains(sim.id.as_str()) && sim.next_activity.is_none() {
+    return Err(PersistenceError::InvalidAssignment {
+        entity: entity_ref(EntityKind::Sim, &sim.id),
+        reason: AssignmentError::MissingNextActivity,
+    });
+}
+```
+
+Use the existing `InvalidAssignment { entity, reason }` shape exactly; do not introduce a string diagnostic path.
+
+- [ ] **Step 5: Implement stable daily seed/day-off/student/optional routine rules**
+
+Keep `numeric_id_suffix`, `shift_template_for_id`, and worker departure windows. Replace `worker_profile_for_id` with `routine_for_new_citizen`:
+
+```rust
+pub fn routine_for_new_citizen(id: &str) -> CitizenRoutine {
+    if numeric_id_suffix(id) % 10 == 0 {
+        CitizenRoutine::Student
+    } else {
+        CitizenRoutine::Worker {
+            shift_template: shift_template_for_id(id)
+                .expect("worker ids have a shift template")
+                .to_string(),
+            workplace: None,
+        }
+    }
+}
+```
+
+Add the deterministic integer mixer from the spec (SplitMix64-style over citizen suffix/day/salt) and exact rule tests:
+
+- `sim-001` has day off when `day % 7 == 1` and exactly once in days 0..6;
+- same citizen/day/fixture chooses identical optional outing in two independent worlds;
+- student without a school emits no primary trip and schedules the next daily wake;
+- day off suppresses primary work/school trip;
+- only one in four eligible day-off citizens emits an optional outing;
+- optional destination type is one of `supermarket`, `cinema`, `clinic`, `parkPlaza`;
+- successful optional outbound schedules `OptionalReturn` exactly 120 in-game minutes later.
+
+Use school outbound 07:30–08:30 and return 15:00–16:00, optional outbound 11:00–15:00.
+
+- [ ] **Step 6: Implement the final one-next-activity state machine**
+
+`DailyRoutine` processing follows this order:
+
+1. if settled position != home, emit a return-home demand first;
+2. otherwise, on non-day-off, emit worker primary outbound when assigned or student primary outbound when a school exists;
+3. otherwise, evaluate the one-in-four optional outing;
+4. otherwise schedule next day's `DailyRoutine`.
+
+Trip resolution rules:
+
+- `Arrived | Late` primary outbound -> settle at destination, schedule `PrimaryReturn` at return window/current bucket if already passed;
+- `Arrived | Late` optional outbound -> settle at destination, schedule `OptionalReturn` at `resolved_at + 120 in-game minutes`;
+- successful return -> settle at home, schedule next day's `DailyRoutine`;
+- `Unserved` outbound -> keep settled position, schedule next daily wake;
+- `Unserved` return -> keep settled position, schedule next daily wake so the away-from-home rule retries before any new outbound activity.
+
+No retry loop is scheduled into the same broken bucket.
+
+- [ ] **Step 7: Migrate Rust fixtures as one schema-breaking sweep**
+
+Update the shared `tests/common/persistence_fixtures.rs` helper first, then run:
+
+```bash
+rg -l 'WorkerProfile|worker_profile|commute_day|outbound_resolved_today|outbound_arrived_today|return_resolved_today|returned_home_today' crates/caelum-core
+```
+
+Every current result must be migrated to `CitizenRoutine` / `next_activity` semantics in this task. Do not leave deprecated fields/aliases for compilation convenience.
+
+Update schema assertions so v9 now expects `UnsupportedSchema { expected: 10, actual: 9 }`.
+
+- [ ] **Step 8: Update the durable TypeScript host types exactly**
+
+In `src/domain/types.ts` use the observed Rust externally tagged representation:
 
 ```ts
 export type CitizenRoutine =
@@ -1157,11 +1004,7 @@ export type TripPurpose =
   | "optionalReturn";
 ```
 
-Match the actual serde representation produced by Rust. If serde encodes the externally tagged enum differently than the example TS union, use the observed Rust JSON exactly; do not change Rust solely to preserve the old TS shape.
-
-- [ ] **Step 2: Update `RustSim` only for host `Option` encoding**
-
-If WASM returns Rust `None` as `undefined`, define:
+For raw WASM Option encoding in `src/runtime/backend/types.ts`:
 
 ```ts
 export interface RustSim extends Omit<Sim, "nextActivity"> {
@@ -1169,63 +1012,58 @@ export interface RustSim extends Omit<Sim, "nextActivity"> {
 }
 ```
 
-Keep this type inside the durable backend contract. Do not add `sims` back to ordinary presentation/live state.
+Set the TS schema mirror to 10. Do not add `sims` to live `GameState` or `PresentationUpdate`.
 
-- [ ] **Step 3: Update schema constant and restore tests**
+- [ ] **Step 9: Add restore/save routine tests and cross-host validation**
 
-Set the TS `SNAPSHOT_SCHEMA_VERSION` mirror to 10. Update persistence tests so v9 is rejected and v10 round-trips worker/student scheduled state through both JSON/native and WASM host paths.
+Add tests covering:
 
-Add one assertion that a normal gameplay tick/dispatch response still has no `sims` key anywhere in `PresentationUpdate`.
-
-- [ ] **Step 4: Run cross-host verification**
+- worker next activity save -> restore -> save exact durable equality after normalization;
+- student next activity round-trip;
+- active trip + scheduled activity rejection with `scheduledWhileTraveling` diagnostic;
+- idle sim without next activity rejection with `missingNextActivity` diagnostic;
+- worker workplace on non-job building rejection;
+- home outside housing rejection;
+- normal presentation JSON still contains no `sims` key.
 
 Run:
 
 ```bash
+cargo fmt --all --check
+cargo test --workspace
 bun run wasm:build:release
 bun run check
 bun run test:unit
-cargo test -p caelum-wasm
-cargo test -p caelum --lib
 ```
 
-Expected: PASS; durable saves use schema 10, normal presentation remains unversioned and population-aggregate only.
+Expected: PASS with v10 only.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 10: Commit**
 
 ```bash
-git add src tests crates/caelum-wasm src-tauri
-git commit -m "feat: align hosts with v10 citizen persistence"
+git add crates/caelum-core crates/caelum-wasm src src-tauri tests Cargo.lock
+git commit -m "feat: persist scheduled ECS citizen routines"
 ```
 
 ---
 
-### Task 8: Prove the 200k runtime shape, document the remaining bottleneck, and close cleanup guards
+### Task 6: Prove the 200k runtime shape, document ownership, and run the full gate
 
 **Files:**
 - Modify: `crates/caelum-core/examples/presentation_scale.rs`
+- Modify: `crates/caelum-core/tests/presentation_scale.rs`
+- Modify: population scheduler tests under `crates/caelum-core/src/population/`
 - Modify: `docs/performance/hpa-347-ecs-population.md`
 - Modify: `docs/architecture.md`
-- Modify: `CLAUDE.md` only if its simulation ownership description is now stale
+- Modify: `CLAUDE.md` if its runtime-ownership description is stale
 
 **Interfaces:**
-- Consumes: final ECS engine/runtime, HPA-544 harness, Task 0 before values.
-- Produces: 10k/50k/200k construction/quiet-tick/save/presentation evidence and 1k/5k/20k due-wave separation between ECS emission and current route choice.
+- Consumes: final ECS engine/runtime and Task 0 baseline.
+- Produces: final construction/quiet-tick/presentation/save evidence plus separate due-wave scheduler vs route-spawn evidence.
 
-- [ ] **Step 1: Update the scale fixture to build the final v10/ECS runtime**
+- [ ] **Step 1: Extend the release harness with final runtime rows**
 
-Retain the existing snapshot/presentation cardinality rows. Add final runtime measurements with labels:
-
-```text
-ecs-10000
-secs-50000
-secs-200000
-wave-1000
-wave-5000
-wave-20000
-```
-
-Use `GameEngine::from_snapshot` for valid durable fixtures where feasible. For high-cardinality construction that cannot correspond to one small map's housing capacity, use a dedicated `#[doc(hidden)]`/example-only population fixture constructor inside the example module rather than weakening production persistence validation.
+For `ecs-10000`, `ecs-50000`, and `ecs-200000`, construct v10 snapshots with stable synthetic citizen IDs and valid in-map home/work points, then create `GameEngine::from_snapshot`. The persistence boundary validates references/shape, not gameplay housing occupancy count, so the scale fixture may intentionally place many synthetic residents on the same valid housing footprint; document this as a performance fixture, not gameplay-produced state.
 
 Measure separately:
 
@@ -1234,57 +1072,61 @@ runtime_build_us
 quiet_tick_us
 runtime_presentation_us
 full_snapshot_us
+```
+
+For `wave-1000`, `wave-5000`, `wave-20000`, schedule exactly that many citizens in one due bucket and measure separately:
+
+```text
 schedule_emit_us
 route_spawn_us
 ```
 
-Do not combine ECS emission and routing into one unexplained number for the wave rows.
+Keep the existing HPA-544 snapshot/presentation cardinality rows too.
 
-- [ ] **Step 2: Add structural 200k tests without timing thresholds**
+- [ ] **Step 2: Add structural 200k assertions without timing thresholds**
 
-In `presentation_scale`/population tests, assert:
+Add tests proving:
 
 ```rust
-assert_eq!(population::population_count(&world), 200_000);
-assert!(live_shell.sims.is_empty());
-assert_eq!(runtime_update.frame.population_count, 200_000);
-assert_eq!(quiet_tick_active_trip_count_before, quiet_tick_active_trip_count_after);
+assert_eq!(population::population_count(&engine.world), 200_000);
+assert!(engine.snapshot.sims.is_empty());
+assert_eq!(engine.presentation().frame.population_count, 200_000);
 ```
 
-Add a due-bucket test where exactly N citizens are scheduled now and `drain_trip_demands` returns exactly N stable-sorted IDs even though the world contains 200,000 entities.
+Because `world`/live shell are private, place these assertions in `engine.rs`/population module tests rather than exposing debug accessors.
 
-- [ ] **Step 3: Record the final reference table**
+Add a 200k scheduler test with exactly N due citizens and assert `drain_trip_demands` returns exactly N stable-sorted IDs while all other citizens remain future-scheduled.
 
-Append to `docs/performance/hpa-347-ecs-population.md`:
+- [ ] **Step 3: Record the final reference evidence**
 
-```markdown
-## After ECS cutover
-| Fixture | ECS citizens | Runtime build µs | Quiet tick µs | Runtime presentation µs | Full snapshot µs |
-| --- | ---: | ---: | ---: | ---: | ---: |
-...
+Run on the same reference machine used in Task 0:
 
-## Due demand wave
-| Fixture | Due citizens | ECS schedule+emit µs | Existing route spawn µs |
-| --- | ---: | ---: | ---: |
-...
+```bash
+cargo run --release -p caelum-core --example presentation_scale
 ```
 
-Fill every row from one release run on the same reference machine. Explain whether route creation is now the dominant wave cost; if so, name HPA-348 as the owner. Do not invent a pass/fail millisecond threshold after seeing the values.
+Append exact measured values to `docs/performance/hpa-347-ecs-population.md` in two tables:
+
+- rows `ecs-10000`, `ecs-50000`, `ecs-200000` with ECS citizens, runtime build, quiet tick, runtime presentation, full snapshot;
+- rows `wave-1000`, `wave-5000`, `wave-20000` with due citizens, scheduler+emit, existing route spawn.
+
+State whether route creation is now the dominant due-wave cost. If it is, explicitly name HPA-348 as owner. Do not derive a pass/fail millisecond threshold from the numbers.
 
 - [ ] **Step 4: Update architecture ownership docs**
 
-Document:
+Document final invariants:
 
 - `GameEngine` owns shell + topology + ECS world/schedule;
-- live shell `sims` is empty by invariant;
-- durable snapshot reconstructs sims;
-- population scheduler is time-bucketed;
-- HPA-544 presentation reads aggregate ECS population data;
-- HPA-348 remains route-choice batching, HPA-640 remains rendering/LOD.
+- live shell `sims` is empty;
+- durable snapshot reconstructs v10 sims;
+- time buckets wake only due citizens;
+- HPA-544 presentation reads ECS population aggregates;
+- HPA-348 remains route-choice batching;
+- HPA-640 remains viewport/LOD/WebGPU work.
 
-Delete stale statements that say sandbox ticking owns `Vec<Sim>` directly.
+Delete stale wording that describes live `Vec<Sim>` as the ticking authority.
 
-- [ ] **Step 5: Run source-shape guards**
+- [ ] **Step 5: Run final source-shape guards**
 
 Run:
 
@@ -1292,7 +1134,7 @@ Run:
 rg 'state\.sims|snapshot\.sims|\.sims\.iter|\.sims\.len' crates/caelum-core/src
 ```
 
-Expected matches are limited to deliberate durable/persistence projection code (`model`, `persistence`, pure durable `presentation::project_update`, and `population::snapshot_sims` support). `trips.rs`, `buildings.rs`, and population-dependent `transit.rs` cleanup must not perform ordinary live sim scans.
+Expected matches are limited to deliberate durable/persistence/pure durable-presentation conversion paths. `trips.rs`, `buildings.rs`, and population-dependent `transit.rs` cleanup must have no ordinary live-population scan.
 
 Run:
 
@@ -1300,25 +1142,33 @@ Run:
 rg 'bevy::|bevy_app|multi_threaded|bevy_reflect|rand::' crates/caelum-core Cargo.toml
 ```
 
-Expected: no prohibited full-Bevy/reflection/multithreading/rand usage; only `bevy_ecs` imports/dependency.
+Expected: no matches for prohibited dependencies/features.
 
 Run:
 
 ```bash
-rg 'Entity' crates/caelum-core/src/model.rs src/domain/types.ts src/runtime/backend/types.ts crates/caelum-core/src/presentation.rs
+rg 'bevy_ecs::.*Entity|\bEntity\b' crates/caelum-core/src/model.rs src/domain/types.ts src/runtime/backend/types.ts crates/caelum-core/src/presentation.rs
 ```
 
-Expected: no Bevy runtime entity ID in durable/public presentation types.
-
-- [ ] **Step 6: Run complete Rust/TS/WASM/E2E verification**
+Expected: no Bevy runtime entity handle in durable/public presentation types.
 
 Run:
 
 ```bash
-cargo +stable fmt --all --check
-cargo +stable clippy --workspace --all-targets --locked -- -D warnings
-cargo +stable test --workspace
-cargo +stable build --workspace --all-targets --locked
+rg 'WorkerProfile|worker_profile|commute_day|outbound_resolved_today|outbound_arrived_today|return_resolved_today|returned_home_today|build_world_v9|snapshot_sims_v9|LegacyDayState' crates/caelum-core src tests
+```
+
+Expected: no final legacy adapter/state references.
+
+- [ ] **Step 6: Run the complete project gate**
+
+Run:
+
+```bash
+cargo fmt --all --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo test --workspace
+cargo build --workspace --all-targets --locked
 bun install --frozen-lockfile
 bun run wasm:build:release
 bun run check
@@ -1330,28 +1180,28 @@ bun run build
 cargo run --release -p caelum-core --example presentation_scale
 ```
 
-Expected: every command PASS; the release example prints the completed before/after reference rows.
+Expected: every command PASS and the release harness prints the recorded final rows.
 
-- [ ] **Step 7: Self-review spec coverage and placeholder/type consistency**
+- [ ] **Step 7: Self-review spec coverage and plan drift**
 
-Check each spec section against the implemented files:
+Verify no unfinished planning markers remain:
 
 ```bash
-rg 'TBD|TODO|<measured value>|<copy |placeholder' \
+rg 'TBD|TODO|FILL_ME|REPLACE_ME' \
   docs/superpowers/specs/2026-09-04-ecs-latent-population-design.md \
   docs/superpowers/plans/2026-09-04-ecs-latent-population.md \
   docs/performance/hpa-347-ecs-population.md
 ```
 
-Expected: no plan/spec/performance placeholders. Code `TODO`s unrelated to HPA-347 are not part of this document guard.
+Expected: no matches.
 
-Confirm the exact runtime interfaces used by `engine.rs` and `trips.rs` still match the names/signatures established in Tasks 2–5. Fix drift rather than adding aliases.
+Read the design spec once more and map every acceptance item to a passing test, harness row, or source-shape guard. Fix interface-name drift instead of adding aliases.
 
-- [ ] **Step 8: Commit the evidence/docs and keep implementation on this PR**
+- [ ] **Step 8: Commit evidence/docs and update this same PR**
 
 ```bash
-git add crates/caelum-core/examples/presentation_scale.rs crates/caelum-core/tests docs CLAUDE.md
+git add crates/caelum-core docs CLAUDE.md
 git commit -m "docs: record HPA-347 ECS scale evidence"
 ```
 
-Then update the existing HPA-347 draft PR body from “planning” to an implementation summary; do not create another PR.
+Update this HPA-347 draft PR body from planning summary to implementation/evidence summary. Do not create another PR.
