@@ -174,7 +174,7 @@ Expected: current tests PASS before ECS data is added.
 
 ```rust
 use bevy_ecs::prelude::*;
-use crate::model::{Point, ScheduledActivity};
+use crate::model::Point;
 
 #[derive(Component, Clone, Debug, PartialEq, Eq)]
 pub(super) struct CitizenId(pub(super) String);
@@ -204,12 +204,16 @@ pub(super) enum Routine {
 }
 
 #[derive(Component, Clone, Debug, PartialEq)]
-pub(super) struct NextActivity(pub(super) ScheduledActivity);
+pub(super) struct LegacyDayState {
+    pub(super) commute_day: u32,
+    pub(super) outbound_resolved: bool,
+    pub(super) outbound_arrived: bool,
+    pub(super) return_resolved: bool,
+    pub(super) returned_home: bool,
+}
 ```
 
-For the temporary v9 adapter only, keep one `LegacyDayState` component carrying the five current day/arrival flags. Task 6 deletes it.
-
-`building_id: None` is allowed for legacy/unit fixtures whose point does not resolve to a real population building. HPA-347 does not add stricter home/workplace persistence hardening solely to make ECS indexes work; gameplay-produced citizens still resolve to real buildings.
+Task 2 adds the final `NextActivity(ScheduledActivity)` component after `ScheduledActivity` exists. `building_id: None` is allowed for legacy/unit fixtures whose point does not resolve to a real population building. HPA-347 does not add stricter home/workplace persistence hardening solely to make ECS indexes work; gameplay-produced citizens still resolve to real buildings.
 
 - [ ] **Step 4: Add rebuildable derived index and separate monotonic allocator**
 
@@ -297,6 +301,7 @@ git commit -m "feat: add indexed Bevy ECS population world"
 ### Task 2: Add exact-time scheduling for current Worker commute
 
 **Files:**
+- Modify: `crates/caelum-core/src/population/components.rs`
 - Modify: `crates/caelum-core/src/population/schedule.rs`
 - Modify: `crates/caelum-core/src/population/mod.rs`
 - Modify: `crates/caelum-core/src/model.rs` only to expose the final activity kind internally before v10 serialization replaces the old `Sim`
@@ -330,6 +335,13 @@ pub struct ScheduledActivity {
     pub kind: ScheduledActivityKind,
     pub due_time: f64,
 }
+```
+
+Then add in `components.rs`:
+
+```rust
+#[derive(Component, Clone, Debug, PartialEq)]
+pub(super) struct NextActivity(pub(super) ScheduledActivity);
 ```
 
 No `PrimaryOutbound` temporary enum exists. `DailyRoutine` decides whether a Worker outbound is due.
