@@ -292,7 +292,7 @@ Do not run `clippy -D warnings` yet; staged production callers land in Task 5.
 Commit:
 
 ```bash
-git add Cargo.lock crates/caelum-core crates/caelum-wasm/Cargo.toml src-tauri/Cargo.toml
+git add Cargo.lock crates/caelum-core/Cargo.toml crates/caelum-core/src/population crates/caelum-wasm/Cargo.toml src-tauri/Cargo.toml
 git commit -m "feat: add indexed Bevy ECS population world"
 ```
 
@@ -595,7 +595,7 @@ cargo check --workspace
 Commit:
 
 ```bash
-git add crates/caelum-core/src/population crates/caelum-core/src/buildings.rs crates/caelum-core/src/transit.rs crates/caelum-core/tests
+git add crates/caelum-core/src/population crates/caelum-core/src/buildings.rs crates/caelum-core/src/transit.rs crates/caelum-core/tests/population.rs crates/caelum-core/tests/areas_buildings.rs crates/caelum-core/tests/transit_build.rs
 git commit -m "feat: reconcile population through ECS indexes"
 ```
 
@@ -997,7 +997,7 @@ Expected: no matches.
 - [ ] **Step 15: Commit**
 
 ```bash
-git add crates/caelum-core src-tauri/src/lib.rs docs/performance/hpa-347-ecs-population.md
+git add crates/caelum-core/src crates/caelum-core/tests src-tauri/src/lib.rs docs/performance/hpa-347-ecs-population.md
 git commit -m "feat: make ECS the live Worker population authority"
 ```
 
