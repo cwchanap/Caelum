@@ -91,7 +91,7 @@ Early objective termination and cap fallback keep the shell and ECS changes proc
 
 ## Components
 
-Keep components small:
+Keep components small. Before the scheduler task, the v9 adapter needs only stable identity, home/settled position, routine/workplace assignment, and the temporary legacy day state. The scheduler task then adds the final `NextActivity(ScheduledActivity)` component once `ScheduledActivity` exists.
 
 ```rust
 #[derive(Component)]
@@ -115,13 +115,17 @@ enum Routine {
     Student,
 }
 
-#[derive(Component)]
-struct NextActivity(ScheduledActivity);
-
 struct BuildingAssignment {
     building_id: Option<String>,
     point: Point,
 }
+```
+
+The scheduler task adds:
+
+```rust
+#[derive(Component)]
+struct NextActivity(ScheduledActivity);
 ```
 
 `building_id: None` is allowed for legacy/unit fixtures whose point does not resolve to a live building. Gameplay-produced population remains building-backed. HPA-347 does not add stricter “home must be housing/workplace must be job building” persistence rules solely for ECS indexing.
