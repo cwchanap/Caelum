@@ -5,6 +5,8 @@ use caelum_core::model::{
     TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::presentation::project_update;
+use caelum_core::road_topology::RoadTopology;
+use caelum_core::trips;
 use caelum_core::GameEngine;
 
 fn sim(index: usize) -> Sim {
@@ -119,6 +121,22 @@ fn measure_presentation(label: &str, snapshot: &GameSnapshot) {
     );
 }
 
+fn measure_population_tick(label: &str, snapshot: &GameSnapshot, delta_seconds: f64) {
+    let topology = RoadTopology::compile(&snapshot.map).expect("scale topology");
+    let mut running = snapshot.clone();
+    running.paused = false;
+    running.speed = 1;
+
+    let started = Instant::now();
+    let advanced = trips::tick_trips(&running, &topology, delta_seconds);
+    let tick_us = started.elapsed().as_micros();
+
+    println!(
+        "{label}\tpopulation_tick_us={tick_us}\tadvanced_time={}",
+        advanced.time - running.time,
+    );
+}
+
 fn main() {
     let baseline = GameEngine::new().snapshot();
     measure_snapshot("current", &baseline);
@@ -129,6 +147,8 @@ fn main() {
         fixture.sims = (0..count).map(sim).collect();
         measure_snapshot(&format!("sims-{count}"), &fixture);
         measure_presentation(&format!("sims-{count}"), &fixture);
+        // Small delta that does not intentionally cross a commute departure.
+        measure_population_tick(&format!("sims-{count}"), &fixture, 0.5);
     }
 
     for count in [1_000, 5_000, 20_000] {
