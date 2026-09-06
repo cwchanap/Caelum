@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 
-use crate::model::{GameSnapshot, Point, RoundaboutSize, ServicePattern, TransitMode};
-use crate::presentation::{project_update, PresentationUpdate};
+use crate::model::{Point, RoundaboutSize, ServicePattern, TransitMode};
+use crate::presentation::PresentationUpdate;
 use crate::rejection::GameplayRejection;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -140,26 +140,26 @@ pub(crate) struct DispatchContext {
 
 impl GameplayUpdateResult {
     /// Result of an applied dispatch: full presentation with scene.
-    pub fn present(snapshot: &GameSnapshot) -> Self {
+    pub fn present(update: PresentationUpdate) -> Self {
         Self {
-            update: project_update(snapshot, true),
+            update,
             applied: true,
             rejection: None,
         }
     }
 
     /// Frame-only result (ticks, rejected/no-op dispatches).
-    pub fn frame_only(snapshot: &GameSnapshot, applied: bool) -> Self {
+    pub fn frame_only(update: PresentationUpdate, applied: bool) -> Self {
         Self {
-            update: project_update(snapshot, false),
+            update,
             applied,
             rejection: None,
         }
     }
 
-    pub fn rejected(snapshot: &GameSnapshot, rejection: GameplayRejection) -> Self {
+    pub fn rejected(update: PresentationUpdate, rejection: GameplayRejection) -> Self {
         Self {
-            update: project_update(snapshot, false),
+            update,
             applied: false,
             rejection: Some(rejection),
         }

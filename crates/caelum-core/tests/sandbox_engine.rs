@@ -1,6 +1,6 @@
 use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use caelum_core::model::{GameMode, Point, TripPurpose, WorkerProfile};
-use caelum_core::presentation::project_update;
+use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
     canonical_default_request, create_sandbox_snapshot, GameEngine, GameIntent,
@@ -50,7 +50,14 @@ fn reset_replays_the_complete_original_blank_grid_request() {
 
     let reset_update = engine.reset().unwrap();
 
-    assert_eq!(reset_update, project_update(&expected, true));
+    assert_eq!(
+        reset_update,
+        project_update(
+            &expected,
+            &population_aggregates_from_snapshot(&expected),
+            true
+        )
+    );
     assert_eq!(engine.snapshot(), expected);
 }
 
@@ -67,7 +74,14 @@ fn reset_replays_the_complete_original_crossroads_request() {
 
     let reset_update = engine.reset().unwrap();
 
-    assert_eq!(reset_update, project_update(&expected, true));
+    assert_eq!(
+        reset_update,
+        project_update(
+            &expected,
+            &population_aggregates_from_snapshot(&expected),
+            true
+        )
+    );
     assert_eq!(engine.snapshot(), expected);
 }
 
@@ -83,7 +97,14 @@ fn reset_replays_the_complete_original_small_town_request() {
 
     let reset_update = engine.reset().unwrap();
 
-    assert_eq!(reset_update, project_update(&expected, true));
+    assert_eq!(
+        reset_update,
+        project_update(
+            &expected,
+            &population_aggregates_from_snapshot(&expected),
+            true
+        )
+    );
     assert_eq!(engine.snapshot(), expected);
 }
 

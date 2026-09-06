@@ -928,7 +928,7 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
         destination,
         59.0,
     ));
-    let mut engine = GameEngine::from_snapshot(state).expect("shortfall waiter loads");
+    let mut engine = GameEngine::from_snapshot(state.clone()).expect("shortfall waiter loads");
     let resumed = engine.dispatch(GameIntent::SetPaused { paused: false });
     assert!(resumed.applied, "resume should apply: {resumed:?}");
 
@@ -950,12 +950,9 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
         wire_before["transit"]["routes"][0]["serviceMetrics"]["nextVehicleCost"],
         serde_json::json!(BUS_COST)
     );
-    let mut paused = engine.clone();
-    let paused_result = paused.dispatch(GameIntent::SetPaused { paused: true });
-    assert!(
-        paused_result.applied,
-        "pause should apply: {paused_result:?}"
-    );
+    // An independent engine over the same durable snapshot stands in for the
+    // paused service: paused services never publish a top-up offer.
+    let paused = GameEngine::from_snapshot(state).expect("shortfall waiter loads");
     assert_eq!(
         paused.snapshot().transit.routes[0]
             .service_metrics

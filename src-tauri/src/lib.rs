@@ -340,9 +340,11 @@ mod tests {
 
     #[test]
     fn invalid_restore_preserves_the_managed_engine() {
+        // Independent engines over the deterministic default sandbox: one is
+        // the managed state, the other produces the comparison snapshot.
         let engine = GameEngine::new();
         let state = Mutex::new(OwnedEngine {
-            engine: engine.clone(),
+            engine: GameEngine::new(),
             runtime_epoch: 0,
         });
         let mut candidate = engine.snapshot();
@@ -368,7 +370,7 @@ mod tests {
     fn stale_restore_does_not_replace_the_managed_engine() {
         let engine = GameEngine::new();
         let state = Mutex::new(OwnedEngine {
-            engine: engine.clone(),
+            engine: GameEngine::new(),
             runtime_epoch: 2,
         });
 

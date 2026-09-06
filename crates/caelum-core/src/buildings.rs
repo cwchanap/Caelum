@@ -3,7 +3,6 @@ use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::ids::next_entity_id;
 use crate::model::{
     BusStopKind, GameSnapshot, PlacedBuilding, Point, Station, Stop, TransitNodeStatus,
-    WorkerProfile,
 };
 use crate::platforms::{bus_platforms, metro_platforms};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -60,18 +59,6 @@ pub fn footprint(
     }
 
     Some(points)
-}
-
-pub fn workplace_points(state: &GameSnapshot) -> Vec<Point> {
-    state
-        .buildings
-        .iter()
-        .filter(|building| {
-            building_definition(&building.building_type)
-                .is_some_and(|definition| definition.job_capacity > 0)
-        })
-        .flat_map(|building| building.occupied_tiles.iter().copied())
-        .collect()
 }
 
 pub fn can_place_building(
@@ -326,71 +313,4 @@ pub fn place_building_core(
     // allocation) is owned by ECS building reconciliation.
 
     Ok(next)
-}
-
-pub fn assign_workplaces(state: &mut GameSnapshot) {
-    let mut workplaces: Vec<(String, Vec<Point>, usize)> = state
-        .buildings
-        .iter()
-        .filter_map(|building| {
-            let definition = building_definition(&building.building_type)?;
-            (definition.job_capacity > 0).then(|| {
-                (
-                    building.id.clone(),
-                    building.occupied_tiles.clone(),
-                    usize::from(definition.job_capacity),
-                )
-            })
-        })
-        .collect();
-    workplaces.sort_by(|left, right| left.0.cmp(&right.0));
-
-    // First preserve existing assignments while each matching workplace has an
-    // unused slot. Anything stale or over capacity is cleared before filling
-    // the remaining slots, including when no workplaces exist at all.
-    let mut used = vec![0usize; workplaces.len()];
-    for sim in &mut state.sims {
-        if sim.worker_profile != WorkerProfile::Worker {
-            continue;
-        }
-
-        let Some(current) = sim.workplace else {
-            continue;
-        };
-        let Some(workplace_index) = workplaces
-            .iter()
-            .position(|(_, occupied_tiles, _)| occupied_tiles.contains(&current))
-        else {
-            sim.workplace = None;
-            continue;
-        };
-        if used[workplace_index] < workplaces[workplace_index].2 {
-            used[workplace_index] += 1;
-        } else {
-            sim.workplace = None;
-        }
-    }
-
-    // Fill open slots in the existing stable sim order. Workplaces are already
-    // sorted by ID, and each slot maps deterministically onto its footprint.
-    for sim in &mut state.sims {
-        if sim.worker_profile != WorkerProfile::Worker || sim.workplace.is_some() {
-            continue;
-        }
-
-        let Some(workplace_index) = workplaces
-            .iter()
-            .enumerate()
-            .find(|(index, (_, occupied_tiles, capacity))| {
-                used[*index] < *capacity && !occupied_tiles.is_empty()
-            })
-            .map(|(index, _)| index)
-        else {
-            continue;
-        };
-
-        let occupied_tiles = &workplaces[workplace_index].1;
-        sim.workplace = Some(occupied_tiles[used[workplace_index] % occupied_tiles.len()]);
-        used[workplace_index] += 1;
-    }
 }

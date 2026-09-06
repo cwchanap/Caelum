@@ -2,7 +2,7 @@ use caelum_core::model::{
     ActiveTrip, GameSnapshot, PlacedBuilding, Point, Sim, TransitMode, TripPosition, TripPurpose,
     TripStatus, Vehicle, WorkerProfile,
 };
-use caelum_core::presentation::project_update;
+use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::state::create_initial_snapshot;
 
 fn sim(index: usize) -> Sim {
@@ -104,8 +104,10 @@ fn latent_population_has_no_row_per_sim_payload_growth() {
     let small = fixture_with_sims(0);
     let large = fixture_with_sims(200_000);
 
-    let small_frame = project_update(&small, false).frame;
-    let large_frame = project_update(&large, false).frame;
+    let small_frame =
+        project_update(&small, &population_aggregates_from_snapshot(&small), false).frame;
+    let large_frame =
+        project_update(&large, &population_aggregates_from_snapshot(&large), false).frame;
 
     assert_eq!(
         small_frame.building_occupancy.len(),
@@ -124,17 +126,25 @@ fn demand_rows_follow_distinct_destinations_not_trip_count() {
     let map_destinations = fixture_with_active_trips(20_000, 504);
 
     assert_eq!(
-        project_update(&one_destination, false)
-            .frame
-            .demand_flow
-            .len(),
+        project_update(
+            &one_destination,
+            &population_aggregates_from_snapshot(&one_destination),
+            false
+        )
+        .frame
+        .demand_flow
+        .len(),
         1
     );
     assert_eq!(
-        project_update(&map_destinations, false)
-            .frame
-            .demand_flow
-            .len(),
+        project_update(
+            &map_destinations,
+            &population_aggregates_from_snapshot(&map_destinations),
+            false
+        )
+        .frame
+        .demand_flow
+        .len(),
         504
     );
 }
@@ -147,10 +157,14 @@ fn scale_fixtures_exercise_building_and_vehicle_terms() {
         snapshot.buildings = (0..count).map(building).collect();
         assert_eq!(snapshot.buildings.len(), count);
         assert_eq!(
-            project_update(&snapshot, false)
-                .frame
-                .building_occupancy
-                .len(),
+            project_update(
+                &snapshot,
+                &population_aggregates_from_snapshot(&snapshot),
+                false
+            )
+            .frame
+            .building_occupancy
+            .len(),
             count
         );
     }
@@ -159,6 +173,16 @@ fn scale_fixtures_exercise_building_and_vehicle_terms() {
         let mut snapshot = create_initial_snapshot();
         snapshot.transit.vehicles = (0..count).map(vehicle).collect();
         assert_eq!(snapshot.transit.vehicles.len(), count);
-        assert_eq!(project_update(&snapshot, false).frame.vehicles.len(), count);
+        assert_eq!(
+            project_update(
+                &snapshot,
+                &population_aggregates_from_snapshot(&snapshot),
+                false
+            )
+            .frame
+            .vehicles
+            .len(),
+            count
+        );
     }
 }

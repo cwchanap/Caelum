@@ -526,7 +526,7 @@ fn validate_buildings<'a>(
                     && tile.road_structure_id.is_none()
                     && definition
                         .allowed_area
-                        .map_or(true, |area| tile.area.as_deref() == Some(area))
+                        .is_none_or(|area| tile.area.as_deref() == Some(area))
             };
             if !valid_tile {
                 return Err(PersistenceError::InvalidEntity {

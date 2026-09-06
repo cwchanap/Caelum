@@ -9,7 +9,7 @@ pub fn numeric_id_suffix(id: &str) -> usize {
 }
 
 pub fn worker_profile_for_id(id: &str) -> WorkerProfile {
-    if numeric_id_suffix(id) % 10 == 0 {
+    if numeric_id_suffix(id).is_multiple_of(10) {
         WorkerProfile::NonWorker
     } else {
         WorkerProfile::Worker
@@ -18,7 +18,7 @@ pub fn worker_profile_for_id(id: &str) -> WorkerProfile {
 
 pub fn shift_template_for_id(id: &str) -> Option<&'static str> {
     let suffix = numeric_id_suffix(id);
-    if suffix % 10 == 0 {
+    if suffix.is_multiple_of(10) {
         return None;
     }
 

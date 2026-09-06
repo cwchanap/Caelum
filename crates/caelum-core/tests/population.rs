@@ -431,3 +431,295 @@ fn move_in_at_exact_departure_spawns_today() {
             && trip.route_plan.is_some()
     }));
 }
+
+// === Task 5 re-pins: placement/demolition/refill/late-assignment behaviors
+// deleted from engine-level tests by Task 3, now pinned end-to-end through
+// GameEngine (dispatch + tick) against the live ECS population authority.
+
+#[test]
+fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("commercial", (8, 3), (9, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for (building_type, origin) in [
+        ("smallHouse", (2, 3)),
+        ("smallHouse", (2, 7)),
+        ("supermarket", (8, 3)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: building_type.to_string(),
+                    origin: origin.into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(600.0);
+    let filled = engine.snapshot();
+    assert_eq!(filled.sims.len(), 8);
+
+    // Task 5 pins the intended precondition through the durable snapshot: the
+    // four residents of the house being demolished are employed, while the
+    // four residents in the surviving house are unassigned surplus.
+    let first_house_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.origin == caelum_core::model::Point { x: 2, y: 3 })
+        .expect("first house")
+        .occupied_tiles
+        .clone();
+    let second_house_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.origin == caelum_core::model::Point { x: 2, y: 7 })
+        .expect("second house")
+        .occupied_tiles
+        .clone();
+    let supermarket_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "supermarket")
+        .expect("supermarket")
+        .occupied_tiles
+        .clone();
+    let supermarket_tile = supermarket_tiles[0];
+    let mut prepared = filled;
+    for sim in &mut prepared.sims {
+        if first_house_tiles.contains(&sim.home) {
+            sim.workplace = Some(supermarket_tile);
+        } else if second_house_tiles.contains(&sim.home) {
+            sim.workplace = None;
+        }
+    }
+    engine = GameEngine::from_snapshot(prepared).expect("prepared occupancy snapshot");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 3).into(),
+    });
+    assert!(removed.applied, "{removed:?}");
+    assert_eq!(engine.snapshot().sims.len(), 4);
+    assert!(engine.snapshot().sims.iter().all(|sim| {
+        second_house_tiles.contains(&sim.home) && sim.worker_profile == WorkerProfile::Worker
+    }));
+    assert_eq!(
+        engine
+            .snapshot()
+            .sims
+            .iter()
+            .filter(|sim| {
+                sim.workplace
+                    .is_some_and(|workplace| supermarket_tiles.contains(&workplace))
+            })
+            .count(),
+        4,
+        "the freed job slots refill from the globally lowest unassigned survivors"
+    );
+}
+
+#[test]
+fn demolishing_workplace_clears_workers_and_refills_elsewhere_without_churn() {
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("commercial", (8, 3), (9, 4)),
+        ("commercial", (8, 5), (10, 6)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for (building_type, origin) in [
+        ("smallHouse", (2, 3)),
+        ("smallHouse", (2, 7)),
+        ("supermarket", (8, 3)),
+        ("cinema", (8, 5)),
+    ] {
+        let placed = engine.dispatch(GameIntent::PlaceBuilding {
+            building_type: building_type.to_string(),
+            origin: origin.into(),
+            rotation: 0,
+        });
+        assert!(placed.applied, "{building_type}: {placed:?}");
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(600.0);
+    let filled = engine.snapshot();
+    assert_eq!(filled.sims.len(), 8);
+
+    let supermarket_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "supermarket")
+        .expect("supermarket")
+        .occupied_tiles
+        .clone();
+    let cinema_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "cinema")
+        .expect("cinema")
+        .occupied_tiles
+        .clone();
+    assert_eq!(supermarket_tiles.len(), 4);
+    assert_eq!(cinema_tiles.len(), 6);
+    let assigned: Vec<_> = filled.sims.iter().filter_map(|sim| sim.workplace).collect();
+    assert_eq!(assigned.len(), 8);
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (8, 3).into(),
+    });
+    assert!(removed.applied, "{removed:?}");
+
+    let after = engine.snapshot();
+    assert_eq!(after.sims.len(), 8, "workplace removal never despawns");
+    let supermarket_workers = after
+        .sims
+        .iter()
+        .filter(|sim| {
+            sim.workplace
+                .is_some_and(|workplace| supermarket_tiles.contains(&workplace))
+        })
+        .count();
+    assert_eq!(
+        supermarket_workers, 0,
+        "removed workplace loses every worker"
+    );
+    let cinema_workers = after
+        .sims
+        .iter()
+        .filter(|sim| {
+            sim.workplace
+                .is_some_and(|workplace| cinema_tiles.contains(&workplace))
+        })
+        .count();
+    assert_eq!(
+        cinema_workers, 6,
+        "survivors refill the free cinema slots in stable order"
+    );
+    assert_eq!(
+        after
+            .sims
+            .iter()
+            .filter(|sim| sim.workplace.is_none())
+            .count(),
+        2,
+        "exactly the surplus workers stay unassigned"
+    );
+}
+
+#[test]
+fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
+    // Advance past today's departure while the town still has no buildings.
+    assert!(
+        engine
+            .tick(scheduled_time_seconds(0, departure) + 1.0)
+            .applied
+    );
+
+    // Move a resident in after the departure boundary (the move-in is due at
+    // its placement timestamp, so one tick admits exactly slot zero).
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: (2, 3).into(),
+                end: (3, 3).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(engine.tick(0.0).applied);
+    assert_eq!(engine.snapshot().sims.len(), 1);
+    assert!(engine.snapshot().active_trips.is_empty());
+
+    // Mid-day destination: the late assignment must not gain a retroactive
+    // outbound today, but the reconcile assigns the free slot immediately.
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "commercial".to_string(),
+                start: (8, 3).into(),
+                end: (9, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    let assigned = engine.snapshot();
+    assert_eq!(assigned.sims.len(), 1);
+    assert!(
+        assigned.sims[0].workplace.is_some(),
+        "reconcile assigns the free job slot immediately"
+    );
+    assert!(
+        assigned
+            .active_trips
+            .iter()
+            .all(|trip| !(trip.sim_id == "sim-001"
+                && trip.purpose == TripPurpose::CommuteOutbound)),
+        "no retroactive outbound after the departure boundary"
+    );
+
+    // The worker commutes normally on the next day.
+    let next_day_departure = scheduled_time_seconds(1, departure);
+    engine.tick(next_day_departure - assigned.time);
+    let next_day = engine.snapshot();
+    assert!(next_day
+        .active_trips
+        .iter()
+        .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound));
+}

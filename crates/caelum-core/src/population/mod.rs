@@ -1,108 +1,19 @@
-use crate::building_catalog::building_definition;
-use crate::buildings::assign_workplaces;
 use crate::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
-use crate::commute::{departure_minute_for_sim, shift_template_for_id, worker_profile_for_id};
-use crate::ids::next_entity_id;
-use crate::model::{GameMode, GameSnapshot, PlacedBuilding, Sim};
 
 mod components;
 mod schedule;
 
 pub const MOVE_IN_INTERVAL_SECONDS: f64 = GAME_DAY_SECONDS / 24.0;
 
-pub fn resident_occupancy(state: &GameSnapshot, building: &PlacedBuilding) -> usize {
-    state
-        .sims
-        .iter()
-        .filter(|sim| building.occupied_tiles.contains(&sim.home))
-        .count()
-}
+pub(crate) use schedule::{
+    apply_trip_resolutions, build_schedule, build_world_v9, drain_trip_demands,
+    next_population_boundary, presentation_aggregates, reconcile_buildings, run_due,
+    scheduler_boundary_generation, scheduler_due_key_count, snapshot_sims_v9, TripDemand,
+    TripResolution,
+};
 
-pub(crate) fn job_occupancy(state: &GameSnapshot, building: &PlacedBuilding) -> usize {
-    state
-        .sims
-        .iter()
-        .filter(|sim| {
-            sim.workplace
-                .is_some_and(|workplace| building.occupied_tiles.contains(&workplace))
-        })
-        .count()
-}
-
-pub fn apply_due_move_ins(state: &mut GameSnapshot) {
-    if state.rules.game_mode != GameMode::Sandbox {
-        return;
-    }
-
-    let mut housing_ids: Vec<String> = state
-        .buildings
-        .iter()
-        .filter(|building| {
-            building_definition(&building.building_type)
-                .is_some_and(|definition| definition.resident_capacity > 0)
-        })
-        .map(|building| building.id.clone())
-        .collect();
-    housing_ids.sort();
-
-    let mut added_resident = false;
-    for building_id in housing_ids {
-        let Some(building) = state
-            .buildings
-            .iter()
-            .find(|building| building.id == building_id)
-            .cloned()
-        else {
-            continue;
-        };
-        let Some(definition) = building_definition(&building.building_type) else {
-            continue;
-        };
-        let Some(tile_count) =
-            (!building.occupied_tiles.is_empty()).then_some(building.occupied_tiles.len())
-        else {
-            continue;
-        };
-        let capacity = usize::from(definition.resident_capacity);
-        let mut occupancy = resident_occupancy(state, &building);
-
-        while occupancy < capacity {
-            let due = building.placed_at + occupancy as f64 * MOVE_IN_INTERVAL_SECONDS;
-            if due > state.time {
-                break;
-            }
-
-            let sim_id = next_entity_id("sim", state.sims.iter().map(|sim| sim.id.clone()));
-            let home = building.occupied_tiles[occupancy % tile_count];
-            let worker_profile = worker_profile_for_id(&sim_id);
-            let shift_template = shift_template_for_id(&sim_id).map(str::to_string);
-            let outbound_resolved_today = shift_template.as_deref().is_some_and(|template| {
-                let departure = departure_minute_for_sim(&sim_id, template, "outbound");
-                state.time > scheduled_time_seconds(state.day, departure)
-            });
-
-            state.sims.push(Sim {
-                id: sim_id,
-                home,
-                position: home,
-                worker_profile,
-                shift_template,
-                workplace: None,
-                commute_day: state.day,
-                outbound_resolved_today,
-                outbound_arrived_today: false,
-                return_resolved_today: false,
-                returned_home_today: false,
-            });
-            occupancy += 1;
-            added_resident = true;
-        }
-    }
-
-    if added_resident {
-        assign_workplaces(state);
-    }
-}
+#[cfg(test)]
+pub(crate) use schedule::population_count;
 
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
     f64::from(day) * GAME_DAY_SECONDS
@@ -115,11 +26,9 @@ mod tests {
 
     use bevy_ecs::prelude::{Entity, World};
 
-    use super::building_definition;
     use super::components::{
         CitizenId, HomeAssignment, LegacyDayState, NextActivity, Routine, SettledPosition,
     };
-    use super::job_occupancy;
     use super::schedule::{
         build_schedule, build_world_v9, drain_trip_demands, job_occupancy_for_building,
         population_count, rebuilt_index, reconcile_buildings, resident_occupancy_for_building,
@@ -127,6 +36,7 @@ mod tests {
         PopulationMutation,
     };
     use super::{scheduled_time_seconds, MOVE_IN_INTERVAL_SECONDS};
+    use crate::building_catalog::building_definition;
     use crate::clock::GAME_DAY_SECONDS;
     use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
     use crate::ids::entity_id;
@@ -169,6 +79,12 @@ mod tests {
         let other_home = housing[1];
         let shop = jobs[0];
         let factory = jobs[jobs.len() - 1];
+        // Strip housing so no template move-ins are scheduled: these tests pin
+        // the durable-sim wake semantics, not move-ins.
+        snapshot.buildings.retain(|building| {
+            building_definition(&building.building_type)
+                .is_some_and(|definition| definition.resident_capacity == 0)
+        });
         let base = Sim {
             id: String::new(),
             home,
@@ -294,63 +210,6 @@ mod tests {
             rebuilt_index(&mut world),
             *world.resource::<PopulationIndex>()
         );
-    }
-
-    #[test]
-    fn job_occupancy_counts_workplace_membership() {
-        let mut snapshot = create_initial_snapshot();
-        let building = PlacedBuilding {
-            id: "building-001".to_string(),
-            building_type: "supermarket".to_string(),
-            origin: Point::from((4, 4)),
-            rotation: 0,
-            occupied_tiles: vec![Point::from((4, 4)), Point::from((5, 4))],
-            placed_at: 0.0,
-            transit_node_id: None,
-        };
-        snapshot.sims = vec![
-            Sim {
-                id: "sim-inside".to_string(),
-                home: Point::from((0, 0)),
-                position: Point::from((0, 0)),
-                worker_profile: WorkerProfile::Worker,
-                shift_template: None,
-                workplace: Some(Point::from((5, 4))),
-                commute_day: 0,
-                outbound_resolved_today: false,
-                outbound_arrived_today: false,
-                return_resolved_today: false,
-                returned_home_today: false,
-            },
-            Sim {
-                id: "sim-outside".to_string(),
-                home: Point::from((0, 0)),
-                position: Point::from((0, 0)),
-                worker_profile: WorkerProfile::Worker,
-                shift_template: None,
-                workplace: Some(Point::from((9, 9))),
-                commute_day: 0,
-                outbound_resolved_today: false,
-                outbound_arrived_today: false,
-                return_resolved_today: false,
-                returned_home_today: false,
-            },
-            Sim {
-                id: "sim-none".to_string(),
-                home: Point::from((0, 0)),
-                position: Point::from((0, 0)),
-                worker_profile: WorkerProfile::Worker,
-                shift_template: None,
-                workplace: None,
-                commute_day: 0,
-                outbound_resolved_today: false,
-                outbound_arrived_today: false,
-                return_resolved_today: false,
-                returned_home_today: false,
-            },
-        ];
-
-        assert_eq!(job_occupancy(&snapshot, &building), 1);
     }
 
     // === Task 3: targeted ECS building reconciliation ===
@@ -620,9 +479,12 @@ mod tests {
         let mut before = reconcile_sandbox(0.0);
         let house_one_tiles = [Point::from((2, 3)), Point::from((3, 3))];
         let house_two_tiles = [Point::from((2, 7)), Point::from((3, 7))];
+        // Pre-existing housing is placed far in the future so its vacant slots
+        // stay outside this test's move-in horizon; only the reconcile-added
+        // replacement housing admits residents.
         before.buildings = vec![
-            reconcile_house("building-001", Point::from((2, 3)), 0.0),
-            reconcile_house("building-002", Point::from((2, 7)), 0.0),
+            reconcile_house("building-001", Point::from((2, 3)), 1.0e6),
+            reconcile_house("building-002", Point::from((2, 7)), 1.0e6),
             reconcile_market("building-003", Point::from((8, 3)), 0.0),
         ];
         before.sims = vec![
@@ -705,10 +567,7 @@ mod tests {
             "replacement housing spawns fresh monotonic IDs, never reused ones"
         );
         for sim in sims.iter().skip(2) {
-            assert!(after.buildings[2]
-                .occupied_tiles
-                .iter()
-                .any(|tile| *tile == sim.home));
+            assert!(after.buildings[2].occupied_tiles.contains(&sim.home));
         }
         assert_index_rebuilt(&mut world);
         assert_eq!(

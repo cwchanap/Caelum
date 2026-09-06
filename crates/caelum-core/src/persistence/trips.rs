@@ -249,7 +249,7 @@ fn validate_route_plan(
     for leg in &plan.legs {
         validate_point(snapshot, &entity, SnapshotField::TripRoutePlan, leg.from)?;
         validate_point(snapshot, &entity, SnapshotField::TripRoutePlan, leg.to)?;
-        if leg.mode != TransitMode::Walk && leg.line_id.as_deref().map_or(true, str::is_empty) {
+        if leg.mode != TransitMode::Walk && leg.line_id.as_deref().is_none_or(str::is_empty) {
             return Err(trip_state_error(
                 SnapshotField::TripRoutePlan,
                 entity.clone(),

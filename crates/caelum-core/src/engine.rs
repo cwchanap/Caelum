@@ -20,7 +20,8 @@ use crate::sandbox::{
 };
 use crate::stop_access;
 use crate::transit;
-use crate::trips;
+use crate::trips::{self, TickAdvance};
+use bevy_ecs::prelude::{Schedule, World};
 
 fn point_changed(before: &GameSnapshot, after: &GameSnapshot, point: &Point) -> bool {
     // Whole-map linear scans: tiles, buildings, stops, and stations are each
@@ -196,10 +197,15 @@ impl NetworkCandidate {
 /// Facade for the simulation core. Both the WASM and Tauri hosts drive this
 /// same engine: `tick` advances game time, `dispatch` applies a player intent.
 ///
-#[derive(Clone)]
+/// The ECS population world is the live Worker population authority: the shell
+/// snapshot never carries a population mirror (`snapshot.sims` stays empty),
+/// and explicit durable snapshots reconstruct sims only on demand via
+/// [`GameEngine::snapshot`].
 pub struct GameEngine {
     snapshot: GameSnapshot,
     road_topology: RoadTopology,
+    world: World,
+    population_schedule: Schedule,
 }
 
 impl Default for GameEngine {
@@ -215,10 +221,7 @@ impl GameEngine {
             road_topology,
         } = create_sandbox_candidate(canonical_default_request())
             .expect("canonical default sandbox request and template must remain valid");
-        Self {
-            snapshot,
-            road_topology,
-        }
+        Self::from_parts(snapshot, road_topology)
     }
 
     pub fn from_sandbox_request(
@@ -228,28 +231,43 @@ impl GameEngine {
             snapshot,
             road_topology,
         } = create_sandbox_candidate(request)?;
-        Ok(Self {
-            snapshot,
-            road_topology,
-        })
+        Ok(Self::from_parts(snapshot, road_topology))
     }
 
-    /// Construct an engine from a schema-v8 snapshot, normalizing
+    /// Construct an engine from a schema-v9 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived
     /// fields, compiles the road topology, and only then validates references
-    /// and ownership — so the supplied snapshot is not retained exactly.
+    /// and ownership — so the supplied snapshot is not retained exactly. The
+    /// durable sims become the ECS population world's authority and are then
+    /// cleared from the live shell.
     pub fn from_snapshot(snapshot: GameSnapshot) -> Result<Self, SnapshotLoadError> {
         let prepared = prepare_snapshot(snapshot).map_err(SnapshotLoadError::from)?;
-        Ok(Self {
-            snapshot: prepared.snapshot,
-            road_topology: prepared.road_topology,
-        })
+        Ok(Self::from_parts(prepared.snapshot, prepared.road_topology))
     }
 
+    /// Candidate-first construction: build/validate the full shell candidate,
+    /// construct the world/schedule/index/allocator from its durable sims,
+    /// clear the shell population mirror, then install.
+    fn from_parts(snapshot: GameSnapshot, road_topology: RoadTopology) -> Self {
+        let world = crate::population::build_world_v9(&snapshot);
+        let population_schedule = crate::population::build_schedule();
+        let mut snapshot = snapshot;
+        snapshot.sims.clear();
+        Self {
+            snapshot,
+            road_topology,
+            world,
+            population_schedule,
+        }
+    }
+
+    /// Reconstruct the durable snapshot: sims come back from the ECS world,
+    /// then derived service metrics are populated on the output only.
     pub fn snapshot(&self) -> GameSnapshot {
         let mut snapshot = self.snapshot.clone();
+        snapshot.sims = crate::population::snapshot_sims_v9(&self.world, snapshot.day);
         crate::service_control::populate_snapshot_metrics(&mut snapshot);
         snapshot
     }
@@ -260,8 +278,16 @@ impl GameEngine {
         snapshot
     }
 
+    fn population_aggregates(&self) -> presentation::PopulationAggregates {
+        crate::population::presentation_aggregates(&self.world)
+    }
+
+    fn frame_update(&self) -> PresentationUpdate {
+        presentation::project_update(&self.snapshot, &self.population_aggregates(), false)
+    }
+
     pub fn presentation(&self) -> PresentationUpdate {
-        presentation::project_update(&self.snapshot, true)
+        presentation::project_update(&self.snapshot, &self.population_aggregates(), true)
     }
 
     pub fn restore_snapshot(
@@ -276,8 +302,7 @@ impl GameEngine {
 
     pub fn reset(&mut self) -> Result<PresentationUpdate, SandboxResetError> {
         let candidate = sandbox_candidate_from_persisted_rules(&self.snapshot.rules)?;
-        self.snapshot = candidate.snapshot;
-        self.road_topology = candidate.road_topology;
+        *self = Self::from_parts(candidate.snapshot, candidate.road_topology);
         Ok(self.presentation())
     }
 
@@ -332,9 +357,9 @@ impl GameEngine {
     }
 
     /// Advance the simulation by `delta_seconds` of game time (scaled by the current
-    /// speed) and run objective evaluation. Tick results are frame-only. If the tick
-    /// produced no change (e.g. paused, speed 0, or a zero-delta substep), `applied ==
-    /// false` — this reference-equality dispatch is the engine's commit discipline.
+    /// speed) and run objective evaluation. Tick results are frame-only. `applied`
+    /// is `shell_changed || population_changed` — ECS population work applies even
+    /// when the shell compared equal, and is always retained.
     pub fn tick(&mut self, delta_seconds: f64) -> GameplayUpdateResult {
         // Topology invariant: `tick` never recompiles `self.road_topology`
         // because the tick pipeline (trips + growth waves) never modifies road
@@ -344,8 +369,16 @@ impl GameEngine {
         // `road_structures`. If a future tick-time mutation touches any road
         // field, the topology must be recompiled here — the debug_assert below
         // catches that regression by flagging a stale topology.
-        let next =
-            trips::tick_trips_with_objectives(&self.snapshot, &self.road_topology, delta_seconds);
+        let TickAdvance {
+            snapshot: next,
+            population_changed,
+        } = trips::tick_trips_with_objectives(
+            &self.snapshot,
+            &self.road_topology,
+            &mut self.world,
+            &mut self.population_schedule,
+            delta_seconds,
+        );
         // O(N) check (tiles are never reordered, so same index = same position):
         // if a future tick-time mutation touches any road field, this fires.
         debug_assert!(
@@ -361,12 +394,12 @@ impl GameEngine {
                         && new.road_structure_id == prev.road_structure_id),
             "tick modified road fields without recompiling topology"
         );
-        if next == self.snapshot {
-            return GameplayUpdateResult::frame_only(&self.snapshot, false);
-        }
-
+        let shell_changed = next != self.snapshot;
         self.snapshot = next;
-        GameplayUpdateResult::frame_only(&self.snapshot, true)
+        let applied = shell_changed || population_changed;
+        let update =
+            presentation::project_update(&self.snapshot, &self.population_aggregates(), false);
+        GameplayUpdateResult::frame_only(update, applied)
     }
 
     /// Apply a single player [`GameIntent`] (build, paint, transit edit, speed/pause,
@@ -383,7 +416,7 @@ impl GameEngine {
             GameIntent::SetSpeed { speed } => {
                 if !matches!(speed, 0 | 1 | 2 | 4) {
                     return GameplayUpdateResult::rejected(
-                        &self.snapshot,
+                        self.frame_update(),
                         GameplayRejection::new(RejectionCode::InvalidSpeed),
                     );
                 }
@@ -546,7 +579,7 @@ impl GameEngine {
             // Unit tests use `set_budget_for_test`; e2e uses debug WASM builds.
             GameIntent::SetBudget { budget } => {
                 if !cfg!(debug_assertions) {
-                    return GameplayUpdateResult::frame_only(&self.snapshot, false);
+                    return GameplayUpdateResult::frame_only(self.frame_update(), false);
                 }
                 let mut next = self.snapshot.clone();
                 next.budget = budget;
@@ -560,12 +593,12 @@ impl GameEngine {
             Ok(mutation) => {
                 let next = mutation.into_snapshot();
                 if next == self.snapshot {
-                    return GameplayUpdateResult::frame_only(&self.snapshot, false);
+                    return GameplayUpdateResult::frame_only(self.frame_update(), false);
                 }
                 self.snapshot = next;
-                GameplayUpdateResult::present(&self.snapshot)
+                GameplayUpdateResult::present(self.presentation())
             }
-            Err(rejection) => GameplayUpdateResult::rejected(&self.snapshot, rejection),
+            Err(rejection) => GameplayUpdateResult::rejected(self.frame_update(), rejection),
         }
     }
 
@@ -582,7 +615,9 @@ impl GameEngine {
     ) -> GameplayUpdateResult {
         let mut network_candidate = match candidate {
             Ok(candidate) => candidate,
-            Err(rejection) => return GameplayUpdateResult::rejected(&self.snapshot, rejection),
+            Err(rejection) => {
+                return GameplayUpdateResult::rejected(self.frame_update(), rejection)
+            }
         };
         let map_changed = self.snapshot.map != network_candidate.snapshot.map;
         if map_changed {
@@ -607,7 +642,7 @@ impl GameEngine {
             match RoadTopology::compile(&network_candidate.snapshot.map) {
                 Ok(topology) => topology,
                 Err(error) => {
-                    return GameplayUpdateResult::rejected(&self.snapshot, error.into());
+                    return GameplayUpdateResult::rejected(self.frame_update(), error.into());
                 }
             }
         };
@@ -623,14 +658,199 @@ impl GameEngine {
 
     fn commit_snapshot_and_topology(
         &mut self,
-        snapshot: GameSnapshot,
+        mut snapshot: GameSnapshot,
         road_topology: RoadTopology,
     ) -> GameplayUpdateResult {
+        // Building-changing candidates reconcile the ECS population world with
+        // the candidate before installation. Rejected and no-op dispatches
+        // never reach this point, so they cannot mutate the world.
+        if snapshot.buildings != self.snapshot.buildings {
+            crate::population::reconcile_buildings(&mut self.world, &self.snapshot, &mut snapshot);
+        }
         if snapshot == self.snapshot {
-            return GameplayUpdateResult::frame_only(&self.snapshot, false);
+            return GameplayUpdateResult::frame_only(self.frame_update(), false);
         }
         self.snapshot = snapshot;
         self.road_topology = road_topology;
-        GameplayUpdateResult::present(&self.snapshot)
+        GameplayUpdateResult::present(self.presentation())
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::model::{Sim, WorkerProfile};
+    use crate::population;
+    use crate::state::create_initial_snapshot;
+
+    fn loaded_sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
+        Sim {
+            id: id.to_string(),
+            home,
+            position: home,
+            worker_profile: WorkerProfile::Worker,
+            shift_template: Some("standard".to_string()),
+            workplace,
+            commute_day: 0,
+            outbound_resolved_today: false,
+            outbound_arrived_today: false,
+            return_resolved_today: false,
+            returned_home_today: false,
+        }
+    }
+
+    fn populated_v9_snapshot() -> GameSnapshot {
+        let mut snapshot = create_initial_snapshot();
+        snapshot.sims = vec![
+            loaded_sim("sim-001", Point::from((2, 3)), None),
+            loaded_sim("sim-002", Point::from((2, 4)), None),
+        ];
+        snapshot
+    }
+
+    #[test]
+    fn live_shell_has_no_population_mirror() {
+        let engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        assert!(engine.snapshot.sims.is_empty());
+        assert_eq!(population::population_count(&engine.world), 2);
+        assert_eq!(engine.snapshot().sims.len(), 2);
+    }
+
+    #[test]
+    fn paused_tick_mutates_neither_shell_nor_population() {
+        let mut engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        let before = engine.snapshot();
+        let result = engine.tick(100.0);
+        assert!(!result.applied);
+        assert_eq!(engine.snapshot(), before);
+    }
+
+    #[test]
+    fn speed_0_tick_mutates_neither_shell_nor_population() {
+        let mut engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        assert!(engine.dispatch(GameIntent::SetSpeed { speed: 0 }).applied);
+        assert!(
+            engine
+                .dispatch(GameIntent::SetPaused { paused: false })
+                .applied
+        );
+        let before = engine.snapshot();
+        let result = engine.tick(100.0);
+        assert!(!result.applied);
+        assert_eq!(engine.snapshot(), before);
+    }
+
+    #[test]
+    fn running_zero_delta_tick_without_due_work_is_a_no_op() {
+        let mut engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        assert!(
+            engine
+                .dispatch(GameIntent::SetPaused { paused: false })
+                .applied
+        );
+        let before = engine.snapshot();
+        let result = engine.tick(0.0);
+        assert!(!result.applied);
+        assert_eq!(engine.snapshot(), before);
+    }
+
+    #[test]
+    fn running_zero_delta_tick_retains_due_worker_activity() {
+        // sim-001 has no workplace, so its due routine is ECS-only: the wake
+        // reschedules to tomorrow without touching the shell. The mutation
+        // must still be retained (applied == true), and a second zero-delta
+        // tick must find no further due work.
+        let departure = scheduled_time_seconds(
+            0,
+            departure_minute_for_sim("sim-001", "standard", "outbound"),
+        );
+        let mut snapshot = populated_v9_snapshot();
+        snapshot.time = departure;
+        snapshot.day = crate::clock::day_index(departure);
+        let mut engine = GameEngine::from_snapshot(snapshot).unwrap();
+        assert!(
+            engine
+                .dispatch(GameIntent::SetPaused { paused: false })
+                .applied
+        );
+        let expected_shell = engine.snapshot();
+
+        let first = engine.tick(0.0);
+        assert!(
+            first.applied,
+            "due ECS work must apply even with an equal shell"
+        );
+        assert_eq!(
+            engine.snapshot(),
+            expected_shell,
+            "a dormant reschedule must not touch the shell"
+        );
+
+        let second = engine.tick(0.0);
+        assert!(
+            !second.applied,
+            "the due work was consumed by the first tick"
+        );
+    }
+
+    #[test]
+    fn presentation_aggregates_match_durable_snapshot_projection() {
+        let mut engine = GameEngine::new();
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: "residential".to_string(),
+                    start: (2, 3).into(),
+                    end: (3, 3).into(),
+                })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: "commercial".to_string(),
+                    start: (8, 3).into(),
+                    end: (9, 4).into(),
+                })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: "smallHouse".to_string(),
+                    origin: (2, 3).into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: "supermarket".to_string(),
+                    origin: (8, 3).into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::SetPaused { paused: false })
+                .applied
+        );
+        engine.tick(600.0);
+
+        let durable = engine.snapshot();
+        let durable_population = presentation::population_aggregates_from_snapshot(&durable);
+        let runtime_population = population::presentation_aggregates(&engine.world);
+        assert_eq!(runtime_population, durable_population);
+        assert_eq!(durable_population.population_count, 4);
+    }
+
+    fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
+        f64::from(day) * crate::clock::GAME_DAY_SECONDS
+            + (f64::from(minute) / f64::from(crate::clock::MINUTES_PER_DAY))
+                * crate::clock::GAME_DAY_SECONDS
+    }
+
+    use crate::commute::departure_minute_for_sim;
 }

@@ -41,11 +41,11 @@ synthetic 10k/50k/200k sims matrices as HPA-544 (no active trips, no
 buildings, no vehicles), so these rows isolate the per-tick cost of a latent
 population under the current snapshot-per-step runtime.
 
-| Fixture     |    Sims | population_tick_us | advanced_time |
-| ----------- | ------: | -----------------: | ------------: |
-| sims-10000  |   10000 |               4654 |           0.5 |
-| sims-50000  |   50000 |              23081 |           0.5 |
-| sims-200000 |  200000 |              95295 |           0.5 |
+| Fixture     |   Sims | population_tick_us | advanced_time |
+| ----------- | -----: | -----------------: | ------------: |
+| sims-10000  |  10000 |               4654 |           0.5 |
+| sims-50000  |  50000 |              23081 |           0.5 |
+| sims-200000 | 200000 |              95295 |           0.5 |
 
 ## Release WASM artifact size
 
@@ -54,3 +54,23 @@ population under the current snapshot-per-step runtime.
 `bun run wasm:build:release`; the dev artifact was not reused).
 
 Wall-clock and artifact-size values are reference evidence, not CI thresholds.
+
+## Population quiet-tick (Stage A: ECS-owned Worker population)
+
+After HPA-347 Task 5, the live Worker population is owned by the Bevy ECS
+world: the shell snapshot carries no population mirror, and a quiet tick only
+peeks the exact-time scheduler instead of scanning every sim. The same
+worker-only 200k fixture is now measured through the engine
+(`GameEngine::from_snapshot`, resumed via `SetPaused`, then one `GameEngine::tick`
+with the same 0.5 s delta that does not cross a commute departure; the fixture
+workers are dormant, so the tick exercises the scheduler path without emitting
+trips). Row recorded on the same reference machine (Apple M1 Pro, rustc 1.96.0,
+`--release`):
+
+| Fixture     |   Sims | population_tick_us | advanced_time | applied |
+| ----------- | -----: | -----------------: | ------------- | ------- |
+| sims-200000 | 200000 |                156 | 0.5           | true    |
+
+For comparison, the pre-ECS snapshot-per-step runtime measured the same
+quiet tick at 95295 us (see the baseline section above). Wall-clock values are
+reference evidence, not CI thresholds.
