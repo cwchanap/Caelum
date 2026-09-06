@@ -1,12 +1,9 @@
 use caelum_core::{
     buildings::assign_workplaces,
     commute::{shift_template_for_id, worker_profile_for_id},
-    model::{
-        ActiveTrip, BusStopKind, EconomyPreset, GameSnapshot, PlacedBuilding, Point, Sim,
-        TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle, WorkerProfile,
-    },
+    model::{BusStopKind, EconomyPreset, GameSnapshot, PlacedBuilding, Point, Sim, WorkerProfile},
     state::create_initial_snapshot,
-    transit, GameEngine, GameIntent, RejectionCode,
+    GameEngine, GameIntent, RejectionCode,
 };
 
 #[test]
@@ -82,42 +79,6 @@ fn housing_requires_residential_area_and_creates_deterministic_sims() {
     assert_eq!(moved_in.sims[0].home.x, 2);
     assert_eq!(moved_in.sims[0].worker_profile, WorkerProfile::Worker);
     assert_eq!(moved_in.sims[9].worker_profile, WorkerProfile::NonWorker);
-}
-
-#[test]
-fn destination_assigns_workplaces_to_unassigned_workers() {
-    let mut engine = GameEngine::new();
-    engine.dispatch(GameIntent::PaintAreaRectangle {
-        area: "residential".to_string(),
-        start: (2, 3).into(),
-        end: (4, 4).into(),
-    });
-    engine.dispatch(GameIntent::PlaceBuilding {
-        building_type: "largeHouse".to_string(),
-        origin: (2, 3).into(),
-        rotation: 0,
-    });
-    engine.dispatch(GameIntent::SetPaused { paused: false });
-    engine.tick(500.0);
-    engine.dispatch(GameIntent::PaintAreaRectangle {
-        area: "commercial".to_string(),
-        start: (8, 3).into(),
-        end: (9, 4).into(),
-    });
-    let result = engine.dispatch(GameIntent::PlaceBuilding {
-        building_type: "supermarket".to_string(),
-        origin: (8, 3).into(),
-        rotation: 0,
-    });
-
-    assert!(result.applied);
-    let assigned = engine
-        .snapshot()
-        .sims
-        .iter()
-        .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
-        .count();
-    assert_eq!(assigned, 4);
 }
 
 #[test]
@@ -281,117 +242,6 @@ fn remove_transit_building_removes_linked_stop() {
     assert!(removed.applied);
     assert!(engine.snapshot().buildings.is_empty());
     assert!(engine.snapshot().transit.stops.is_empty());
-}
-
-#[test]
-fn demolishing_occupied_house_removes_residents_trips_and_vehicle_passengers() {
-    let house_tiles = vec![Point { x: 2, y: 3 }, Point { x: 3, y: 3 }];
-    let kept_home = Point { x: 8, y: 3 };
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![PlacedBuilding {
-        id: "building-001".to_string(),
-        building_type: "smallHouse".to_string(),
-        origin: house_tiles[0],
-        rotation: 0,
-        occupied_tiles: house_tiles.clone(),
-        placed_at: 0.0,
-        transit_node_id: None,
-    }];
-    state.sims = vec![
-        unassigned_worker("sim-001", house_tiles[0]),
-        unassigned_worker("sim-002", kept_home),
-    ];
-    state.active_trips = vec![
-        ActiveTrip {
-            id: "trip-removed-outbound".to_string(),
-            sim_id: "sim-001".to_string(),
-            purpose: TripPurpose::CommuteOutbound,
-            origin: house_tiles[0],
-            destination: kept_home,
-            position: TripPosition {
-                x: f64::from(house_tiles[0].x),
-                y: f64::from(house_tiles[0].y),
-            },
-            status: TripStatus::Riding,
-            deadline: 900.0,
-            route_plan: None,
-            current_leg_index: 0,
-            patience_remaining: 240.0,
-            current_leg_wait_seconds: 0.0,
-            private_car_trip: None,
-        },
-        ActiveTrip {
-            id: "trip-removed-return".to_string(),
-            sim_id: "sim-001".to_string(),
-            purpose: TripPurpose::CommuteReturn,
-            origin: kept_home,
-            destination: house_tiles[0],
-            position: TripPosition {
-                x: f64::from(kept_home.x),
-                y: f64::from(kept_home.y),
-            },
-            status: TripStatus::Waiting,
-            deadline: 900.0,
-            route_plan: None,
-            current_leg_index: 0,
-            patience_remaining: 240.0,
-            current_leg_wait_seconds: 0.0,
-            private_car_trip: None,
-        },
-        ActiveTrip {
-            id: "trip-kept".to_string(),
-            sim_id: "sim-002".to_string(),
-            purpose: TripPurpose::CommuteOutbound,
-            origin: kept_home,
-            destination: house_tiles[0],
-            position: TripPosition {
-                x: f64::from(kept_home.x),
-                y: f64::from(kept_home.y),
-            },
-            status: TripStatus::Waiting,
-            deadline: 900.0,
-            route_plan: None,
-            current_leg_index: 0,
-            patience_remaining: 240.0,
-            current_leg_wait_seconds: 0.0,
-            private_car_trip: None,
-        },
-    ];
-    state.transit.vehicles = vec![Vehicle {
-        id: "vehicle-001".to_string(),
-        mode: TransitMode::Bus,
-        line_id: "route-001".to_string(),
-        capacity: 18,
-        passenger_ids: vec![
-            "trip-removed-outbound".to_string(),
-            "trip-removed-return".to_string(),
-            "trip-kept".to_string(),
-        ],
-        itinerary_index: 0,
-        path_step_index: 0,
-        step_progress: 0.0,
-        parked_position: None,
-    }];
-
-    let removed = transit::remove_at_tile(&state, &house_tiles[0]).expect("house removal");
-
-    assert_eq!(
-        removed
-            .sims
-            .iter()
-            .map(|sim| sim.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["sim-002"]
-    );
-    assert_eq!(
-        removed
-            .active_trips
-            .iter()
-            .map(|trip| trip.id.as_str())
-            .collect::<Vec<_>>(),
-        vec!["trip-kept"]
-    );
-    assert_eq!(removed.transit.vehicles[0].passenger_ids, vec!["trip-kept"]);
 }
 
 #[test]

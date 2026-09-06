@@ -1,7 +1,6 @@
 use std::collections::{HashMap, HashSet};
 
 use crate::building_catalog::building_definition;
-use crate::commute::trip_deadline_seconds;
 use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
@@ -20,7 +19,6 @@ use crate::transit_nodes::{
     canonical_node_anchor, garbage_collect_missing_nodes, is_present_node,
     matching_present_node_id, remove_or_tombstone_node, restore_or_create_node, LogicalNodeKind,
 };
-use crate::trips::WAIT_PATIENCE_SECONDS;
 
 pub const BUS_STOP_COST: i32 = 2_000;
 pub const METRO_STATION_COST: i32 = 25_000;
@@ -210,14 +208,6 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         .into_iter()
         .flat_map(|building| building.occupied_tiles.iter().map(point_key))
         .collect();
-    let removed_resident_tiles: HashSet<String> = removed_building
-        .filter(|building| {
-            building_definition(&building.building_type)
-                .is_some_and(|definition| definition.resident_capacity > 0)
-        })
-        .into_iter()
-        .flat_map(|building| building.occupied_tiles.iter().map(point_key))
-        .collect();
 
     if let Some(building) = removed_building {
         if let Some(transit_node_id) = &building.transit_node_id {
@@ -252,9 +242,6 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
     }
     if !removed_destination_tiles.is_empty() {
         cleanup_removed_destination_references(&mut next, &removed_destination_tiles);
-    }
-    if !removed_resident_tiles.is_empty() {
-        cleanup_removed_resident_references(&mut next, &removed_resident_tiles);
     }
     for stop_id in removed_stop_ids {
         next = remove_or_tombstone_node(&next, &stop_id);
@@ -1013,120 +1000,22 @@ fn cleanup_removed_destination_references(
     state: &mut GameSnapshot,
     removed_destination_tiles: &HashSet<String>,
 ) {
-    let mut cleared_sim_ids = HashSet::new();
-    for sim in &mut state.sims {
-        if sim
-            .workplace
-            .as_ref()
-            .is_some_and(|workplace| removed_destination_tiles.contains(&point_key(workplace)))
-        {
-            sim.workplace = None;
-            cleared_sim_ids.insert(sim.id.clone());
-        }
-    }
-
-    crate::buildings::assign_workplaces(state);
-
-    let workplace_by_sim_id: HashMap<String, Point> = state
-        .sims
-        .iter()
-        .filter_map(|sim| sim.workplace.map(|workplace| (sim.id.clone(), workplace)))
-        .collect();
-    let mut invalidated_trip_ids = HashSet::new();
+    // Shell-only cleanup: ECS building reconciliation owns workplace clearing,
+    // refill, and retargeting. Outbound trips still targeting a bulldozed
+    // destination are dropped with their passenger references; every other
+    // trip (notably in-flight returns heading home) is left untouched.
     let mut removed_trip_ids = HashSet::new();
     for trip in &mut state.active_trips {
-        let destination_removed = removed_destination_tiles.contains(&point_key(&trip.destination));
-        // Only outbound trips target a workplace; a return trip's destination is the
-        // sim's home (a residential tile, never present in `removed_destination_tiles`).
-        // A cleared workplace must therefore never retarget an in-flight return trip:
-        // `apply_arrival_to_sim` resolves `CommuteReturn` at home regardless of
-        // `trip.destination`, so rewriting it toward a replacement workplace would
-        // route the passenger away from home for nothing.
-        let workplace_retarget_needed =
-            trip.purpose == TripPurpose::CommuteOutbound && cleared_sim_ids.contains(&trip.sim_id);
-        if !destination_removed && !workplace_retarget_needed {
-            continue;
-        }
-
-        let replacement_workplace = workplace_by_sim_id
-            .get(&trip.sim_id)
-            .filter(|workplace| !removed_destination_tiles.contains(&point_key(workplace)))
-            .cloned();
-
-        // An outbound trip whose destination was bulldozed with no replacement
-        // workplace cannot be retargeted. Drop it outright so the sim is left
-        // unassigned and free to spawn a fresh outbound trip when a workplace
-        // reappears.
         if trip.purpose == TripPurpose::CommuteOutbound
-            && destination_removed
-            && replacement_workplace.is_none()
+            && removed_destination_tiles.contains(&point_key(&trip.destination))
         {
             removed_trip_ids.insert(trip.id.clone());
-            invalidated_trip_ids.insert(trip.id.clone());
-            continue;
         }
-
-        // No replacement to retarget to (e.g. a stale trip whose own destination is
-        // still standing): leave it on its current heading rather than rewriting it.
-        let Some(replacement) = replacement_workplace else {
-            continue;
-        };
-
-        invalidated_trip_ids.insert(trip.id.clone());
-        trip.status = TripStatus::Idle;
-        trip.route_plan = None;
-        trip.private_car_trip = None;
-        trip.current_leg_index = 0;
-        trip.current_leg_wait_seconds = 0.0;
-        trip.destination = replacement;
-        // Refresh the trip timers: retargeting starts a fresh trip (plan nulled,
-        // status reset to idle), so the patience/deadline window must reset too.
-        // Otherwise a trip that already consumed most of its patience, or whose
-        // deadline has elapsed, would be marked unserved on the next tick even
-        // though it was validly retargeted. Mirrors the legacy `retargetCitizens`
-        // flow (buildingSelectors.ts) and the values used at trip creation
-        // (`build_trip`: `trip_deadline_seconds(scheduled) = t + 900`,
-        // `WAIT_PATIENCE_SECONDS = 240`).
-        trip.deadline = trip_deadline_seconds(state.time);
-        trip.patience_remaining = WAIT_PATIENCE_SECONDS;
     }
 
-    if !removed_trip_ids.is_empty() {
-        state
-            .active_trips
-            .retain(|trip| !removed_trip_ids.contains(&trip.id));
-    }
-
-    if invalidated_trip_ids.is_empty() {
+    if removed_trip_ids.is_empty() {
         return;
     }
-    for vehicle in &mut state.transit.vehicles {
-        vehicle
-            .passenger_ids
-            .retain(|passenger_id| !invalidated_trip_ids.contains(passenger_id));
-    }
-}
-
-fn cleanup_removed_resident_references(
-    state: &mut GameSnapshot,
-    removed_resident_tiles: &HashSet<String>,
-) {
-    let removed_resident_ids: HashSet<String> = state
-        .sims
-        .iter()
-        .filter(|sim| removed_resident_tiles.contains(&point_key(&sim.home)))
-        .map(|sim| sim.id.clone())
-        .collect();
-    let removed_trip_ids: HashSet<String> = state
-        .active_trips
-        .iter()
-        .filter(|trip| removed_resident_ids.contains(&trip.sim_id))
-        .map(|trip| trip.id.clone())
-        .collect();
-
-    state
-        .sims
-        .retain(|sim| !removed_resident_ids.contains(&sim.id));
     state
         .active_trips
         .retain(|trip| !removed_trip_ids.contains(&trip.id));
@@ -1135,8 +1024,6 @@ fn cleanup_removed_resident_references(
             .passenger_ids
             .retain(|passenger_id| !removed_trip_ids.contains(passenger_id));
     }
-
-    crate::buildings::assign_workplaces(state);
 }
 
 fn reassign_within_node<T>(

@@ -1,7 +1,7 @@
 use caelum_core::model::{
     ActiveTrip, BusStopKind, EconomyPreset, GameSnapshot, Heading, MovementKind, PathGeometry,
-    PlacedBuilding, Point, PrivateCarTrip, RoadPathStep, RoundaboutSize, Route, RouteLeg,
-    RouteLegKind, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
+    PlacedBuilding, Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind,
+    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
     TransitNodeStatus, TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
 use caelum_core::network::resolve_route_legs;
@@ -1434,231 +1434,6 @@ fn removing_road_marks_route_broken_and_relaying_restores_it() {
 }
 
 #[test]
-fn removing_destination_reassigns_workplaces_away_from_removed_tiles() {
-    let removed_tiles = vec![
-        Point { x: 5, y: 5 },
-        Point { x: 6, y: 5 },
-        Point { x: 5, y: 6 },
-        Point { x: 6, y: 6 },
-    ];
-    let remaining_tiles = vec![
-        Point { x: 12, y: 5 },
-        Point { x: 13, y: 5 },
-        Point { x: 12, y: 6 },
-        Point { x: 13, y: 6 },
-        Point { x: 14, y: 5 },
-        Point { x: 14, y: 6 },
-    ];
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![
-        destination_building("building-001", "supermarket", removed_tiles.clone()),
-        destination_building("building-002", "factory", remaining_tiles.clone()),
-    ];
-    state.sims = vec![
-        worker_sim("sim-001", (1, 1).into(), removed_tiles[0]),
-        worker_sim("sim-002", (1, 2).into(), remaining_tiles[0]),
-    ];
-
-    let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
-
-    assert!(!next
-        .buildings
-        .iter()
-        .any(|building| building.id == "building-001"));
-    for sim in &next.sims {
-        if let Some(workplace) = &sim.workplace {
-            assert!(!removed_tiles.contains(workplace));
-        }
-    }
-    let reassigned = next
-        .sims
-        .iter()
-        .find(|sim| sim.id == "sim-001")
-        .and_then(|sim| sim.workplace)
-        .expect("worker should be reassigned");
-    assert!(remaining_tiles.contains(&reassigned));
-}
-
-#[test]
-fn removing_destination_invalidates_targeting_trip_and_clears_vehicle_passenger() {
-    let removed_tiles = vec![
-        Point { x: 5, y: 5 },
-        Point { x: 6, y: 5 },
-        Point { x: 5, y: 6 },
-        Point { x: 6, y: 6 },
-    ];
-    let remaining_tiles = vec![
-        Point { x: 12, y: 5 },
-        Point { x: 13, y: 5 },
-        Point { x: 12, y: 6 },
-        Point { x: 13, y: 6 },
-        Point { x: 14, y: 5 },
-        Point { x: 14, y: 6 },
-    ];
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![
-        destination_building("building-001", "supermarket", removed_tiles.clone()),
-        destination_building("building-002", "factory", remaining_tiles.clone()),
-    ];
-    state.sims = vec![worker_sim(
-        "sim-001",
-        Point { x: 2, y: 5 },
-        removed_tiles[0],
-    )];
-    state.active_trips = vec![ActiveTrip {
-        id: "trip-001".to_string(),
-        sim_id: "sim-001".to_string(),
-        purpose: TripPurpose::CommuteOutbound,
-        origin: Point { x: 2, y: 5 },
-        destination: removed_tiles[0],
-        position: Point { x: 3, y: 5 }.into(),
-        status: TripStatus::Riding,
-        deadline: 3_600.0,
-        route_plan: Some(RoutePlan {
-            legs: vec![RouteLeg {
-                mode: TransitMode::Bus,
-                from: Point { x: 2, y: 5 },
-                to: removed_tiles[0],
-                line_id: Some("route-001".to_string()),
-                service_direction: Some(ServiceDirection::Loop),
-                board_itinerary_index: Some(0),
-                alight_itinerary_index: Some(0),
-            }],
-            estimated_seconds: 120.0,
-        }),
-        current_leg_index: 0,
-        patience_remaining: 30.0,
-        current_leg_wait_seconds: 0.0,
-        private_car_trip: Some(PrivateCarTrip {
-            path: TransitPath::Road {
-                steps: Vec::new(),
-                total_travel_seconds: 0.0,
-            },
-            arrival_time: 101.25,
-        }),
-    }];
-    state.transit.vehicles = vec![Vehicle {
-        id: "vehicle-001".to_string(),
-        mode: TransitMode::Bus,
-        line_id: "route-001".to_string(),
-        capacity: 18,
-        passenger_ids: vec!["trip-001".to_string(), "trip-other".to_string()],
-        itinerary_index: 0,
-        path_step_index: 0,
-        step_progress: 0.25,
-        parked_position: None,
-    }];
-
-    let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
-    let sim = next
-        .sims
-        .iter()
-        .find(|sim| sim.id == "sim-001")
-        .expect("sim remains");
-    let trip = next
-        .active_trips
-        .iter()
-        .find(|trip| trip.id == "trip-001")
-        .expect("trip remains");
-
-    assert_eq!(trip.status, TripStatus::Idle);
-    assert!(trip.route_plan.is_none());
-    assert!(trip.private_car_trip.is_none());
-    assert_eq!(trip.current_leg_index, 0);
-    assert_eq!(Some(&trip.destination), sim.workplace.as_ref());
-    assert!(!removed_tiles.contains(&trip.destination));
-    assert!(remaining_tiles.contains(&trip.destination));
-    // Retargeting starts a fresh trip, so the patience/deadline window must
-    // refresh (legacy `retargetCitizens` parity). The pre-retarget trip had
-    // patience_remaining 30.0 and deadline 3_600.0; with state.time == 0.0 the
-    // fresh window is deadline 900.0 / patience 240.0.
-    assert_eq!(trip.patience_remaining, 240.0);
-    assert_eq!(trip.deadline, 900.0);
-    assert!(!next.transit.vehicles[0]
-        .passenger_ids
-        .contains(&"trip-001".to_string()));
-    assert!(next.transit.vehicles[0]
-        .passenger_ids
-        .contains(&"trip-other".to_string()));
-}
-
-#[test]
-fn retargeting_outbound_trip_refreshes_elapsed_deadline_and_drained_patience() {
-    // Regression: a trip whose destination is bulldozed late in its commute has
-    // already consumed most of its patience and its deadline may have elapsed.
-    // Retargeting to a replacement workplace must start a fresh trip with
-    // refreshed timers; otherwise `tick_trips` would mark the validly retargeted
-    // trip unserved on the next tick (deadline grace elapsed, patience <= 0).
-    // Mirrors legacy `retargetCitizens` (buildingSelectors.ts deadline = t + 900,
-    // patienceRemaining = 240).
-    let removed_tiles = vec![
-        Point { x: 5, y: 5 },
-        Point { x: 6, y: 5 },
-        Point { x: 5, y: 6 },
-        Point { x: 6, y: 6 },
-    ];
-    let remaining_tiles = vec![
-        Point { x: 12, y: 5 },
-        Point { x: 13, y: 5 },
-        Point { x: 12, y: 6 },
-        Point { x: 13, y: 6 },
-    ];
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![
-        destination_building("building-001", "supermarket", removed_tiles.clone()),
-        destination_building("building-002", "factory", remaining_tiles.clone()),
-    ];
-    state.sims = vec![worker_sim(
-        "sim-001",
-        Point { x: 2, y: 5 },
-        removed_tiles[0],
-    )];
-    // Mid-commute: deadline long elapsed (well past the 300s grace), patience
-    // almost gone. Without the timer refresh this trip is doomed on the next
-    // tick regardless of the retarget.
-    state.time = 5_000.0;
-    state.active_trips = vec![ActiveTrip {
-        id: "trip-001".to_string(),
-        sim_id: "sim-001".to_string(),
-        purpose: TripPurpose::CommuteOutbound,
-        origin: Point { x: 2, y: 5 },
-        destination: removed_tiles[0],
-        position: Point { x: 3, y: 5 }.into(),
-        status: TripStatus::Riding,
-        deadline: 1_000.0,
-        route_plan: Some(RoutePlan {
-            legs: vec![RouteLeg {
-                mode: TransitMode::Bus,
-                from: Point { x: 2, y: 5 },
-                to: removed_tiles[0],
-                line_id: Some("route-001".to_string()),
-                service_direction: Some(ServiceDirection::Loop),
-                board_itinerary_index: Some(0),
-                alight_itinerary_index: Some(0),
-            }],
-            estimated_seconds: 120.0,
-        }),
-        current_leg_index: 0,
-        patience_remaining: 2.0,
-        current_leg_wait_seconds: 0.0,
-        private_car_trip: None,
-    }];
-
-    let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
-    let trip = next
-        .active_trips
-        .iter()
-        .find(|trip| trip.id == "trip-001")
-        .expect("trip remains retargeted");
-
-    // Fresh trip window: deadline = state.time + 900, patience fully restored.
-    assert_eq!(trip.deadline, 5_000.0 + 900.0);
-    assert_eq!(trip.patience_remaining, 240.0);
-    assert_eq!(trip.status, TripStatus::Idle);
-    assert!(trip.route_plan.is_none());
-}
-
-#[test]
 fn removing_destination_keeps_return_trip_targeting_home() {
     let removed_tiles = vec![
         Point { x: 5, y: 5 },
@@ -1714,20 +1489,16 @@ fn removing_destination_keeps_return_trip_targeting_home() {
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
 
-    let sim = next
+    let _sim = next
         .sims
         .iter()
         .find(|sim| sim.id == "sim-001")
         .expect("sim remains");
-    // Workplace was cleared and reassigned to a still-standing destination...
-    let reassigned = sim
-        .workplace
-        .expect("worker reassigned to a replacement workplace");
-    assert!(remaining_tiles.contains(&reassigned));
-
-    // ...but the in-flight return trip must still head home, not to the new
-    // workplace. apply_arrival_to_sim resolves CommuteReturn at home, so routing
-    // it elsewhere would be wasted movement and wrong visuals.
+    // Shell cleanup never touches population state (workplace clearing and
+    // refill are owned by ECS building reconciliation), and it must never
+    // retarget an in-flight return trip: apply_arrival_to_sim resolves
+    // CommuteReturn at home, so routing it elsewhere would be wasted movement
+    // and wrong visuals.
     let trip = next
         .active_trips
         .iter()
@@ -1796,16 +1567,15 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
 
     let next = transit::remove_at_tile(&state, &removed_tiles[0]).expect("destination removes");
 
-    // The sim is left without a workplace...
-    let sim = next
+    let _sim = next
         .sims
         .iter()
         .find(|sim| sim.id == "sim-001")
         .expect("sim remains");
-    assert!(sim.workplace.is_none());
 
-    // ...and the orphaned outbound trip is gone entirely, leaving the sim free
-    // to retry when a new destination is placed.
+    // The orphaned outbound trip is gone entirely (workplace state itself is
+    // left to ECS reconciliation), leaving the sim free to retry when a new
+    // destination is placed.
     assert!(next
         .active_trips
         .iter()
