@@ -2,6 +2,18 @@ use crate::areas;
 use crate::buildings;
 use crate::model::{GameMode, GameSnapshot, GrowthAction};
 
+/// Whether any growth wave is due at `state.time`. Cheap pre-check so callers
+/// only pay for snapshot cloning / reconciliation when a wave will actually
+/// apply.
+pub(crate) fn has_due_growth_waves(state: &GameSnapshot) -> bool {
+    state.rules.game_mode == GameMode::Campaign
+        && state
+            .scenario
+            .growth_waves
+            .iter()
+            .any(|wave| !wave.applied && wave.trigger_time <= state.time)
+}
+
 /// Apply every growth wave whose `trigger_time` has arrived, in declared order,
 /// by replaying its actions through the engine's own handlers. Placements are
 /// budget-exempt (`place_building_core`): a wave is the world growing, not the

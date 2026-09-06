@@ -135,7 +135,7 @@ impl RoadTopology {
             });
         }
 
-        if self.transitions.get(&start).map_or(true, Vec::is_empty) {
+        if self.transitions.get(&start).is_none_or(Vec::is_empty) {
             return Err(LegFailureReason::NoLegalExitHeading);
         }
 
@@ -219,7 +219,7 @@ impl RoadTopology {
                 let next_rank = rank.with_transition(transition);
                 let should_update = best
                     .get(&transition.to)
-                    .map_or(true, |existing| next_rank < *existing);
+                    .is_none_or(|existing| next_rank < *existing);
                 if !should_update {
                     continue;
                 }
@@ -564,7 +564,7 @@ fn deterministic_dijkstra(
         let rank = PathRank::zero();
         let should_insert = best
             .get(&state)
-            .map_or(true, |existing: &PathRank| rank < *existing);
+            .is_none_or(|existing: &PathRank| rank < *existing);
         if should_insert {
             best.insert(state, rank.clone());
             heap.push(Reverse((rank, state)));
@@ -597,7 +597,7 @@ fn deterministic_dijkstra(
             let next_rank = rank.with_transition(transition);
             let should_update = best
                 .get(&transition.to)
-                .map_or(true, |existing| next_rank < *existing);
+                .is_none_or(|existing| next_rank < *existing);
             if !should_update {
                 continue;
             }
@@ -642,7 +642,7 @@ fn deterministic_access_tile_dijkstra(
         let rank = PathRank::zero().with_start_preference(state, from_preferred);
         let should_insert = best
             .get(&state)
-            .map_or(true, |existing: &PathRank| rank < *existing);
+            .is_none_or(|existing: &PathRank| rank < *existing);
         if should_insert {
             best.insert(state, rank.clone());
             heap.push(Reverse((rank, state)));
@@ -661,7 +661,7 @@ fn deterministic_access_tile_dijkstra(
             let next_rank = rank.with_transition_to(transition, to_tile, to_preferred);
             let should_update = best
                 .get(&transition.to)
-                .map_or(true, |existing| next_rank < *existing);
+                .is_none_or(|existing| next_rank < *existing);
             if !should_update {
                 continue;
             }
@@ -831,7 +831,7 @@ fn classify_movement(incoming: Heading, outgoing: Heading) -> MovementKind {
 }
 
 pub(crate) fn lane_accepts(one_way: Option<Heading>, heading: Heading) -> bool {
-    one_way.map_or(true, |allowed| allowed == heading)
+    one_way.is_none_or(|allowed| allowed == heading)
 }
 
 pub(crate) fn is_road(map: &GameMap, point: Point) -> bool {

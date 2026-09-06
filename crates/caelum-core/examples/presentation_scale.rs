@@ -2,11 +2,9 @@ use std::time::Instant;
 
 use caelum_core::model::{
     ActiveTrip, GameSnapshot, PlacedBuilding, Point, Sim, TransitMode, TripPosition, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    TripStatus, Vehicle,
 };
-use caelum_core::presentation::project_update;
-use caelum_core::road_topology::RoadTopology;
-use caelum_core::trips;
+use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::GameEngine;
 
 fn sim(index: usize) -> Sim {
@@ -18,7 +16,7 @@ fn sim(index: usize) -> Sim {
         id: format!("sim-{index:06}"),
         home,
         position: home,
-        worker_profile: WorkerProfile::Worker,
+        worker_profile: caelum_core::model::WorkerProfile::Worker,
         shift_template: Some("standard".to_string()),
         workplace: Some(Point { x: 14, y: 9 }),
         commute_day: 0,
@@ -102,7 +100,11 @@ fn measure_snapshot(label: &str, snapshot: &GameSnapshot) {
 
 fn measure_presentation(label: &str, snapshot: &GameSnapshot) {
     let started = Instant::now();
-    let update = project_update(snapshot, true);
+    let update = project_update(
+        snapshot,
+        &population_aggregates_from_snapshot(snapshot),
+        true,
+    );
     let projection_us = started.elapsed().as_micros();
 
     let started = Instant::now();
@@ -121,19 +123,26 @@ fn measure_presentation(label: &str, snapshot: &GameSnapshot) {
     );
 }
 
+/// Time one quiet engine tick over a worker-only latent population. The fixture
+/// workers are dormant (their workplace point resolves to no job building), so
+/// the tick exercises the ECS scheduler path without emitting trips.
 fn measure_population_tick(label: &str, snapshot: &GameSnapshot, delta_seconds: f64) {
-    let topology = RoadTopology::compile(&snapshot.map).expect("scale topology");
-    let mut running = snapshot.clone();
-    running.paused = false;
-    running.speed = 1;
+    let mut fixture = snapshot.clone();
+    fixture.paused = false;
+    fixture.speed = 1;
+    let mut engine = GameEngine::from_snapshot(fixture.clone()).expect("scale fixture loads");
+    // `prepare_snapshot` forces `paused`; resume through the public intent.
+    let resumed = engine.dispatch(caelum_core::GameIntent::SetPaused { paused: false });
+    assert!(resumed.applied, "fixture must resume");
 
     let started = Instant::now();
-    let advanced = trips::tick_trips(&running, &topology, delta_seconds);
+    let result = engine.tick(delta_seconds);
     let tick_us = started.elapsed().as_micros();
 
     println!(
-        "{label}\tpopulation_tick_us={tick_us}\tadvanced_time={}",
-        advanced.time - running.time,
+        "{label}\tpopulation_tick_us={tick_us}\tadvanced_time={}\tapplied={}",
+        result.update.frame.time - fixture.time,
+        result.applied,
     );
 }
 

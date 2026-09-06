@@ -121,10 +121,7 @@ pub(crate) fn build_world_v9(snapshot: &GameSnapshot) -> World {
                     &sim.id,
                     shift_template,
                     sim.commute_day,
-                    sim.outbound_resolved_today,
-                    sim.outbound_arrived_today,
-                    sim.return_resolved_today,
-                    sim.returned_home_today,
+                    &day_state,
                     snapshot.time,
                 )),
                 Routine::Student => Some(next_student_daily_routine(sim.commute_day)),
@@ -146,7 +143,35 @@ pub(crate) fn build_world_v9(snapshot: &GameSnapshot) -> World {
 
     world.insert_resource(index);
     world.insert_resource(NextCitizenOrdinal(next_ordinal));
-    world.insert_resource(PopulationScheduler::default());
+    // Template and restored housing: schedule every housing slot as an
+    // exact-time move-in (Sandbox only), mirroring `reconcile_buildings` for
+    // added housing. This replaces the deleted shell move-in scan;
+    // `apply_move_in` revalidates occupancy, so slots already filled by
+    // durable sims are skipped when their due time arrives.
+    if snapshot.rules.game_mode == GameMode::Sandbox {
+        let mut scheduler = PopulationScheduler::default();
+        for building in &snapshot.buildings {
+            let Some(definition) = building_definition(&building.building_type) else {
+                continue;
+            };
+            if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
+                continue;
+            }
+            for slot in 0..definition.resident_capacity {
+                insert_scheduler_event(
+                    &mut scheduler,
+                    building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS,
+                    PopulationEvent::MoveIn {
+                        building_id: building.id.clone(),
+                        slot,
+                    },
+                );
+            }
+        }
+        world.insert_resource(scheduler);
+    } else {
+        world.insert_resource(PopulationScheduler::default());
+    }
     world.insert_resource(DuePopulationEvents::default());
     world.insert_resource(PendingTripDemands::default());
     world.insert_resource(SchedulerNow(snapshot.time));
@@ -160,7 +185,7 @@ pub(crate) fn build_world_v9(snapshot: &GameSnapshot) -> World {
     world
 }
 
-pub(crate) fn snapshot_sims_v9(world: &World, _day: u32) -> Vec<Sim> {
+pub(crate) fn snapshot_sims_v9(world: &World, day: u32) -> Vec<Sim> {
     let index = world.resource::<PopulationIndex>();
     let mut ids: Vec<&String> = index.by_id.keys().collect();
     ids.sort_by_key(|id| numeric_id_suffix(id));
@@ -182,13 +207,30 @@ pub(crate) fn snapshot_sims_v9(world: &World, _day: u32) -> Vec<Sim> {
             let day_state = world
                 .get::<LegacyDayState>(entity)
                 .expect("indexed citizen must carry a LegacyDayState");
+            // Mirror the deleted shell midnight reset: a citizen whose flags
+            // still belong to a previous day exports fresh flags for the
+            // current day (their wake rolls the live component itself).
+            let exported_day_state = if day_state.commute_day == day {
+                day_state.clone()
+            } else if day_state.commute_day < day {
+                LegacyDayState {
+                    commute_day: day,
+                    outbound_resolved: false,
+                    outbound_arrived: false,
+                    return_resolved: false,
+                    returned_home: false,
+                }
+            } else {
+                day_state.clone()
+            };
             let (worker_profile, shift_template, workplace) = match routine {
                 Routine::Worker {
                     shift_template,
                     workplace,
                 } => (
                     WorkerProfile::Worker,
-                    Some(shift_template.clone()),
+                    // The `""` sentinel maps back to the durable `None`.
+                    (!shift_template.is_empty()).then(|| shift_template.clone()),
                     workplace.as_ref().map(|assignment| assignment.point),
                 ),
                 Routine::Student => (WorkerProfile::NonWorker, None, None),
@@ -200,20 +242,57 @@ pub(crate) fn snapshot_sims_v9(world: &World, _day: u32) -> Vec<Sim> {
                 worker_profile,
                 shift_template,
                 workplace,
-                commute_day: day_state.commute_day,
-                outbound_resolved_today: day_state.outbound_resolved,
-                outbound_arrived_today: day_state.outbound_arrived,
-                return_resolved_today: day_state.return_resolved,
-                returned_home_today: day_state.returned_home,
+                commute_day: exported_day_state.commute_day,
+                outbound_resolved_today: exported_day_state.outbound_resolved,
+                outbound_arrived_today: exported_day_state.outbound_arrived,
+                return_resolved_today: exported_day_state.return_resolved,
+                returned_home_today: exported_day_state.returned_home,
             }
         })
         .collect()
 }
 
+#[cfg(test)]
 pub(crate) fn population_count(world: &World) -> u32 {
     world.resource::<PopulationIndex>().by_id.len() as u32
 }
 
+/// Number of distinct scheduler due-time keys. The tick's initial substep cap
+/// includes these so every currently scheduled wake can fire within one tick.
+pub(crate) fn scheduler_due_key_count(world: &World) -> usize {
+    world.resource::<PopulationScheduler>().buckets.len()
+}
+
+/// Live presentation aggregates derived from the ECS population indexes. The
+/// engine supplies these to the projector instead of reconstructing a
+/// population mirror into the shell snapshot.
+pub(crate) fn presentation_aggregates(world: &World) -> crate::presentation::PopulationAggregates {
+    let index = world.resource::<PopulationIndex>();
+    let building_occupancy = index
+        .buildings
+        .keys()
+        .map(|building_id| {
+            let occupancy = if index.buildings[building_id].resident_capacity > 0 {
+                index
+                    .residents_by_building
+                    .get(building_id)
+                    .map_or(0, Vec::len)
+            } else {
+                index
+                    .workers_by_building
+                    .get(building_id)
+                    .map_or(0, Vec::len)
+            };
+            (building_id.clone(), occupancy as u32)
+        })
+        .collect();
+    crate::presentation::PopulationAggregates {
+        population_count: index.by_id.len() as u32,
+        building_occupancy,
+    }
+}
+
+#[cfg(test)]
 pub(crate) fn resident_occupancy_for_building(world: &World, building_id: &str) -> u32 {
     world
         .resource::<PopulationIndex>()
@@ -222,6 +301,7 @@ pub(crate) fn resident_occupancy_for_building(world: &World, building_id: &str) 
         .map_or(0, Vec::len) as u32
 }
 
+#[cfg(test)]
 pub(crate) fn job_occupancy_for_building(world: &World, building_id: &str) -> u32 {
     world
         .resource::<PopulationIndex>()
@@ -855,10 +935,7 @@ fn collect_due_events(
 ) {
     let horizon = now.0 + EPSILON;
     let mut drained: Vec<(f64, PopulationEvent)> = Vec::new();
-    loop {
-        let Some((&time, _)) = scheduler.buckets.iter().next() else {
-            break;
-        };
+    while let Some((&time, _)) = scheduler.buckets.iter().next() {
         if time.0 > horizon {
             break;
         }
@@ -948,25 +1025,16 @@ fn apply_move_in(world: &mut World, building_id: &str, slot: u16) {
             // The v9 adapter flag mirrors the conversion: only a departure
             // already lost to a late assignment counts as resolved today.
             let missed_today = now > scheduled + EPSILON;
-            (
-                LegacyDayState {
-                    commute_day,
-                    outbound_resolved: missed_today,
-                    outbound_arrived: false,
-                    return_resolved: false,
-                    returned_home: false,
-                },
-                worker_next_activity(
-                    &sim_id,
-                    shift_template,
-                    commute_day,
-                    false,
-                    false,
-                    false,
-                    false,
-                    now,
-                ),
-            )
+            let day_state = LegacyDayState {
+                commute_day,
+                outbound_resolved: missed_today,
+                outbound_arrived: false,
+                return_resolved: false,
+                returned_home: false,
+            };
+            let next_activity =
+                worker_next_activity(&sim_id, shift_template, commute_day, &day_state, now);
+            (day_state, next_activity)
         }
         WorkerProfile::NonWorker => (
             LegacyDayState {
@@ -1065,6 +1133,9 @@ fn apply_activity(world: &mut World, entity: Entity, due_time: f64) {
 }
 
 fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_time: f64) {
+    // A wake on a new day rolls the v9 daily flags fresh, mirroring the
+    // deleted shell `reset_daily_commute_flags` midnight reset.
+    let commute_day = day_index(due_time);
     // A destination must resolve to a live job building, mirroring the
     // `has_valid_workplace_destination` spawn condition. A Stage-A Student
     // (current NonWorker) has none and stays dormant — Task 7 replaces this.
@@ -1078,6 +1149,13 @@ fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_
             _ => None,
         });
     let Some(destination) = destination else {
+        world.entity_mut(entity).insert(LegacyDayState {
+            commute_day,
+            outbound_resolved: false,
+            outbound_arrived: false,
+            return_resolved: false,
+            returned_home: false,
+        });
         schedule_activity(
             world,
             entity,
@@ -1091,6 +1169,52 @@ fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_
     let Some(origin) = world.get::<HomeAssignment>(entity).map(|home| home.point) else {
         return;
     };
+
+    // Stranded-worker guard, mirroring the deleted spawn-scan guard: a worker
+    // with a valid destination who is not at home at the day's outbound wake
+    // was stranded by a previous unserved return. Emitting an outbound would
+    // anchor a phantom commute to a worker away from `origin`, so resolve the
+    // outbound instead and unlock today's return trip to bring them home.
+    let stranded = world
+        .get::<SettledPosition>(entity)
+        .map(|settled| settled.0)
+        .is_some_and(|position| position != origin);
+    if stranded {
+        let Some(routine) = world.get::<Routine>(entity).cloned() else {
+            return;
+        };
+        let Routine::Worker { shift_template, .. } = routine else {
+            return;
+        };
+        let day_state = LegacyDayState {
+            commute_day,
+            outbound_resolved: true,
+            outbound_arrived: true,
+            return_resolved: false,
+            returned_home: false,
+        };
+        world.entity_mut(entity).insert(day_state.clone());
+        schedule_activity(
+            world,
+            entity,
+            worker_next_activity(
+                citizen_id,
+                &shift_template,
+                commute_day,
+                &day_state,
+                due_time,
+            ),
+        );
+        return;
+    }
+
+    world.entity_mut(entity).insert(LegacyDayState {
+        commute_day,
+        outbound_resolved: false,
+        outbound_arrived: false,
+        return_resolved: false,
+        returned_home: false,
+    });
     world
         .resource_mut::<PendingTripDemands>()
         .0
@@ -1103,6 +1227,171 @@ fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_
         });
     // The outbound trip owns the citizen until its resolution handler
     // schedules the PrimaryReturn.
+}
+
+// === Terminal trip resolution feedback ===
+
+/// One terminal trip transition collected by the trip loop before the trip is
+/// removed, and fed back into the population world by
+/// [`apply_trip_resolutions`].
+pub(crate) struct TripResolution {
+    pub(crate) citizen_id: String,
+    pub(crate) purpose: TripPurpose,
+    pub(crate) destination: Point,
+    /// `true` when the trip reached `Arrived`/`Late` (the deleted
+    /// `apply_arrival_to_sim` gate on `completed_trips > 0`).
+    pub(crate) completed: bool,
+    pub(crate) service_day: Option<u32>,
+}
+
+/// Apply terminal trip transitions to the population world: settle the
+/// traveller's position, mirror the v9 daily flags, and schedule their next
+/// activity — exactly the feedback the deleted `apply_arrival_to_sim` /
+/// `apply_commute_resolution_to_sim` shell mutations used to provide, so
+/// explicit v9 snapshots stay equivalent until Task 6 removes them.
+pub(crate) fn apply_trip_resolutions(
+    world: &mut World,
+    resolutions: &[TripResolution],
+    now_day: u32,
+    now: f64,
+) -> bool {
+    let mut changed = false;
+    for row in resolutions {
+        changed |= apply_trip_resolution(world, row, now_day, now);
+    }
+    changed
+}
+
+fn apply_trip_resolution(world: &mut World, row: &TripResolution, now_day: u32, now: f64) -> bool {
+    let Some(&entity) = world
+        .resource::<PopulationIndex>()
+        .by_id
+        .get(&row.citizen_id)
+    else {
+        return false;
+    };
+    let Some(routine) = world.get::<Routine>(entity).cloned() else {
+        return false;
+    };
+    let Routine::Worker { shift_template, .. } = routine else {
+        return false;
+    };
+    let citizen_id = row.citizen_id.clone();
+    let same_day = row.service_day.is_some_and(|day| day == now_day);
+    // Whether today's outbound window is already closed at the resolution
+    // instant. A cross-midnight resolution landing after today's departure has
+    // missed it — the v9 flag mirrors the deleted late-assignment guard.
+    let late_today = now
+        > scheduled_time_seconds(
+            now_day,
+            departure_minute_for_sim(&citizen_id, &shift_template, "outbound"),
+        ) + EPSILON;
+
+    let fresh_day =
+        |commute_day: u32, outbound_resolved: bool, outbound_arrived: bool| LegacyDayState {
+            commute_day,
+            outbound_resolved,
+            outbound_arrived,
+            return_resolved: false,
+            returned_home: false,
+        };
+
+    match row.purpose {
+        TripPurpose::CommuteOutbound => {
+            if row.completed {
+                if let Some(mut position) = world.get_mut::<SettledPosition>(entity) {
+                    position.0 = row.destination;
+                }
+                if same_day {
+                    let day_state = fresh_day(now_day, true, true);
+                    world.entity_mut(entity).insert(day_state.clone());
+                    schedule_activity(
+                        world,
+                        entity,
+                        worker_next_activity(
+                            &citizen_id,
+                            &shift_template,
+                            now_day,
+                            &day_state,
+                            now,
+                        ),
+                    );
+                } else {
+                    // Cross-midnight arrival at the workplace: the trip's own
+                    // commute day is over, so today's outbound/return stay
+                    // untouched (the deleted resolution handler never resolved
+                    // a previous day's trip into today's flags). The worker
+                    // simply sits at the destination until their next future
+                    // outbound wake, which re-evaluates dormancy or the
+                    // stranded guard.
+                    schedule_activity(
+                        world,
+                        entity,
+                        worker_next_activity(
+                            &citizen_id,
+                            &shift_template,
+                            now_day,
+                            &fresh_day(now_day, false, false),
+                            now,
+                        ),
+                    );
+                }
+            } else {
+                let day_state = fresh_day(now_day, late_today, false);
+                world.entity_mut(entity).insert(day_state.clone());
+                schedule_activity(
+                    world,
+                    entity,
+                    worker_next_activity(&citizen_id, &shift_template, now_day, &day_state, now),
+                );
+            }
+        }
+        TripPurpose::CommuteReturn => {
+            if row.completed {
+                if let Some(mut position) = world.get_mut::<SettledPosition>(entity) {
+                    position.0 = row.destination;
+                }
+            }
+            if same_day {
+                if let Some(mut day_state) = world.get_mut::<LegacyDayState>(entity) {
+                    day_state.return_resolved = true;
+                    day_state.returned_home = row.completed;
+                }
+                schedule_activity(
+                    world,
+                    entity,
+                    next_worker_daily_routine(&citizen_id, &shift_template, now_day),
+                );
+            } else if row.completed {
+                // Cross-midnight arrival home: the previous commute day is
+                // over, so the flags roll fresh for today and the worker takes
+                // their next future outbound wake — no retroactive return.
+                schedule_activity(
+                    world,
+                    entity,
+                    worker_next_activity(
+                        &citizen_id,
+                        &shift_template,
+                        now_day,
+                        &fresh_day(now_day, false, false),
+                        now,
+                    ),
+                );
+            } else {
+                // Cross-midnight unserved return: the traveller is stranded at
+                // the far end. Mirror the deleted stranded guard: resolve and
+                // arrive today's outbound, unlocking today's return trip.
+                let day_state = fresh_day(now_day, true, true);
+                world.entity_mut(entity).insert(day_state.clone());
+                schedule_activity(
+                    world,
+                    entity,
+                    worker_next_activity(&citizen_id, &shift_template, now_day, &day_state, now),
+                );
+            }
+        }
+    }
+    true
 }
 
 fn emit_trip_demands(mut pending: ResMut<PendingTripDemands>) {
@@ -1161,14 +1450,11 @@ fn worker_next_activity(
     sim_id: &str,
     shift_template: &str,
     commute_day: u32,
-    outbound_resolved: bool,
-    outbound_arrived: bool,
-    return_resolved: bool,
-    returned_home: bool,
+    day: &LegacyDayState,
     now: f64,
 ) -> ScheduledActivity {
     let outbound_minute = departure_minute_for_sim(sim_id, shift_template, "outbound");
-    if !outbound_resolved && !outbound_arrived {
+    if !day.outbound_resolved && !day.outbound_arrived {
         let departure = scheduled_time_seconds(commute_day, outbound_minute);
         if now <= departure + EPSILON {
             return ScheduledActivity {
@@ -1178,7 +1464,7 @@ fn worker_next_activity(
         }
         return next_worker_daily_routine(sim_id, shift_template, commute_day);
     }
-    if outbound_arrived && !return_resolved && !returned_home {
+    if day.outbound_arrived && !day.return_resolved && !day.returned_home {
         let return_minute = departure_minute_for_sim(sim_id, shift_template, "return");
         return ScheduledActivity {
             kind: ScheduledActivityKind::PrimaryReturn,

@@ -11,11 +11,14 @@
 //! into the frontend, at which point it also serves as the parity oracle for the
 //! legacy TypeScript simulation under `src/simulation/`.
 //!
-//! The engine runs one tick as a fixed pipeline over an immutable [`model::GameSnapshot`]:
-//! [`trips::tick_trips`] (spawn + advance trips, tick vehicles) →
-//! [`objectives::evaluate_objectives`] (metrics + win/loss). Each step takes a snapshot
-//! and returns a new one; the engine publishes a new snapshot only when it differs from
-//! the previous one (see [`engine::GameEngine::tick`]).
+//! The engine runs one tick as a fixed pipeline over an immutable shell
+//! [`model::GameSnapshot`] plus the live ECS population world
+//! ([`population`]): due scheduler wakes emit trip demands, the demand bridge
+//! spawns + advances trips through [`trips`] (tick vehicles), then
+//! [`objectives::evaluate_objectives`] computes metrics + win/loss. Terminal
+//! trip resolutions feed back into the ECS world; the engine publishes a new
+//! snapshot whenever shell or population state changed (see
+//! [`engine::GameEngine::tick`]).
 //!
 //! Determinism is a contract: no RNG, no wall-clock time, a fixed N-E-S-W BFS tiebreak,
 //! and stable id/jitter derivation (see [`commute`] and [`ids`]).

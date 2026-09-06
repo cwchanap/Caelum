@@ -1507,7 +1507,11 @@ fn gameplay_update_result_round_trips_through_serde_json() {
     let snapshot = create_initial_snapshot();
 
     // Applied case: rejection is None -> serializes to JSON `null`.
-    let applied = GameplayUpdateResult::present(&snapshot);
+    let applied = GameplayUpdateResult::present(caelum_core::presentation::project_update(
+        &snapshot,
+        &caelum_core::presentation::population_aggregates_from_snapshot(&snapshot),
+        true,
+    ));
     let value = serde_json::to_value(&applied).expect("applied result should serialize");
     assert_eq!(value["applied"], json!(true));
     assert_eq!(value["rejection"], json!(null));
@@ -1518,7 +1522,11 @@ fn gameplay_update_result_round_trips_through_serde_json() {
 
     // Rejected case: rejection is Some -> serializes to structured JSON.
     let rejected = GameplayUpdateResult::rejected(
-        &snapshot,
+        caelum_core::presentation::project_update(
+            &snapshot,
+            &caelum_core::presentation::population_aggregates_from_snapshot(&snapshot),
+            false,
+        ),
         GameplayRejection::new(RejectionCode::InvalidSpeed),
     );
     let value = serde_json::to_value(&rejected).expect("rejected result should serialize");

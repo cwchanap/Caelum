@@ -8,15 +8,66 @@
 
 use serde::{Deserialize, Serialize};
 
+use std::collections::{BTreeMap, HashSet};
+
 use crate::building_catalog::building_definition;
 use crate::model::{
     GameMap, GameRules, GameSnapshot, MetricsState, PlacedBuilding, Point, RouteLegPath,
     ServiceMetrics, ServicePattern, Station, Stop, TransitMode, TripPosition,
 };
 use crate::platforms::platform_waiting_occupancy;
-use crate::population::{job_occupancy, resident_occupancy};
 use crate::service_control::service_metrics_by_line;
 use crate::traffic::derive_road_flow;
+
+/// Population-derived frame inputs, built either from a durable snapshot
+/// ([`population_aggregates_from_snapshot`]) or straight from the live ECS
+/// population world ([`crate::population::presentation_aggregates`]). The
+/// parity of the two builders is pinned by an engine test.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PopulationAggregates {
+    pub population_count: u32,
+    pub building_occupancy: BTreeMap<String, u32>,
+}
+
+/// Build presentation aggregates from a durable snapshot's population mirror.
+/// Used on explicit snapshots (saves, fixtures); the live engine derives the
+/// same rows from its ECS world instead.
+pub fn population_aggregates_from_snapshot(snapshot: &GameSnapshot) -> PopulationAggregates {
+    let mut building_occupancy = BTreeMap::new();
+    for building in &snapshot.buildings {
+        let Some(definition) = building_definition(&building.building_type) else {
+            continue;
+        };
+        if definition.resident_capacity == 0 && definition.job_capacity == 0 {
+            continue;
+        }
+        // The catalog never mixes resident and job capacity (pinned by test),
+        // so the branch order cannot mask a capacity class.
+        let occupancy = if definition.resident_capacity > 0 {
+            let tiles: HashSet<&Point> = building.occupied_tiles.iter().collect();
+            snapshot
+                .sims
+                .iter()
+                .filter(|sim| tiles.contains(&sim.home))
+                .count()
+        } else {
+            let tiles: HashSet<&Point> = building.occupied_tiles.iter().collect();
+            snapshot
+                .sims
+                .iter()
+                .filter(|sim| {
+                    sim.workplace
+                        .is_some_and(|workplace| tiles.contains(&workplace))
+                })
+                .count()
+        };
+        building_occupancy.insert(building.id.clone(), occupancy as u32);
+    }
+    PopulationAggregates {
+        population_count: snapshot.sims.len() as u32,
+        building_occupancy,
+    }
+}
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -149,11 +200,18 @@ pub struct ServiceMetricsPresentation {
     pub metrics: ServiceMetrics,
 }
 
-/// Pure, deterministic projection of a snapshot into presentation rows.
-pub fn project_update(snapshot: &GameSnapshot, include_scene: bool) -> PresentationUpdate {
+/// Pure, deterministic projection of a snapshot into presentation rows. The
+/// population-derived frame inputs are supplied by the caller: the live engine
+/// passes ECS-derived aggregates, explicit snapshots pass
+/// [`population_aggregates_from_snapshot`] output.
+pub fn project_update(
+    snapshot: &GameSnapshot,
+    population: &PopulationAggregates,
+    include_scene: bool,
+) -> PresentationUpdate {
     PresentationUpdate {
         scene: include_scene.then(|| project_scene(snapshot)),
-        frame: project_frame(snapshot),
+        frame: project_frame(snapshot, population),
     }
 }
 
@@ -203,7 +261,7 @@ fn project_scene(snapshot: &GameSnapshot) -> PresentationScene {
     }
 }
 
-fn project_frame(snapshot: &GameSnapshot) -> PresentationFrame {
+fn project_frame(snapshot: &GameSnapshot, population: &PopulationAggregates) -> PresentationFrame {
     PresentationFrame {
         time: snapshot.time,
         day: snapshot.day,
@@ -217,8 +275,15 @@ fn project_frame(snapshot: &GameSnapshot) -> PresentationFrame {
             average_wait_seconds: snapshot.metrics.average_wait_seconds,
             state: snapshot.metrics.state,
         },
-        population_count: snapshot.sims.len() as u32,
-        building_occupancy: building_occupancy(snapshot),
+        population_count: population.population_count,
+        building_occupancy: population
+            .building_occupancy
+            .iter()
+            .map(|(building_id, occupancy)| BuildingOccupancyPresentation {
+                building_id: building_id.clone(),
+                occupancy: *occupancy,
+            })
+            .collect(),
         platform_occupancy: platform_waiting_occupancy(snapshot)
             .into_iter()
             .map(
@@ -250,28 +315,6 @@ fn project_frame(snapshot: &GameSnapshot) -> PresentationFrame {
             .map(|(line_id, metrics)| ServiceMetricsPresentation { line_id, metrics })
             .collect(),
     }
-}
-
-fn building_occupancy(snapshot: &GameSnapshot) -> Vec<BuildingOccupancyPresentation> {
-    let mut rows = Vec::new();
-    for building in &snapshot.buildings {
-        let Some(definition) = building_definition(&building.building_type) else {
-            continue;
-        };
-        let occupancy = if definition.resident_capacity > 0 {
-            resident_occupancy(snapshot, building)
-        } else if definition.job_capacity > 0 {
-            job_occupancy(snapshot, building)
-        } else {
-            continue;
-        };
-        rows.push(BuildingOccupancyPresentation {
-            building_id: building.id.clone(),
-            occupancy: occupancy as u32,
-        });
-    }
-    rows.sort_by(|left, right| left.building_id.cmp(&right.building_id));
-    rows
 }
 
 fn traffic_flow(snapshot: &GameSnapshot) -> Vec<TrafficFlowPresentation> {
@@ -442,22 +485,27 @@ mod tests {
     fn resident_projection_matches_resident_occupancy() {
         let mut snapshot = create_initial_snapshot();
         let building = building("building-001", "smallHouse");
-        snapshot.buildings.push(building.clone());
+        snapshot.buildings.push(building);
         snapshot.sims = vec![
             sim("sim-a", Point::from((4, 4)), None),
             sim("sim-b", Point::from((5, 4)), None),
             sim("sim-c", Point::from((9, 9)), None),
         ];
 
-        let frame = project_update(&snapshot, false).frame;
+        let aggregates = population_aggregates_from_snapshot(&snapshot);
+        assert_eq!(aggregates.population_count, 3);
+        assert_eq!(
+            aggregates.building_occupancy,
+            BTreeMap::from([("building-001".to_string(), 2)])
+        );
+        let frame = project_update(&snapshot, &aggregates, false).frame;
         assert_eq!(
             frame.building_occupancy,
             vec![BuildingOccupancyPresentation {
                 building_id: "building-001".to_string(),
-                occupancy: resident_occupancy(&snapshot, &building) as u32,
+                occupancy: 2,
             }]
         );
-        assert_eq!(frame.building_occupancy[0].occupancy, 2);
     }
 
     #[test]
@@ -472,7 +520,12 @@ mod tests {
             sim("sim-c", Point::from((0, 0)), None),
         ];
 
-        let frame = project_update(&snapshot, false).frame;
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
         assert_eq!(
             frame.building_occupancy,
             vec![BuildingOccupancyPresentation {
@@ -515,7 +568,12 @@ mod tests {
             waiting_trip_for_line("trip-b", point, "route-001", 20.0),
         ];
 
-        let frame = project_update(&snapshot, false).frame;
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
         assert_eq!(
             frame.platform_occupancy,
             vec![PlatformOccupancyPresentation {
@@ -544,7 +602,12 @@ mod tests {
             car_trip("car-c", &[Point::from((5, 5))]),
         ];
 
-        let frame = project_update(&snapshot, false).frame;
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
         assert_eq!(
             frame.traffic_flow,
             vec![
@@ -569,7 +632,12 @@ mod tests {
             walking_trip("trip-c", Point::from((3, 2))),
         ];
 
-        let frame = project_update(&snapshot, false).frame;
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
         assert_eq!(
             frame.demand_flow,
             vec![
@@ -606,7 +674,12 @@ mod tests {
             parked_position: None,
         });
 
-        let value = serde_json::to_value(project_update(&snapshot, true)).unwrap();
+        let value = serde_json::to_value(project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            true,
+        ))
+        .unwrap();
         let mut keys = Vec::new();
         collect_keys(&value, &mut keys);
         for forbidden in [
@@ -655,7 +728,12 @@ mod tests {
             parked_position: Some(TripPosition { x: 1.5, y: 2.5 }),
         });
 
-        let frame = project_update(&snapshot, false).frame;
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
         assert_eq!(
             frame.vehicles,
             vec![VehiclePresentation {
@@ -690,7 +768,12 @@ mod tests {
         assert!(created.applied, "fixture route should apply: {created:?}");
 
         let snapshot = engine.snapshot();
-        let frame = project_update(&snapshot, false).frame;
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
         let projected: BTreeMap<String, ServiceMetrics> = frame
             .service_metrics
             .into_iter()
@@ -718,8 +801,10 @@ mod tests {
         let small = fixture_with_sims(0);
         let large = fixture_with_sims(200_000);
 
-        let small_frame = project_update(&small, false).frame;
-        let large_frame = project_update(&large, false).frame;
+        let small_frame =
+            project_update(&small, &population_aggregates_from_snapshot(&small), false).frame;
+        let large_frame =
+            project_update(&large, &population_aggregates_from_snapshot(&large), false).frame;
 
         assert!(small_frame.building_occupancy.is_empty());
         assert!(large_frame.building_occupancy.is_empty());

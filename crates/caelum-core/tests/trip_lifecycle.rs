@@ -1,4 +1,3 @@
-use caelum_core::buildings::assign_workplaces;
 use caelum_core::model::{
     ActiveTrip, GameSnapshot, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
     PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection,
@@ -99,73 +98,6 @@ fn place_destination(state: &mut GameSnapshot, id: &str, origin: Point) {
         placed_at: 0.0,
         transit_node_id: None,
     });
-}
-
-fn placed_building(id: &str, building_type: &str, occupied_tiles: Vec<Point>) -> PlacedBuilding {
-    PlacedBuilding {
-        id: id.to_string(),
-        building_type: building_type.to_string(),
-        origin: occupied_tiles[0],
-        rotation: 0,
-        occupied_tiles,
-        placed_at: 0.0,
-        transit_node_id: None,
-    }
-}
-
-#[test]
-fn assign_workplaces_clears_stale_assignments_when_no_workplaces_remain() {
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![placed_building(
-        "building-001",
-        "smallHouse",
-        vec![Point { x: 2, y: 3 }],
-    )];
-    state.sims = vec![worker_sim(
-        "sim-001",
-        Point { x: 2, y: 3 },
-        Some(Point { x: 99, y: 99 }),
-    )];
-
-    assign_workplaces(&mut state);
-
-    assert_eq!(state.sims[0].workplace, None);
-}
-
-#[test]
-fn assign_workplaces_sorts_buildings_and_fills_slots_in_sim_order() {
-    let supermarket_tiles = vec![
-        Point { x: 8, y: 3 },
-        Point { x: 9, y: 3 },
-        Point { x: 8, y: 4 },
-        Point { x: 9, y: 4 },
-    ];
-    let factory_tiles = vec![
-        Point { x: 12, y: 3 },
-        Point { x: 13, y: 3 },
-        Point { x: 14, y: 3 },
-        Point { x: 12, y: 4 },
-        Point { x: 13, y: 4 },
-        Point { x: 14, y: 4 },
-    ];
-    let mut state = create_initial_snapshot();
-    // Deliberately reverse the vector order: assignment must sort by building
-    // ID, not by insertion order.
-    state.buildings = vec![
-        placed_building("building-002", "factory", factory_tiles.clone()),
-        placed_building("building-001", "supermarket", supermarket_tiles.clone()),
-    ];
-    state.sims = (1..=11)
-        .map(|index| worker_sim(&format!("sim-2{index:02}"), Point { x: 2, y: 3 }, None))
-        .collect();
-
-    assign_workplaces(&mut state);
-
-    let assigned: Vec<_> = state.sims.iter().filter_map(|sim| sim.workplace).collect();
-    assert_eq!(assigned.len(), 10);
-    assert_eq!(&assigned[..4], supermarket_tiles.as_slice());
-    assert_eq!(&assigned[4..], factory_tiles.as_slice());
-    assert_eq!(state.sims[10].workplace, None);
 }
 
 fn bus_then_walk_plan(bus_from: Point, bus_to: Point, walk_to: Point, line_id: &str) -> RoutePlan {

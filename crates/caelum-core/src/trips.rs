@@ -1,12 +1,13 @@
 use std::collections::HashSet;
 
-use crate::building_catalog::building_definition;
-use crate::clock::{self, GAME_DAY_SECONDS, MINUTES_PER_DAY};
-use crate::commute::{departure_minute_for_sim, trip_deadline_seconds, WALK_SECONDS_PER_TILE};
+use bevy_ecs::prelude::{Schedule, World};
+
+use crate::clock::{self, GAME_DAY_SECONDS};
+use crate::commute::{trip_deadline_seconds, WALK_SECONDS_PER_TILE};
 use crate::model::{
     ActiveTrip, GameMode, GameSnapshot, Metrics, MetricsState, ObjectiveThresholds, Point,
-    PrivateCarTrip, RoutePlan, Sim, TransitMode, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus, WorkerProfile,
+    PrivateCarTrip, RoutePlan, TransitMode, TripOutcome, TripOutcomeKind, TripPosition,
+    TripPurpose, TripStatus,
 };
 use crate::objectives;
 use crate::population;
@@ -34,6 +35,16 @@ pub(crate) fn current_leg_wait_seconds(trip: &ActiveTrip) -> f64 {
 const DEADLINE_GRACE_SECONDS: f64 = 300.0;
 pub(crate) const EPSILON: f64 = 0.000_001;
 
+/// Outcome of one production tick: the advanced shell snapshot plus whether
+/// any ECS population work happened (scheduler wakes, move-ins, building
+/// reconciliation, terminal trip resolutions). `applied` on the tick commit is
+/// `shell_changed || population_changed`; ECS mutations are always retained —
+/// never discarded because the shell compared equal.
+pub(crate) struct TickAdvance {
+    pub(crate) snapshot: GameSnapshot,
+    pub(crate) population_changed: bool,
+}
+
 fn plan_route(
     state: &GameSnapshot,
     flow: &traffic::RoadFlow,
@@ -42,14 +53,6 @@ fn plan_route(
 ) -> Option<RoutePlan> {
     router::find_route_plan(state, flow, origin, destination)
 }
-
-/// Boundaries per sim per day: outbound spawn + outbound resolution + return
-/// spawn + return resolution, plus headroom for the walk-leg / patience /
-/// deadline boundaries a single commute can generate. Driving arrival is an
-/// existing outbound/return resolution boundary, not a seventh category. Used both in
-/// `max_tick_substeps` (initial cap) and in the post-growth cap widening
-/// inside `tick_trips_substepped`.
-const SIM_SHIFT_BOUNDARIES_PER_DAY: usize = 6;
 
 struct TripTickResult {
     trip: ActiveTrip,
@@ -68,15 +71,7 @@ struct TripMetricDelta {
     outcomes: Vec<TripOutcome>,
 }
 
-pub fn tick_trips(
-    state: &GameSnapshot,
-    road_topology: &RoadTopology,
-    delta_seconds: f64,
-) -> GameSnapshot {
-    tick_trips_substepped(state, road_topology, delta_seconds, |_| false)
-}
-
-/// Like [`tick_trips`] but evaluates objectives after every substep and stops the
+/// Evaluate objectives after every substep and stops the
 /// tick as soon as a loss or win condition is reached.
 ///
 /// A coarse tick (e.g. resuming from a suspended browser tab) can span a waiting
@@ -88,47 +83,101 @@ pub fn tick_trips(
 /// evaluation makes a coarse tick equivalent to a sequence of stepped ticks for
 /// objective detection, preserving the determinism/granularity-independence
 /// invariant.
-pub fn tick_trips_with_objectives(
+pub(crate) fn tick_trips_with_objectives(
     state: &GameSnapshot,
     road_topology: &RoadTopology,
+    world: &mut World,
+    population_schedule: &mut Schedule,
     delta_seconds: f64,
-) -> GameSnapshot {
-    tick_trips_substepped(state, road_topology, delta_seconds, |next| {
-        // Use the opt variant so the common no-fire path skips the snapshot
-        // clone the legacy wrapper would perform on every substep.
-        if let Some(evaluated) = objectives::evaluate_objectives_opt(next) {
-            *next = evaluated;
+) -> TickAdvance {
+    tick_trips_substepped(
+        state,
+        road_topology,
+        world,
+        population_schedule,
+        delta_seconds,
+        |next| {
+            // Use the opt variant so the common no-fire path skips the snapshot
+            // clone the legacy wrapper would perform on every substep.
+            if let Some(evaluated) = objectives::evaluate_objectives_opt(next) {
+                *next = evaluated;
+            }
+            next.metrics.state != MetricsState::Running
+        },
+    )
+}
+
+/// Apply due growth waves (reconciling the ECS population with any placed
+/// buildings) and run the exact-time population scheduler up to `state.time`.
+/// Returns whether ECS population state changed.
+fn apply_due_world_events(
+    state: &mut GameSnapshot,
+    world: &mut World,
+    population_schedule: &mut Schedule,
+) -> bool {
+    let mut population_changed =
+        population::run_due(world, population_schedule, state.time).changed;
+    if crate::growth::has_due_growth_waves(state) {
+        let before = state.clone();
+        crate::growth::apply_due_growth_waves(state);
+        if state != &before {
+            population_changed |= population::reconcile_buildings(world, &before, state).changed;
         }
-        next.metrics.state != MetricsState::Running
-    })
+    }
+    population_changed
 }
 
-fn apply_due_world_events(state: &mut GameSnapshot) {
-    crate::growth::apply_due_growth_waves(state);
-    population::apply_due_move_ins(state);
-}
-
-/// Derive the road-flow map for this scheduling iteration and spawn due
-/// commute trips into the same snapshot, admitting same-time cars into the
-/// returned map so planning, boundary estimation, and the substep all see the
-/// post-spawn flow.
-fn derive_flow_and_spawn(
+/// Drain every pending ECS trip demand into one freshly derived road flow so
+/// same-time demands admit their cars into the map the later trips plan
+/// against. One mutable [`traffic::RoadFlow`] serves the whole same-time batch.
+fn drain_and_spawn(
     state: &mut GameSnapshot,
     road_topology: &RoadTopology,
+    world: &mut World,
 ) -> traffic::RoadFlow {
+    let demands = population::drain_trip_demands(world);
     let mut road_flow = traffic::derive_road_flow(state);
-    spawn_due_commute_trips(state, road_topology, &mut road_flow);
+    spawn_pending_trip_demands(state, road_topology, &mut road_flow, demands);
     road_flow
+}
+
+/// Route pending ECS demand through the existing trip builder. ECS emits
+/// demand; it never routes.
+fn spawn_pending_trip_demands(
+    state: &mut GameSnapshot,
+    road_topology: &RoadTopology,
+    road_flow: &mut traffic::RoadFlow,
+    demands: Vec<population::TripDemand>,
+) {
+    for demand in demands {
+        let trip = build_commute_trip(state, road_topology, road_flow, &demand);
+        state.active_trips.push(trip);
+    }
+}
+
+/// Widen the substep cap by every new population scheduler boundary the
+/// intervening `run_due` / reconciliation pass created. This may conservatively
+/// count a new key outside the current tick window; overcount is safe.
+fn widen_population_cap(world: &World, cap: &mut usize, last_generation: &mut u64) {
+    let generation = population::scheduler_boundary_generation(world);
+    let added = generation.saturating_sub(*last_generation);
+    *cap = cap.saturating_add(added as usize);
+    *last_generation = generation;
 }
 
 fn tick_trips_substepped(
     state: &GameSnapshot,
     road_topology: &RoadTopology,
+    world: &mut World,
+    population_schedule: &mut Schedule,
     delta_seconds: f64,
     mut on_substep: impl FnMut(&mut GameSnapshot) -> bool,
-) -> GameSnapshot {
+) -> TickAdvance {
     if state.paused || state.metrics.state != MetricsState::Running || state.speed == 0 {
-        return state.clone();
+        return TickAdvance {
+            snapshot: state.clone(),
+            population_changed: false,
+        };
     }
 
     let scaled_delta = clock::scaled_delta(delta_seconds, state.speed);
@@ -142,30 +191,31 @@ fn tick_trips_substepped(
     // already above the loss threshold) must be detected at its current
     // timestamp, not at the next boundary — otherwise coarse and fine ticks
     // produce different terminal timestamps, breaking the granularity-
-    // independence invariant. Process due events (growth, daily flags, trip
-    // spawning) first so the evaluation sees the correct state at the current
-    // time, then evaluate. If terminal, return immediately.
-    apply_due_world_events(&mut next);
-    reset_daily_commute_flags(&mut next);
-    derive_flow_and_spawn(&mut next, road_topology);
+    // independence invariant. Process due events (growth waves, population
+    // wakes, demand spawning) first so the evaluation sees the correct state
+    // at the current time, then evaluate. If terminal, return immediately.
+    let mut population_changed = apply_due_world_events(&mut next, world, population_schedule);
+    drain_and_spawn(&mut next, road_topology, world);
     if on_substep(&mut next) {
-        return next;
+        return TickAdvance {
+            snapshot: next,
+            population_changed,
+        };
     }
 
     let mut early_termination = false;
     let mut steps = 0;
-    // The substep budget is computed from the current snapshot, but growth
-    // waves applied inside the loop can spawn new sims whose departure
-    // boundaries weren't counted in `events_per_day`, and each substep appends
-    // new `TripOutcome`s whose expiry boundaries weren't counted in
-    // `outcome_expiry_bound`. Widen the cap when either count grows so the
-    // post-growth/post-substep event budget is always accounted for and the
-    // tick cannot be truncated in release builds. The outcome widening is
-    // Campaign-only, matching the `outcome_expiry_bound` term in
-    // `max_tick_substeps` (sandbox mode never tracks outcome-expiry
-    // boundaries — see `next_boundary_after`).
-    let mut cap = max_tick_substeps(&next, final_time);
-    let mut last_sim_count = next.sims.len();
+    // The substep budget covers the scheduler's current due-time keys plus the
+    // shell-derived bounds, but growth waves applied inside the loop can add
+    // population scheduler keys (housing move-ins), and each substep appends
+    // new `TripOutcome`s whose expiry boundaries weren't counted. Widen the
+    // cap after every population pass via the scheduler's boundary generation,
+    // and after every substep for outcome expiry, so the tick cannot be
+    // truncated in release builds. The outcome widening is Campaign-only,
+    // matching the `outcome_expiry_bound` term in `max_tick_substeps`.
+    let mut cap = max_tick_substeps(&next, final_time)
+        .saturating_add(population::scheduler_due_key_count(world));
+    let mut last_population_boundary_generation = population::scheduler_boundary_generation(world);
     let campaign_mode = next.rules.game_mode == GameMode::Campaign;
     let mut last_outcome_count = if campaign_mode {
         next.metrics.trip_outcomes.len()
@@ -177,19 +227,8 @@ fn tick_trips_substepped(
             break;
         }
 
-        apply_due_world_events(&mut next);
-        let sim_count = next.sims.len();
-        if sim_count > last_sim_count {
-            let start_day = clock::day_index(next.time);
-            let end_day = clock::day_index(final_time);
-            let day_count = end_day.saturating_sub(start_day) as usize + 1;
-            let additional = sim_count
-                .saturating_sub(last_sim_count)
-                .saturating_mul(SIM_SHIFT_BOUNDARIES_PER_DAY)
-                .saturating_mul(day_count);
-            cap = cap.saturating_add(additional);
-            last_sim_count = sim_count;
-        }
+        population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+        widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
         if campaign_mode {
             let outcome_count = next.metrics.trip_outcomes.len();
             if outcome_count > last_outcome_count {
@@ -198,10 +237,9 @@ fn tick_trips_substepped(
             }
         }
 
-        reset_daily_commute_flags(&mut next);
-        let road_flow = derive_flow_and_spawn(&mut next, road_topology);
+        let road_flow = drain_and_spawn(&mut next, road_topology, world);
 
-        let substep_end = next_boundary_after(&next, &road_flow)
+        let substep_end = next_boundary_after(&next, &road_flow, world)
             .map(|boundary| boundary.min(final_time))
             .unwrap_or(final_time);
         let substep_delta = (substep_end - next.time).max(0.0);
@@ -209,7 +247,10 @@ fn tick_trips_substepped(
             break;
         }
 
-        next = advance_tick_substep(&next, &road_flow, substep_delta);
+        let (advanced, resolution_changed) =
+            advance_tick_substep(&next, &road_flow, substep_delta, world);
+        next = advanced;
+        population_changed |= resolution_changed;
         steps += 1;
         // Apply growth waves whose trigger time was reached by this substep
         // before evaluating objectives. Without this, a wave due at the same
@@ -217,7 +258,7 @@ fn tick_trips_substepped(
         // break the loop, and the wave would remain permanently unapplied in the
         // terminal snapshot (growth is otherwise applied only at the top of the
         // next iteration, which never runs).
-        apply_due_world_events(&mut next);
+        population_changed |= apply_due_world_events(&mut next, world, population_schedule);
         if on_substep(&mut next) {
             early_termination = true;
             break;
@@ -241,11 +282,11 @@ fn tick_trips_substepped(
         );
 
         while final_time - next.time > EPSILON {
-            apply_due_world_events(&mut next);
-            reset_daily_commute_flags(&mut next);
-            let road_flow = derive_flow_and_spawn(&mut next, road_topology);
+            population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+            widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
+            let road_flow = drain_and_spawn(&mut next, road_topology, world);
 
-            let substep_end = next_boundary_after(&next, &road_flow)
+            let substep_end = next_boundary_after(&next, &road_flow, world)
                 .map(|boundary| boundary.min(final_time))
                 .unwrap_or(final_time);
             let mut substep_delta = (substep_end - next.time).max(0.0);
@@ -258,10 +299,13 @@ fn tick_trips_substepped(
                 }
             }
 
-            next = advance_tick_substep(&next, &road_flow, substep_delta);
+            let (advanced, resolution_changed) =
+                advance_tick_substep(&next, &road_flow, substep_delta, world);
+            next = advanced;
+            population_changed |= resolution_changed;
             // Same post-substep growth application as the main loop — see the
             // comment there for why this must precede `on_substep`.
-            apply_due_world_events(&mut next);
+            population_changed |= apply_due_world_events(&mut next, world, population_schedule);
             if on_substep(&mut next) {
                 early_termination = true;
                 break;
@@ -269,28 +313,31 @@ fn tick_trips_substepped(
         }
 
         if !early_termination {
-            apply_due_world_events(&mut next);
-            reset_daily_commute_flags(&mut next);
-            derive_flow_and_spawn(&mut next, road_topology);
+            population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+            drain_and_spawn(&mut next, road_topology, world);
         }
     }
 
-    next
+    TickAdvance {
+        snapshot: next,
+        population_changed,
+    }
 }
 
 /// Upper bound on the number of fixed-size substeps a single tick may take.
 ///
 /// A tick from `state.time` to `final_time` is broken at every meaningful boundary
-/// (day rollover, each sim's scheduled outbound/return departure, each active trip's
+/// (day rollover, each ECS population scheduler due-time key, each active trip's
 /// next walk/patience/deadline event, each transit vehicle's next stop arrival, and
 /// each unapplied growth wave's trigger time) so spawn, boarding, growth, and
-/// day-rollover logic fire at exactly the right instant. The cap is the sum of four
-/// independent upper bounds on the number of such events:
-/// - `day_count * events_per_day` — one boundary per sim shift event
-///   (`SIM_SHIFT_BOUNDARIES_PER_DAY` covers the outbound/return spawn + resolution
-///   boundaries) plus `2` for the day boundary, across every day the tick spans;
+/// day-rollover logic fire at exactly the right instant. Population scheduler
+/// boundaries are covered by the `scheduler_due_key_count` term added at the
+/// call site (plus generation-based widening inside `tick_trips_substepped`).
+/// The cap computed here is the sum of independent upper bounds on the number
+/// of shell-derived events:
+/// - `day_count * 2` — the day boundary, across every day the tick spans;
 /// - `per_second_net` — a 1-second-granularity safety net over the elapsed time,
-///   which covers the sparse walk-leg / sim-departure / day boundaries; and
+///   which covers the sparse walk-leg / day boundaries; and
 /// - `vehicle_bound` — one substep per transit stop arrival, the densest source. A
 ///   vehicle on the shortest possible segment (1 tile) reaches its next stop every
 ///   `1 / METRO_TILES_PER_SECOND` seconds, and metro is the fastest mode so it
@@ -299,8 +346,6 @@ fn tick_trips_substepped(
 ///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
 /// - campaign `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
 ///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`); and
-/// - sandbox remaining resident slots — one boundary per due housing move-in, so a coarse tick
-///   can process every deterministic occupancy timestamp without exhausting the cap.
 /// - campaign `trip_outcomes.len()` — one boundary per in-window outcome expiry, since
 ///   `next_boundary_after` breaks at the instant each outcome falls out of the rolling
 ///   evaluation window so a coarse tick samples the loss gates there (see
@@ -316,11 +361,6 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let start_day = clock::day_index(state.time);
     let end_day = clock::day_index(final_time);
     let day_count = end_day.saturating_sub(start_day) as usize + 1;
-    let events_per_day = state
-        .sims
-        .len()
-        .saturating_mul(SIM_SHIFT_BOUNDARIES_PER_DAY)
-        .saturating_add(2);
 
     let duration = (final_time - state.time).max(0.0);
     let per_second_net = duration.ceil() as usize;
@@ -332,7 +372,6 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     } else {
         0
     };
-    let move_in_bound = remaining_move_in_slots(state);
     let outcome_expiry_bound = if state.rules.game_mode == GameMode::Campaign {
         state.metrics.trip_outcomes.len()
     } else {
@@ -340,45 +379,25 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     };
 
     day_count
-        .saturating_mul(events_per_day)
+        .saturating_mul(2)
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
         .saturating_add(growth_wave_bound)
-        .saturating_add(move_in_bound)
         .saturating_add(outcome_expiry_bound)
         .saturating_add(1)
-}
-
-fn remaining_move_in_slots(state: &GameSnapshot) -> usize {
-    if state.rules.game_mode != GameMode::Sandbox {
-        return 0;
-    }
-
-    state
-        .buildings
-        .iter()
-        .filter_map(|building| {
-            let definition = building_definition(&building.building_type)?;
-            if definition.resident_capacity == 0 {
-                return None;
-            }
-            let occupancy = population::resident_occupancy(state, building);
-            Some(usize::from(definition.resident_capacity).saturating_sub(occupancy))
-        })
-        .sum()
 }
 
 fn advance_tick_substep(
     state: &GameSnapshot,
     flow: &traffic::RoadFlow,
     delta_seconds: f64,
-) -> GameSnapshot {
+    world: &mut World,
+) -> (GameSnapshot, bool) {
     let previous_day = state.day;
     let mut next = state.clone();
     next.time += delta_seconds;
     sync_clock(&mut next);
     crate::operating_cost::apply_day_boundary_charge(&mut next, previous_day);
-    reset_daily_commute_flags(&mut next);
 
     let vehicle_state = transit::tick_vehicles(&next, flow, delta_seconds);
     let just_disembarked_trip_ids = just_disembarked_trip_ids(&next, &vehicle_state);
@@ -387,6 +406,7 @@ fn advance_tick_substep(
         flow,
         delta_seconds,
         &just_disembarked_trip_ids,
+        world,
     )
 }
 
@@ -395,12 +415,26 @@ fn sync_clock(state: &mut GameSnapshot) {
     state.clock_minutes = clock::clock_minutes(state.time);
 }
 
+/// Advance active trips by one pass against a snapshot-held population (test
+/// and tooling form). The live tick path feeds terminal resolutions into the
+/// ECS population world instead; this wrapper builds a throwaway population
+/// world from the snapshot's durable sims, runs the same single pass, and
+/// folds the resolved population state back into the returned snapshot.
 pub fn advance_active_trips(
     state: &GameSnapshot,
     flow: &traffic::RoadFlow,
     delta_seconds: f64,
 ) -> GameSnapshot {
-    advance_active_trips_with_zero_delta_ids(state, flow, delta_seconds, &HashSet::new())
+    let mut world = population::build_world_v9(state);
+    let (mut next, _) = advance_active_trips_with_zero_delta_ids(
+        state,
+        flow,
+        delta_seconds,
+        &HashSet::new(),
+        &mut world,
+    );
+    next.sims = population::snapshot_sims_v9(&world, next.day);
+    next
 }
 
 fn advance_active_trips_with_zero_delta_ids(
@@ -408,7 +442,8 @@ fn advance_active_trips_with_zero_delta_ids(
     flow: &traffic::RoadFlow,
     delta_seconds: f64,
     zero_delta_trip_ids: &HashSet<String>,
-) -> GameSnapshot {
+    world: &mut World,
+) -> (GameSnapshot, bool) {
     let mut results = Vec::with_capacity(state.active_trips.len());
 
     for trip in &state.active_trips {
@@ -445,7 +480,8 @@ fn advance_active_trips_with_zero_delta_ids(
     // `completed_transit_trip_income` keys off status alone, so without this
     // gate every subsequent tick would re-add the fare. `completed_trips` is
     // set to 1 only in `score_arrival`, the single transition into a terminal
-    // arrival status, so this matches the `apply_arrival_to_sim` gate below.
+    // arrival status, so this matches the population resolution gate on
+    // `completed` below.
     let total_transit_income = results
         .iter()
         .filter(|result| result.completed_trips > 0)
@@ -458,17 +494,25 @@ fn advance_active_trips_with_zero_delta_ids(
     let mut next = state.clone();
     crate::transit_income::apply_transit_income(&mut next, total_transit_income);
     next.active_trips = Vec::with_capacity(results.len());
+    // Collect terminal transition rows before removing trips, then feed them
+    // back to the ECS population world.
+    let mut resolutions = Vec::new();
     for result in results {
         if is_terminal_status(result.trip.status) {
-            apply_commute_resolution_to_sim(&mut next, &result.trip);
-        }
-        if result.completed_trips > 0 {
-            apply_arrival_to_sim(&mut next, &result.trip);
+            resolutions.push(population::TripResolution {
+                citizen_id: result.trip.sim_id.clone(),
+                purpose: result.trip.purpose,
+                destination: result.trip.destination,
+                completed: result.completed_trips > 0,
+                service_day: trip_service_day(&result.trip),
+            });
         }
         if !is_terminal_status(result.trip.status) {
             next.active_trips.push(result.trip);
         }
     }
+    let population_changed =
+        population::apply_trip_resolutions(world, &resolutions, next.day, next.time);
 
     let retention_window_seconds = objectives::effective_rolling_window_seconds(state);
     next.metrics = update_metrics(
@@ -478,7 +522,7 @@ fn advance_active_trips_with_zero_delta_ids(
         state.time,
         retention_window_seconds,
     );
-    next
+    (next, population_changed)
 }
 
 fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> HashSet<String> {
@@ -521,30 +565,13 @@ fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> Has
         .collect()
 }
 
-fn reset_daily_commute_flags(state: &mut GameSnapshot) {
-    if state.trip_sequence_day != state.day {
-        state.trip_sequence_day = state.day;
-        state.next_trip_sequence = 1;
-    }
-
-    for sim in &mut state.sims {
-        if sim.commute_day != state.day {
-            sim.commute_day = state.day;
-            sim.outbound_resolved_today = false;
-            sim.outbound_arrived_today = false;
-            sim.return_resolved_today = false;
-            sim.returned_home_today = false;
-        }
-    }
-}
-
 fn private_car_trip_if_faster(
     non_car_plan: Option<&RoutePlan>,
     car: Option<traffic::PrivateCarCandidate>,
     current_time: f64,
 ) -> Option<PrivateCarTrip> {
     let car = car.filter(|car| {
-        non_car_plan.map_or(true, |plan| car.estimated_seconds < plan.estimated_seconds)
+        non_car_plan.is_none_or(|plan| car.estimated_seconds < plan.estimated_seconds)
     })?;
     Some(PrivateCarTrip {
         path: car.path,
@@ -552,143 +579,11 @@ fn private_car_trip_if_faster(
     })
 }
 
-fn spawn_due_commute_trips(
-    state: &mut GameSnapshot,
-    road_topology: &RoadTopology,
-    road_flow: &mut traffic::RoadFlow,
-) {
-    let sims = state.sims.clone();
-
-    for sim in sims {
-        if sim.worker_profile != WorkerProfile::Worker {
-            continue;
-        }
-        let Some(template) = sim.shift_template.as_deref() else {
-            continue;
-        };
-
-        if !sim.outbound_resolved_today
-            && !sim.outbound_arrived_today
-            && has_valid_workplace_destination(state, &sim)
-        {
-            // `has_valid_workplace_destination` above guarantees a workplace, but
-            // prefer a defensive `continue` over `.expect()` so a future regression
-            // in that guard surfaces as a skipped sim rather than a panic.
-            let Some(workplace) = sim.workplace else {
-                continue;
-            };
-
-            // Stranded-sim guard: the only way a worker is not at home at the
-            // start of a day's outbound window is that the previous day's return
-            // trip was unserved, leaving them stranded at (or near) the
-            // workplace. The midnight reset cleared the daily flags, so without
-            // this guard the spawn condition below would fire and `build_trip`
-            // would use `sim.position` (the workplace) as the trip position
-            // while the destination is that same workplace — a zero-distance
-            // phantom outbound that `tick_trip` immediately scores as arrived,
-            // inflating `completed_trips` and masking the stranded state. The
-            // sim is already at work, so resolve the outbound and unlock the
-            // return trip to bring them home.
-            //
-            // Active-trip exception: if the sim still has an in-progress trip
-            // (e.g., a return trip from the previous day that has not yet
-            // arrived across the midnight boundary), `sim.position` is still
-            // the workplace even though the sim is in transit, not stranded.
-            // Applying the stranded guard here would set
-            // `outbound_resolved_today`/`outbound_arrived_today`, unlocking the
-            // return spawn; once the in-progress return arrives home (setting
-            // `sim.position = home` but, due to the day mismatch in
-            // `apply_arrival_to_sim`, NOT setting `returned_home_today`/
-            // `return_resolved_today`), the current day's return departure
-            // would spawn a home→home phantom return trip and count a phantom
-            // completion. Skip the sim entirely and let the active trip
-            // resolve naturally; the normal spawn logic handles the next
-            // outbound once the sim is back at home.
-            if sim.position != sim.home {
-                if has_active_trip_for_sim(state, &sim.id) {
-                    continue;
-                }
-                if let Some(sim) = state
-                    .sims
-                    .iter_mut()
-                    .find(|candidate| candidate.id == sim.id)
-                {
-                    sim.outbound_resolved_today = true;
-                    sim.outbound_arrived_today = true;
-                }
-                continue;
-            }
-
-            let departure = departure_minute_for_sim(&sim.id, template, "outbound");
-            let scheduled_time = scheduled_time_seconds(state.day, departure);
-            if state.time + EPSILON >= scheduled_time
-                && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteOutbound, state.day)
-            {
-                // Late-assignment guard: when `state.time` is already past the
-                // scheduled departure, the workplace was assigned after the
-                // departure boundary (e.g., housing existed with no destinations
-                // and a destination was built mid-day). The substep machinery
-                // breaks at the departure only when a workplace already exists,
-                // so a spawn meaningfully past `scheduled_time` can only arise
-                // from a mid-day assignment. Spawning now would anchor the trip
-                // to the past `scheduled_time`, giving it a shortened or
-                // already-expired deadline (`scheduled_time + 900`) and
-                // recording spurious late/unserved demand even though no commute
-                // requirement existed at the departure boundary. Skip today's
-                // outbound; the worker commutes normally on the next day when
-                // the scheduled departure is in the future relative to
-                // `state.time`.
-                if state.time > scheduled_time + EPSILON {
-                    if let Some(sim) = state
-                        .sims
-                        .iter_mut()
-                        .find(|candidate| candidate.id == sim.id)
-                    {
-                        sim.outbound_resolved_today = true;
-                    }
-                    continue;
-                }
-                let trip = build_commute_trip(
-                    state,
-                    road_topology,
-                    road_flow,
-                    &sim.id,
-                    TripPurpose::CommuteOutbound,
-                    sim.home,
-                    workplace,
-                    scheduled_time,
-                );
-                state.active_trips.push(trip);
-            }
-        }
-
-        if !sim.outbound_arrived_today {
-            continue;
-        }
-        if sim.return_resolved_today || sim.returned_home_today {
-            continue;
-        }
-        let return_departure = departure_minute_for_sim(&sim.id, template, "return");
-        let scheduled_time = scheduled_time_seconds(state.day, return_departure);
-        if state.time + EPSILON >= scheduled_time
-            && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
-        {
-            let trip = build_commute_trip(
-                state,
-                road_topology,
-                road_flow,
-                &sim.id,
-                TripPurpose::CommuteReturn,
-                sim.position,
-                sim.home,
-                scheduled_time,
-            );
-            state.active_trips.push(trip);
-        }
-    }
-}
-
-fn next_boundary_after(state: &GameSnapshot, flow: &traffic::RoadFlow) -> Option<f64> {
+fn next_boundary_after(
+    state: &GameSnapshot,
+    flow: &traffic::RoadFlow,
+    world: &World,
+) -> Option<f64> {
     let mut next = None;
     let active_thresholds = active_objective_thresholds(state);
     let next_day_boundary = (f64::from(state.day) + 1.0) * GAME_DAY_SECONDS;
@@ -700,38 +595,11 @@ fn next_boundary_after(state: &GameSnapshot, flow: &traffic::RoadFlow) -> Option
         track_next_boundary(&mut next, survival_time, state.time);
     }
 
-    for sim in &state.sims {
-        if sim.worker_profile != WorkerProfile::Worker {
-            continue;
-        }
-        let Some(template) = sim.shift_template.as_deref() else {
-            continue;
-        };
-
-        if !sim.outbound_resolved_today
-            && !sim.outbound_arrived_today
-            && has_valid_workplace_destination(state, sim)
-            && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteOutbound, state.day)
-        {
-            let departure = departure_minute_for_sim(&sim.id, template, "outbound");
-            track_next_boundary(
-                &mut next,
-                scheduled_time_seconds(state.day, departure),
-                state.time,
-            );
-        }
-
-        if !sim.return_resolved_today
-            && !sim.returned_home_today
-            && !has_trip_for_sim_day(state, &sim.id, TripPurpose::CommuteReturn, state.day)
-        {
-            let return_departure = departure_minute_for_sim(&sim.id, template, "return");
-            track_next_boundary(
-                &mut next,
-                scheduled_time_seconds(state.day, return_departure),
-                state.time,
-            );
-        }
+    // The ECS population scheduler owns every citizen wake (commute departures,
+    // returns, move-ins). Its earliest future due-time key is the next
+    // population boundary — never reconstructed through clock-minute arithmetic.
+    if let Some(boundary) = population::next_population_boundary(world, state.time) {
+        track_next_boundary(&mut next, boundary, state.time);
     }
 
     for trip in &state.active_trips {
@@ -760,25 +628,6 @@ fn next_boundary_after(state: &GameSnapshot, flow: &traffic::RoadFlow) -> Option
         for wave in &state.scenario.growth_waves {
             if !wave.applied {
                 track_next_boundary(&mut next, wave.trigger_time, state.time);
-            }
-        }
-    }
-
-    if state.rules.game_mode == GameMode::Sandbox {
-        for building in &state.buildings {
-            let Some(definition) = building_definition(&building.building_type) else {
-                continue;
-            };
-            if definition.resident_capacity == 0 {
-                continue;
-            }
-            let occupancy = population::resident_occupancy(state, building);
-            if occupancy >= usize::from(definition.resident_capacity) {
-                continue;
-            }
-            let due = building.placed_at + occupancy as f64 * population::MOVE_IN_INTERVAL_SECONDS;
-            if due > state.time {
-                track_next_boundary(&mut next, due, state.time);
             }
         }
     }
@@ -1019,7 +868,7 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) 
         candidate
     };
 
-    if next.as_ref().map_or(true, |current| sample < *current) {
+    if next.as_ref().is_none_or(|current| sample < *current) {
         *next = Some(sample);
     }
 }
@@ -1030,31 +879,33 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) 
 /// it. When the non-car plan wins, it is stored on the trip (with the status
 /// and leg index it implies) so `tick_trip` and boundary tracking reuse it
 /// instead of re-planning the same origin/destination.
-#[allow(clippy::too_many_arguments)]
 fn build_commute_trip(
     state: &mut GameSnapshot,
     road_topology: &RoadTopology,
     road_flow: &mut traffic::RoadFlow,
-    sim_id: &str,
-    purpose: TripPurpose,
-    origin: Point,
-    destination: Point,
-    scheduled_time: f64,
+    demand: &population::TripDemand,
 ) -> ActiveTrip {
-    let non_car_plan = router::find_route_plan(state, road_flow, &origin, &destination);
+    let non_car_plan =
+        router::find_route_plan(state, road_flow, &demand.origin, &demand.destination);
     let chosen_car = private_car_trip_if_faster(
         non_car_plan.as_ref(),
-        traffic::private_car_candidate(state, road_topology, road_flow, origin, destination),
+        traffic::private_car_candidate(
+            state,
+            road_topology,
+            road_flow,
+            demand.origin,
+            demand.destination,
+        ),
         state.time,
     );
     let mut trip = build_trip(
         state,
-        sim_id,
-        purpose,
-        origin,
-        destination,
-        origin.into(),
-        scheduled_time,
+        &demand.citizen_id,
+        demand.purpose,
+        demand.origin,
+        demand.destination,
+        demand.origin.into(),
+        demand.scheduled_time,
     );
     if let Some(car) = chosen_car {
         traffic::add_car_path_to_flow(road_flow, &car.path);
@@ -1105,34 +956,6 @@ fn next_trip_id_for_day(state: &mut GameSnapshot) -> String {
     let next_number = state.next_trip_sequence.max(1);
     state.next_trip_sequence = next_number + 1;
     format!("{prefix}{next_number:03}")
-}
-
-fn has_trip_for_sim_day(
-    state: &GameSnapshot,
-    sim_id: &str,
-    purpose: TripPurpose,
-    day: u32,
-) -> bool {
-    let prefix = format!("trip-day-{day}-trip-");
-    state.active_trips.iter().any(|trip| {
-        trip.id.starts_with(&prefix) && trip.sim_id == sim_id && trip.purpose == purpose
-    })
-}
-
-/// Whether the sim has any non-terminal active trip (regardless of service
-/// day). Used by the stranded-sim guard to distinguish a sim genuinely
-/// stranded at the workplace from one still in transit on a cross-midnight
-/// return trip.
-fn has_active_trip_for_sim(state: &GameSnapshot, sim_id: &str) -> bool {
-    state
-        .active_trips
-        .iter()
-        .any(|trip| trip.sim_id == sim_id && !is_terminal_status(trip.status))
-}
-
-fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
-    f64::from(day) * GAME_DAY_SECONDS
-        + (f64::from(minute) / f64::from(MINUTES_PER_DAY)) * GAME_DAY_SECONDS
 }
 
 fn tick_trip(
@@ -1481,46 +1304,6 @@ fn update_metrics(
     }
 }
 
-fn apply_arrival_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
-    let Some(sim) = state.sims.iter_mut().find(|sim| sim.id == trip.sim_id) else {
-        return;
-    };
-
-    match trip.purpose {
-        TripPurpose::CommuteOutbound => {
-            sim.position = trip.destination;
-            if trip_service_day(trip).is_some_and(|day| day == state.day) {
-                sim.outbound_arrived_today = true;
-            }
-        }
-        TripPurpose::CommuteReturn => {
-            sim.position = sim.home;
-            if trip_service_day(trip).is_some_and(|day| day == state.day) {
-                sim.returned_home_today = true;
-            }
-        }
-    }
-}
-
-fn apply_commute_resolution_to_sim(state: &mut GameSnapshot, trip: &ActiveTrip) {
-    if !trip_service_day(trip).is_some_and(|day| day == state.day) {
-        return;
-    }
-
-    let Some(sim) = state.sims.iter_mut().find(|sim| sim.id == trip.sim_id) else {
-        return;
-    };
-
-    match trip.purpose {
-        TripPurpose::CommuteOutbound => {
-            sim.outbound_resolved_today = true;
-        }
-        TripPurpose::CommuteReturn => {
-            sim.return_resolved_today = true;
-        }
-    }
-}
-
 pub(crate) fn is_terminal_status(status: TripStatus) -> bool {
     matches!(
         status,
@@ -1559,16 +1342,6 @@ fn is_trip_on_vehicle(state: &GameSnapshot, trip_id: &str) -> bool {
         .vehicles
         .iter()
         .any(|vehicle| vehicle.passenger_ids.iter().any(|id| id == trip_id))
-}
-
-fn has_valid_workplace_destination(state: &GameSnapshot, sim: &Sim) -> bool {
-    let Some(workplace) = sim.workplace.as_ref() else {
-        return false;
-    };
-
-    crate::buildings::workplace_points(state)
-        .iter()
-        .any(|destination| destination == workplace)
 }
 
 fn snap_position_to_point(position: &TripPosition) -> Point {
@@ -1653,7 +1426,9 @@ mod tests {
         topology: &RoadTopology,
         delta_seconds: f64,
     ) -> GameSnapshot {
-        super::tick_trips(state, topology, delta_seconds)
+        // Sandbox fixtures never evaluate objectives, so the objectives
+        // variant is behaviorally the plain tick here.
+        tick_with_objectives_for_test(state, topology, delta_seconds)
     }
 
     fn tick_with_objectives_for_test(
@@ -1661,7 +1436,16 @@ mod tests {
         topology: &RoadTopology,
         delta_seconds: f64,
     ) -> GameSnapshot {
-        super::tick_trips_with_objectives(state, topology, delta_seconds)
+        let mut world = crate::population::build_world_v9(state);
+        let mut population_schedule = crate::population::build_schedule();
+        super::tick_trips_with_objectives(
+            state,
+            topology,
+            &mut world,
+            &mut population_schedule,
+            delta_seconds,
+        )
+        .snapshot
     }
 
     fn trip_with_private_car_payload() -> ActiveTrip {
@@ -1934,9 +1718,11 @@ mod tests {
         sandbox_without_wave.paused = false;
         let flow = traffic::RoadFlow::new();
 
+        let sandbox_world = crate::population::build_world_v9(&sandbox_with_wave);
+        let baseline_world = crate::population::build_world_v9(&sandbox_without_wave);
         assert_eq!(
-            next_boundary_after(&sandbox_with_wave, &flow),
-            next_boundary_after(&sandbox_without_wave, &flow),
+            next_boundary_after(&sandbox_with_wave, &flow, &sandbox_world),
+            next_boundary_after(&sandbox_without_wave, &flow, &baseline_world),
             "sandbox waves do not create tick boundaries"
         );
         assert_eq!(

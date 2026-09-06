@@ -1,8 +1,6 @@
 use caelum_core::{
-    buildings::assign_workplaces,
     commute::{shift_template_for_id, worker_profile_for_id},
-    model::{BusStopKind, EconomyPreset, GameSnapshot, PlacedBuilding, Point, Sim, WorkerProfile},
-    state::create_initial_snapshot,
+    model::{BusStopKind, EconomyPreset, GameSnapshot, WorkerProfile},
     GameEngine, GameIntent, RejectionCode,
 };
 
@@ -280,34 +278,6 @@ fn place_metro_station_building_requires_track_and_creates_linked_station() {
     assert_eq!(station.platforms[1].id, "station-001-p1");
 }
 
-fn unassigned_worker(id: &str, home: Point) -> Sim {
-    Sim {
-        id: id.to_string(),
-        home,
-        position: home,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: None,
-        workplace: None,
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
-    }
-}
-
-fn destination_on(id: &str, building_type: &str, tiles: Vec<Point>) -> PlacedBuilding {
-    PlacedBuilding {
-        id: id.to_string(),
-        building_type: building_type.to_string(),
-        origin: tiles[0],
-        rotation: 0,
-        occupied_tiles: tiles,
-        placed_at: 0.0,
-        transit_node_id: None,
-    }
-}
-
 // Regression: a referenced bus-stop demolition leaves a Missing tombstone at
 // the former building anchor. Missing nodes are non-physical elsewhere, so
 // once the road is cleared the empty tile must be zoneable (not skipped while
@@ -445,27 +415,6 @@ fn place_building_rejects_overflowing_origin_without_panicking() {
         Some(&RejectionCode::InvalidBuildingPlacement)
     );
     assert!(engine.snapshot().buildings.is_empty());
-}
-
-// Contract: a worker already holding a workplace must not be reshuffled by a
-// later assign_workplaces call (no load-balancing churn).
-#[test]
-fn assign_workplaces_leaves_an_existing_real_workplace_unchanged() {
-    let home = Point { x: 2, y: 3 };
-    let first = Point { x: 9, y: 4 };
-    let second = Point { x: 7, y: 8 };
-    let mut state = create_initial_snapshot();
-    state.buildings = vec![
-        destination_on("building-001", "supermarket", vec![first]),
-        destination_on("building-002", "factory", vec![second]),
-    ];
-    let mut worker = unassigned_worker("sim-001", home);
-    worker.workplace = Some(first);
-    state.sims = vec![worker];
-
-    assign_workplaces(&mut state);
-
-    assert_eq!(state.sims[0].workplace, Some(first));
 }
 
 #[test]
