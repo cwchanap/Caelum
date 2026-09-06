@@ -1,17 +1,15 @@
+mod common;
+
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, Heading, LegFailureReason, MovementKind, RouteLeg, RouteLegKind,
-    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitPath,
-    TripPurpose, TripStatus,
+    ActiveTrip, Heading, LegFailureReason, MovementKind, RouteLeg, RouteLegKind, RouteLegStatus,
+    RoutePlan, ServiceDirection, ServicePattern, TransitMode, TransitPath, TripPurpose, TripStatus,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::service_itinerary::{enumerate_ride_edges, service_visits, ServiceVisit};
 use caelum_core::traffic::RoadFlow;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset, RoutingContext};
-
-fn tick_trips(state: &GameSnapshot, topology: &RoadTopology, delta_seconds: f64) -> GameSnapshot {
-    caelum_core::trips::tick_trips(state, topology, delta_seconds)
-}
+use common::persistence_fixtures::dormant_worker_sim;
 
 fn ids(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
@@ -94,6 +92,66 @@ fn metro_shuttle_state() -> caelum_core::model::GameSnapshot {
         "metro fixture vehicle should apply: {assigned:?}"
     );
     engine.snapshot()
+}
+
+/// The coarse/stepped runtime-comparison fixture: the metro shuttle state with
+/// the passenger's boarding trip injected and every referenced sim present so
+/// the snapshot is persistence-valid for `running_engine_from_fixture`.
+fn rider_shuttle_state() -> caelum_core::model::GameSnapshot {
+    let mut state = metro_shuttle_state();
+    state.paused = false;
+    state.speed = 1;
+
+    // Vehicle sits on the zero-step terminal reversal at stop-003 (10, 4),
+    // itinerary index 2. The following leg (index 3) is the return service
+    // from stop-003 to stop-002 (6, 4).
+    state.transit.vehicles[0].itinerary_index = 2;
+    state.transit.vehicles[0].path_step_index = 0;
+    state.transit.vehicles[0].step_progress = 0.0;
+
+    let service_leg_seconds = state.transit.metro_lines[0].legs[3]
+        .current_path
+        .as_ref()
+        .unwrap()
+        .total_travel_seconds();
+
+    // Passenger is aboard, riding to stop-002 (6, 4), then walking 2 tiles
+    // south to (6, 2). The walk leg is 40 seconds (20 s/tile).
+    let ride_plan = metro_transit_plan((10, 4), (6, 4), ServiceDirection::Return, 3, 3);
+    let plan = RoutePlan {
+        legs: vec![
+            ride_plan.legs[0].clone(),
+            RouteLeg {
+                mode: TransitMode::Walk,
+                from: (6, 4).into(),
+                to: (6, 2).into(),
+                line_id: None,
+                service_direction: None,
+                board_itinerary_index: None,
+                alight_itinerary_index: None,
+            },
+        ],
+        estimated_seconds: service_leg_seconds + 40.0,
+    };
+
+    state.active_trips = vec![ActiveTrip {
+        id: "trip-001".to_string(),
+        sim_id: "sim-001".to_string(),
+        purpose: TripPurpose::CommuteReturn,
+        origin: (10, 4).into(),
+        destination: (6, 2).into(),
+        position: (10, 4).into(),
+        status: TripStatus::Riding,
+        deadline: 3_600.0,
+        route_plan: Some(plan),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
+        private_car_trip: None,
+    }];
+    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state
 }
 
 fn transit_plan(
@@ -754,83 +812,40 @@ fn shuttle_off_road_terminal_with_separate_access_lanes_does_not_jump() {
 /// equivalent stepped ticks and breaking granularity independence.
 #[test]
 fn coarse_tick_through_zero_step_reversal_matches_stepped_ticks() {
-    let mut state = metro_shuttle_state();
-    state.paused = false;
-    state.speed = 1;
-
-    // Vehicle sits on the zero-step terminal reversal at stop-003 (10, 4),
-    // itinerary index 2. The following leg (index 3) is the return service
-    // from stop-003 to stop-002 (6, 4).
-    state.transit.vehicles[0].itinerary_index = 2;
-    state.transit.vehicles[0].path_step_index = 0;
-    state.transit.vehicles[0].step_progress = 0.0;
-
+    let state = rider_shuttle_state();
     let service_leg_seconds = state.transit.metro_lines[0].legs[3]
         .current_path
         .as_ref()
         .unwrap()
         .total_travel_seconds();
 
-    // Passenger is aboard, riding to stop-002 (6, 4), then walking 2 tiles
-    // south to (6, 2). The walk leg is 40 seconds (20 s/tile).
-    let ride_plan = metro_transit_plan((10, 4), (6, 4), ServiceDirection::Return, 3, 3);
-    let plan = RoutePlan {
-        legs: vec![
-            ride_plan.legs[0].clone(),
-            RouteLeg {
-                mode: TransitMode::Walk,
-                from: (6, 4).into(),
-                to: (6, 2).into(),
-                line_id: None,
-                service_direction: None,
-                board_itinerary_index: None,
-                alight_itinerary_index: None,
-            },
-        ],
-        estimated_seconds: service_leg_seconds + 40.0,
-    };
-
-    state.active_trips = vec![ActiveTrip {
-        id: "trip-001".to_string(),
-        sim_id: "sim-001".to_string(),
-        purpose: TripPurpose::CommuteReturn,
-        origin: (10, 4).into(),
-        destination: (6, 2).into(),
-        position: (10, 4).into(),
-        status: TripStatus::Riding,
-        deadline: 3_600.0,
-        route_plan: Some(plan),
-        current_leg_index: 0,
-        patience_remaining: 240.0,
-        current_leg_wait_seconds: 0.0,
-        private_car_trip: None,
-    }];
-    state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
-
     // Total delta: service leg + 10 seconds of walking (0.5 tiles at 20 s/tile).
     let walk_seconds = 10.0;
     let total_delta = service_leg_seconds + walk_seconds;
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
 
     // Coarse: one big tick through the full trip simulation.
-    let coarse = tick_trips(&state, &topology, total_delta);
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    let coarse_result = coarse.tick(total_delta);
+    assert!(coarse_result.rejection.is_none());
+    let coarse_snapshot = coarse.snapshot();
 
     // Stepped: many small ticks summing to the same total.
     let step = 0.5;
-    let mut stepped = state.clone();
+    let mut stepped = common::running_engine_from_fixture(state);
     let mut remaining = total_delta;
     while remaining > 0.0 {
         let delta = remaining.min(step);
-        stepped = tick_trips(&stepped, &topology, delta);
+        stepped.tick(delta);
         remaining -= delta;
     }
+    let stepped_snapshot = stepped.snapshot();
 
-    let coarse_trip = coarse
+    let coarse_trip = coarse_snapshot
         .active_trips
         .iter()
         .find(|t| t.id == "trip-001")
         .expect("trip-001 present after coarse tick");
-    let stepped_trip = stepped
+    let stepped_trip = stepped_snapshot
         .active_trips
         .iter()
         .find(|t| t.id == "trip-001")

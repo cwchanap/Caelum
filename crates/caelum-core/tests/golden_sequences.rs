@@ -1,20 +1,14 @@
 mod common;
 
 use caelum_core::model::{
-    GameSnapshot, MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode,
-    WorkerProfile,
+    MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode, WorkerProfile,
 };
-use caelum_core::road_topology::RoadTopology;
 use caelum_core::traffic::RoadFlow;
 use caelum_core::{
     clock,
     scenario::{growing_suburb_campaign, growing_suburb_objectives},
-    transit, trips, GameEngine, GameIntent, RoadPreset,
+    transit, GameEngine, GameIntent, RoadPreset,
 };
-
-fn tick_trips(state: &GameSnapshot, topology: &RoadTopology, delta_seconds: f64) -> GameSnapshot {
-    trips::tick_trips(state, topology, delta_seconds)
-}
 
 #[test]
 fn zone_build_and_route_sequence_has_stable_counts() {
@@ -180,7 +174,7 @@ fn commute_respawns_across_day_boundary() {
 
     // Run all of day 0 to completion without crossing the survival win at 1200s.
     engine.tick(clock::GAME_DAY_SECONDS - 1.0);
-    let mut snapshot = engine.snapshot();
+    let snapshot = engine.snapshot();
     assert_eq!(snapshot.day, 0);
     assert_eq!(snapshot.metrics.state, MetricsState::Running);
     assert!(snapshot.active_trips.is_empty());
@@ -188,8 +182,8 @@ fn commute_respawns_across_day_boundary() {
     // Drive the raw tick across the day boundary. This isolates the day-rollover path
     // (reset_daily_commute_flags + spawn_due_commute_trips + sequence/day math); it no
     // longer needs to avoid a default-sandbox win.
-    let topology = RoadTopology::compile(&snapshot.map).expect("fixture topology compiles");
-    snapshot = tick_trips(&snapshot, &topology, 400.0);
+    engine.tick(400.0);
+    let snapshot = engine.snapshot();
 
     assert_eq!(snapshot.day, 1);
     // Daily commute flags must reset so residents are eligible to commute again.
@@ -250,12 +244,11 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
         assigned.applied,
         "metro fixture vehicle should apply: {assigned:?}"
     );
-
-    let mut state = engine.snapshot();
-    state.paused = false;
+    engine.dispatch(GameIntent::SetPaused { paused: false });
 
     // Sanity: the densest boundary really is the 0.625s vehicle stop arrival, so
     // this setup genuinely exercises the failure mode.
+    let state = engine.snapshot();
     let boundary = transit::seconds_until_next_vehicle_stop(
         &state,
         &RoadFlow::new(),
@@ -268,8 +261,9 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
     );
 
     let delta = 600.0_f64;
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let advanced = tick_trips(&state, &topology, delta);
+    let result = engine.tick(delta);
+    assert!(result.rejection.is_none());
+    let advanced = engine.snapshot();
 
     assert!(
         (advanced.time - state.time - delta).abs() < 1e-6,
@@ -284,7 +278,7 @@ fn large_tick_with_short_metro_segment_advances_full_delta() {
 /// real divergence between coarse and fine stepping).
 #[test]
 fn short_metro_segment_large_tick_matches_stepped_tick() {
-    let build = || -> caelum_core::GameSnapshot {
+    let build = || -> GameEngine {
         let mut engine = GameEngine::new();
         for x in 2..=3 {
             engine.dispatch(GameIntent::LayTrack {
@@ -311,27 +305,30 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
             assigned.applied,
             "metro fixture vehicle should apply: {assigned:?}"
         );
-        let mut state = engine.snapshot();
-        state.paused = false;
-        state
+        engine.dispatch(GameIntent::SetPaused { paused: false });
+        engine
     };
 
-    let start = build();
-    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-    let large = tick_trips(&start, &topology, 200.0);
+    let mut large = build();
+    large.tick(200.0);
+    let large_snapshot = large.snapshot();
 
-    let mut stepped = start;
+    let mut stepped = build();
     for _ in 0..200 {
-        stepped = tick_trips(&stepped, &topology, 1.0);
+        stepped.tick(1.0);
     }
+    let stepped_snapshot = stepped.snapshot();
 
     assert!(
-        (large.time - stepped.time).abs() < 1e-6,
+        (large_snapshot.time - stepped_snapshot.time).abs() < 1e-6,
         "large and stepped ticks must agree on time: large={} stepped={}",
-        large.time,
-        stepped.time
+        large_snapshot.time,
+        stepped_snapshot.time
     );
-    let (lv, sv) = (&large.transit.vehicles[0], &stepped.transit.vehicles[0]);
+    let (lv, sv) = (
+        &large_snapshot.transit.vehicles[0],
+        &stepped_snapshot.transit.vehicles[0],
+    );
     assert_eq!(lv.itinerary_index % 2, sv.itinerary_index % 2);
     assert_eq!(lv.path_step_index, sv.path_step_index);
     assert!((lv.step_progress - sv.step_progress).abs() < 1e-9);
@@ -340,7 +337,7 @@ fn short_metro_segment_large_tick_matches_stepped_tick() {
 /// A deployed, time-spaced multi-bus route used by the granularity regression.
 /// Its perimeter is long enough that the authoritative 60s floor requires more
 /// than one bus, so every deployed cursor participates in the comparison.
-fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
+fn deployed_bus_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     for points in [
         (2..=25).map(|x| (x, 2).into()).collect::<Vec<_>>(),
@@ -399,27 +396,33 @@ fn deployed_bus_snapshot() -> caelum_core::GameSnapshot {
         deployed.applied,
         "perimeter fleet should deploy: {deployed:?}"
     );
-    let mut state = engine.snapshot();
-    state.paused = false;
-    state
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+    engine
 }
 
 #[test]
 fn deployed_bus_fleet_is_granularity_independent() {
-    let start = deployed_bus_snapshot();
-    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-    let large = tick_trips(&start, &topology, 200.0);
-    let leg_count = start.transit.routes[0].legs.len();
+    let mut large = deployed_bus_engine();
+    large.tick(200.0);
+    let large_snapshot = large.snapshot();
 
-    let mut stepped = start;
+    let mut stepped = deployed_bus_engine();
     for _ in 0..200 {
-        stepped = tick_trips(&stepped, &topology, 1.0);
+        stepped.tick(1.0);
     }
+    let stepped_snapshot = stepped.snapshot();
+    let leg_count = large_snapshot.transit.routes[0].legs.len();
 
-    assert!((large.time - stepped.time).abs() < 1e-6);
-    assert_eq!(large.transit.vehicles.len(), stepped.transit.vehicles.len());
-    for (large_vehicle, stepped_vehicle) in
-        large.transit.vehicles.iter().zip(&stepped.transit.vehicles)
+    assert!((large_snapshot.time - stepped_snapshot.time).abs() < 1e-6);
+    assert_eq!(
+        large_snapshot.transit.vehicles.len(),
+        stepped_snapshot.transit.vehicles.len()
+    );
+    for (large_vehicle, stepped_vehicle) in large_snapshot
+        .transit
+        .vehicles
+        .iter()
+        .zip(&stepped_snapshot.transit.vehicles)
     {
         assert_eq!(large_vehicle.id, stepped_vehicle.id);
         assert_eq!(
@@ -443,7 +446,7 @@ fn deployed_bus_fleet_is_granularity_independent() {
 /// A deployed, time-spaced Metro line used by the granularity regression.
 /// The serpentine track is long enough that the authoritative 60s floor requires
 /// multiple trains, so every deployed cursor participates in the comparison.
-fn deployed_metro_snapshot() -> caelum_core::GameSnapshot {
+fn deployed_metro_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     engine.set_budget_for_test(1_000_000);
 
@@ -518,31 +521,37 @@ fn deployed_metro_snapshot() -> caelum_core::GameSnapshot {
         deployed.applied,
         "serpentine fleet should deploy: {deployed:?}"
     );
-    let mut state = engine.snapshot();
-    state.paused = false;
-    state
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+    engine
 }
 
 #[test]
 fn deployed_metro_fleet_is_granularity_independent() {
-    let start = deployed_metro_snapshot();
-    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-    let large = tick_trips(&start, &topology, 200.0);
-    let leg_count = start.transit.metro_lines[0].legs.len();
+    let mut large = deployed_metro_engine();
+    large.tick(200.0);
+    let large_snapshot = large.snapshot();
 
-    let mut stepped = start;
+    let mut stepped = deployed_metro_engine();
     for _ in 0..200 {
-        stepped = tick_trips(&stepped, &topology, 1.0);
+        stepped.tick(1.0);
     }
+    let stepped_snapshot = stepped.snapshot();
+    let leg_count = large_snapshot.transit.metro_lines[0].legs.len();
 
-    assert!((large.time - stepped.time).abs() < 1e-6);
+    assert!((large_snapshot.time - stepped_snapshot.time).abs() < 1e-6);
     assert_eq!(
-        large.transit.metro_lines[0].vehicle_ids,
-        stepped.transit.metro_lines[0].vehicle_ids
+        large_snapshot.transit.metro_lines[0].vehicle_ids,
+        stepped_snapshot.transit.metro_lines[0].vehicle_ids
     );
-    assert_eq!(large.transit.vehicles.len(), stepped.transit.vehicles.len());
-    for (large_vehicle, stepped_vehicle) in
-        large.transit.vehicles.iter().zip(&stepped.transit.vehicles)
+    assert_eq!(
+        large_snapshot.transit.vehicles.len(),
+        stepped_snapshot.transit.vehicles.len()
+    );
+    for (large_vehicle, stepped_vehicle) in large_snapshot
+        .transit
+        .vehicles
+        .iter()
+        .zip(&stepped_snapshot.transit.vehicles)
     {
         assert_eq!(large_vehicle.id, stepped_vehicle.id);
         assert_eq!(large_vehicle.line_id, stepped_vehicle.line_id);
@@ -578,9 +587,9 @@ fn deployed_metro_fleet_is_granularity_independent() {
 /// Bus route fixture whose path enters, circulates, and exits a Standard3x3
 /// roundabout. Mirrors the setup in
 /// `transit_build::vehicle_time_through_roundabout_matches_authoritative_path_duration`,
-/// but returns the post-creation snapshot (unpaused) so tick goldens can drive
-/// it directly through `tick_trips`.
-fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
+/// but returns the resumed engine so tick goldens can drive it through
+/// `GameEngine::tick`.
+fn roundabout_bus_engine() -> GameEngine {
     let mut engine = GameEngine::new();
     // Horizontal arterial at y=5 carrying the bus from x=2 to x=10.
     for x in 2..=10 {
@@ -623,7 +632,8 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
     // Sanity: the route really does circulate through the roundabout — without
     // this, the golden below would silently degrade to a straight-line bus test
     // and stop pinning the new movement kinds.
-    let route = &engine.snapshot().transit.routes[0];
+    let state = engine.snapshot();
+    let route = &state.transit.routes[0];
     let path = route.legs[0]
         .current_path
         .as_ref()
@@ -635,9 +645,8 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
         "bus path must enter the roundabout"
     );
 
-    let mut state = engine.snapshot();
-    state.paused = false;
-    state
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+    engine
 }
 
 /// Determinism golden: a single large tick and many 1s stepped ticks must land
@@ -648,22 +657,26 @@ fn roundabout_bus_snapshot() -> caelum_core::GameSnapshot {
 /// entry/circulation/exit block, not just straight segments.
 #[test]
 fn roundabout_bus_large_tick_matches_stepped_tick() {
-    let start = roundabout_bus_snapshot();
-    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-    let large = tick_trips(&start, &topology, 200.0);
+    let mut large = roundabout_bus_engine();
+    large.tick(200.0);
+    let large_snapshot = large.snapshot();
 
-    let mut stepped = start;
+    let mut stepped = roundabout_bus_engine();
     for _ in 0..200 {
-        stepped = tick_trips(&stepped, &topology, 1.0);
+        stepped.tick(1.0);
     }
+    let stepped_snapshot = stepped.snapshot();
 
     assert!(
-        (large.time - stepped.time).abs() < 1e-6,
+        (large_snapshot.time - stepped_snapshot.time).abs() < 1e-6,
         "large and stepped ticks must agree on time: large={} stepped={}",
-        large.time,
-        stepped.time
+        large_snapshot.time,
+        stepped_snapshot.time
     );
-    let (lv, sv) = (&large.transit.vehicles[0], &stepped.transit.vehicles[0]);
+    let (lv, sv) = (
+        &large_snapshot.transit.vehicles[0],
+        &stepped_snapshot.transit.vehicles[0],
+    );
     assert_eq!(lv.itinerary_index % 2, sv.itinerary_index % 2);
     assert_eq!(lv.path_step_index, sv.path_step_index);
     assert!(
@@ -683,9 +696,10 @@ fn roundabout_bus_large_tick_matches_stepped_tick() {
 /// behaviour changed.
 #[test]
 fn roundabout_bus_vehicle_has_stable_golden_state_after_fixed_duration() {
-    let state = roundabout_bus_snapshot();
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let after = tick_trips(&state, &topology, 120.0);
+    let mut engine = roundabout_bus_engine();
+    let result = engine.tick(120.0);
+    assert!(result.rejection.is_none());
+    let after = engine.snapshot();
     let vehicle = &after.transit.vehicles[0];
 
     // After 120s the bus has completed leg 0 (one stop-to-stop pass through the
