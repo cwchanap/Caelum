@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::ops::Bound::{Excluded, Unbounded};
 
 use bevy_ecs::prelude::*;
@@ -7,24 +7,26 @@ use super::components::{
     BuildingAssignment, CitizenId, HomeAssignment, LegacyDayState, NextActivity, Routine,
     SettledPosition,
 };
-use super::scheduled_time_seconds;
+use super::{scheduled_time_seconds, MOVE_IN_INTERVAL_SECONDS};
 use crate::building_catalog::building_definition;
 use crate::clock::{day_index, GAME_DAY_SECONDS};
 use crate::commute::{
-    departure_minute_for_sim, numeric_id_suffix, shift_template_for_id, worker_profile_for_id,
+    departure_minute_for_sim, numeric_id_suffix, shift_template_for_id, trip_deadline_seconds,
+    worker_profile_for_id,
 };
 use crate::ids::entity_id;
 use crate::model::{
-    GameSnapshot, Point, ScheduledActivity, ScheduledActivityKind, Sim, TripPurpose, WorkerProfile,
+    GameMode, GameSnapshot, PlacedBuilding, Point, ScheduledActivity, ScheduledActivityKind, Sim,
+    TripPurpose, TripStatus, WorkerProfile,
 };
-use crate::trips::{is_terminal_status, EPSILON};
+use crate::trips::{is_terminal_status, EPSILON, WAIT_PATIENCE_SECONDS};
 
 /// Rebuildable derived indexes over the population world. Reconstructed from
 /// components via [`rebuilt_index`] (test-only) or maintained incrementally by
 /// [`spawn_indexed_citizen`].
 #[derive(Resource, Clone, Debug, Default, PartialEq)]
 pub(super) struct PopulationIndex {
-    by_id: BTreeMap<String, Entity>,
+    pub(super) by_id: BTreeMap<String, Entity>,
     residents_by_building: BTreeMap<String, Vec<Entity>>,
     workers_by_building: BTreeMap<String, Vec<Entity>>,
     unassigned_workers: BTreeSet<String>,
@@ -312,6 +314,345 @@ pub(super) fn rebuilt_index(world: &mut World) -> PopulationIndex {
         index_citizen(&mut rebuilt, entity, &citizen_id, &home, &routine);
     }
     rebuilt
+}
+
+// === Targeted building reconciliation ===
+
+/// Outcome of one [`reconcile_buildings`] pass. Scheduling future move-ins
+/// alone is not a population mutation; despawns, workplace (re)assignment,
+/// trip retargets/drops, and recovery scheduling are.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct PopulationMutation {
+    pub(crate) changed: bool,
+}
+
+fn take_index(world: &mut World) -> PopulationIndex {
+    world
+        .remove_resource::<PopulationIndex>()
+        .expect("population index must exist")
+}
+
+/// Reconcile the live population world with a shell candidate whose building
+/// set changed. Only changed building IDs are handled:
+///
+/// - added Sandbox housing schedules each slot as an exact-time move-in
+///   (campaign reconciliation schedules nothing);
+/// - removed housing despawns exactly its residents and scrubs their trips
+///   and vehicle passenger references from the candidate;
+/// - removed workplaces clear their surviving workers into the shared
+///   unassigned set, then one global refill exposes every free job slot in
+///   stable building-ID/slot order to the globally lowest unassigned IDs;
+/// - affected outbound trips are retargeted with the existing idle-reset
+///   semantics (fresh deadline/patience window) or — without a replacement —
+///   dropped, with next-day daily-routine recovery for the stranded citizen.
+///
+/// Shell and preview paths never call this; the engine applies it to real
+/// building-changing candidates only.
+pub(crate) fn reconcile_buildings(
+    world: &mut World,
+    before: &GameSnapshot,
+    after: &mut GameSnapshot,
+) -> PopulationMutation {
+    let mut changed = false;
+    let before_ids: BTreeSet<&str> = before
+        .buildings
+        .iter()
+        .map(|building| building.id.as_str())
+        .collect();
+    let after_ids: BTreeSet<&str> = after
+        .buildings
+        .iter()
+        .map(|building| building.id.as_str())
+        .collect();
+    let added: Vec<&PlacedBuilding> = after
+        .buildings
+        .iter()
+        .filter(|building| !before_ids.contains(building.id.as_str()))
+        .collect();
+    let removed_ids: Vec<String> = before
+        .buildings
+        .iter()
+        .filter(|building| !after_ids.contains(building.id.as_str()))
+        .map(|building| building.id.clone())
+        .collect();
+
+    // Structural entries: drop removed buildings, register added ones.
+    {
+        let mut index = take_index(world);
+        for building_id in &removed_ids {
+            index.buildings.remove(building_id);
+        }
+        for building in &added {
+            let Some(definition) = building_definition(&building.building_type) else {
+                continue;
+            };
+            if definition.resident_capacity == 0 && definition.job_capacity == 0 {
+                continue;
+            }
+            index.buildings.insert(
+                building.id.clone(),
+                PopulationBuilding {
+                    occupied_tiles: building.occupied_tiles.clone(),
+                    resident_capacity: definition.resident_capacity,
+                    job_capacity: definition.job_capacity,
+                },
+            );
+        }
+        world.insert_resource(index);
+    }
+
+    // Added Sandbox housing schedules every slot at its exact due time;
+    // `apply_move_in` revalidates occupancy, so slots already due fill in
+    // canonical (building_id, slot) order. Campaign reconciliation schedules
+    // nothing.
+    if after.rules.game_mode == GameMode::Sandbox {
+        for building in &added {
+            let Some(definition) = building_definition(&building.building_type) else {
+                continue;
+            };
+            if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
+                continue;
+            }
+            for slot in 0..definition.resident_capacity {
+                let due_time = building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS;
+                insert_scheduler_event(
+                    &mut world.resource_mut::<PopulationScheduler>(),
+                    due_time,
+                    PopulationEvent::MoveIn {
+                        building_id: building.id.clone(),
+                        slot,
+                    },
+                );
+            }
+        }
+    }
+
+    // Removed housing despawns exactly its residents; removed workplaces clear
+    // their surviving workers back into the shared unassigned set. Despawned
+    // residents were already removed from every worker entry with their
+    // entity, so a cleared building's own workers are all survivors.
+    let mut despawned_ids: HashSet<String> = HashSet::new();
+    let mut cleared: Vec<(Entity, String)> = Vec::new();
+    {
+        let mut index = take_index(world);
+        for building_id in &removed_ids {
+            let residents = index
+                .residents_by_building
+                .get(building_id)
+                .cloned()
+                .unwrap_or_default();
+            for entity in residents {
+                let Some(citizen_id) = world.get::<CitizenId>(entity).map(|c| c.0.clone()) else {
+                    continue;
+                };
+                let job_building_id = match world.get::<Routine>(entity) {
+                    Some(Routine::Worker {
+                        workplace: Some(assignment),
+                        ..
+                    }) => assignment.building_id.clone(),
+                    _ => None,
+                };
+                world.despawn(entity);
+                index.by_id.remove(&citizen_id);
+                index.unassigned_workers.remove(&citizen_id);
+                if let Some(job_building_id) = job_building_id {
+                    if let Some(rows) = index.workers_by_building.get_mut(&job_building_id) {
+                        rows.retain(|row| *row != entity);
+                    }
+                }
+                despawned_ids.insert(citizen_id);
+                changed = true;
+            }
+            index.residents_by_building.remove(building_id);
+
+            let workers = index
+                .workers_by_building
+                .get(building_id)
+                .cloned()
+                .unwrap_or_default();
+            for entity in workers {
+                let Some(citizen_id) = world.get::<CitizenId>(entity).map(|c| c.0.clone()) else {
+                    continue;
+                };
+                if let Some(mut routine) = world.get_mut::<Routine>(entity) {
+                    if let Routine::Worker { workplace, .. } = &mut *routine {
+                        *workplace = None;
+                    }
+                }
+                index.unassigned_workers.insert(citizen_id.clone());
+                cleared.push((entity, citizen_id));
+                changed = true;
+            }
+            index.workers_by_building.remove(building_id);
+        }
+        world.insert_resource(index);
+    }
+
+    // One global refill: every free job slot in stable building-ID/slot order
+    // goes to the globally lowest unassigned citizen IDs — never just the
+    // workers this reconciliation happened to clear.
+    {
+        let mut index = take_index(world);
+        let building_ids: Vec<String> = index.buildings.keys().cloned().collect();
+        for building_id in building_ids {
+            let Some(building) = index.buildings.get(&building_id).cloned() else {
+                continue;
+            };
+            if building.job_capacity == 0 || building.occupied_tiles.is_empty() {
+                continue;
+            }
+            loop {
+                let used = index
+                    .workers_by_building
+                    .get(&building_id)
+                    .map_or(0, Vec::len);
+                if used >= usize::from(building.job_capacity) {
+                    break;
+                }
+                let Some((citizen_id, &entity)) =
+                    index
+                        .unassigned_workers
+                        .iter()
+                        .next()
+                        .and_then(|citizen_id| {
+                            index
+                                .by_id
+                                .get(citizen_id)
+                                .map(|entity| (citizen_id, entity))
+                        })
+                else {
+                    break;
+                };
+                let citizen_id = citizen_id.clone();
+                let point = building.occupied_tiles[used % building.occupied_tiles.len()];
+                index.unassigned_workers.remove(&citizen_id);
+                index
+                    .workers_by_building
+                    .entry(building_id.clone())
+                    .or_default()
+                    .push(entity);
+                if let Some(mut routine) = world.get_mut::<Routine>(entity) {
+                    if let Routine::Worker { workplace, .. } = &mut *routine {
+                        *workplace = Some(BuildingAssignment {
+                            building_id: Some(building_id.clone()),
+                            point,
+                        });
+                    }
+                }
+                changed = true;
+            }
+        }
+        world.insert_resource(index);
+    }
+
+    // Trip reconciliation on the shell candidate. Despawned residents lose
+    // every trip; only outbound trips of cleared citizens are retargeted or
+    // dropped. In-flight returns keep heading home.
+    let mut scrubbed_trip_ids: HashSet<String> = HashSet::new();
+    if !despawned_ids.is_empty() {
+        for trip in &after.active_trips {
+            if despawned_ids.contains(&trip.sim_id) {
+                scrubbed_trip_ids.insert(trip.id.clone());
+            }
+        }
+        after
+            .active_trips
+            .retain(|trip| !despawned_ids.contains(&trip.sim_id));
+        changed = true;
+    }
+
+    let mut replacements: BTreeMap<String, Option<Point>> = BTreeMap::new();
+    for (entity, citizen_id) in &cleared {
+        let replacement = world
+            .get::<Routine>(*entity)
+            .and_then(|routine| match routine {
+                Routine::Worker { workplace, .. } => {
+                    workplace.as_ref().map(|assignment| assignment.point)
+                }
+                _ => None,
+            });
+        replacements.insert(citizen_id.clone(), replacement);
+    }
+
+    let now = after.time;
+    let mut invalidated_trip_ids: HashSet<String> = HashSet::new();
+    let mut dropped: Vec<(String, String)> = Vec::new();
+    for trip in &mut after.active_trips {
+        if trip.purpose != TripPurpose::CommuteOutbound {
+            continue;
+        }
+        let Some(replacement) = replacements.get(&trip.sim_id) else {
+            continue;
+        };
+        invalidated_trip_ids.insert(trip.id.clone());
+        match replacement {
+            Some(point) => {
+                trip.status = TripStatus::Idle;
+                trip.route_plan = None;
+                trip.private_car_trip = None;
+                trip.current_leg_index = 0;
+                trip.current_leg_wait_seconds = 0.0;
+                trip.destination = *point;
+                // Retargeting starts a fresh trip window, mirroring trip
+                // creation: an already-drained patience or elapsed deadline
+                // must not unserve a validly retargeted trip.
+                trip.deadline = trip_deadline_seconds(now);
+                trip.patience_remaining = WAIT_PATIENCE_SECONDS;
+            }
+            None => dropped.push((trip.id.clone(), trip.sim_id.clone())),
+        }
+    }
+
+    if !invalidated_trip_ids.is_empty() {
+        let dropped_ids: HashSet<String> =
+            dropped.iter().map(|(trip_id, _)| trip_id.clone()).collect();
+        after
+            .active_trips
+            .retain(|trip| !dropped_ids.contains(&trip.id));
+        changed = true;
+    }
+
+    scrubbed_trip_ids.extend(invalidated_trip_ids.iter().cloned());
+    if !scrubbed_trip_ids.is_empty() {
+        for vehicle in &mut after.transit.vehicles {
+            vehicle
+                .passenger_ids
+                .retain(|passenger_id| !scrubbed_trip_ids.contains(passenger_id));
+        }
+        changed = true;
+    }
+
+    // A citizen whose outbound was dropped without a replacement is stranded:
+    // schedule next day's daily-routine recovery rather than a phantom
+    // zero-distance outbound.
+    for (_trip_id, citizen_id) in &dropped {
+        let Some(&entity) = world.resource::<PopulationIndex>().by_id.get(citizen_id) else {
+            continue;
+        };
+        let still_travelling = after
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == *citizen_id && !is_terminal_status(trip.status));
+        if still_travelling || world.get::<NextActivity>(entity).is_some() {
+            continue;
+        }
+        let Some(Routine::Worker { shift_template, .. }) = world.get::<Routine>(entity) else {
+            continue;
+        };
+        let shift_template = shift_template.clone();
+        let commute_day = world
+            .get::<LegacyDayState>(entity)
+            .map(|state| state.commute_day)
+            .unwrap_or_else(|| day_index(now));
+        schedule_activity(
+            world,
+            entity,
+            next_worker_daily_routine(citizen_id, &shift_template, commute_day),
+        );
+        changed = true;
+    }
+
+    PopulationMutation { changed }
 }
 
 // === Exact-time population scheduler ===

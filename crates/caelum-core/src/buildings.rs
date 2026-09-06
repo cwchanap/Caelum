@@ -322,9 +322,8 @@ pub fn place_building_core(
         transit_node_id,
     });
 
-    if definition.resident_capacity > 0 || definition.job_capacity > 0 {
-        assign_workplaces(&mut next);
-    }
+    // Placement is shell-only: population mutation (move-ins, workplace
+    // allocation) is owned by ECS building reconciliation.
 
     Ok(next)
 }
