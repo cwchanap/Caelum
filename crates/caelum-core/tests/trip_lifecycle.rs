@@ -5,29 +5,14 @@ use caelum_core::model::{
     ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
     TripPurpose, TripStatus, Vehicle, WorkerProfile,
 };
-use caelum_core::road_topology::RoadTopology;
 use caelum_core::{
-    clock, commute, objectives, state::create_initial_snapshot, traffic, transit, trips,
+    clock, commute, objectives, road_topology::RoadTopology, state::create_initial_snapshot,
+    traffic, transit, trips,
 };
 use caelum_core::{GameEngine, GameIntent};
+use common::persistence_fixtures::{dormant_worker_sim, worker_sim};
 
 mod common;
-
-fn sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
-    Sim {
-        id: id.to_string(),
-        home,
-        position: home,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace,
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
-    }
-}
 
 fn trip(id: &str, status: TripStatus, position: TripPosition, destination: Point) -> ActiveTrip {
     ActiveTrip {
@@ -77,16 +62,43 @@ fn bus_plan(from: Point, to: Point, line_id: &str) -> RoutePlan {
     }
 }
 
-fn destination_building(point: Point) -> PlacedBuilding {
-    PlacedBuilding {
-        id: "building-001".to_string(),
+/// A persistence-valid zoned destination: the supermarket's canonical 2x2
+/// footprint must be empty, commercially zoned tiles, and those occupied tiles
+/// are what `has_valid_workplace_destination` and the private-car access
+/// derivation match commute endpoints against.
+fn place_destination(state: &mut GameSnapshot, id: &str, origin: Point) {
+    for y in origin.y..origin.y + 2 {
+        for x in origin.x..origin.x + 2 {
+            let tile = state
+                .map
+                .tile_mut(Point { x, y })
+                .expect("fixture tile exists");
+            tile.area = Some("commercial".to_string());
+        }
+    }
+    state.buildings.push(PlacedBuilding {
+        id: id.to_string(),
         building_type: "supermarket".to_string(),
-        origin: point,
+        origin,
         rotation: 0,
-        occupied_tiles: vec![point],
+        occupied_tiles: vec![
+            origin,
+            Point {
+                x: origin.x + 1,
+                y: origin.y,
+            },
+            Point {
+                x: origin.x,
+                y: origin.y + 1,
+            },
+            Point {
+                x: origin.x + 1,
+                y: origin.y + 1,
+            },
+        ],
         placed_at: 0.0,
         transit_node_id: None,
-    }
+    });
 }
 
 fn placed_building(id: &str, building_type: &str, occupied_tiles: Vec<Point>) -> PlacedBuilding {
@@ -109,7 +121,7 @@ fn assign_workplaces_clears_stale_assignments_when_no_workplaces_remain() {
         "smallHouse",
         vec![Point { x: 2, y: 3 }],
     )];
-    state.sims = vec![sim(
+    state.sims = vec![worker_sim(
         "sim-001",
         Point { x: 2, y: 3 },
         Some(Point { x: 99, y: 99 }),
@@ -144,7 +156,7 @@ fn assign_workplaces_sorts_buildings_and_fills_slots_in_sim_order() {
         placed_building("building-001", "supermarket", supermarket_tiles.clone()),
     ];
     state.sims = (1..=11)
-        .map(|index| sim(&format!("sim-2{index:02}"), Point { x: 2, y: 3 }, None))
+        .map(|index| worker_sim(&format!("sim-2{index:02}"), Point { x: 2, y: 3 }, None))
         .collect();
 
     assign_workplaces(&mut state);
@@ -201,19 +213,7 @@ fn clear_roads(state: &mut GameSnapshot) {
     }
 }
 
-fn commute_endpoint(id: &str, building_type: &str, point: Point) -> PlacedBuilding {
-    PlacedBuilding {
-        id: id.to_string(),
-        building_type: building_type.to_string(),
-        origin: point,
-        rotation: 0,
-        occupied_tiles: vec![point],
-        placed_at: 0.0,
-        transit_node_id: None,
-    }
-}
-
-fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
+fn car_commute_fixture(sim_ids: &[&str]) -> GameSnapshot {
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 12, y: 3 };
     let mut state = create_initial_snapshot();
@@ -223,15 +223,16 @@ fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
         &(3..=11).map(|x| Point { x, y: 3 }).collect::<Vec<_>>(),
         None,
     );
-    state.buildings = vec![
-        // A destination building keeps the fixture free of automatic Sandbox
-        // move-ins; the commute lifecycle only needs stable building footprints.
-        commute_endpoint("home", "supermarket", home),
-        commute_endpoint("work", "supermarket", workplace),
-    ];
+    // Zoned, persistence-valid destination buildings anchor both commute
+    // endpoints: `has_valid_workplace_destination` needs the workplace in a
+    // destination footprint, and the private-car candidate derives road
+    // access from the home/work footprints. The home footprint sits at x=1
+    // so its 2x2 tiles avoid the corridor road at (3,3).
+    place_destination(&mut state, "home", Point { x: 1, y: 2 });
+    place_destination(&mut state, "work", workplace);
     state.sims = sim_ids
         .iter()
-        .map(|id| sim(id, home, Some(workplace)))
+        .map(|id| worker_sim(id, home, Some(workplace)))
         .collect();
     let departure_minute = commute::departure_minute_for_sim(sim_ids[0], "standard", "outbound");
     state.time =
@@ -239,11 +240,10 @@ fn car_commute_fixture(sim_ids: &[&str]) -> (GameSnapshot, RoadTopology) {
     state.day = 0;
     state.clock_minutes = departure_minute;
     state.paused = false;
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    (state, topology)
+    state
 }
 
-fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
+fn bus_fractional_progress_fixture() -> (GameSnapshot, f64) {
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 12, y: 3 };
     let mut engine = GameEngine::new();
@@ -270,11 +270,11 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
     );
 
     let mut state = engine.snapshot();
-    state.buildings = vec![
-        commute_endpoint("home", "supermarket", home),
-        commute_endpoint("work", "supermarket", workplace),
-    ];
-    state.sims = vec![sim("sim-001", home, Some(workplace))];
+    place_destination(&mut state, "home", Point { x: 1, y: 2 });
+    place_destination(&mut state, "work", workplace);
+    state.sims = std::iter::once(worker_sim("sim-001", home, Some(workplace)))
+        .chain((0..4).map(|id| dormant_worker_sim(&format!("seed-car-sim-{id:03}"), home)))
+        .collect();
     let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
     let departure_time =
         f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY) * clock::GAME_DAY_SECONDS;
@@ -309,11 +309,10 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, RoadTopology, f64) {
         })
         .collect();
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    (state, topology, departure_time)
+    (state, departure_time)
 }
 
-fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
+fn bus_arrival_order_fixture() -> GameSnapshot {
     let mut engine = GameEngine::new();
     road_line(&mut engine, 3, 3, 9);
     engine.dispatch(GameIntent::AddBusStop {
@@ -339,7 +338,9 @@ fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
 
     let mut state = engine.snapshot();
     state.paused = false;
-    state.sims.clear();
+    state.sims = (0..5)
+        .map(|id| dormant_worker_sim(&format!("arrival-car-sim-{id:03}"), (2, 3).into()))
+        .collect();
     let bus_path = state.transit.routes[0].legs[0]
         .current_path
         .clone()
@@ -367,14 +368,14 @@ fn bus_arrival_order_fixture() -> (GameSnapshot, RoadTopology) {
         .chain(std::iter::once(make_car(4, 1.25)))
         .collect();
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    (state, topology)
+    state
 }
 
-fn staggered_car_arrival_fixture() -> (GameSnapshot, RoadTopology) {
-    let (mut state, topology) = car_commute_fixture(&["sim-001"]);
+fn staggered_car_arrival_fixture() -> GameSnapshot {
+    let mut state = car_commute_fixture(&["sim-001"]);
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 12, y: 3 };
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
     let candidate = traffic::private_car_candidate(
         &state,
         &topology,
@@ -383,7 +384,9 @@ fn staggered_car_arrival_fixture() -> (GameSnapshot, RoadTopology) {
         workplace,
     )
     .expect("staggered arrival fixture has a valid car path");
-    state.sims.clear();
+    state.sims = (0..5)
+        .map(|index| dormant_worker_sim(&format!("arrival-sim-{index:03}"), home))
+        .collect();
     state.active_trips = [0.5, 1.0, 1.5, 2.0, 2.5]
         .into_iter()
         .enumerate()
@@ -406,7 +409,7 @@ fn staggered_car_arrival_fixture() -> (GameSnapshot, RoadTopology) {
             }),
         })
         .collect();
-    (state, topology)
+    state
 }
 
 fn driving_trip_without_payload() -> ActiveTrip {
@@ -427,23 +430,13 @@ fn driving_trip_without_payload() -> ActiveTrip {
     }
 }
 
-fn tick_trips(state: &GameSnapshot, topology: &RoadTopology, delta_seconds: f64) -> GameSnapshot {
-    trips::tick_trips(state, topology, delta_seconds)
-}
-
-fn tick_trips_with_objectives(
-    state: &GameSnapshot,
-    topology: &RoadTopology,
-    delta_seconds: f64,
-) -> GameSnapshot {
-    trips::tick_trips_with_objectives(state, topology, delta_seconds)
-}
-
 #[test]
 fn car_mode_choice_uses_driving_when_car_eta_is_strictly_faster_than_walk() {
-    let (state, topology) = car_commute_fixture(&["sim-001"]);
+    let mut engine = common::running_engine_from_fixture(car_commute_fixture(&["sim-001"]));
 
-    let next = tick_trips(&state, &topology, 0.0);
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
     assert_eq!(next.active_trips.len(), 1);
     let outbound = &next.active_trips[0];
 
@@ -454,11 +447,13 @@ fn car_mode_choice_uses_driving_when_car_eta_is_strictly_faster_than_walk() {
 
 #[test]
 fn car_mode_choice_keeps_walk_lifecycle_when_car_access_is_unavailable() {
-    let (mut state, _topology) = car_commute_fixture(&["sim-001"]);
+    let mut state = car_commute_fixture(&["sim-001"]);
     clear_roads(&mut state);
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
 
-    let next = tick_trips(&state, &topology, 0.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
     assert_eq!(next.active_trips.len(), 1);
     let outbound = &next.active_trips[0];
 
@@ -467,7 +462,8 @@ fn car_mode_choice_keeps_walk_lifecycle_when_car_access_is_unavailable() {
     assert!(outbound.private_car_trip.is_none());
     assert!(outbound.route_plan.is_some());
 
-    let walking = tick_trips(&next, &topology, 1.0);
+    engine.tick(1.0);
+    let walking = engine.snapshot();
     assert_eq!(walking.active_trips[0].status, TripStatus::Walking);
 }
 
@@ -475,9 +471,10 @@ fn car_mode_choice_keeps_walk_lifecycle_when_car_access_is_unavailable() {
 fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     // Suffix 485 has the same standard-shift departure minute as suffix 001,
     // while retaining a deterministic later sim iteration slot.
-    let (mut state, topology) = car_commute_fixture(&["sim-001", "sim-485"]);
+    let mut state = car_commute_fixture(&["sim-001", "sim-485"]);
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 12, y: 3 };
+    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
     let free_flow = traffic::private_car_candidate(
         &state,
         &topology,
@@ -490,6 +487,7 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
         return;
     };
     let seed_arrival_time = state.time + free_flow.estimated_seconds;
+    let fixture_time = state.time;
     state.active_trips = (0..4)
         .map(|index| ActiveTrip {
             id: format!("seed-trip-{index}"),
@@ -510,8 +508,16 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
             }),
         })
         .collect();
+    // The seeded driving trips reference these sims; keep them dormant so the
+    // spawn pass never adds commute traffic for them.
+    state
+        .sims
+        .extend((0..4).map(|index| dormant_worker_sim(&format!("seed-sim-{index}"), home)));
 
-    let next = tick_trips(&state, &topology, 0.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert_eq!(
         next.active_trips
@@ -574,13 +580,13 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
         .sum();
     let fixed_car_seconds = free_flow.estimated_seconds - free_road_seconds;
     assert!(
-        (first_arrival_time - state.time - fixed_car_seconds - free_road_seconds * 1.25).abs()
+        (first_arrival_time - fixture_time - fixed_car_seconds - free_road_seconds * 1.25).abs()
             < 1e-9,
         "first worker should see seeded flow of four: arrival={first_arrival_time}, free_flow={}s",
         free_flow.estimated_seconds
     );
     assert!(
-        (second_arrival_time - state.time - fixed_car_seconds - free_road_seconds * 1.5).abs()
+        (second_arrival_time - fixture_time - fixed_car_seconds - free_road_seconds * 1.5).abs()
             < 1e-9,
         "second worker should see the first worker's selected flow: arrival={second_arrival_time}, free_flow={}s",
         free_flow.estimated_seconds
@@ -589,30 +595,40 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
 
 #[test]
 fn car_mode_choice_is_identical_for_coarse_and_fine_ticks() {
-    let (state, topology) = car_commute_fixture(&["sim-001"]);
-    let coarse = tick_trips(&state, &topology, 3.0);
+    let base = car_commute_fixture(&["sim-001"]);
 
-    let mut fine = state.clone();
+    let mut coarse = common::running_engine_from_fixture(base.clone());
+    coarse.tick(3.0);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(base);
     for _ in 0..3 {
-        fine = tick_trips(&fine, &topology, 1.0);
+        fine.tick(1.0);
     }
+    let fine_snapshot = fine.snapshot();
 
-    assert_eq!(coarse.time, fine.time);
-    assert_eq!(coarse.active_trips, fine.active_trips);
+    assert_eq!(coarse_snapshot.time, fine_snapshot.time);
+    assert_eq!(coarse_snapshot.active_trips, fine_snapshot.active_trips);
     assert_eq!(
-        caelum_core::traffic::derive_road_flow(&coarse),
-        caelum_core::traffic::derive_road_flow(&fine)
+        caelum_core::traffic::derive_road_flow(&coarse_snapshot),
+        caelum_core::traffic::derive_road_flow(&fine_snapshot)
     );
 }
 
 #[test]
 fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
-    let (state, topology, departure_time) = bus_fractional_progress_fixture();
+    let (state, departure_time) = bus_fractional_progress_fixture();
     let departure_delta = departure_time - state.time;
     let total_delta = departure_delta + 0.4;
 
-    let coarse = tick_trips(&state, &topology, total_delta);
-    let at_departure = tick_trips(&state, &topology, departure_delta);
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(total_delta);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut split = common::running_engine_from_fixture(state);
+    let at_departure_result = split.tick(departure_delta);
+    assert!(at_departure_result.rejection.is_none());
+    let at_departure = split.snapshot();
     assert_eq!(
         at_departure.transit.vehicles[0].step_progress, 0.7,
         "fractional progress stays in normalized coordinates at the flow boundary"
@@ -622,29 +638,36 @@ fn fractional_bus_progress_rescales_only_remaining_time_at_car_departure() {
         Some(&5)
     );
 
-    let split = tick_trips(&at_departure, &topology, total_delta - departure_delta);
-    assert_eq!(coarse.transit.vehicles[0], split.transit.vehicles[0]);
+    split.tick(total_delta - departure_delta);
+    let split_snapshot = split.snapshot();
     assert_eq!(
-        coarse.transit.vehicles[0].itinerary_index, 0,
+        coarse_snapshot.transit.vehicles[0],
+        split_snapshot.transit.vehicles[0]
+    );
+    assert_eq!(
+        coarse_snapshot.transit.vehicles[0].itinerary_index, 0,
         "0.4s after departure is shorter than the rescaled 0.46875s remaining"
     );
     assert!(
-        coarse.transit.vehicles[0].step_progress > 0.95,
+        coarse_snapshot.transit.vehicles[0].step_progress > 0.95,
         "progress={}",
-        coarse.transit.vehicles[0].step_progress
+        coarse_snapshot.transit.vehicles[0].step_progress
     );
-    assert!(coarse.transit.vehicles[0].step_progress < 1.0);
+    assert!(coarse_snapshot.transit.vehicles[0].step_progress < 1.0);
 }
 
 #[test]
 fn scheduled_car_departure_updates_flow_before_fractional_bus_boundary_estimate() {
-    let (mut state, topology, departure_time) = bus_fractional_progress_fixture();
+    let (mut state, departure_time) = bus_fractional_progress_fixture();
     state.time = departure_time;
     state.day = 0;
     state.clock_minutes = clock::clock_minutes(state.time);
     state.transit.vehicles[0].step_progress = 0.5;
 
-    let spawned = tick_trips(&state, &topology, 0.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let spawned = engine.snapshot();
     let flow = traffic::derive_road_flow(&spawned);
     let first_step = spawned.transit.routes[0].legs[0]
         .current_path
@@ -670,7 +693,7 @@ fn scheduled_car_departure_updates_flow_before_fractional_bus_boundary_estimate(
 
 #[test]
 fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
-    let (state, topology) = bus_arrival_order_fixture();
+    let state = bus_arrival_order_fixture();
     let current_path = state.transit.routes[0].legs[0].current_path.as_ref();
     assert!(current_path.is_some(), "bus route has a path");
     let Some(current_path) = current_path else {
@@ -693,7 +716,9 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
         1.5625
     );
 
-    let at_arrival = tick_trips(&state, &topology, 1.25);
+    let mut at_arrival_engine = common::running_engine_from_fixture(state.clone());
+    at_arrival_engine.tick(1.25);
+    let at_arrival = at_arrival_engine.snapshot();
     let bus = &at_arrival.transit.vehicles[0];
     assert_eq!(bus.path_step_index, 0);
     assert!((bus.step_progress - 0.8).abs() < 1e-9);
@@ -719,8 +744,15 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
         assert!((next_stop_seconds - 6.5).abs() < 1e-9);
     }
 
-    let coarse = tick_trips(&state, &topology, 1.5);
-    let split = tick_trips(&at_arrival, &topology, 0.25);
+    let mut coarse_engine = common::running_engine_from_fixture(state.clone());
+    coarse_engine.tick(1.5);
+    let coarse = coarse_engine.snapshot();
+
+    let mut split_engine = common::running_engine_from_fixture(state);
+    split_engine.tick(1.25);
+    split_engine.tick(0.25);
+    let split = split_engine.snapshot();
+
     assert_eq!(coarse.transit.vehicles[0], split.transit.vehicles[0]);
     assert_eq!(coarse.active_trips, split.active_trips);
     assert_eq!(
@@ -731,28 +763,36 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
 
 #[test]
 fn staggered_car_arrivals_resolve_identically_in_coarse_and_split_ticks() {
-    let (state, topology) = staggered_car_arrival_fixture();
-    let coarse = tick_trips(&state, &topology, 3.0);
+    let state = staggered_car_arrival_fixture();
+    let fixture_time = state.time;
 
-    let mut split = state.clone();
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(3.0);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut split = common::running_engine_from_fixture(state);
     for _ in 0..6 {
-        split = tick_trips(&split, &topology, 0.5);
+        split.tick(0.5);
     }
+    let split_snapshot = split.snapshot();
 
-    assert_eq!(coarse.time, state.time + 3.0);
-    assert_eq!(coarse.time, split.time);
-    assert!(coarse.active_trips.is_empty());
-    assert!(split.active_trips.is_empty());
-    assert!(traffic::derive_road_flow(&coarse).is_empty());
-    assert!(traffic::derive_road_flow(&split).is_empty());
-    assert_eq!(coarse.metrics.completed_trips, 5);
-    assert_eq!(coarse.metrics, split.metrics);
+    assert_eq!(coarse_snapshot.time, fixture_time + 3.0);
+    assert_eq!(coarse_snapshot.time, split_snapshot.time);
+    assert!(coarse_snapshot.active_trips.is_empty());
+    assert!(split_snapshot.active_trips.is_empty());
+    assert!(traffic::derive_road_flow(&coarse_snapshot).is_empty());
+    assert!(traffic::derive_road_flow(&split_snapshot).is_empty());
+    assert_eq!(coarse_snapshot.metrics.completed_trips, 5);
+    assert_eq!(coarse_snapshot.metrics, split_snapshot.metrics);
 }
 
 #[test]
 fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
-    let (state, topology) = car_commute_fixture(&["sim-001"]);
-    let spawned = tick_trips(&state, &topology, 0.0);
+    let mut engine = common::running_engine_from_fixture(car_commute_fixture(&["sim-001"]));
+
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let spawned = engine.snapshot();
     assert_eq!(spawned.active_trips.len(), 1);
     let arrival_time = spawned.active_trips[0]
         .private_car_trip
@@ -763,14 +803,16 @@ fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
         return;
     };
 
-    let before_arrival = tick_trips(&spawned, &topology, 1.0);
+    engine.tick(1.0);
+    let before_arrival = engine.snapshot();
     assert_eq!(before_arrival.active_trips.len(), 1);
     let active = &before_arrival.active_trips[0];
     assert_eq!(active.status, TripStatus::Driving);
     assert!(active.private_car_trip.is_some());
     assert!(!caelum_core::traffic::derive_road_flow(&before_arrival).is_empty());
 
-    let arrived = tick_trips(&spawned, &topology, (arrival_time - spawned.time).max(0.0));
+    engine.tick((arrival_time - before_arrival.time).max(0.0));
+    let arrived = engine.snapshot();
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert!(caelum_core::traffic::derive_road_flow(&arrived).is_empty());
@@ -778,26 +820,39 @@ fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
 
 #[test]
 fn coarse_car_arrival_matches_ticks_split_at_arrival_boundary() {
-    let (state, topology) = car_commute_fixture(&["sim-001"]);
-    let coarse = tick_trips(&state, &topology, 12.0);
+    let base = car_commute_fixture(&["sim-001"]);
 
-    let mut fine = state.clone();
+    let mut coarse = common::running_engine_from_fixture(base.clone());
+    coarse.tick(12.0);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(base);
     for _ in 0..12 {
-        fine = tick_trips(&fine, &topology, 1.0);
+        fine.tick(1.0);
     }
+    let fine_snapshot = fine.snapshot();
 
-    assert_eq!(coarse.time, fine.time);
-    assert_eq!(coarse.active_trips, fine.active_trips);
-    assert_eq!(coarse.sims, fine.sims);
-    assert_eq!(coarse.metrics.completed_trips, fine.metrics.completed_trips);
-    assert_eq!(coarse.metrics.late_trips, fine.metrics.late_trips);
-    assert_eq!(coarse.metrics.unserved_trips, fine.metrics.unserved_trips);
+    assert_eq!(coarse_snapshot.time, fine_snapshot.time);
+    assert_eq!(coarse_snapshot.active_trips, fine_snapshot.active_trips);
+    assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
+    assert_eq!(
+        coarse_snapshot.metrics.completed_trips,
+        fine_snapshot.metrics.completed_trips
+    );
+    assert_eq!(
+        coarse_snapshot.metrics.late_trips,
+        fine_snapshot.metrics.late_trips
+    );
+    assert_eq!(
+        coarse_snapshot.metrics.unserved_trips,
+        fine_snapshot.metrics.unserved_trips
+    );
 }
 
 #[test]
 fn missing_driving_payload_becomes_unserved_and_saveable() {
     let mut state = GameEngine::new().snapshot();
-    state.sims = vec![sim("sim-001", (2, 3).into(), None)];
+    state.sims = vec![worker_sim("sim-001", (2, 3).into(), None)];
     state.active_trips = vec![driving_trip_without_payload()];
 
     let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
@@ -819,7 +874,7 @@ fn missing_driving_payload_becomes_unserved_and_saveable() {
 #[test]
 fn walking_movement_scales_by_simulated_time() {
     let mut state = create_initial_snapshot();
-    state.sims = vec![sim("sim-001", (2, 3).into(), Some((5, 3).into()))];
+    state.sims = vec![worker_sim("sim-001", (2, 3).into(), Some((5, 3).into()))];
     state.active_trips = vec![trip(
         "trip-001",
         TripStatus::Idle,
@@ -1012,7 +1067,7 @@ fn waiting_trips_lose_patience_and_update_wait_metrics() {
 fn short_walking_route_arrives_and_late_arrival_counts_late() {
     let mut on_time = create_initial_snapshot();
     on_time.time = 20.0;
-    on_time.sims = vec![sim("sim-001", (2, 3).into(), Some((3, 3).into()))];
+    on_time.sims = vec![worker_sim("sim-001", (2, 3).into(), Some((3, 3).into()))];
     on_time.active_trips = vec![trip(
         "trip-001",
         TripStatus::Idle,
@@ -1133,6 +1188,7 @@ fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
     state.day = clock::day_index(state.time);
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
     let mut waiting = trip(
         "trip-001",
         TripStatus::Waiting,
@@ -1143,8 +1199,10 @@ fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
     waiting.patience_remaining = 5.0;
     state.active_trips = vec![waiting];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 100.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(100.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
@@ -1219,13 +1277,17 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let coarse = tick_trips(&state, &topology, 12.5);
-    let mut next = state;
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(12.5);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(state);
     for _ in 0..10 {
-        next = tick_trips(&next, &topology, 1.25);
+        fine.tick(1.25);
     }
+    let next = fine.snapshot();
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
@@ -1237,18 +1299,21 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
     assert!((next.metrics.trip_outcomes[0].time - 12.5).abs() < 0.000_001);
 
     // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
-    assert!(coarse.active_trips.is_empty());
-    assert_eq!(coarse.metrics.completed_trips, next.metrics.completed_trips);
+    assert!(coarse_snapshot.active_trips.is_empty());
     assert_eq!(
-        coarse.metrics.trip_outcomes.len(),
+        coarse_snapshot.metrics.completed_trips,
+        next.metrics.completed_trips
+    );
+    assert_eq!(
+        coarse_snapshot.metrics.trip_outcomes.len(),
         next.metrics.trip_outcomes.len()
     );
     assert_eq!(
-        coarse.metrics.trip_outcomes[0].outcome,
+        coarse_snapshot.metrics.trip_outcomes[0].outcome,
         next.metrics.trip_outcomes[0].outcome
     );
     assert!(
-        (coarse.metrics.trip_outcomes[0].time - next.metrics.trip_outcomes[0].time).abs()
+        (coarse_snapshot.metrics.trip_outcomes[0].time - next.metrics.trip_outcomes[0].time).abs()
             < 0.000_001
     );
 }
@@ -1297,13 +1362,17 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let coarse_disembarked = tick_trips(&state, &topology, 12.5);
-    let mut disembarked = state;
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(12.5);
+    let coarse_disembarked = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(state);
     for _ in 0..10 {
-        disembarked = tick_trips(&disembarked, &topology, 1.25);
+        fine.tick(1.25);
     }
+    let disembarked = fine.snapshot();
     let walking = &disembarked.active_trips[0];
 
     assert_eq!(walking.status, TripStatus::Walking);
@@ -1326,8 +1395,12 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         disembarked.metrics.completed_trips
     );
 
-    let coarse_arrived = tick_trips(&coarse_disembarked, &topology, 20.0);
-    let arrived = tick_trips(&disembarked, &topology, 20.0);
+    let coarse_engine_arrival = coarse.tick(20.0);
+    assert!(coarse_engine_arrival.rejection.is_none());
+    let coarse_arrived = coarse.snapshot();
+    let arrived_result = fine.tick(20.0);
+    assert!(arrived_result.rejection.is_none());
+    let arrived = fine.snapshot();
 
     assert_eq!(arrived.budget, starting_budget + 200);
     assert_eq!(coarse_arrived.budget, arrived.budget);
@@ -1389,13 +1462,17 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     // Vehicle starts at the boarding stop with a free seat.
     assert_eq!(state.transit.vehicles[0].step_progress, 0.0);
     assert!(state.transit.vehicles[0].passenger_ids.is_empty());
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let coarse_disembarked = tick_trips(&state, &topology, 12.5);
-    let mut disembarked = state;
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(12.5);
+    let coarse_disembarked = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(state);
     for _ in 0..10 {
-        disembarked = tick_trips(&disembarked, &topology, 1.25);
+        fine.tick(1.25);
     }
+    let disembarked = fine.snapshot();
     let walking = &disembarked.active_trips[0];
 
     assert_eq!(walking.status, TripStatus::Walking);
@@ -1414,7 +1491,8 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
         disembarked.metrics.completed_trips
     );
 
-    let arrived = tick_trips(&disembarked, &topology, 20.0);
+    fine.tick(20.0);
+    let arrived = fine.snapshot();
 
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
@@ -1465,6 +1543,7 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
     let seconds = transit::seconds_until_next_vehicle_stop(
         &state,
@@ -1472,8 +1551,10 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         &state.transit.vehicles[0],
     )
     .expect("vehicle has a next stop");
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, seconds);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(seconds);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert_eq!(next.transit.vehicles[0].itinerary_index, 1);
     assert_eq!(next.transit.vehicles[0].path_step_index, 0);
@@ -1583,9 +1664,10 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
     after_return_window.clock_minutes = return_minute;
     after_return_window.paused = false;
 
-    let topology =
-        RoadTopology::compile(&after_return_window.map).expect("fixture topology compiles");
-    let ticked = tick_trips(&after_return_window, &topology, 0.0);
+    let mut engine = common::running_engine_from_fixture(after_return_window);
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let ticked = engine.snapshot();
 
     assert!(!ticked
         .active_trips
@@ -1617,8 +1699,10 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
         returned_home_today: false,
     }];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let arrived = tick_trips(&state, &topology, 20.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(20.0);
+    assert!(result.rejection.is_none());
+    let arrived = engine.snapshot();
     let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(arrived.active_trips.is_empty());
@@ -1627,7 +1711,9 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
     assert!(sim.return_resolved_today);
     assert!(sim.returned_home_today);
 
-    let ticked_again = tick_trips(&arrived, &topology, 0.0);
+    let again_result = engine.tick(0.0);
+    assert!(again_result.rejection.is_none());
+    let ticked_again = engine.snapshot();
 
     assert!(ticked_again.active_trips.is_empty());
     assert_eq!(ticked_again.metrics.completed_trips, 1);
@@ -1640,13 +1726,14 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
     let departure_time =
         (f64::from(departure_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
     let home = Point { x: 2, y: 3 };
-    let workplace = Point { x: 28, y: 17 };
+    // An in-bounds workplace: the map is 28 tiles wide, so the original x=28
+    // point was not persistence-valid.
+    let workplace = Point { x: 27, y: 17 };
     state.time = departure_time;
     state.day = 0;
     state.clock_minutes = departure_minute;
     state.paused = false;
-    state.buildings = vec![destination_building(workplace)];
-    state.sims = vec![sim("sim-001", home, Some(workplace))];
+    state.sims = vec![worker_sim("sim-001", home, Some(workplace))];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -1656,19 +1743,17 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
         position: Point { x: 7, y: 8 }.into(),
         status: TripStatus::Waiting,
         deadline: departure_time + 900.0,
-        route_plan: Some(bus_plan(
-            Point { x: 7, y: 8 },
-            Point { x: 22, y: 8 },
-            "route-001",
-        )),
+        route_plan: Some(bus_plan(Point { x: 7, y: 8 }, workplace, "route-001")),
         current_leg_index: 0,
         patience_remaining: 1.0,
         current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 2.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(2.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(next.active_trips.is_empty());
@@ -1685,7 +1770,9 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
     let return_time =
         (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
     let home = Point { x: 2, y: 3 };
-    let workplace = Point { x: 28, y: 17 };
+    // An in-bounds workplace: the map is 28 tiles wide, so the original x=28
+    // point was not persistence-valid.
+    let workplace = Point { x: 27, y: 17 };
     state.time = return_time;
     state.day = 0;
     state.clock_minutes = return_minute;
@@ -1712,15 +1799,17 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
         position: workplace.into(),
         status: TripStatus::Waiting,
         deadline: return_time + 900.0,
-        route_plan: Some(bus_plan(workplace, Point { x: 7, y: 8 }, "route-001")),
+        route_plan: Some(bus_plan(workplace, home, "route-001")),
         current_leg_index: 0,
         patience_remaining: 1.0,
         current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 2.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(2.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(next.active_trips.is_empty());
@@ -1752,7 +1841,7 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
     state.day = 1;
     state.clock_minutes = departure_minute;
     state.paused = false;
-    state.buildings = vec![destination_building(workplace)];
+    place_destination(&mut state, "workplace", workplace);
     // Sim stranded at the workplace after day-0 return was unserved. Day-0
     // flags are set as they would be after the unserved return resolved;
     // `commute_day` is still 0 so the day-1 reset clears them.
@@ -1771,8 +1860,10 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
     }];
     state.active_trips = Vec::new();
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 1.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(1.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     assert!(
@@ -1814,7 +1905,7 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
     state.day = 1;
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
-    state.buildings = vec![destination_building(workplace)];
+    place_destination(&mut state, "workplace", workplace);
     // Day-0 flags are set as they would be after the outbound completed and the
     // return spawned; `commute_day` is still 0 so the day-1 reset clears them.
     state.sims = vec![Sim {
@@ -1847,8 +1938,10 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
         private_car_trip: None,
     }];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 1.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(1.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
     // The stranded guard must not fire while a return trip is in progress.
@@ -1891,7 +1984,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     state.day = 1;
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
-    state.buildings = vec![destination_building(workplace)];
+    place_destination(&mut state, "workplace", workplace);
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
         home,
@@ -1927,8 +2020,11 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
     let day1_return_time = clock::GAME_DAY_SECONDS
         + (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, day1_return_time - state.time + 1.0);
+    let fixture_time = state.time;
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(day1_return_time - fixture_time + 1.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
@@ -2002,9 +2098,16 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
         current_leg_wait_seconds: 0.0,
         private_car_trip: None,
     }];
+    // The injected walking trip references sim-002; keep it dormant so the
+    // spawn pass never adds commute traffic for it.
+    state
+        .sims
+        .push(dormant_worker_sim("sim-002", (8, 3).into()));
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 0.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(0.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     let ids = next
         .active_trips
@@ -2027,6 +2130,7 @@ fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
     state.day = clock::day_index(state.time);
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
     // No transit vehicles: the trip just waits at the boarding point so we can
     // isolate wait-time accrual without depending on vehicle movement.
     state.transit = TransitNetwork {
@@ -2076,9 +2180,11 @@ fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
 #[test]
 fn zero_length_walk_leg_accrues_wait_time_under_large_tick() {
     let state = state_with_zero_length_walk_then_bus();
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
 
-    let next = tick_trips(&state, &topology, 60.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(60.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     // The zero-length walk must be collapsed so the following bus leg's wait
     // time is accrued for the full substep, not dropped to zero.
@@ -2095,13 +2201,16 @@ fn zero_length_walk_leg_accrues_wait_time_under_large_tick() {
 #[test]
 fn zero_length_walk_leg_preserves_large_tick_vs_stepped_tick_equivalence() {
     let state = state_with_zero_length_walk_then_bus();
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let large_snapshot = tick_trips(&state, &topology, 60.0);
 
-    let mut stepped_snapshot = state;
+    let mut large = common::running_engine_from_fixture(state.clone());
+    large.tick(60.0);
+    let large_snapshot = large.snapshot();
+
+    let mut stepped = common::running_engine_from_fixture(state);
     for _ in 0..60 {
-        stepped_snapshot = tick_trips(&stepped_snapshot, &topology, 1.0);
+        stepped.tick(1.0);
     }
+    let stepped_snapshot = stepped.snapshot();
 
     assert!(
         (large_snapshot.metrics.total_wait_seconds - stepped_snapshot.metrics.total_wait_seconds)
@@ -2155,9 +2264,12 @@ fn all_zero_length_walks_collapses_to_immediate_arrival() {
     });
     trip.deadline = 1_000.0;
     state.active_trips = vec![trip];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 1.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(1.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
@@ -2228,9 +2340,12 @@ fn zero_length_transfer_walk_collapses_between_transit_legs() {
     trip.current_leg_index = 1;
     trip.deadline = 1_000.0;
     state.active_trips = vec![trip];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips(&state, &topology, 30.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(30.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     // The zero-length transfer walk at leg index 1 must collapse, advancing
     // straight to the second bus leg (index 2) and accruing its wait time.
@@ -2260,37 +2375,44 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
     }
 
     let start = build();
-    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-    let large = tick_trips(&start, &topology, 100.0);
+    let mut large = common::running_engine_from_fixture(start.clone());
+    large.tick(100.0);
+    let large_snapshot = large.snapshot();
 
-    let mut stepped = start;
+    let mut stepped = common::running_engine_from_fixture(start);
     for _ in 0..100 {
-        stepped = tick_trips(&stepped, &topology, 1.0);
+        stepped.tick(1.0);
     }
+    let stepped_snapshot = stepped.snapshot();
 
-    assert_eq!(large.metrics.unserved_trips, stepped.metrics.unserved_trips);
-    assert!(
-        (large.metrics.total_wait_seconds - stepped.metrics.total_wait_seconds).abs() < 0.001,
-        "large wait {}s != stepped wait {}s",
-        large.metrics.total_wait_seconds,
-        stepped.metrics.total_wait_seconds
-    );
-    assert_eq!(large.metrics.trip_outcomes.len(), 1);
     assert_eq!(
-        large.metrics.trip_outcomes[0].outcome,
+        large_snapshot.metrics.unserved_trips,
+        stepped_snapshot.metrics.unserved_trips
+    );
+    assert!(
+        (large_snapshot.metrics.total_wait_seconds - stepped_snapshot.metrics.total_wait_seconds)
+            .abs()
+            < 0.001,
+        "large wait {}s != stepped wait {}s",
+        large_snapshot.metrics.total_wait_seconds,
+        stepped_snapshot.metrics.total_wait_seconds
+    );
+    assert_eq!(large_snapshot.metrics.trip_outcomes.len(), 1);
+    assert_eq!(
+        large_snapshot.metrics.trip_outcomes[0].outcome,
         TripOutcomeKind::Unserved
     );
     // The trip drained 30s of patience this tick (patience_remaining was 30s).
     assert!(
-        (large.metrics.total_wait_seconds - 30.0).abs() < 0.001,
+        (large_snapshot.metrics.total_wait_seconds - 30.0).abs() < 0.001,
         "expected 30s accrued wait, got {}",
-        large.metrics.total_wait_seconds
+        large_snapshot.metrics.total_wait_seconds
     );
     // Outcome fires at patience boundary: start (100s) + 30s drained.
     assert!(
-        (large.metrics.trip_outcomes[0].time - 130.0).abs() < 0.001,
+        (large_snapshot.metrics.trip_outcomes[0].time - 130.0).abs() < 0.001,
         "expected outcome at t=130, got {}",
-        large.metrics.trip_outcomes[0].time
+        large_snapshot.metrics.trip_outcomes[0].time
     );
 }
 
@@ -2315,9 +2437,12 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
     // 170s of wait past the 180s threshold to the 240s patience expiry.
     waiting.patience_remaining = 70.0;
     state.active_trips = vec![waiting];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips_with_objectives(&state, &topology, 70.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(70.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -2362,12 +2487,15 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
     trip_b.patience_remaining = 121.0; // waited 119s
 
     state.active_trips = vec![trip_a, trip_b];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
     // A 200s coarse tick: the aggregate average crosses 180s at t=31s, well
     // before Trip A's patience expiry at t=61s. Without the aggregate boundary
     // the crossing is missed and the loss is never detected.
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips_with_objectives(&state, &topology, 200.0);
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(200.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -2376,25 +2504,30 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
     );
 }
 
-fn assert_average_wait_loss_matches_coarse_and_fine(
-    state: &caelum_core::GameSnapshot,
-    topology: &RoadTopology,
-) {
-    let coarse = tick_trips_with_objectives(state, topology, 300.0);
-    let fine = tick_trips_with_objectives(state, topology, 1.0);
+fn assert_average_wait_loss_matches_coarse_and_fine(state: &caelum_core::GameSnapshot) {
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(300.0);
+    let coarse_snapshot = coarse.snapshot();
 
-    assert_eq!(coarse.metrics.state, MetricsState::Lost);
-    assert_eq!(fine.metrics.state, MetricsState::Lost);
+    let mut fine = common::running_engine_from_fixture(state.clone());
+    fine.tick(1.0);
+    let fine_snapshot = fine.snapshot();
+
+    assert_eq!(coarse_snapshot.metrics.state, MetricsState::Lost);
+    assert_eq!(fine_snapshot.metrics.state, MetricsState::Lost);
     assert_eq!(
-        coarse.metrics.loss_reason.as_deref(),
+        coarse_snapshot.metrics.loss_reason.as_deref(),
         Some("Average wait time is too high")
     );
-    assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
-    assert_eq!(coarse.time, fine.time);
+    assert_eq!(
+        coarse_snapshot.metrics.loss_reason,
+        fine_snapshot.metrics.loss_reason
+    );
+    assert_eq!(coarse_snapshot.time, fine_snapshot.time);
     assert!(
-        (coarse.time - 0.000_002).abs() < 1e-12,
+        (coarse_snapshot.time - 0.000_002).abs() < 1e-12,
         "expected strict-threshold sample at t=0.000002, got {}",
-        coarse.time
+        coarse_snapshot.time
     );
 }
 
@@ -2424,9 +2557,9 @@ fn coarse_tick_samples_aggregate_wait_when_threshold_is_already_equal() {
     trip_b.patience_remaining = 121.0; // waited 119s; aggregate average is exactly 149s
 
     state.active_trips = vec![trip_a, trip_b];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    assert_average_wait_loss_matches_coarse_and_fine(&state, &topology);
+    assert_average_wait_loss_matches_coarse_and_fine(&state);
 }
 
 #[test]
@@ -2436,14 +2569,23 @@ fn coarse_tick_samples_per_trip_wait_when_zero_threshold_is_already_equal() {
     state.scenario.objectives.as_mut().unwrap().max_average_wait =
         MaxAverageWaitSeconds::new(0.0).unwrap();
 
-    // Idle is intentional: aggregate tracking sees no waiting trip yet, so the
-    // per-trip terminal tracker must schedule the strict-threshold sample.
-    let mut idle = trip("trip-001", TripStatus::Idle, (7, 8).into(), (22, 8).into());
-    idle.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    state.active_trips = vec![idle];
+    // A just-spawned waiting trip with a full patience budget has zero
+    // elapsed wait, so both the per-trip terminal tracker and the aggregate
+    // tracker sit exactly on the 0s threshold — the strict-threshold sample
+    // (one epsilon past the `>` gate) must still be scheduled. (The old
+    // construction parked the trip in Idle with a plan, which the persistence
+    // boundary rightly rejects as unsavable state.)
+    let mut just_spawned = trip(
+        "trip-001",
+        TripStatus::Waiting,
+        (7, 8).into(),
+        (22, 8).into(),
+    );
+    just_spawned.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
+    state.active_trips = vec![just_spawned];
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
 
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    assert_average_wait_loss_matches_coarse_and_fine(&state, &topology);
+    assert_average_wait_loss_matches_coarse_and_fine(&state);
 }
 
 /// Regression: a coarse tick that generates bad outcomes early and advances past
@@ -2474,8 +2616,12 @@ fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
     // outcomes), then the tick advances 390s past the 300s rolling window. By
     // the final snapshot at t=400s, the outcomes at t=10s are pruned (window
     // start = 100s). Without per-substep evaluation, the loss is missed.
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let next = tick_trips_with_objectives(&state, &topology, 400.0);
+    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+
+    let mut engine = common::running_engine_from_fixture(state);
+    let result = engine.tick(400.0);
+    assert!(result.rejection.is_none());
+    let next = engine.snapshot();
 
     assert_eq!(next.metrics.state, MetricsState::Lost);
     assert_eq!(
@@ -2510,37 +2656,46 @@ fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
                 waiting
             })
             .collect();
+        state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
         state
     }
 
-    let start = build();
-    let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-    let coarse = tick_trips_with_objectives(&start, &topology, 700.0);
-    let mut fine = start;
+    let mut coarse = common::running_engine_from_fixture(build());
+    coarse.tick(700.0);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(build());
     // Bound the fine-grained loop so a regression that never reaches a terminal
     // state fails the test instead of hanging CI. 700 seconds of game time at
     // 1-second ticks is the same horizon as the coarse tick; the cap is generous
     // beyond that to absorb substep re-evaluations.
     const MAX_FINE_TICKS: usize = 2_000;
     let mut iterations = 0;
-    while fine.metrics.state == MetricsState::Running {
+    while fine.snapshot().metrics.state == MetricsState::Running {
         iterations += 1;
         assert!(
             iterations <= MAX_FINE_TICKS,
             "fine-grained loop did not reach a terminal state within {MAX_FINE_TICKS} ticks"
         );
-        fine = tick_trips_with_objectives(&fine, &topology, 1.0);
+        fine.tick(1.0);
     }
+    let fine_snapshot = fine.snapshot();
     assert_ne!(
-        fine.metrics.state,
+        fine_snapshot.metrics.state,
         MetricsState::Running,
         "fine-grained loop must reach a terminal state"
     );
 
-    assert_eq!(coarse.metrics.state, MetricsState::Lost);
-    assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
-    assert_eq!(coarse.time, fine.time);
-    assert_eq!(coarse.metrics.unserved_trips, fine.metrics.unserved_trips);
+    assert_eq!(coarse_snapshot.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        coarse_snapshot.metrics.loss_reason,
+        fine_snapshot.metrics.loss_reason
+    );
+    assert_eq!(coarse_snapshot.time, fine_snapshot.time);
+    assert_eq!(
+        coarse_snapshot.metrics.unserved_trips,
+        fine_snapshot.metrics.unserved_trips
+    );
 }
 
 /// Regression: a coarse tick that spans the expiry of "good" outcomes (arrived)
@@ -2585,28 +2740,33 @@ fn coarse_tick_detects_loss_when_good_outcomes_expire_before_bad_ones() {
     // The coarse tick spans both expiry instants (arrivals at t=10, unserved at
     // t=15). The substep must break at t=10+eps, prune the arrivals, and
     // evaluate the loss gate on the remaining 10 unserved outcomes.
-    let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-    let coarse = tick_trips_with_objectives(&state, &topology, 15.0);
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(15.0);
+    let coarse_snapshot = coarse.snapshot();
 
-    assert_eq!(coarse.metrics.state, MetricsState::Lost);
+    assert_eq!(coarse_snapshot.metrics.state, MetricsState::Lost);
     assert_eq!(
-        coarse.metrics.loss_reason.as_deref(),
+        coarse_snapshot.metrics.loss_reason.as_deref(),
         Some("Too many unserved citizens")
     );
 
     // Fine ticks must also detect the loss, confirming the coarse tick's
     // terminal state is not a divergence from the granularity-independent
     // invariant.
-    let mut fine = state.clone();
+    let mut fine = common::running_engine_from_fixture(state);
     let mut iterations = 0;
-    while fine.metrics.state == MetricsState::Running {
+    while fine.snapshot().metrics.state == MetricsState::Running {
         iterations += 1;
         assert!(
             iterations <= 100,
             "fine-grained loop did not reach a terminal state within 100 ticks"
         );
-        fine = tick_trips_with_objectives(&fine, &topology, 1.0);
+        fine.tick(1.0);
     }
-    assert_eq!(fine.metrics.state, MetricsState::Lost);
-    assert_eq!(coarse.metrics.loss_reason, fine.metrics.loss_reason);
+    let fine_snapshot = fine.snapshot();
+    assert_eq!(fine_snapshot.metrics.state, MetricsState::Lost);
+    assert_eq!(
+        coarse_snapshot.metrics.loss_reason,
+        fine_snapshot.metrics.loss_reason
+    );
 }

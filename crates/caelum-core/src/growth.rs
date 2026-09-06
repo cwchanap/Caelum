@@ -53,13 +53,13 @@ pub fn apply_due_growth_waves(state: &mut GameSnapshot) {
 
 #[cfg(test)]
 mod tests {
+    use crate::engine::GameEngine;
+    use crate::intent::GameIntent;
     use crate::model::{GameSnapshot, GrowthAction, GrowthWave, Point};
-    use crate::road_topology::RoadTopology;
     use crate::scenario::{
         growing_suburb_campaign, growing_suburb_growth_waves, growing_suburb_objectives,
     };
     use crate::state::create_initial_snapshot;
-    use crate::trips;
 
     fn campaign_with_waves(waves: Vec<GrowthWave>) -> GameSnapshot {
         let mut state = create_initial_snapshot();
@@ -70,16 +70,20 @@ mod tests {
         state
     }
 
-    fn seeded() -> GameSnapshot {
-        campaign_with_waves(growing_suburb_growth_waves())
+    /// Build a resumable engine from the prepared campaign/sandbox fixture.
+    /// `from_snapshot` canonicalizes shell fields (paused, clock) and compiles
+    /// the road topology, exactly as the persistence boundary would.
+    fn running_engine(snapshot: GameSnapshot) -> GameEngine {
+        let mut engine =
+            GameEngine::from_snapshot(snapshot).expect("fixture must be persistence-valid");
+        let resumed = engine.dispatch(GameIntent::SetPaused { paused: false });
+        assert!(resumed.applied, "fixture must resume: {resumed:?}");
+        assert!(resumed.rejection.is_none());
+        engine
     }
 
-    fn tick_trips(
-        state: &GameSnapshot,
-        topology: &RoadTopology,
-        delta_seconds: f64,
-    ) -> GameSnapshot {
-        trips::tick_trips(state, topology, delta_seconds)
+    fn seeded() -> GameSnapshot {
+        campaign_with_waves(growing_suburb_growth_waves())
     }
 
     #[test]
@@ -87,9 +91,11 @@ mod tests {
         let mut start = create_initial_snapshot();
         start.paused = false;
         start.scenario.growth_waves = growing_suburb_growth_waves();
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
 
-        let next = tick_trips(&start, &topology, 1.0);
+        let mut engine = running_engine(start);
+        let result = engine.tick(1.0);
+        assert!(result.rejection.is_none());
+        let next = engine.snapshot();
 
         assert!(next.buildings.is_empty());
         assert!(next.sims.is_empty());
@@ -100,9 +106,11 @@ mod tests {
     fn campaign_without_objectives_still_applies_growth() {
         let mut start = campaign_with_waves(growing_suburb_growth_waves());
         start.scenario.objectives = None;
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
 
-        let next = tick_trips(&start, &topology, 1.0);
+        let mut engine = running_engine(start);
+        let result = engine.tick(1.0);
+        assert!(result.rejection.is_none());
+        let next = engine.snapshot();
 
         assert_eq!(next.buildings.len(), 5);
         assert!(next.scenario.growth_waves[0].applied);
@@ -112,8 +120,11 @@ mod tests {
     fn seed_wave_zones_places_houses_without_immediate_sims() {
         let start = seeded();
         let budget_before = start.budget;
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-        let next = tick_trips(&start, &topology, 1.0);
+
+        let mut engine = running_engine(start);
+        let result = engine.tick(1.0);
+        assert!(result.rejection.is_none());
+        let next = engine.snapshot();
 
         assert_eq!(next.buildings.len(), 5, "5 smallHouse units placed");
         assert_eq!(
@@ -135,10 +146,12 @@ mod tests {
 
     #[test]
     fn application_is_idempotent() {
-        let start = seeded();
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-        let once = tick_trips(&start, &topology, 1.0);
-        let twice = tick_trips(&once, &topology, 1.0);
+        let mut engine = running_engine(seeded());
+        let result = engine.tick(1.0);
+        assert!(result.rejection.is_none());
+        let once = engine.snapshot();
+        engine.tick(1.0);
+        let twice = engine.snapshot();
         assert_eq!(twice.buildings.len(), once.buildings.len());
         assert_eq!(twice.sims.len(), once.sims.len());
     }
@@ -147,24 +160,30 @@ mod tests {
     fn empty_growth_waves_is_a_noop() {
         let mut start = create_initial_snapshot();
         start.paused = false;
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-        let next = tick_trips(&start, &topology, 1.0);
+
+        let mut engine = running_engine(start);
+        let result = engine.tick(1.0);
+        assert!(result.rejection.is_none());
+        let next = engine.snapshot();
         assert!(next.buildings.is_empty());
         assert!(next.sims.is_empty());
     }
 
     #[test]
     fn coarse_and_fine_ticks_produce_identical_growth() {
-        let start = seeded();
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-        let coarse = tick_trips(&start, &topology, 5.0);
-        let mut fine = start.clone();
+        let mut coarse = running_engine(seeded());
+        coarse.tick(5.0);
+        let coarse_snapshot = coarse.snapshot();
+
+        let mut fine = running_engine(seeded());
         for _ in 0..5 {
-            fine = tick_trips(&fine, &topology, 1.0);
+            fine.tick(1.0);
         }
-        assert_eq!(coarse.buildings, fine.buildings);
-        assert_eq!(coarse.sims, fine.sims);
-        assert_eq!(coarse.map, fine.map);
+        let fine_snapshot = fine.snapshot();
+
+        assert_eq!(coarse_snapshot.buildings, fine_snapshot.buildings);
+        assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
+        assert_eq!(coarse_snapshot.map, fine_snapshot.map);
     }
 
     #[test]
@@ -180,8 +199,11 @@ mod tests {
                 rotation: 0,
             }],
         }]);
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-        let next = tick_trips(&start, &topology, 1.0);
+
+        let mut engine = running_engine(start);
+        let result = engine.tick(1.0);
+        assert!(result.rejection.is_none());
+        let next = engine.snapshot();
         assert!(next.buildings.is_empty(), "unzoned placement skipped");
         assert!(next.scenario.growth_waves[0].applied);
     }
@@ -252,8 +274,10 @@ mod tests {
             },
         ]);
 
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
-        let next = tick_trips(&start, &topology, 300.0);
+        let mut engine = running_engine(start);
+        let result = engine.tick(300.0);
+        assert!(result.rejection.is_none());
+        let next = engine.snapshot();
 
         // All three waves fired.
         assert!(next.scenario.growth_waves[0].applied, "wave-a applied");
@@ -284,28 +308,39 @@ mod tests {
         seed_waves[0].trigger_time = 120.0;
 
         let start = campaign_with_waves(seed_waves);
-        let topology = RoadTopology::compile(&start.map).expect("fixture topology compiles");
 
         // Coarse: one 300s tick spanning well past the 120s trigger.
-        let coarse = tick_trips(&start, &topology, 300.0);
+        let mut coarse = running_engine(start.clone());
+        coarse.tick(300.0);
+        let coarse_snapshot = coarse.snapshot();
 
         // Fine: 300 × 1s ticks; the wave fires on the 120th tick.
-        let mut fine = start.clone();
+        let mut fine = running_engine(start);
         for _ in 0..300 {
-            fine = tick_trips(&fine, &topology, 1.0);
+            fine.tick(1.0);
         }
+        let fine_snapshot = fine.snapshot();
 
         assert!(
-            coarse.scenario.growth_waves[0].applied,
+            coarse_snapshot.scenario.growth_waves[0].applied,
             "coarse tick applied the mid-tick wave"
         );
         assert!(
-            fine.scenario.growth_waves[0].applied,
+            fine_snapshot.scenario.growth_waves[0].applied,
             "fine ticks applied the mid-tick wave"
         );
-        assert_eq!(coarse.buildings, fine.buildings, "buildings match");
-        assert_eq!(coarse.sims, fine.sims, "spawned sims match");
-        assert_eq!(coarse.map, fine.map, "map/zoning match");
-        assert_eq!(coarse.time, fine.time, "both reach the same simulated time");
+        assert_eq!(
+            coarse_snapshot.buildings, fine_snapshot.buildings,
+            "buildings match"
+        );
+        assert_eq!(
+            coarse_snapshot.sims, fine_snapshot.sims,
+            "spawned sims match"
+        );
+        assert_eq!(coarse_snapshot.map, fine_snapshot.map, "map/zoning match");
+        assert_eq!(
+            coarse_snapshot.time, fine_snapshot.time,
+            "both reach the same simulated time"
+        );
     }
 }

@@ -40,6 +40,25 @@ pub fn fixture_with_bus_route() -> GameSnapshot {
     engine.snapshot_for_save()
 }
 
+/// A Worker whose commute is already resolved and who has no workplace: a
+/// valid referential anchor for hand-authored trips that the commute-spawn
+/// pass permanently skips.
+pub fn dormant_worker_sim(id: &str, home: Point) -> Sim {
+    Sim {
+        id: id.to_string(),
+        home,
+        position: home,
+        worker_profile: WorkerProfile::Worker,
+        shift_template: Some("standard".to_string()),
+        workplace: None,
+        commute_day: 0,
+        outbound_resolved_today: true,
+        outbound_arrived_today: true,
+        return_resolved_today: true,
+        returned_home_today: true,
+    }
+}
+
 /// Construct a worker sim with the given id, home tile, and optional workplace.
 pub fn worker_sim(id: &str, home: Point, workplace: Option<Point>) -> Sim {
     Sim {
