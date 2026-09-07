@@ -180,7 +180,7 @@ fn commute_respawns_across_day_boundary() {
     assert_eq!(snapshot.metrics.state, MetricsState::Running);
     assert!(snapshot.active_trips.is_empty());
 
-    // Drive the raw tick across the day boundary. This isolates the day-rollover path
+    // Drive the engine tick across the day boundary. This isolates the day-rollover path
     // (reset_daily_commute_flags + spawn_due_commute_trips + sequence/day math); it no
     // longer needs to avoid a default-sandbox win.
     engine.tick(400.0);
