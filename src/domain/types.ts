@@ -1,5 +1,5 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 9 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 10 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
@@ -360,21 +360,37 @@ export interface Vehicle {
   parkedPosition: TripPosition | null;
 }
 
-export type WorkerProfile = "worker" | "nonWorker";
-export type TripPurpose = "commuteOutbound" | "commuteReturn";
+export type TripPurpose =
+  | "commuteOutbound"
+  | "commuteReturn"
+  | "optionalOutbound"
+  | "optionalReturn";
+
+export type CitizenRoutine =
+  | {
+      worker: {
+        shiftTemplate: "standard" | "early" | "late" | "offPeak";
+        workplace?: Point;
+      };
+    }
+  | "student";
+
+export type ScheduledActivityKind =
+  | "dailyRoutine"
+  | "primaryReturn"
+  | "optionalReturn";
+
+export interface ScheduledActivity {
+  kind: ScheduledActivityKind;
+  dueTime: number;
+}
 
 export interface Sim {
   id: string;
   home: Point;
   position: Point;
-  workerProfile: WorkerProfile;
-  shiftTemplate?: "standard" | "early" | "late" | "offPeak" | null;
-  workplace?: Point;
-  commuteDay: number;
-  outboundResolvedToday: boolean;
-  outboundArrivedToday: boolean;
-  returnResolvedToday: boolean;
-  returnedHomeToday: boolean;
+  routine: CitizenRoutine;
+  nextActivity: ScheduledActivity | null;
 }
 
 export interface TripPosition {

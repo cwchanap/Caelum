@@ -1,6 +1,6 @@
 use caelum_core::{
-    commute::{shift_template_for_id, worker_profile_for_id},
-    model::{BusStopKind, EconomyPreset, GameSnapshot, WorkerProfile},
+    commute::{is_student_id, shift_template_for_id},
+    model::{BusStopKind, CitizenRoutine, EconomyPreset, GameSnapshot},
     GameEngine, GameIntent, RejectionCode,
 };
 
@@ -75,8 +75,11 @@ fn housing_requires_residential_area_and_creates_deterministic_sims() {
     assert_eq!(moved_in.sims.len(), 10);
     assert_eq!(moved_in.sims[0].id, "sim-001");
     assert_eq!(moved_in.sims[0].home.x, 2);
-    assert_eq!(moved_in.sims[0].worker_profile, WorkerProfile::Worker);
-    assert_eq!(moved_in.sims[9].worker_profile, WorkerProfile::NonWorker);
+    assert!(matches!(
+        &moved_in.sims[0].routine,
+        CitizenRoutine::Worker { .. }
+    ));
+    assert_eq!(moved_in.sims[9].routine, CitizenRoutine::Student);
 }
 
 #[test]
@@ -117,20 +120,28 @@ fn destination_placed_before_housing_assigns_new_workers() {
     let assigned = assigned_snapshot
         .sims
         .iter()
-        .filter(|sim| sim.worker_profile == WorkerProfile::Worker && sim.workplace.is_some())
+        .filter(|sim| {
+            matches!(
+                &sim.routine,
+                CitizenRoutine::Worker {
+                    workplace: Some(_),
+                    ..
+                }
+            )
+        })
         .count();
     assert_eq!(assigned, 4);
 }
 
 #[test]
 fn shift_templates_use_worker_ordinal_after_non_worker_ids() {
-    assert_eq!(worker_profile_for_id("sim-001"), WorkerProfile::Worker);
+    assert!(!is_student_id("sim-001"));
     assert_eq!(shift_template_for_id("sim-001"), Some("standard"));
     assert_eq!(shift_template_for_id("sim-008"), Some("early"));
     assert_eq!(shift_template_for_id("sim-009"), Some("late"));
-    assert_eq!(worker_profile_for_id("sim-010"), WorkerProfile::NonWorker);
+    assert!(is_student_id("sim-010"));
     assert_eq!(shift_template_for_id("sim-010"), None);
-    assert_eq!(worker_profile_for_id("sim-011"), WorkerProfile::Worker);
+    assert!(!is_student_id("sim-011"));
     assert_eq!(shift_template_for_id("sim-011"), Some("offPeak"));
 }
 

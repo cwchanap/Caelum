@@ -63,9 +63,9 @@ fn driving_trip() -> ActiveTrip {
 
 fn valid_driving_snapshot() -> caelum_core::GameSnapshot {
     let mut snapshot = GameEngine::new().snapshot();
-    snapshot
-        .sims
-        .push(worker_sim("sim-driving", Point { x: 1, y: 1 }, None));
+    let mut sim = worker_sim("sim-driving", Point { x: 1, y: 1 }, None);
+    sim.next_activity = None; // the driving trip owns the citizen
+    snapshot.sims.push(sim);
     snapshot.active_trips.push(driving_trip());
     snapshot
 }
@@ -164,9 +164,9 @@ fn non_driving_trip_rejects_a_private_car_payload() {
 #[test]
 fn driving_trip_rejects_transit_vehicle_membership() {
     let mut snapshot = engine_with_bus_route().snapshot();
-    snapshot
-        .sims
-        .push(worker_sim("sim-driving", Point { x: 1, y: 1 }, None));
+    let mut sim = worker_sim("sim-driving", Point { x: 1, y: 1 }, None);
+    sim.next_activity = None; // the driving trip owns the citizen
+    snapshot.sims.push(sim);
     snapshot.active_trips.push(driving_trip());
     snapshot.transit.vehicles[0].passenger_ids = vec!["trip-driving".to_string()];
 

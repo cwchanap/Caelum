@@ -1,15 +1,15 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, MaxAverageWaitSeconds, MetricsState, PlacedBuilding, Point,
-    PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan, ServiceDirection,
-    ServicePattern, Sim, TransitMode, TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, CitizenRoutine, GameSnapshot, MaxAverageWaitSeconds, MetricsState, PlacedBuilding,
+    Point, PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan,
+    ScheduledActivity, ScheduledActivityKind, ServiceDirection, ServicePattern, Sim, TransitMode,
+    TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::{
     clock, commute, objectives, road_topology::RoadTopology, state::create_initial_snapshot,
     traffic, transit, trips,
 };
 use caelum_core::{GameEngine, GameIntent};
-use common::persistence_fixtures::{dormant_worker_sim, worker_sim};
+use common::persistence_fixtures::{travelling_worker_sim, worker_sim};
 
 mod common;
 
@@ -205,7 +205,7 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, f64) {
     place_destination(&mut state, "home", Point { x: 1, y: 2 });
     place_destination(&mut state, "work", workplace);
     state.sims = std::iter::once(worker_sim("sim-001", home, Some(workplace)))
-        .chain((0..4).map(|id| dormant_worker_sim(&format!("seed-car-sim-{id:03}"), home)))
+        .chain((0..4).map(|id| travelling_worker_sim(&format!("seed-car-sim-{id:03}"), home)))
         .collect();
     let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
     let departure_time =
@@ -271,7 +271,7 @@ fn bus_arrival_order_fixture() -> GameSnapshot {
     let mut state = engine.snapshot();
     state.paused = false;
     state.sims = (0..5)
-        .map(|id| dormant_worker_sim(&format!("arrival-car-sim-{id:03}"), (2, 3).into()))
+        .map(|id| travelling_worker_sim(&format!("arrival-car-sim-{id:03}"), (2, 3).into()))
         .collect();
     let bus_path = state.transit.routes[0].legs[0]
         .current_path
@@ -317,7 +317,7 @@ fn staggered_car_arrival_fixture() -> GameSnapshot {
     )
     .expect("staggered arrival fixture has a valid car path");
     state.sims = (0..5)
-        .map(|index| dormant_worker_sim(&format!("arrival-sim-{index:03}"), home))
+        .map(|index| travelling_worker_sim(&format!("arrival-sim-{index:03}"), home))
         .collect();
     state.active_trips = [0.5, 1.0, 1.5, 2.0, 2.5]
         .into_iter()
@@ -444,7 +444,7 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     // spawn pass never adds commute traffic for them.
     state
         .sims
-        .extend((0..4).map(|index| dormant_worker_sim(&format!("seed-sim-{index}"), home)));
+        .extend((0..4).map(|index| travelling_worker_sim(&format!("seed-sim-{index}"), home)));
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(0.0);
@@ -785,6 +785,7 @@ fn coarse_car_arrival_matches_ticks_split_at_arrival_boundary() {
 fn missing_driving_payload_becomes_unserved_and_saveable() {
     let mut state = GameEngine::new().snapshot();
     state.sims = vec![worker_sim("sim-001", (2, 3).into(), None)];
+    state.sims[0].next_activity = None; // the hand-authored trip owns the citizen
     state.active_trips = vec![driving_trip_without_payload()];
 
     let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
@@ -807,6 +808,7 @@ fn missing_driving_payload_becomes_unserved_and_saveable() {
 fn walking_movement_scales_by_simulated_time() {
     let mut state = create_initial_snapshot();
     state.sims = vec![worker_sim("sim-001", (2, 3).into(), Some((5, 3).into()))];
+    state.sims[0].next_activity = None; // the hand-authored trip owns the citizen
     state.active_trips = vec![trip(
         "trip-001",
         TripStatus::Idle,
@@ -1000,6 +1002,7 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     let mut on_time = create_initial_snapshot();
     on_time.time = 20.0;
     on_time.sims = vec![worker_sim("sim-001", (2, 3).into(), Some((3, 3).into()))];
+    on_time.sims[0].next_activity = None; // the hand-authored trip owns the citizen
     on_time.active_trips = vec![trip(
         "trip-001",
         TripStatus::Idle,
@@ -1120,7 +1123,7 @@ fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
     state.day = clock::day_index(state.time);
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
     let mut waiting = trip(
         "trip-001",
         TripStatus::Waiting,
@@ -1209,7 +1212,7 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut coarse = common::running_engine_from_fixture(state.clone());
     coarse.tick(12.5);
@@ -1294,7 +1297,7 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut coarse = common::running_engine_from_fixture(state.clone());
     coarse.tick(12.5);
@@ -1394,7 +1397,7 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     // Vehicle starts at the boarding stop with a free seat.
     assert_eq!(state.transit.vehicles[0].step_progress, 0.0);
     assert!(state.transit.vehicles[0].passenger_ids.is_empty());
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut coarse = common::running_engine_from_fixture(state.clone());
     coarse.tick(12.5);
@@ -1475,7 +1478,7 @@ fn large_tick_consumes_all_duration_until_the_next_stop() {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let seconds = transit::seconds_until_next_vehicle_stop(
         &state,
@@ -1555,14 +1558,12 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         id: "sim-001".to_string(),
         home,
         position: home,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some(workplace),
-        commute_day: 1,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(workplace),
+        },
+        // The cross-midnight outbound still owns the citizen.
+        next_activity: None,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
@@ -1584,8 +1585,11 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
     let sim = arrived.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
     assert!(arrived.active_trips.is_empty());
     assert_eq!(sim.position, workplace);
-    assert!(!sim.outbound_resolved_today);
-    assert!(!sim.outbound_arrived_today);
+    assert_eq!(
+        sim.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine),
+        "the cross-midnight arrival defers to the next daily routine"
+    );
 
     let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
     let return_time = clock::GAME_DAY_SECONDS
@@ -1621,14 +1625,15 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
         id: "sim-001".to_string(),
         home: (2, 3).into(),
         position: (3, 3).into(),
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some((3, 3).into()),
-        commute_day: 0,
-        outbound_resolved_today: true,
-        outbound_arrived_today: true,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some((3, 3).into()),
+        },
+        // Waiting at the workplace for today's return wake.
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::PrimaryReturn,
+            due_time: return_time,
+        }),
     }];
 
     let mut engine = common::running_engine_from_fixture(state);
@@ -1640,8 +1645,11 @@ fn completed_same_day_return_is_not_respawned_after_pruning() {
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert_eq!(sim.position, Point { x: 2, y: 3 });
-    assert!(sim.return_resolved_today);
-    assert!(sim.returned_home_today);
+    assert_eq!(
+        sim.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine),
+        "the completed return hands the citizen back to tomorrow's routine"
+    );
 
     let again_result = engine.tick(0.0);
     assert!(again_result.rejection.is_none());
@@ -1665,7 +1673,7 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
     state.day = 0;
     state.clock_minutes = departure_minute;
     state.paused = false;
-    state.sims = vec![worker_sim("sim-001", home, Some(workplace))];
+    state.sims = vec![travelling_worker_sim("sim-001", home)];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),
@@ -1691,8 +1699,11 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(next.metrics.trip_outcomes.len(), 1);
-    assert!(sim.outbound_resolved_today);
-    assert!(!sim.outbound_arrived_today);
+    assert_eq!(
+        sim.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine),
+        "the unserved outbound defers to the next daily routine"
+    );
 }
 
 #[test]
@@ -1713,14 +1724,12 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
         id: "sim-001".to_string(),
         home,
         position: workplace,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some(workplace),
-        commute_day: 0,
-        outbound_resolved_today: true,
-        outbound_arrived_today: true,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(workplace),
+        },
+        // The hand-authored return trip owns the citizen.
+        next_activity: None,
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
@@ -1747,8 +1756,11 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(next.metrics.trip_outcomes.len(), 1);
-    assert!(sim.return_resolved_today);
-    assert!(!sim.returned_home_today);
+    assert_eq!(
+        sim.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine),
+        "the unserved return hands the citizen back to tomorrow's routine"
+    );
 }
 
 #[test]
@@ -1774,21 +1786,21 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
     state.clock_minutes = departure_minute;
     state.paused = false;
     place_destination(&mut state, "workplace", workplace);
-    // Sim stranded at the workplace after day-0 return was unserved. Day-0
-    // flags are set as they would be after the unserved return resolved;
-    // `commute_day` is still 0 so the day-1 reset clears them.
+    // Sim stranded at the workplace after day-0 return was unserved: the
+    // resolution handler scheduled next day's routine wake, and the citizen
+    // waits away from home.
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
         home,
         position: workplace,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some(workplace),
-        commute_day: 0,
-        outbound_resolved_today: true,
-        outbound_arrived_today: true,
-        return_resolved_today: true,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(workplace),
+        },
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: day1_departure,
+        }),
     }];
     state.active_trips = Vec::new();
 
@@ -1810,10 +1822,12 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
         "phantom outbound must not be counted as a completed trip"
     );
     assert_eq!(next.metrics.unserved_trips, 0);
-    // The sim is already at work, so the outbound is resolved and the return
-    // trip is unlocked to bring them home.
-    assert!(sim.outbound_resolved_today);
-    assert!(sim.outbound_arrived_today);
+    // The sim is away from home, so the daily routine resolved into today's
+    // return wake to bring them home instead of an outbound.
+    assert_eq!(
+        sim.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::PrimaryReturn),
+    );
     assert_eq!(sim.position, workplace);
 }
 
@@ -1821,15 +1835,9 @@ fn stranded_sim_at_workplace_does_not_spawn_phantom_outbound_next_day() {
 fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
     // Regression: when a return trip from the previous day is still in
     // progress at the midnight rollover, `sim.position` is still the workplace
-    // (position is only updated on trip arrival). The stranded-sim guard at
-    // the outbound spawn must NOT fire — the sim is in transit, not stranded.
-    // If it did, it would set `outbound_resolved_today` and
-    // `outbound_arrived_today`, unlocking the return spawn. Once the
-    // in-progress return arrives home (setting `sim.position = home` but, due
-    // to the day mismatch in `apply_arrival_to_sim`, NOT setting
-    // `returned_home_today`/`return_resolved_today`), the current day's return
-    // departure would spawn a home→home phantom return trip and count a
-    // phantom completion.
+    // (position is only updated on trip arrival). The daily-routine stranded
+    // guard must NOT treat the citizen as stranded — they are in transit,
+    // owned by that trip, and carry no daily-routine wake that could fire.
     let mut state = create_initial_snapshot();
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 8, y: 3 };
@@ -1838,20 +1846,17 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
     place_destination(&mut state, "workplace", workplace);
-    // Day-0 flags are set as they would be after the outbound completed and the
-    // return spawned; `commute_day` is still 0 so the day-1 reset clears them.
+    // The in-progress return owns the citizen: no next activity, so the
+    // daily-routine stranded guard cannot fire for them.
     state.sims = vec![Sim {
         id: "sim-001".to_string(),
         home,
         position: workplace,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some(workplace),
-        commute_day: 0,
-        outbound_resolved_today: true,
-        outbound_arrived_today: true,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(workplace),
+        },
+        next_activity: None,
     }];
     // Active return trip from day 0, walking home, 1 tile away from arrival.
     state.active_trips = vec![ActiveTrip {
@@ -1876,14 +1881,11 @@ fn return_trip_in_progress_across_midnight_does_not_trigger_stranded_guard() {
     let next = engine.snapshot();
     let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
 
-    // The stranded guard must not fire while a return trip is in progress.
+    // The stranded guard must not fire while a return trip is in progress:
+    // the citizen is still travelling, owned by that trip.
     assert!(
-        !sim.outbound_resolved_today,
-        "stranded guard must not resolve outbound while a return trip is in progress"
-    );
-    assert!(
-        !sim.outbound_arrived_today,
-        "stranded guard must not mark outbound arrived while a return trip is in progress"
+        sim.next_activity.is_none(),
+        "a citizen mid-return must stay travelling, not scheduled"
     );
     // No phantom outbound should spawn.
     assert!(
@@ -1921,14 +1923,12 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
         id: "sim-001".to_string(),
         home,
         position: workplace,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some(workplace),
-        commute_day: 0,
-        outbound_resolved_today: true,
-        outbound_arrived_today: true,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(workplace),
+        },
+        // The cross-midnight return owns the citizen until it lands home.
+        next_activity: None,
     }];
     // Active return trip from day 0, walking home, 1 tile away from arrival.
     state.active_trips = vec![ActiveTrip {
@@ -1962,22 +1962,17 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
 
     // The day-1 outbound should have spawned and arrived (the sim was at home
     // after the cross-midnight return arrived, before the outbound departure).
-    // Without the fix, the stranded guard suppresses the outbound, leaving
-    // `outbound_arrived_today` set only by the guard itself — but no actual
-    // outbound trip runs, so the sim never reaches the workplace and the
-    // return spawns from home instead.
-    assert!(
-        sim.outbound_arrived_today,
+    // Without the exact-time chain, the outbound would never run after the
+    // cross-midnight return brought the sim home, and the return would spawn
+    // from home instead.
+    assert_eq!(
+        sim.position, workplace,
         "day-1 outbound should have arrived after the cross-midnight return brought the sim home"
     );
 
     // A legitimate day-1 return originates at the workplace (after the
-    // outbound arrives) and is still in progress. A phantom home→home return
-    // would have completed instantly and set `return_resolved_today`.
-    assert!(
-        !sim.return_resolved_today,
-        "day-1 return should still be in progress, not resolved by a phantom home→home completion"
-    );
+    // outbound arrives) and is still in progress; a phantom home→home return
+    // would have completed instantly at the workplace.
     let active_return = next
         .active_trips
         .iter()
@@ -2006,14 +2001,15 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
         id: "sim-001".to_string(),
         home: (2, 3).into(),
         position: (3, 3).into(),
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some((3, 3).into()),
-        commute_day: 0,
-        outbound_resolved_today: true,
-        outbound_arrived_today: true,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some((3, 3).into()),
+        },
+        // Waiting at the workplace for today's return wake.
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::PrimaryReturn,
+            due_time: return_time,
+        }),
     }];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-002".to_string(),
@@ -2034,7 +2030,7 @@ fn spawned_return_uses_monotonic_trip_sequence_after_pruning() {
     // spawn pass never adds commute traffic for it.
     state
         .sims
-        .push(dormant_worker_sim("sim-002", (8, 3).into()));
+        .push(travelling_worker_sim("sim-002", (8, 3).into()));
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(0.0);
@@ -2062,7 +2058,7 @@ fn state_with_zero_length_walk_then_bus() -> caelum_core::model::GameSnapshot {
     state.day = clock::day_index(state.time);
     state.clock_minutes = clock::clock_minutes(state.time);
     state.paused = false;
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
     // No transit vehicles: the trip just waits at the boarding point so we can
     // isolate wait-time accrual without depending on vehicle movement.
     state.transit = TransitNetwork {
@@ -2196,7 +2192,7 @@ fn all_zero_length_walks_collapses_to_immediate_arrival() {
     });
     trip.deadline = 1_000.0;
     state.active_trips = vec![trip];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(1.0);
@@ -2272,7 +2268,7 @@ fn zero_length_transfer_walk_collapses_between_transit_legs() {
     trip.current_leg_index = 1;
     trip.deadline = 1_000.0;
     state.active_trips = vec![trip];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(30.0);
@@ -2369,7 +2365,7 @@ fn coarse_tick_detects_wait_loss_before_patience_expiry() {
     // 170s of wait past the 180s threshold to the 240s patience expiry.
     waiting.patience_remaining = 70.0;
     state.active_trips = vec![waiting];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(70.0);
@@ -2419,7 +2415,7 @@ fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
     trip_b.patience_remaining = 121.0; // waited 119s
 
     state.active_trips = vec![trip_a, trip_b];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     // A 200s coarse tick: the aggregate average crosses 180s at t=31s, well
     // before Trip A's patience expiry at t=61s. Without the aggregate boundary
@@ -2489,7 +2485,7 @@ fn coarse_tick_samples_aggregate_wait_when_threshold_is_already_equal() {
     trip_b.patience_remaining = 121.0; // waited 119s; aggregate average is exactly 149s
 
     state.active_trips = vec![trip_a, trip_b];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     assert_average_wait_loss_matches_coarse_and_fine(&state);
 }
@@ -2515,7 +2511,7 @@ fn coarse_tick_samples_per_trip_wait_when_zero_threshold_is_already_equal() {
     );
     just_spawned.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
     state.active_trips = vec![just_spawned];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     assert_average_wait_loss_matches_coarse_and_fine(&state);
 }
@@ -2548,7 +2544,7 @@ fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
     // outcomes), then the tick advances 390s past the 300s rolling window. By
     // the final snapshot at t=400s, the outcomes at t=10s are pruned (window
     // start = 100s). Without per-substep evaluation, the loss is missed.
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(400.0);
@@ -2588,7 +2584,7 @@ fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
                 waiting
             })
             .collect();
-        state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+        state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
         state
     }
 

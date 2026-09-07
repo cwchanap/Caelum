@@ -30,15 +30,8 @@ pub(super) enum Routine {
 }
 
 /// Durable next scheduled activity. The component is authoritative citizen
-/// state; the exact-time scheduler bucket entry is only its wake-up.
+/// state; the exact-time scheduler bucket entry is only its wake-up. A citizen
+/// with no component is travelling: an active trip owns them until its
+/// resolution handler schedules the next activity.
 #[derive(Component, Clone, Debug, PartialEq)]
 pub(super) struct NextActivity(pub(super) ScheduledActivity);
-
-#[derive(Component, Clone, Debug, PartialEq)]
-pub(super) struct LegacyDayState {
-    pub(super) commute_day: u32,
-    pub(super) outbound_resolved: bool,
-    pub(super) outbound_arrived: bool,
-    pub(super) return_resolved: bool,
-    pub(super) returned_home: bool,
-}

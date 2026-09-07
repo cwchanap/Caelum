@@ -117,14 +117,138 @@ pub fn check_snapshot_schema(value: &serde_json::Value) -> Result<(), SnapshotLo
 
 #[cfg(test)]
 mod tests {
-    use super::{validate_and_compile, NumericError, PersistenceError, SnapshotField, TileError};
+    use super::{
+        validate_and_compile, AssignmentError, EntityKind, EntityRef, NumericError,
+        PersistenceError, SnapshotField, TileError,
+    };
     use crate::engine::GameEngine;
-    use crate::model::Point;
+    use crate::model::{
+        CitizenRoutine, Point, RouteLeg, RoutePlan, ScheduledActivity, ScheduledActivityKind, Sim,
+        TransitMode, TripStatus,
+    };
 
     fn paused_snapshot() -> crate::model::GameSnapshot {
         let mut snapshot = GameEngine::new().snapshot();
         snapshot.paused = true;
         snapshot
+    }
+
+    fn worker_routine(workplace: Option<Point>) -> CitizenRoutine {
+        CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace,
+        }
+    }
+
+    fn scheduled(due_time: f64) -> Option<ScheduledActivity> {
+        Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time,
+        })
+    }
+
+    fn idle_sim(id: &str, next_activity: Option<ScheduledActivity>) -> Sim {
+        Sim {
+            id: id.to_string(),
+            home: Point { x: 2, y: 3 },
+            position: Point { x: 2, y: 3 },
+            routine: worker_routine(None),
+            next_activity,
+        }
+    }
+
+    fn walking_trip(sim_id: &str) -> crate::model::ActiveTrip {
+        crate::model::ActiveTrip {
+            id: "trip-day-0-trip-001".to_string(),
+            sim_id: sim_id.to_string(),
+            purpose: crate::model::TripPurpose::CommuteOutbound,
+            origin: Point { x: 2, y: 3 },
+            destination: Point { x: 8, y: 3 },
+            position: crate::model::TripPosition { x: 4.0, y: 3.0 },
+            status: TripStatus::Walking,
+            deadline: 900.0,
+            route_plan: Some(RoutePlan {
+                legs: vec![RouteLeg {
+                    mode: TransitMode::Walk,
+                    from: Point { x: 2, y: 3 },
+                    to: Point { x: 8, y: 3 },
+                    line_id: None,
+                    service_direction: None,
+                    board_itinerary_index: None,
+                    alight_itinerary_index: None,
+                }],
+                estimated_seconds: 120.0,
+            }),
+            current_leg_index: 0,
+            patience_remaining: 240.0,
+            current_leg_wait_seconds: 0.0,
+            private_car_trip: None,
+        }
+    }
+
+    fn sim_entity(id: &str) -> EntityRef {
+        EntityRef {
+            kind: EntityKind::Sim,
+            id: id.to_string(),
+        }
+    }
+
+    #[test]
+    fn travelling_sim_with_a_next_activity_is_rejected() {
+        let mut snapshot = paused_snapshot();
+        snapshot.sims = vec![idle_sim("sim-001", scheduled(350.0))];
+        snapshot.active_trips = vec![walking_trip("sim-001")];
+
+        match validate_and_compile(snapshot) {
+            Err(PersistenceError::InvalidAssignment { entity, reason }) => {
+                assert_eq!(entity, sim_entity("sim-001"));
+                assert_eq!(reason, AssignmentError::ScheduledWhileTraveling);
+            }
+            Err(error) => panic!("unexpected rejection: {error:?}"),
+            Ok(_) => panic!("travelling sim with a schedule should be rejected"),
+        }
+    }
+
+    #[test]
+    fn idle_sim_without_a_next_activity_is_rejected() {
+        let mut snapshot = paused_snapshot();
+        snapshot.sims = vec![idle_sim("sim-001", None)];
+
+        match validate_and_compile(snapshot) {
+            Err(PersistenceError::InvalidAssignment { entity, reason }) => {
+                assert_eq!(entity, sim_entity("sim-001"));
+                assert_eq!(reason, AssignmentError::MissingNextActivity);
+            }
+            Err(error) => panic!("unexpected rejection: {error:?}"),
+            Ok(_) => panic!("idle sim without a schedule should be rejected"),
+        }
+    }
+
+    #[test]
+    fn nonfinite_next_activity_due_time_is_rejected() {
+        let mut snapshot = paused_snapshot();
+        snapshot.sims = vec![idle_sim("sim-001", scheduled(f64::NAN))];
+
+        assert_eq!(
+            validate_and_compile(snapshot).err(),
+            Some(PersistenceError::InvalidNumericValue {
+                entity: Some(sim_entity("sim-001")),
+                field: SnapshotField::SimNextActivityDueTime,
+                reason: NumericError::NotFinite,
+            })
+        );
+    }
+
+    #[test]
+    fn travelling_sim_without_a_next_activity_and_idle_with_one_both_load() {
+        let mut travelling = paused_snapshot();
+        travelling.sims = vec![idle_sim("sim-001", None)];
+        travelling.active_trips = vec![walking_trip("sim-001")];
+        assert!(validate_and_compile(travelling).is_ok());
+
+        let mut idle = paused_snapshot();
+        idle.sims = vec![idle_sim("sim-001", scheduled(350.0))];
+        assert!(validate_and_compile(idle).is_ok());
     }
 
     #[test]

@@ -1,8 +1,8 @@
 use std::time::Instant;
 
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, PlacedBuilding, Point, Sim, TransitMode, TripPosition, TripPurpose,
-    TripStatus, Vehicle,
+    ActiveTrip, CitizenRoutine, GameSnapshot, PlacedBuilding, Point, ScheduledActivity,
+    ScheduledActivityKind, Sim, TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::GameEngine;
@@ -16,14 +16,14 @@ fn sim(index: usize) -> Sim {
         id: format!("sim-{index:06}"),
         home,
         position: home,
-        worker_profile: caelum_core::model::WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: Some(Point { x: 14, y: 9 }),
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(Point { x: 14, y: 9 }),
+        },
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: 350.0,
+        }),
     }
 }
 

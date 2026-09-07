@@ -6,9 +6,9 @@ mod schedule;
 pub const MOVE_IN_INTERVAL_SECONDS: f64 = GAME_DAY_SECONDS / 24.0;
 
 pub(crate) use schedule::{
-    apply_trip_resolutions, build_schedule, build_world_v9, drain_trip_demands,
+    apply_trip_resolutions, build_schedule, build_world, drain_trip_demands,
     next_population_boundary, presentation_aggregates, reconcile_buildings, run_due,
-    scheduler_boundary_generation, scheduler_due_key_count, snapshot_sims_v9, TripDemand,
+    scheduler_boundary_generation, scheduler_due_key_count, snapshot_sims, TripDemand,
     TripResolution,
 };
 
@@ -26,13 +26,11 @@ mod tests {
 
     use bevy_ecs::prelude::{Entity, World};
 
-    use super::components::{
-        CitizenId, HomeAssignment, LegacyDayState, NextActivity, Routine, SettledPosition,
-    };
+    use super::components::{CitizenId, HomeAssignment, NextActivity, Routine, SettledPosition};
     use super::schedule::{
-        build_schedule, build_world_v9, drain_trip_demands, job_occupancy_for_building,
+        build_schedule, build_world, drain_trip_demands, job_occupancy_for_building,
         population_count, rebuilt_index, reconcile_buildings, resident_occupancy_for_building,
-        run_due, snapshot_sims_v9, spawn_indexed_citizen, NextCitizenOrdinal, PopulationIndex,
+        run_due, snapshot_sims, spawn_indexed_citizen, NextCitizenOrdinal, PopulationIndex,
         PopulationMutation,
     };
     use super::{scheduled_time_seconds, MOVE_IN_INTERVAL_SECONDS};
@@ -41,9 +39,9 @@ mod tests {
     use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
     use crate::ids::entity_id;
     use crate::model::{
-        ActiveTrip, GameMode, GameSnapshot, PlacedBuilding, Point, PrivateCarTrip, RoutePlan,
-        ScheduledActivityKind, Sim, TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle,
-        WorkerProfile,
+        ActiveTrip, CitizenRoutine, GameMode, GameSnapshot, PlacedBuilding, Point, PrivateCarTrip,
+        RoutePlan, ScheduledActivity, ScheduledActivityKind, Sim, TransitMode, TripPosition,
+        TripPurpose, TripStatus, Vehicle,
     };
     use crate::sandbox::{create_sandbox_snapshot, SandboxCreationRequest};
     use crate::state::create_initial_snapshot;
@@ -85,47 +83,44 @@ mod tests {
             building_definition(&building.building_type)
                 .is_some_and(|definition| definition.resident_capacity == 0)
         });
-        let base = Sim {
-            id: String::new(),
+        let worker_wake = |sim_id: &str, template: &str| ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: scheduled_time_seconds(
+                snapshot.day,
+                departure_minute_for_sim(sim_id, template, "outbound"),
+            ),
+        };
+        let worker = |sim_id: &str, template: &str, workplace, home: Point| Sim {
+            id: sim_id.to_string(),
             home,
             position: home,
-            worker_profile: WorkerProfile::Worker,
-            shift_template: Some("standard".to_string()),
-            workplace: Some(shop),
-            commute_day: 5,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
+            routine: CitizenRoutine::Worker {
+                shift_template: template.to_string(),
+                workplace,
+            },
+            next_activity: Some(worker_wake(sim_id, template)),
         };
         snapshot.sims = vec![
+            worker("sim-001", "standard", Some(shop), home),
             Sim {
-                id: "sim-001".to_string(),
-                ..base.clone()
-            },
-            Sim {
-                id: "sim-002".to_string(),
-                home: other_home,
                 position: Point {
                     x: other_home.x + 1,
                     y: other_home.y,
                 },
-                shift_template: Some("swing".to_string()),
-                workplace: None,
-                ..base.clone()
+                routine: CitizenRoutine::Worker {
+                    shift_template: "swing".to_string(),
+                    workplace: None,
+                },
+                ..worker("sim-002", "swing", None, other_home)
             },
+            worker("sim-003", "standard", Some(factory), home),
             Sim {
-                id: "sim-003".to_string(),
-                workplace: Some(factory),
-                ..base.clone()
-            },
-            Sim {
-                id: "sim-004".to_string(),
-                home: other_home,
-                worker_profile: WorkerProfile::NonWorker,
-                shift_template: None,
-                workplace: None,
-                ..base
+                routine: CitizenRoutine::Student,
+                next_activity: Some(ScheduledActivity {
+                    kind: ScheduledActivityKind::DailyRoutine,
+                    due_time: scheduled_time_seconds(snapshot.day + 1, 0),
+                }),
+                ..worker("sim-004", "", None, other_home)
             },
         ];
         snapshot
@@ -144,15 +139,15 @@ mod tests {
     #[test]
     fn ecs_world_round_trips_current_durable_sims_in_stable_id_order() {
         let snapshot = population_fixture();
-        let world = build_world_v9(&snapshot);
+        let world = build_world(&snapshot);
         assert_eq!(population_count(&world), snapshot.sims.len() as u32);
-        assert_eq!(snapshot_sims_v9(&world, snapshot.day), snapshot.sims);
+        assert_eq!(snapshot_sims(&world, snapshot.day), snapshot.sims);
     }
 
     #[test]
     fn allocator_does_not_reuse_a_deleted_highest_id() {
         let snapshot = population_fixture();
-        let mut world = build_world_v9(&snapshot);
+        let mut world = build_world(&snapshot);
         let before = world.resource::<NextCitizenOrdinal>().0;
         despawn_highest_fixture_citizen(&mut world);
         assert_eq!(world.resource::<NextCitizenOrdinal>().0, before);
@@ -161,7 +156,7 @@ mod tests {
     #[test]
     fn rebuilt_index_matches_the_index_built_from_snapshot() {
         let snapshot = population_fixture();
-        let mut world = build_world_v9(&snapshot);
+        let mut world = build_world(&snapshot);
         assert_eq!(
             rebuilt_index(&mut world),
             *world.resource::<PopulationIndex>()
@@ -187,13 +182,6 @@ mod tests {
                     Routine::Worker {
                         shift_template: "standard".to_string(),
                         workplace: None,
-                    },
-                    LegacyDayState {
-                        commute_day: 0,
-                        outbound_resolved: false,
-                        outbound_arrived: false,
-                        return_resolved: false,
-                        returned_home: true,
                     },
                 ),
             );
@@ -265,14 +253,17 @@ mod tests {
             id: id.to_string(),
             home,
             position: home,
-            worker_profile: WorkerProfile::Worker,
-            shift_template: Some("standard".to_string()),
-            workplace,
-            commute_day: 0,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace,
+            },
+            next_activity: Some(ScheduledActivity {
+                kind: ScheduledActivityKind::DailyRoutine,
+                due_time: scheduled_time_seconds(
+                    1,
+                    departure_minute_for_sim(id, "standard", "outbound"),
+                ),
+            }),
         }
     }
 
@@ -326,9 +317,12 @@ mod tests {
     }
 
     fn citizen_workplaces(world: &mut World, day: u32) -> Vec<(String, Option<Point>)> {
-        snapshot_sims_v9(world, day)
+        snapshot_sims(world, day)
             .into_iter()
-            .map(|sim| (sim.id, sim.workplace))
+            .map(|sim| match sim.routine {
+                CitizenRoutine::Worker { workplace, .. } => (sim.id, workplace),
+                CitizenRoutine::Student => (sim.id, None),
+            })
             .collect()
     }
 
@@ -349,7 +343,7 @@ mod tests {
             reconcile_house("building-002", Point::from((2, 7)), 0.0),
             reconcile_market("building-003", Point::from((8, 3)), 0.0),
         ];
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let ordinal_before = world.resource::<NextCitizenOrdinal>().0;
 
         // Scheduling future move-ins alone is not a population mutation.
@@ -361,7 +355,7 @@ mod tests {
         assert!(result.changed);
 
         assert_eq!(population_count(&world), 8);
-        let sims = snapshot_sims_v9(&world, after.day);
+        let sims = snapshot_sims(&world, after.day);
         assert_eq!(
             sims.iter().map(|sim| sim.id.as_str()).collect::<Vec<_>>(),
             [
@@ -371,7 +365,11 @@ mod tests {
         );
         let market_tiles: HashSet<Point> =
             after.buildings[2].occupied_tiles.iter().copied().collect();
-        let assigned: Vec<Option<Point>> = sims.iter().map(|sim| sim.workplace).collect();
+        let workplace_of = |sim: &Sim| match &sim.routine {
+            CitizenRoutine::Worker { workplace, .. } => *workplace,
+            CitizenRoutine::Student => None,
+        };
+        let assigned: Vec<Option<Point>> = sims.iter().map(workplace_of).collect();
         assert_eq!(
             assigned
                 .iter()
@@ -384,10 +382,16 @@ mod tests {
             assert!(market_tiles.contains(workplace));
         }
         for sim in sims.iter().take(4) {
-            assert!(sim.workplace.is_some(), "lowest IDs fill the free slots");
+            assert!(
+                workplace_of(sim).is_some(),
+                "lowest IDs fill the free slots"
+            );
         }
         for sim in sims.iter().skip(4) {
-            assert!(sim.workplace.is_none(), "surplus workers stay unassigned");
+            assert!(
+                workplace_of(sim).is_none(),
+                "surplus workers stay unassigned"
+            );
         }
         assert_index_rebuilt(&mut world);
         assert_eq!(
@@ -414,7 +418,7 @@ mod tests {
         after
             .buildings
             .retain(|building| building.id != "building-001");
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let ordinal_before = world.resource::<NextCitizenOrdinal>().0;
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
@@ -455,7 +459,7 @@ mod tests {
         after
             .buildings
             .push(reconcile_market("building-001", Point::from((8, 3)), 0.0));
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let ordinal_before = world.resource::<NextCitizenOrdinal>().0;
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
@@ -529,7 +533,7 @@ mod tests {
         after
             .buildings
             .push(reconcile_house("building-004", Point::from((6, 3)), 0.0));
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let ordinal_before = world.resource::<NextCitizenOrdinal>().0;
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
@@ -560,7 +564,7 @@ mod tests {
         let mut schedule = build_schedule();
         run_due(&mut world, &mut schedule, 3.0 * MOVE_IN_INTERVAL_SECONDS);
         assert_eq!(population_count(&world), 6);
-        let sims = snapshot_sims_v9(&world, after.day);
+        let sims = snapshot_sims(&world, after.day);
         assert_eq!(
             sims.iter().map(|sim| sim.id.as_str()).collect::<Vec<_>>(),
             ["sim-003", "sim-004", "sim-005", "sim-006", "sim-007", "sim-008"],
@@ -588,7 +592,7 @@ mod tests {
         after
             .buildings
             .push(reconcile_house("building-new", anchor, after.time));
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
 
@@ -613,11 +617,18 @@ mod tests {
         let departure = sim_departure_time("sim-001", 0);
         let mut before = reconcile_sandbox(departure + 1.0);
         before.sims = vec![reconcile_worker("sim-001", Point::from((2, 3)), None)];
+        // A late load: today's departure already passed, so the durable wake is
+        // tomorrow's routine.
+        let dormant = ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: departure + GAME_DAY_SECONDS,
+        };
+        before.sims[0].next_activity = Some(dormant.clone());
         let mut after = before.clone();
         after
             .buildings
             .push(reconcile_market("building-001", Point::from((8, 3)), 0.0));
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
         let dormant = world.get::<NextActivity>(entity).unwrap().0.clone();
         assert_eq!(dormant.kind, ScheduledActivityKind::DailyRoutine);
@@ -672,7 +683,7 @@ mod tests {
         after
             .buildings
             .push(reconcile_market("building-002", Point::from((12, 3)), 0.0));
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
         assert!(world.get::<NextActivity>(entity).is_none());
 
@@ -724,7 +735,7 @@ mod tests {
         before.transit.vehicles = vec![reconcile_vehicle(&["trip-1", "trip-other"])];
         let mut after = before.clone();
         after.buildings.clear();
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
@@ -800,7 +811,7 @@ mod tests {
         after
             .buildings
             .retain(|building| building.id != "building-001");
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
 
@@ -855,7 +866,7 @@ mod tests {
         after
             .buildings
             .retain(|building| building.id != "building-001");
-        let mut world = build_world_v9(&before);
+        let mut world = build_world(&before);
         let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);

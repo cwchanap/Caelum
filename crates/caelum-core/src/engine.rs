@@ -251,7 +251,7 @@ impl GameEngine {
     /// construct the world/schedule/index/allocator from its durable sims,
     /// clear the shell population mirror, then install.
     fn from_parts(snapshot: GameSnapshot, road_topology: RoadTopology) -> Self {
-        let world = crate::population::build_world_v9(&snapshot);
+        let world = crate::population::build_world(&snapshot);
         let population_schedule = crate::population::build_schedule();
         let mut snapshot = snapshot;
         snapshot.sims.clear();
@@ -267,7 +267,7 @@ impl GameEngine {
     /// then derived service metrics are populated on the output only.
     pub fn snapshot(&self) -> GameSnapshot {
         let mut snapshot = self.snapshot.clone();
-        snapshot.sims = crate::population::snapshot_sims_v9(&self.world, snapshot.day);
+        snapshot.sims = crate::population::snapshot_sims(&self.world, snapshot.day);
         crate::service_control::populate_snapshot_metrics(&mut snapshot);
         snapshot
     }
@@ -679,7 +679,7 @@ impl GameEngine {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{Sim, WorkerProfile};
+    use crate::model::{CitizenRoutine, ScheduledActivity, ScheduledActivityKind, Sim};
     use crate::population;
     use crate::state::create_initial_snapshot;
 
@@ -688,18 +688,21 @@ mod tests {
             id: id.to_string(),
             home,
             position: home,
-            worker_profile: WorkerProfile::Worker,
-            shift_template: Some("standard".to_string()),
-            workplace,
-            commute_day: 0,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace,
+            },
+            next_activity: Some(ScheduledActivity {
+                kind: ScheduledActivityKind::DailyRoutine,
+                due_time: scheduled_time_seconds(
+                    0,
+                    departure_minute_for_sim(id, "standard", "outbound"),
+                ),
+            }),
         }
     }
 
-    fn populated_v9_snapshot() -> GameSnapshot {
+    fn populated_snapshot() -> GameSnapshot {
         let mut snapshot = create_initial_snapshot();
         snapshot.sims = vec![
             loaded_sim("sim-001", Point::from((2, 3)), None),
@@ -710,7 +713,7 @@ mod tests {
 
     #[test]
     fn live_shell_has_no_population_mirror() {
-        let engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        let engine = GameEngine::from_snapshot(populated_snapshot()).unwrap();
         assert!(engine.snapshot.sims.is_empty());
         assert_eq!(population::population_count(&engine.world), 2);
         assert_eq!(engine.snapshot().sims.len(), 2);
@@ -718,7 +721,7 @@ mod tests {
 
     #[test]
     fn paused_tick_mutates_neither_shell_nor_population() {
-        let mut engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        let mut engine = GameEngine::from_snapshot(populated_snapshot()).unwrap();
         let before = engine.snapshot();
         let result = engine.tick(100.0);
         assert!(!result.applied);
@@ -727,7 +730,7 @@ mod tests {
 
     #[test]
     fn speed_0_tick_mutates_neither_shell_nor_population() {
-        let mut engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        let mut engine = GameEngine::from_snapshot(populated_snapshot()).unwrap();
         assert!(engine.dispatch(GameIntent::SetSpeed { speed: 0 }).applied);
         assert!(
             engine
@@ -742,7 +745,7 @@ mod tests {
 
     #[test]
     fn running_zero_delta_tick_without_due_work_is_a_no_op() {
-        let mut engine = GameEngine::from_snapshot(populated_v9_snapshot()).unwrap();
+        let mut engine = GameEngine::from_snapshot(populated_snapshot()).unwrap();
         assert!(
             engine
                 .dispatch(GameIntent::SetPaused { paused: false })
@@ -764,7 +767,7 @@ mod tests {
             0,
             departure_minute_for_sim("sim-001", "standard", "outbound"),
         );
-        let mut snapshot = populated_v9_snapshot();
+        let mut snapshot = populated_snapshot();
         snapshot.time = departure;
         snapshot.day = crate::clock::day_index(departure);
         let mut engine = GameEngine::from_snapshot(snapshot).unwrap();
@@ -780,11 +783,16 @@ mod tests {
             first.applied,
             "due ECS work must apply even with an equal shell"
         );
+        // The dormant reschedule moves only the citizen's durable wake; every
+        // shell field is untouched.
+        let mut after = engine.snapshot();
         assert_eq!(
-            engine.snapshot(),
-            expected_shell,
-            "a dormant reschedule must not touch the shell"
+            after.sims[0].next_activity.as_ref().unwrap().due_time,
+            departure + crate::clock::GAME_DAY_SECONDS,
+            "the dormant wake reschedules to tomorrow"
         );
+        after.sims = expected_shell.sims.clone();
+        assert_eq!(after, expected_shell);
 
         let second = engine.tick(0.0);
         assert!(

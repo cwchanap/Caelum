@@ -12,8 +12,8 @@
 //! functions they lock.
 
 use caelum_core::model::{
-    ActiveTrip, EconomyPreset, Point, PrivateCarTrip, RouteLeg, RoutePlan, ServiceDirection, Sim,
-    TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus, WorkerProfile,
+    ActiveTrip, CitizenRoutine, EconomyPreset, Point, PrivateCarTrip, RouteLeg, RoutePlan,
+    ServiceDirection, Sim, TransitMode, TransitPath, TripPosition, TripPurpose, TripStatus,
 };
 use caelum_core::traffic::RoadFlow;
 use caelum_core::transit::{BUS_CAPACITY, BUS_COST, METRO_CAPACITY, METRO_COST};
@@ -176,19 +176,17 @@ fn free_flow_cycle_seconds(engine: &GameEngine) -> f64 {
         .sum()
 }
 
+/// A traveller anchored by a hand-authored waiting trip for the same id.
 fn waiting_sim(id: &str, position: Point) -> Sim {
     Sim {
         id: id.to_string(),
         home: position,
         position,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: None,
-        workplace: None,
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: None,
+        },
+        next_activity: None,
     }
 }
 
@@ -879,14 +877,12 @@ fn shortfall_bus_engine() -> GameEngine {
             id: sim_id.clone(),
             home: Point { x: 2, y: 4 },
             position: Point { x: 2, y: 4 },
-            worker_profile: WorkerProfile::Worker,
-            shift_template: None,
-            workplace: None,
-            commute_day: 0,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace: None,
+            },
+            // The driving trip below owns this citizen.
+            next_activity: None,
         });
         slowed.active_trips.push(ActiveTrip {
             id: format!("traffic-{suffix}"),

@@ -1,5 +1,3 @@
-use crate::model::WorkerProfile;
-
 pub const WALK_SECONDS_PER_TILE: f64 = 20.0;
 
 pub fn numeric_id_suffix(id: &str) -> usize {
@@ -8,12 +6,10 @@ pub fn numeric_id_suffix(id: &str) -> usize {
         .unwrap_or(1)
 }
 
-pub fn worker_profile_for_id(id: &str) -> WorkerProfile {
-    if numeric_id_suffix(id).is_multiple_of(10) {
-        WorkerProfile::NonWorker
-    } else {
-        WorkerProfile::Worker
-    }
+/// Canonical Students are every 10th ID (sim-010, sim-020, ...). Only fresh
+/// move-ins consult this; a restored citizen's durable routine is authoritative.
+pub fn is_student_id(id: &str) -> bool {
+    numeric_id_suffix(id).is_multiple_of(10)
 }
 
 pub fn shift_template_for_id(id: &str) -> Option<&'static str> {

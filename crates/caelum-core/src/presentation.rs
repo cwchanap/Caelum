@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::building_catalog::building_definition;
 use crate::model::{
-    GameMap, GameRules, GameSnapshot, MetricsState, PlacedBuilding, Point, RouteLegPath,
-    ServiceMetrics, ServicePattern, Station, Stop, TransitMode, TripPosition,
+    CitizenRoutine, GameMap, GameRules, GameSnapshot, MetricsState, PlacedBuilding, Point,
+    RouteLegPath, ServiceMetrics, ServicePattern, Station, Stop, TransitMode, TripPosition,
 };
 use crate::platforms::platform_waiting_occupancy;
 use crate::service_control::service_metrics_by_line;
@@ -55,9 +55,12 @@ pub fn population_aggregates_from_snapshot(snapshot: &GameSnapshot) -> Populatio
             snapshot
                 .sims
                 .iter()
-                .filter(|sim| {
-                    sim.workplace
-                        .is_some_and(|workplace| tiles.contains(&workplace))
+                .filter(|sim| match &sim.routine {
+                    CitizenRoutine::Worker {
+                        workplace: Some(workplace),
+                        ..
+                    } => tiles.contains(workplace),
+                    _ => false,
                 })
                 .count()
         };
@@ -356,9 +359,10 @@ mod tests {
     use crate::engine::GameEngine;
     use crate::intent::{GameIntent, RoadPreset};
     use crate::model::{
-        ActiveTrip, BusStopKind, Heading, MovementKind, PathGeometry, Platform, PrivateCarTrip,
-        RoadPathStep, RouteLeg, RoutePlan, ServiceDirection, Sim, Stop, TransitNodeStatus,
-        TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+        ActiveTrip, BusStopKind, CitizenRoutine, Heading, MovementKind, PathGeometry, Platform,
+        PrivateCarTrip, RoadPathStep, RouteLeg, RoutePlan, ScheduledActivity,
+        ScheduledActivityKind, ServiceDirection, Sim, Stop, TransitNodeStatus, TransitPath,
+        TripPurpose, TripStatus, Vehicle,
     };
     use crate::platforms::on_platform_trip_ids;
     use crate::state::create_initial_snapshot;
@@ -369,14 +373,14 @@ mod tests {
             id: id.to_string(),
             home,
             position: home,
-            worker_profile: WorkerProfile::Worker,
-            shift_template: None,
-            workplace,
-            commute_day: 0,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace,
+            },
+            next_activity: Some(ScheduledActivity {
+                kind: ScheduledActivityKind::DailyRoutine,
+                due_time: 3_600.0,
+            }),
         }
     }
 
@@ -834,14 +838,14 @@ mod tests {
             id: format!("sim-{index:06}"),
             home,
             position: home,
-            worker_profile: WorkerProfile::Worker,
-            shift_template: Some("standard".to_string()),
-            workplace: None,
-            commute_day: 0,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace: None,
+            },
+            next_activity: Some(ScheduledActivity {
+                kind: ScheduledActivityKind::DailyRoutine,
+                due_time: 3_600.0,
+            }),
         }
     }
 }

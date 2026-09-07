@@ -1,7 +1,8 @@
 mod common;
 
 use caelum_core::model::{
-    MetricsState, MovementKind, RoundaboutSize, ServicePattern, TransitMode, WorkerProfile,
+    CitizenRoutine, MetricsState, MovementKind, RoundaboutSize, ScheduledActivityKind,
+    ServicePattern, TransitMode,
 };
 use caelum_core::traffic::RoadFlow;
 use caelum_core::{
@@ -186,11 +187,17 @@ fn commute_respawns_across_day_boundary() {
     let snapshot = engine.snapshot();
 
     assert_eq!(snapshot.day, 1);
-    // Daily commute flags must reset so residents are eligible to commute again.
+    // Daily routine wakes must roll over so residents are eligible to commute
+    // again: every worker is either mid-commute or carries a future wake.
     assert!(snapshot.sims.iter().any(|sim| {
-        sim.worker_profile == WorkerProfile::Worker
-            && !sim.outbound_resolved_today
-            && !sim.outbound_arrived_today
+        matches!(sim.routine, CitizenRoutine::Worker { .. })
+            && match &sim.next_activity {
+                Some(activity) => activity.kind == ScheduledActivityKind::DailyRoutine,
+                None => snapshot
+                    .active_trips
+                    .iter()
+                    .any(|trip| trip.sim_id == sim.id),
+            }
     }));
     // Fresh day-1 trips must spawn with day-1 ids, and no day-0 id may leak across.
     assert!(

@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 9;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -193,12 +193,14 @@ pub enum TripStatus {
 }
 
 /// Why a trip exists. Serialized as the camelCase TS-parity strings
-/// `commuteOutbound` / `commuteReturn`.
+/// `commuteOutbound` / `commuteReturn` / `optionalOutbound` / `optionalReturn`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum TripPurpose {
     CommuteOutbound,
     CommuteReturn,
+    OptionalOutbound,
+    OptionalReturn,
 }
 
 /// Overall game state. Serialized as the lowercase TS-parity strings
@@ -211,17 +213,21 @@ pub enum MetricsState {
     Lost,
 }
 
-/// A sim's work status. Serialized as the camelCase TS-parity strings
-/// `worker` / `nonWorker`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub enum WorkerProfile {
-    Worker,
-    NonWorker,
+/// A citizen's durable daily routine. Serialized as the externally tagged
+/// camelCase object `{ "worker": { shiftTemplate, workplace? } }` or the bare
+/// string `"student"` (see `tests/model_wire_format.rs`).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", rename_all_fields = "camelCase")]
+pub enum CitizenRoutine {
+    Worker {
+        shift_template: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        workplace: Option<Point>,
+    },
+    Student,
 }
 
-/// Final scheduled-activity kinds. Introduced internally ahead of the v10
-/// durable schema so the ECS scheduler can already speak the final vocabulary.
+/// Scheduled-activity kinds owned by the exact-time population scheduler.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ScheduledActivityKind {
@@ -951,26 +957,18 @@ pub struct Vehicle {
     pub parked_position: Option<TripPosition>,
 }
 
+/// One durable citizen: identity, anchors, routine, and the authoritative next
+/// scheduled activity. `next_activity` is `None` exactly while an active
+/// (non-terminal) trip owns the citizen; the persistence boundary rejects the
+/// impossible combinations (see `persistence::validate_sims`).
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Sim {
     pub id: String,
     pub home: Point,
     pub position: Point,
-    pub worker_profile: WorkerProfile,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub shift_template: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub workplace: Option<Point>,
-    pub commute_day: u32,
-    #[serde(default)]
-    pub outbound_resolved_today: bool,
-    #[serde(default)]
-    pub outbound_arrived_today: bool,
-    #[serde(default)]
-    pub return_resolved_today: bool,
-    #[serde(default)]
-    pub returned_home_today: bool,
+    pub routine: CitizenRoutine,
+    pub next_activity: Option<ScheduledActivity>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

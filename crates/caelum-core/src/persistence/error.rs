@@ -201,11 +201,8 @@ pub enum SnapshotField {
     VehicleParkedPosition,
     SimHome,
     SimPosition,
-    SimWorkerProfile,
-    SimShiftTemplate,
     SimWorkplace,
-    SimCommuteDay,
-    SimDailyFlags,
+    SimNextActivityDueTime,
     TripServiceDay,
     TripPurpose,
     TripStatus,
@@ -404,6 +401,12 @@ pub enum AssignmentError {
     ItineraryIndexOutOfBounds,
     PathStepIndexOutOfBounds,
     ProgressOutOfRange,
+    /// A citizen with a non-terminal active trip must not also carry a
+    /// scheduled next activity: the trip owns them until it resolves.
+    ScheduledWhileTraveling,
+    /// An idle citizen (no non-terminal trip) must carry the next scheduled
+    /// activity the exact-time scheduler wakes them for.
+    MissingNextActivity,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]

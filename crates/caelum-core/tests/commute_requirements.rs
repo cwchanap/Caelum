@@ -1,7 +1,5 @@
-use caelum_core::commute::{
-    departure_minute_for_sim, shift_template_for_id, worker_profile_for_id,
-};
-use caelum_core::model::{TripPurpose, TripStatus, WorkerProfile};
+use caelum_core::commute::{departure_minute_for_sim, is_student_id, shift_template_for_id};
+use caelum_core::model::{TripPurpose, TripStatus};
 use caelum_core::{clock, GameEngine, GameIntent};
 
 fn assigned_worker_engine() -> GameEngine {
@@ -89,8 +87,8 @@ fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
 
 #[test]
 fn deterministic_worker_and_shift_distribution() {
-    assert_eq!(worker_profile_for_id("sim-001"), WorkerProfile::Worker);
-    assert_eq!(worker_profile_for_id("sim-010"), WorkerProfile::NonWorker);
+    assert!(!is_student_id("sim-001"));
+    assert!(is_student_id("sim-010"));
     assert_eq!(shift_template_for_id("sim-001"), Some("standard"));
     assert_eq!(shift_template_for_id("sim-008"), Some("early"));
     assert_eq!(shift_template_for_id("sim-009"), Some("late"));

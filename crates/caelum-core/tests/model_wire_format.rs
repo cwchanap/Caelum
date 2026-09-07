@@ -1,8 +1,8 @@
 //! Wire-format lock for the soon-to-be-enum fields.
 //!
-//! These tests pin the exact JSON spelling of every `String` field that will become a
+//! These tests pin the exact JSON spelling of every `String` field that has become a
 //! fieldless enum (`status`, `purpose`, `mode`, `Metrics.state`, `TripOutcome.outcome`,
-//! `worker_profile`). They MUST stay green when the types change to enums with
+//! `CitizenRoutine`). They MUST stay green when the types change to enums with
 //! `#[serde(rename_all = ...)]` — that is the proof the WASM/Tauri wire format is
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
@@ -11,13 +11,13 @@ use caelum_core::building_catalog::{building_definition, BUILDINGS};
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, DemandMultiplier, GameRules, GameSnapshot, Heading, Metrics,
-    MetricsState, MetroLine, MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip,
-    RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind,
-    RouteLegPath, RouteLegStatus, RoutePlan, ScenarioConfig, ServiceDirection, ServiceMetrics,
-    ServicePattern, Sim, Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus,
-    TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
-    WorkerProfile,
+    ActiveTrip, BusStopKind, CitizenRoutine, DemandMultiplier, GameRules, GameSnapshot, Heading,
+    Metrics, MetricsState, MetroLine, MovementKind, PathGeometry, PlacedBuilding, Point,
+    PrivateCarTrip, RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg,
+    RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ScenarioConfig, ScheduledActivity,
+    ScheduledActivityKind, ServiceDirection, ServiceMetrics, ServicePattern, Sim, Station, Stop,
+    StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
+    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
@@ -250,11 +250,11 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
-    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 9);
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 10);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(9)
+        json!(10)
     );
 }
 
@@ -406,7 +406,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(9));
+    assert_eq!(value["schemaVersion"], json!(10));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
@@ -909,32 +909,93 @@ fn trip_outcome_field_names_serialize_to_camel_case_wire() {
     );
 }
 
-#[test]
-fn sim_worker_profile_serializes_to_legacy_strings() {
-    for (profile, wire) in [
-        (WorkerProfile::Worker, "worker"),
-        (WorkerProfile::NonWorker, "nonWorker"),
-    ] {
-        let sim = Sim {
-            id: "sim-001".to_string(),
-            home: (0, 0).into(),
-            position: (0, 0).into(),
-            worker_profile: profile,
-            shift_template: None,
-            workplace: None,
-            commute_day: 0,
-            outbound_resolved_today: false,
-            outbound_arrived_today: false,
-            return_resolved_today: false,
-            returned_home_today: false,
-        };
-        let value = serde_json::to_value(&sim).expect("sim should serialize");
-        assert_eq!(
-            value["workerProfile"],
-            json!(wire),
-            "worker_profile wire spelling changed: {wire}"
-        );
+fn v10_sim(id: &str, routine: CitizenRoutine, next_activity: Option<ScheduledActivity>) -> Sim {
+    Sim {
+        id: id.to_string(),
+        home: (0, 0).into(),
+        position: (0, 0).into(),
+        routine,
+        next_activity,
     }
+}
+
+#[test]
+fn worker_routine_serializes_to_tagged_camel_case_object() {
+    let sim = v10_sim(
+        "sim-001",
+        CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some((2, 3).into()),
+        },
+        Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: 420.0,
+        }),
+    );
+    let value = serde_json::to_value(&sim).expect("sim should serialize");
+    assert_eq!(
+        value["routine"],
+        json!({
+            "worker": {
+                "shiftTemplate": "standard",
+                "workplace": { "x": 2, "y": 3 },
+            }
+        }),
+        "worker routine wire shape changed: {value}"
+    );
+    assert_eq!(
+        value["nextActivity"],
+        json!({ "kind": "dailyRoutine", "dueTime": 420.0 }),
+        "next activity wire shape changed: {value}"
+    );
+}
+
+#[test]
+fn worker_routine_omits_absent_workplace_and_student_serializes_to_bare_string() {
+    let worker = v10_sim(
+        "sim-001",
+        CitizenRoutine::Worker {
+            shift_template: String::new(),
+            workplace: None,
+        },
+        None,
+    );
+    let value = serde_json::to_value(&worker).expect("worker sim should serialize");
+    assert_eq!(
+        value["routine"],
+        json!({ "worker": { "shiftTemplate": "" } }),
+        "absent workplace must be omitted from the worker wire: {value}"
+    );
+    assert!(value["nextActivity"].is_null());
+
+    let student = v10_sim("sim-010", CitizenRoutine::Student, None);
+    let value = serde_json::to_value(&student).expect("student sim should serialize");
+    assert_eq!(
+        value["routine"],
+        json!("student"),
+        "student routine wire spelling changed: {value}"
+    );
+}
+
+#[test]
+fn travelling_citizen_serializes_next_activity_as_null() {
+    let sim = v10_sim(
+        "sim-001",
+        CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: None,
+        },
+        None,
+    );
+    let value = serde_json::to_value(&sim).expect("sim should serialize");
+    assert_eq!(
+        value["nextActivity"],
+        json!(null),
+        "a travelling citizen must serialize nextActivity as null: {value}"
+    );
+    assert_eq!(value["id"], json!("sim-001"));
+    assert_eq!(value["home"], json!({ "x": 0, "y": 0 }));
+    assert_eq!(value["position"], json!({ "x": 0, "y": 0 }));
 }
 
 #[test]
