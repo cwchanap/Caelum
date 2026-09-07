@@ -6,7 +6,7 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 
 `crates/caelum-core` owns the simulation. It is a Cargo workspace member gated by CI (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo build`) and by `lint-staged`.
 
-- `engine.rs` — `GameEngine` holds the current `GameSnapshot` and runs `tick_trips_with_objectives`, which advances immutable snapshots in deterministic boundary-aware substeps and evaluates objectives after each substep. Trip outcomes are recorded inline by the trip pipeline (via `update_metrics`); there is no separate `record_trip_outcome` step. It publishes a new snapshot only when `next != current`, matching the TS runtime's reference-equality dispatch.
+- `engine.rs` — `GameEngine` owns the shell `GameSnapshot`, the compiled `RoadTopology`, and the ECS population world/schedule as one commit unit, and runs `tick_trips_with_objectives`, which advances immutable snapshots in deterministic boundary-aware substeps and evaluates objectives after each substep. A tick commits the shell candidate and ECS mutations together: `applied = shell_changed || population_changed`. Trip outcomes are recorded inline by the trip pipeline (via `update_metrics`); there is no separate `record_trip_outcome` step.
 - `transit.rs`, `network.rs`, `router.rs`, `trips.rs`, `commute.rs` — transit network, multi-leg router, trip/commute lifecycle with substep ticking across boundary times (departures, vehicle stops, walk ends, day rollovers).
 - `areas.rs`, `buildings.rs`, `building_catalog.rs` — area zoning and building placement, gated by area.
 - `objectives.rs`, `platforms.rs` — objective evaluation and platform capacity.
@@ -14,6 +14,11 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a ca
 - `scenario.rs`, `clock.rs` — Growing Suburb campaign configuration and deterministic clock.
 - `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde used by the active WASM and Tauri host boundaries.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
+- `population/` — the load-bearing standalone `bevy_ecs` population world: citizen components, the exact-time scheduler, the derived population index, and the trip-demand bridge.
+
+### Population ownership (ECS)
+
+`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v10 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
 
 The crate is deterministic: no `SystemTime`/`Instant`/`rand` in library source (`Instant` exists only in native example tooling, such as `examples/presentation_scale.rs`); HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
@@ -387,7 +392,7 @@ Host bootstrap failures stay in the shell layer, while gameplay validation remai
 5. Svelte rerenders from the latest runtime snapshot.
 
 The canvas `requestAnimationFrame` loop remains the tick owner until HPA-640
-revisits cadence/interpolation; HPA-347 introduces the load-bearing standalone
-Bevy ECS.
+revisits cadence/interpolation; the load-bearing standalone Bevy ECS population
+introduced by HPA-347 is live in `caelum-core` (see Population ownership above).
 
 The Growing Suburb scenario remains deterministic for tests: initial state, growth thresholds, generated citizens, identifiers, and objective evaluation stay stable across repeated runs.

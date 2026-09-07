@@ -1,8 +1,11 @@
+use caelum_core::commute::shift_template_for_id;
 use caelum_core::{
-    commute::{is_student_id, shift_template_for_id},
     model::{BusStopKind, CitizenRoutine, EconomyPreset, GameSnapshot},
     GameEngine, GameIntent, RejectionCode,
 };
+
+mod common;
+use common::is_student_id;
 
 #[test]
 fn paint_area_rectangle_skips_starter_roads() {

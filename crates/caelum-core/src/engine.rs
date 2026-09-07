@@ -1,9 +1,11 @@
 use crate::areas;
 use crate::buildings;
+use crate::clock;
 use crate::cost_policy::CostedMutation;
 use crate::intent::{DispatchContext, GameIntent, GameplayUpdateResult};
 use crate::model::{GameSnapshot, Point};
 use crate::persistence::{normalize_snapshot_for_save, prepare_snapshot, SnapshotLoadError};
+use crate::population::TripDemand;
 use crate::presentation::{self, PresentationUpdate};
 use crate::preview::{
     self, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
@@ -19,6 +21,7 @@ use crate::sandbox::{
     SandboxCandidate, SandboxCreationError, SandboxCreationRequest, SandboxResetError,
 };
 use crate::stop_access;
+use crate::traffic;
 use crate::transit;
 use crate::trips::{self, TickAdvance};
 use bevy_ecs::prelude::{Schedule, World};
@@ -288,6 +291,36 @@ impl GameEngine {
 
     pub fn presentation(&self) -> PresentationUpdate {
         presentation::project_update(&self.snapshot, &self.population_aggregates(), true)
+    }
+
+    /// Release scale-harness seam (`examples/presentation_scale.rs`): advance
+    /// the shell clock by the scaled delta, run the due population scheduler
+    /// (growth-wave reconciliation included), and drain its trip demands
+    /// without routing them. The ordinary tick routes drained demands inline;
+    /// the harness times scheduler emission and route spawning separately.
+    /// Evidence tooling — not part of the gameplay contract.
+    pub fn run_due_and_drain_for_scale_harness(&mut self, delta_seconds: f64) -> Vec<TripDemand> {
+        self.snapshot.time += clock::scaled_delta(delta_seconds, self.snapshot.speed);
+        trips::sync_clock(&mut self.snapshot);
+        trips::apply_due_world_events(
+            &mut self.snapshot,
+            &mut self.world,
+            &mut self.population_schedule,
+        );
+        crate::population::drain_trip_demands(&mut self.world)
+    }
+
+    /// Release scale-harness seam: route previously drained demands through
+    /// the shared trip builder with one derived road flow, exactly as the
+    /// tick's demand-drain phase does. Evidence tooling.
+    pub fn spawn_drained_demands_for_scale_harness(&mut self, demands: Vec<TripDemand>) {
+        let mut road_flow = traffic::derive_road_flow(&self.snapshot);
+        trips::spawn_pending_trip_demands(
+            &mut self.snapshot,
+            &self.road_topology,
+            &mut road_flow,
+            demands,
+        );
     }
 
     pub fn restore_snapshot(

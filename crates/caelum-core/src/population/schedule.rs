@@ -752,9 +752,11 @@ enum PopulationSet {
 }
 
 /// One trip row handed to the existing `build_commute_trip` routing path.
-/// ECS emits demand; it never routes.
+/// ECS emits demand; it never routes. Opaque to callers outside the crate:
+/// only the release scale harness passes drained rows between the two
+/// evidence seams on `GameEngine`.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct TripDemand {
+pub struct TripDemand {
     pub(crate) citizen_id: String,
     pub(crate) purpose: TripPurpose,
     pub(crate) origin: Point,

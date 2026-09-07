@@ -1,10 +1,12 @@
 use caelum_core::commute::{
-    departure_minute_for_sim, is_canonical_shift_template, is_day_off, is_student_id,
-    optional_departure_minute, shift_template_for_id, stable_daily_seed, student_departure_minute,
-    OPTIONAL_SALT,
+    departure_minute_for_sim, is_canonical_shift_template, is_day_off, optional_departure_minute,
+    shift_template_for_id, stable_daily_seed, student_departure_minute, OPTIONAL_SALT,
 };
 use caelum_core::model::{CitizenRoutine, Point, TripPurpose, TripStatus};
 use caelum_core::{clock, GameEngine, GameIntent};
+
+mod common;
+use common::is_student_id;
 
 fn assigned_worker_engine() -> GameEngine {
     let mut engine = GameEngine::new();

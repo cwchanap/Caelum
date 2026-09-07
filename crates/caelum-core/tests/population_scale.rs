@@ -9,11 +9,14 @@ use std::collections::HashSet;
 
 use caelum_core::building_catalog::building_definition;
 use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
-use caelum_core::commute::{departure_minute_for_sim, is_student_id, shift_template_for_id};
+use caelum_core::commute::{departure_minute_for_sim, shift_template_for_id};
 use caelum_core::model::{
     CitizenRoutine, GameSnapshot, Point, ScheduledActivity, ScheduledActivityKind, Sim, TripPurpose,
 };
 use caelum_core::{create_sandbox_snapshot, GameEngine, GameIntent, SandboxCreationRequest};
+
+mod common;
+use common::is_student_id;
 
 const TOTAL: usize = 200_000;
 const DUE: usize = 1_000;
@@ -71,7 +74,13 @@ fn scale_snapshot(all_future: bool) -> GameSnapshot {
             let id = format!("sim-{index:06}");
             let student = is_student_id(&id);
             let shift_template = shift_template_for_id(&id);
-            let due = !all_future && !student && {
+            // Stage B: one day in seven is off (`day % 7 == suffix % 7`); on
+            // day 0 those citizens suppress their primary outbound (and may
+            // schedule an in-window optional outing), so they are excluded
+            // from the due set — the due set is exactly the citizens whose
+            // day-0 wake produces one CommuteOutbound demand.
+            let day_off = index.is_multiple_of(7);
+            let due = !all_future && !student && !day_off && {
                 due_workers += 1;
                 due_workers <= DUE
             };
@@ -141,10 +150,11 @@ fn stage_a_two_hundred_thousand_worker_engine_structural_and_granularity() {
     // Only the 1_000 due Workers produced demand: every produced trip is
     // either still active with a due-set sim id, or already terminal — and
     // their count is exactly DUE. The due set is the first DUE derived Worker
-    // ordinals (every 10th id is a canonical NonWorker and is skipped).
+    // ordinals that travel on day 0: every 10th id is a canonical Student and
+    // every 7th is on a day-0 day off, and both are skipped.
     let mut due_ordinals = Vec::with_capacity(DUE);
     for index in 1..=TOTAL {
-        if !is_student_id(&format!("sim-{index:06}")) {
+        if !is_student_id(&format!("sim-{index:06}")) && !index.is_multiple_of(7) {
             due_ordinals.push(index);
             if due_ordinals.len() == DUE {
                 break;

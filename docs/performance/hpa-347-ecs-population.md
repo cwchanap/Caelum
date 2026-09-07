@@ -74,3 +74,98 @@ trips). Row recorded on the same reference machine (Apple M1 Pro, rustc 1.96.0,
 For comparison, the pre-ECS snapshot-per-step runtime measured the same
 quiet tick at 95295 us (see the baseline section above). Wall-clock values are
 reference evidence, not CI thresholds.
+
+## Final evidence (Task 8: schema v10, Stage B enabled)
+
+Recorded on the same reference machine (Apple M1 Pro, 32 GB RAM, rustc 1.96.0,
+`--release`) at the completed HPA-347 state (schema v10, Student/day-off/
+optional-outing behavior enabled), with:
+
+```bash
+cargo run --release -p caelum-core --example presentation_scale
+cargo test --release -p caelum-core --test population_scale -- --ignored --nocapture
+bun run wasm:build:release && wc -c src/generated/caelum_wasm/caelum_wasm_bg.wasm
+```
+
+### Runtime build / quiet tick / runtime presentation / full snapshot
+
+`runtime_build_us` is the candidate-first `GameEngine::from_snapshot` build
+(shell validation, topology compile, ECS world/schedule construction, shell
+population-mirror clear). `quiet_tick_us` is one resumed `engine.tick(0.5)`
+that crosses no wake. `runtime_presentation_us` is `engine.presentation()`
+(ECS-built `PopulationAggregates` through the one projector).
+`full_snapshot_us` is the explicit durable reconstruction `engine.snapshot()`
+(O(population) — ordinary ticks never call it).
+
+| Row        |   Sims | runtime_build_us | quiet_tick_us | runtime_presentation_us | full_snapshot_us |
+| ---------- | -----: | ---------------: | ------------: | ----------------------: | ---------------: |
+| ecs-10000  |  10000 |            13018 |           170 |                      19 |             1595 |
+| ecs-50000  |  50000 |            67864 |           138 |                      19 |             8029 |
+| ecs-200000 | 200000 |           298386 |           138 |                      20 |            35573 |
+
+The dormant-population quiet tick is flat from 10k through 200k sims (~140 us,
+versus 95295 us pre-ECS): an ordinary tick costs O(1) in latent population.
+The linear costs are the two explicitly O(population) operations — building
+the runtime once (load/New City/restore) and the explicit durable snapshot
+reconstruction (save/debug) — neither of which is on the tick path.
+
+### Scheduler emission vs route spawning
+
+One wave of same-time due Workers on the small-town template (day-0 day-off
+citizens excluded, so exactly N demands emit). `schedule_emit_us` covers the
+exact-time scheduler emission — the due `run_due` pass (collect, canonicalize,
+apply, emit) plus the demand drain — without route spawning.
+`route_spawn_us` covers `spawn_pending_trip_demands` over the drained demands
+(route choice plus private-car candidacy per row, the O(due demand) bridge).
+
+| Row        | Due demands | schedule_emit_us | route_spawn_us |
+| ---------- | ----------: | ---------------: | -------------: |
+| wave-1000  |        1000 |              370 |            243 |
+| wave-5000  |        5000 |             1626 |           1272 |
+| wave-20000 |       20000 |             6175 |           4784 |
+
+Both phases are linear in wave size. **The dominant due-wave cost is scheduler
+emission** (CollectDue/ApplyDue/EmitTripDemand plus the canonical demand
+drain) — the larger half at every measured wave size, so the next bottleneck
+is inside the population schedule's per-event work. Route spawning is a close
+second and grows the same O(due demand) way; HPA-348 owns route-choice
+batching and owns that term.
+
+### Release WASM bytes
+
+**After HPA-347 release WASM bytes:** 1849300
+(`src/generated/caelum_wasm/caelum_wasm_bg.wasm`, measured with `wc -c` after
+`bun run wasm:build:release`).
+
+Before: 1313885. Delta: +535415 bytes (+40.8%) for the standalone
+`bevy_ecs` dependency with default features off (no full `bevy`, no
+reflection, no multithreaded schedule, no `rand`). Size is evidence, not a
+threshold.
+
+### HPA-544 presentation-cardinality rows (retained, final v10 run)
+
+The Task 0 matrix re-run at the final schema-v10 state (durable `Sim` shrank
+with the v10 scheduled-activity shape, so `sims-*` snapshot bytes differ from
+the v9 baseline above; presentation behavior is unchanged).
+
+| Fixture         |   Sims | Active trips | Buildings | Vehicles | Snapshot bytes | Serialize µs |
+| --------------- | -----: | -----------: | --------: | -------: | -------------: | -----------: |
+| current         |      0 |            0 |         0 |        0 |          39741 |           84 |
+| sims-10000      |  10000 |            0 |         0 |        0 |        2041392 |         2524 |
+| sims-50000      |  50000 |            0 |         0 |        0 |       10048372 |        15420 |
+| sims-200000     | 200000 |            0 |         0 |        0 |       40074560 |        52978 |
+| trips-1000      |      0 |         1000 |         0 |        0 |         339820 |          423 |
+| trips-5000      |      0 |         5000 |         0 |        0 |        1540150 |         1940 |
+| trips-20000     |      0 |        20000 |         0 |        0 |        6041392 |         7648 |
+| buildings-1000  |      0 |            0 |      1000 |        0 |         169900 |          187 |
+| buildings-5000  |      0 |            0 |      5000 |        0 |         690560 |          738 |
+| buildings-20000 |      0 |            0 |     20000 |        0 |        2643044 |         3156 |
+| vehicles-1000   |      0 |            0 |         0 |     1000 |         224720 |          311 |
+| vehicles-5000   |      0 |            0 |         0 |     5000 |         964650 |         1354 |
+
+Presentation projection stays flat in latent population (200k sims still
+project in 29 us into a 302-byte frame) and O(presented rows) elsewhere;
+HPA-640 owns WebGPU/viewport/LOD/cadence work beyond this contract.
+
+All wall-clock and byte values in this document are reference evidence, not CI
+thresholds.
