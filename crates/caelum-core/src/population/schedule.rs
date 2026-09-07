@@ -591,8 +591,11 @@ pub(crate) fn reconcile_buildings(
     }
 
     // Trip reconciliation on the shell candidate. Despawned residents lose
-    // every trip; only outbound trips of cleared citizens are retargeted or
-    // dropped. In-flight returns keep heading home.
+    // every trip; cleared Workers' outbound trips are retargeted to a
+    // replacement workplace or dropped. Student `CommuteOutbound` and any
+    // `OptionalOutbound` heading to a demolished building's footprint have no
+    // Worker replacement path, so they are dropped here and scheduled for
+    // next-day recovery. In-flight returns keep heading home.
     let mut scrubbed_trip_ids: HashSet<String> = HashSet::new();
     if !despawned_ids.is_empty() {
         for trip in &after.active_trips {
@@ -622,29 +625,54 @@ pub(crate) fn reconcile_buildings(
     let now = after.time;
     let mut invalidated_trip_ids: HashSet<String> = HashSet::new();
     let mut dropped: Vec<(String, String)> = Vec::new();
+    // Footprints of buildings removed this pass. Student `CommuteOutbound`
+    // and `OptionalOutbound` trips target these tiles but their citizens are
+    // not in the Worker `replacements` map, so the Worker retarget path
+    // never sees them. The design calls for cancelling only the affected
+    // outbound demand and scheduling recovery, not retargeting.
+    let removed_footprint: HashSet<Point> = before
+        .buildings
+        .iter()
+        .filter(|building| removed_ids.contains(&building.id))
+        .flat_map(|building| building.occupied_tiles.iter().copied())
+        .collect();
     for trip in &mut after.active_trips {
-        if trip.purpose != TripPurpose::CommuteOutbound {
-            continue;
-        }
-        let Some(replacement) = replacements.get(&trip.sim_id) else {
-            continue;
-        };
-        invalidated_trip_ids.insert(trip.id.clone());
-        match replacement {
-            Some(point) => {
-                trip.status = TripStatus::Idle;
-                trip.route_plan = None;
-                trip.private_car_trip = None;
-                trip.current_leg_index = 0;
-                trip.current_leg_wait_seconds = 0.0;
-                trip.destination = *point;
-                // Retargeting starts a fresh trip window, mirroring trip
-                // creation: an already-drained patience or elapsed deadline
-                // must not unserve a validly retargeted trip.
-                trip.deadline = trip_deadline_seconds(now);
-                trip.patience_remaining = WAIT_PATIENCE_SECONDS;
+        // Cleared Workers: retarget to a replacement workplace or drop.
+        if trip.purpose == TripPurpose::CommuteOutbound {
+            if let Some(replacement) = replacements.get(&trip.sim_id) {
+                invalidated_trip_ids.insert(trip.id.clone());
+                match replacement {
+                    Some(point) => {
+                        trip.status = TripStatus::Idle;
+                        trip.route_plan = None;
+                        trip.private_car_trip = None;
+                        trip.current_leg_index = 0;
+                        trip.current_leg_wait_seconds = 0.0;
+                        trip.destination = *point;
+                        // Retargeting starts a fresh trip window, mirroring
+                        // trip creation: an already-drained patience or
+                        // elapsed deadline must not unserve a validly
+                        // retargeted trip.
+                        trip.deadline = trip_deadline_seconds(now);
+                        trip.patience_remaining = WAIT_PATIENCE_SECONDS;
+                    }
+                    None => dropped.push((trip.id.clone(), trip.sim_id.clone())),
+                }
+                continue;
             }
-            None => dropped.push((trip.id.clone(), trip.sim_id.clone())),
+        }
+        // Non-Worker destination demolition: a Student's school commute or an
+        // optional outing to a demolished building cannot be retargeted, so
+        // drop it and schedule next-day recovery. Retargeted Worker
+        // outbounds already point at a surviving replacement workplace and
+        // are skipped by this footprint check.
+        if matches!(
+            trip.purpose,
+            TripPurpose::CommuteOutbound | TripPurpose::OptionalOutbound
+        ) && removed_footprint.contains(&trip.destination)
+        {
+            invalidated_trip_ids.insert(trip.id.clone());
+            dropped.push((trip.id.clone(), trip.sim_id.clone()));
         }
     }
 
@@ -669,7 +697,9 @@ pub(crate) fn reconcile_buildings(
 
     // A citizen whose outbound was dropped without a replacement is stranded:
     // schedule next day's daily-routine recovery rather than a phantom
-    // zero-distance outbound.
+    // zero-distance outbound. This covers cleared Workers without a new
+    // workplace, Students whose school was demolished, and any citizen whose
+    // optional outing targeted a demolished site.
     for (_trip_id, citizen_id) in &dropped {
         let Some(&entity) = world.resource::<PopulationIndex>().by_id.get(citizen_id) else {
             continue;
@@ -682,11 +712,6 @@ pub(crate) fn reconcile_buildings(
             continue;
         }
         let Some(routine) = world.get::<Routine>(entity).cloned() else {
-            continue;
-        };
-        // Only Worker outbounds are retargeted/dropped by reconciliation, so
-        // only they recover here.
-        let Routine::Worker { .. } = routine else {
             continue;
         };
         schedule_activity(

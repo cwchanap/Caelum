@@ -1,7 +1,7 @@
 use caelum_core::commute::departure_minute_for_sim;
 use caelum_core::model::{
-    ActiveTrip, CitizenRoutine, GameSnapshot, Point, RouteLeg, RoutePlan, Sim, TransitMode,
-    TripPosition, TripPurpose, TripStatus,
+    ActiveTrip, CitizenRoutine, GameSnapshot, Point, RouteLeg, RoutePlan, ScheduledActivityKind,
+    Sim, TransitMode, TripPosition, TripPurpose, TripStatus,
 };
 use caelum_core::{clock, GameEngine, GameIntent};
 
@@ -740,12 +740,17 @@ fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
 
 /// A hand-authored non-terminal outbound trip owning its citizen. Mirrors the
 /// durable shape `validate_sims` accepts: `next_activity = None` plus a
-/// non-terminal `CommuteOutbound` trip for the same sim.
-fn mid_outbound_trip(sim_id: &str, origin: Point, destination: Point) -> ActiveTrip {
+/// non-terminal outbound trip for the same sim.
+fn mid_outbound_trip(
+    sim_id: &str,
+    purpose: TripPurpose,
+    origin: Point,
+    destination: Point,
+) -> ActiveTrip {
     ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: sim_id.to_string(),
-        purpose: TripPurpose::CommuteOutbound,
+        purpose,
         origin,
         destination,
         position: TripPosition::from(origin),
@@ -815,8 +820,12 @@ fn bulldozing_only_workplace_with_in_flight_outbound_schedules_recovery() {
     // Replace only the target worker's trips so other travelling sims (if any)
     // keep their trips and stay valid against `validate_sims`.
     mid.active_trips.retain(|trip| trip.sim_id != worker_id);
-    mid.active_trips
-        .push(mid_outbound_trip(&worker_id, home, workplace_tile));
+    mid.active_trips.push(mid_outbound_trip(
+        &worker_id,
+        TripPurpose::CommuteOutbound,
+        home,
+        workplace_tile,
+    ));
     let mut engine = GameEngine::from_snapshot(mid).expect("mid-outbound snapshot loads");
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -926,8 +935,12 @@ fn bulldozing_one_of_two_workplaces_retargets_in_flight_outbound() {
         }
     }
     mid.active_trips.retain(|trip| trip.sim_id != worker_id);
-    mid.active_trips
-        .push(mid_outbound_trip(&worker_id, home, workplace_tile));
+    mid.active_trips.push(mid_outbound_trip(
+        &worker_id,
+        TripPurpose::CommuteOutbound,
+        home,
+        workplace_tile,
+    ));
     let mut engine = GameEngine::from_snapshot(mid).expect("mid-outbound snapshot loads");
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -1034,5 +1047,261 @@ fn allocator_high_water_mark_survives_save_restore_and_move_in() {
     assert_ne!(
         new_sim.home, highest_home,
         "the reused-id case would also replay the same home slot"
+    );
+}
+
+/// [P2] Bulldozing a school while a Student is mid-outbound to it must drop the
+/// orphaned commute and schedule recovery. Students are not in the Worker
+/// `replacements` map, so the Worker retarget path never sees them; the
+/// footprint-based destination demolition path owns this case. Pins the
+/// Student case through the real `RemoveAtTile` engine path.
+#[test]
+fn bulldozing_school_with_in_flight_student_outbound_schedules_recovery() {
+    let mut engine = GameEngine::new();
+    for origin in [(2, 3), (5, 3), (8, 3)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: "residential".to_string(),
+                    start: origin.into(),
+                    end: (origin.0 + 1, origin.1).into(),
+                })
+                .applied
+        );
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: "smallHouse".to_string(),
+                    origin: origin.into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "civic".to_string(),
+                start: (6, 10).into(),
+                end: (8, 11).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "school".to_string(),
+                origin: (6, 10).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    // Twelve housing slots move in; sim-010 is the canonical Student.
+    let _ = engine.tick(1_600.0);
+    let filled = engine.snapshot();
+    assert_eq!(filled.sims.len(), 12);
+    let student = filled
+        .sims
+        .iter()
+        .find(|sim| matches!(sim.routine, CitizenRoutine::Student))
+        .expect("a canonical Student moved in");
+    assert_eq!(student.id, "sim-010");
+    let student_id = student.id.clone();
+    let home = student.home;
+    let school_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "school")
+        .expect("school")
+        .occupied_tiles
+        .clone();
+    let school_tile = school_tiles[0];
+
+    // Force the Student mid-outbound to the school, then bulldoze the school
+    // through the real dispatch path.
+    let mut mid = engine.snapshot();
+    for sim in &mut mid.sims {
+        if sim.id == student_id {
+            sim.next_activity = None;
+        }
+    }
+    mid.active_trips.retain(|trip| trip.sim_id != student_id);
+    mid.active_trips.push(mid_outbound_trip(
+        &student_id,
+        TripPurpose::CommuteOutbound,
+        home,
+        school_tile,
+    ));
+    let mut engine = GameEngine::from_snapshot(mid).expect("mid-outbound snapshot loads");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: school_tile });
+    assert!(removed.applied, "{removed:?}");
+
+    let after = engine.snapshot();
+    // The Student's orphaned school commute is gone.
+    assert!(!after
+        .active_trips
+        .iter()
+        .any(|trip| trip.sim_id == student_id && trip.purpose == TripPurpose::CommuteOutbound));
+    // The Student is NOT dormant: reconciliation scheduled a recovery wake.
+    let student = after
+        .sims
+        .iter()
+        .find(|sim| sim.id == student_id)
+        .expect("student remains");
+    assert!(
+        student.next_activity.is_some(),
+        "reconciliation schedules recovery for a dropped school commute, not dormancy"
+    );
+    let recovery = student.next_activity.as_ref().unwrap();
+    assert_eq!(
+        recovery.kind,
+        ScheduledActivityKind::DailyRoutine,
+        "recovery is a daily-routine wake, not a phantom outbound"
+    );
+}
+
+/// [P2] Bulldozing an optional-outing site while a citizen is mid-outbound to
+/// it must drop the orphaned outing and schedule recovery. Optional outings
+/// target supermarket/cinema/clinic/parkPlaza footprints but their citizens are
+/// not in the Worker `replacements` map, so the footprint-based destination
+/// demolition path owns this case. The citizen's own workplace is untouched.
+/// Pins the Optional case through the real `RemoveAtTile` engine path.
+#[test]
+fn bulldozing_optional_site_with_in_flight_outing_schedules_recovery() {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: (2, 3).into(),
+                end: (3, 3).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    // Factory placed first so the four workers fill it; the parkPlaza keeps no
+    // assigned workers, isolating the optional-outing demolition path.
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "industrial".to_string(),
+                start: (8, 3).into(),
+                end: (10, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "factory".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "park".to_string(),
+                start: (12, 3).into(),
+                end: (13, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "parkPlaza".to_string(),
+                origin: (12, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(600.0);
+    let filled = engine.snapshot();
+    assert_eq!(filled.sims.len(), 4);
+    let worker = filled
+        .sims
+        .iter()
+        .find(|sim| is_worker(sim))
+        .expect("a worker moved in");
+    let worker_id = worker.id.clone();
+    let home = worker.home;
+    let factory_tile = workplace_of(worker).expect("worker assigned to the factory");
+    let park_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "parkPlaza")
+        .expect("parkPlaza")
+        .occupied_tiles
+        .clone();
+    let park_tile = park_tiles[0];
+
+    // Force the worker mid-outbound on an optional outing to the parkPlaza,
+    // then bulldoze the parkPlaza through the real dispatch path.
+    let mut mid = engine.snapshot();
+    for sim in &mut mid.sims {
+        if sim.id == worker_id {
+            sim.next_activity = None;
+        }
+    }
+    mid.active_trips.retain(|trip| trip.sim_id != worker_id);
+    mid.active_trips.push(mid_outbound_trip(
+        &worker_id,
+        TripPurpose::OptionalOutbound,
+        home,
+        park_tile,
+    ));
+    let mut engine = GameEngine::from_snapshot(mid).expect("mid-outbound snapshot loads");
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile { point: park_tile });
+    assert!(removed.applied, "{removed:?}");
+
+    let after = engine.snapshot();
+    // The orphaned optional outing is gone.
+    assert!(!after
+        .active_trips
+        .iter()
+        .any(|trip| trip.sim_id == worker_id && trip.purpose == TripPurpose::OptionalOutbound));
+    // The citizen is NOT dormant: reconciliation scheduled a recovery wake.
+    let worker = after
+        .sims
+        .iter()
+        .find(|sim| sim.id == worker_id)
+        .expect("worker remains");
+    assert!(
+        worker.next_activity.is_some(),
+        "reconciliation schedules recovery for a dropped optional outing, not dormancy"
+    );
+    assert_eq!(
+        worker.next_activity.as_ref().unwrap().kind,
+        ScheduledActivityKind::DailyRoutine,
+        "recovery is a daily-routine wake, not a phantom outing"
+    );
+    // The citizen's own workplace (the factory) is untouched by the
+    // parkPlaza demolition — only the optional outing was cancelled.
+    assert_eq!(
+        workplace_of(worker),
+        Some(factory_tile),
+        "the factory workplace survives the unrelated parkPlaza demolition"
     );
 }
