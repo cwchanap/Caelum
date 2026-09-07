@@ -88,8 +88,10 @@ export interface RustVehicle extends Omit<
   parkedPosition: TripPosition | null | undefined;
 }
 
-// The v10 durable `Sim` serializes `nextActivity: null` while travelling and
-// omits an absent `workplace` entirely, so the wire shape matches `Sim` exactly.
+// The v10 durable `Sim` round-trips `nextActivity` as Rust `None` while
+// travelling: Tauri JSON emits `null` and serde-wasm-bindgen emits `undefined`
+// (the key is always present; both deserialize back to `None`). An absent
+// `workplace` is omitted from the worker routine variant.
 
 export interface RustTransitNetwork extends Omit<
   TransitNetwork,

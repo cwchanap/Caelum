@@ -999,6 +999,51 @@ fn travelling_citizen_serializes_next_activity_as_null() {
 }
 
 #[test]
+fn sim_requires_next_activity_key_but_accepts_explicit_null() {
+    let travelling = v10_sim(
+        "sim-001",
+        CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: None,
+        },
+        None,
+    );
+    let value = serde_json::to_value(&travelling).expect("sim should serialize");
+
+    // Explicit null deserializes to None.
+    let restored: Sim =
+        serde_json::from_value(value.clone()).expect("null nextActivity round-trips");
+    assert_eq!(restored.next_activity, None);
+
+    // A scheduled sim round-trips its activity.
+    let scheduled = v10_sim(
+        "sim-002",
+        CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: None,
+        },
+        Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: 420.0,
+        }),
+    );
+    let scheduled_value = serde_json::to_value(&scheduled).expect("sim should serialize");
+    let restored_scheduled: Sim =
+        serde_json::from_value(scheduled_value).expect("scheduled sim round-trips");
+    assert_eq!(restored_scheduled.next_activity, scheduled.next_activity);
+
+    // A missing nextActivity key is rejected: the wire contract is required-nullable,
+    // not optional, so an incomplete snapshot must fail at deserialization rather than
+    // silently becoming None (which validate_sims would then accept for a travelling sim).
+    let mut missing = value;
+    missing.as_object_mut().unwrap().remove("nextActivity");
+    assert!(
+        serde_json::from_value::<Sim>(missing).is_err(),
+        "a Sim missing the nextActivity key must fail to deserialize"
+    );
+}
+
+#[test]
 fn line_intents_use_camel_case_wire_names() {
     let intent = GameIntent::LayRoadLine {
         points: vec![(1, 2).into(), (3, 2).into()],
