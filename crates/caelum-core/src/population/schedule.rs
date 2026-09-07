@@ -29,6 +29,8 @@ pub(super) struct PopulationIndex {
     pub(super) by_id: BTreeMap<String, Entity>,
     residents_by_building: BTreeMap<String, Vec<Entity>>,
     workers_by_building: BTreeMap<String, Vec<Entity>>,
+    // ponytail: lexicographic ID order diverges from numeric above sim-999; add a
+    // numeric sort key if assignment distribution becomes observable.
     unassigned_workers: BTreeSet<String>,
     buildings: BTreeMap<String, PopulationBuilding>,
 }
