@@ -314,7 +314,7 @@ fn move_in_after_departure_skips_today_but_commutes_next_day() {
             .applied
     );
 
-    let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
+    let departure = departure_minute_for_sim("sim-003", "standard", "outbound");
     let after_departure = scheduled_time_seconds(0, departure) + 1.0;
     assert!(engine.tick(after_departure).applied);
 
@@ -362,7 +362,7 @@ fn move_in_after_departure_skips_today_but_commutes_next_day() {
     let due = engine.snapshot();
     assert_eq!(due.sims.len(), 1);
     assert!(due.active_trips.iter().all(|trip| {
-        !(trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
+        !(trip.sim_id == "sim-003" && trip.purpose == TripPurpose::CommuteOutbound)
     }));
 
     let next_day_departure = scheduled_time_seconds(1, departure);
@@ -372,7 +372,7 @@ fn move_in_after_departure_skips_today_but_commutes_next_day() {
     assert!(next_day
         .active_trips
         .iter()
-        .any(|trip| { trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound }));
+        .any(|trip| { trip.sim_id == "sim-003" && trip.purpose == TripPurpose::CommuteOutbound }));
 }
 
 #[test]
@@ -658,7 +658,7 @@ fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
             .applied
     );
 
-    let departure = departure_minute_for_sim("sim-001", "standard", "outbound");
+    let departure = departure_minute_for_sim("sim-003", "standard", "outbound");
     // Advance past today's departure while the town still has no buildings.
     assert!(
         engine
@@ -720,7 +720,7 @@ fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
         assigned
             .active_trips
             .iter()
-            .all(|trip| !(trip.sim_id == "sim-001"
+            .all(|trip| !(trip.sim_id == "sim-003"
                 && trip.purpose == TripPurpose::CommuteOutbound)),
         "no retroactive outbound after the departure boundary"
     );
@@ -732,5 +732,5 @@ fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
     assert!(next_day
         .active_trips
         .iter()
-        .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound));
+        .any(|trip| trip.sim_id == "sim-003" && trip.purpose == TripPurpose::CommuteOutbound));
 }

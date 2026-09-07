@@ -1591,24 +1591,45 @@ fn previous_day_outbound_arriving_after_midnight_does_not_unlock_current_day_ret
         "the cross-midnight arrival defers to the next daily routine"
     );
 
-    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
-    let return_time = clock::GAME_DAY_SECONDS
-        + (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
-    let mut after_return_window = arrived.clone();
-    after_return_window.time = return_time;
-    after_return_window.day = 1;
-    after_return_window.clock_minutes = return_minute;
-    after_return_window.paused = false;
+    // Give the stranded worker a real placed workplace so the state matches
+    // what gameplay can produce.
+    let mut with_destination = arrived.clone();
+    place_destination(&mut with_destination, "workplace", Point { x: 8, y: 3 });
 
-    let mut engine = common::running_engine_from_fixture(after_return_window);
-    let result = engine.tick(0.0);
+    // Immediately after the cross-midnight arrival no return has unlocked:
+    // the citizen defers to the daily routine, whose wake is still ahead.
+    let mut engine = common::running_engine_from_fixture(with_destination);
+    let result = engine.tick(10.0);
     assert!(result.rejection.is_none());
     let ticked = engine.snapshot();
-
     assert!(!ticked
         .active_trips
         .iter()
         .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn));
+
+    // At the day-1 routine wake the away-from-home guard resolves the citizen
+    // into today's return window instead of an outbound from the workplace.
+    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
+    let return_time = clock::GAME_DAY_SECONDS
+        + (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
+    let result = engine.tick(return_time - ticked.time + 1.0);
+    assert!(result.rejection.is_none());
+    let ticked = engine.snapshot();
+
+    assert!(
+        !ticked
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound),
+        "the cross-midnight arrival must not produce a day-1 outbound from the workplace"
+    );
+    let recovery_return = ticked
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn)
+        .expect("today's return window brings the stranded citizen home");
+    assert_eq!(recovery_return.origin, Point { x: 8, y: 3 });
+    assert_eq!(recovery_return.destination, Point { x: 2, y: 3 });
 }
 
 #[test]
@@ -1920,7 +1941,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     state.paused = false;
     place_destination(&mut state, "workplace", workplace);
     state.sims = vec![Sim {
-        id: "sim-001".to_string(),
+        id: "sim-003".to_string(),
         home,
         position: workplace,
         routine: CitizenRoutine::Worker {
@@ -1933,7 +1954,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     // Active return trip from day 0, walking home, 1 tile away from arrival.
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
-        sim_id: "sim-001".to_string(),
+        sim_id: "sim-003".to_string(),
         purpose: TripPurpose::CommuteReturn,
         origin: workplace,
         destination: home,
@@ -1949,7 +1970,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
 
     // Drive the tick to just past the day-1 return departure so the return
     // trip has spawned but has not yet completed (1s of a 120s walk).
-    let return_minute = commute::departure_minute_for_sim("sim-001", "standard", "return");
+    let return_minute = commute::departure_minute_for_sim("sim-003", "standard", "return");
     let day1_return_time = clock::GAME_DAY_SECONDS
         + (f64::from(return_minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS;
     let fixture_time = state.time;
@@ -1958,7 +1979,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     assert!(result.rejection.is_none());
     let next = engine.snapshot();
 
-    let sim = next.sims.iter().find(|sim| sim.id == "sim-001").unwrap();
+    let sim = next.sims.iter().find(|sim| sim.id == "sim-003").unwrap();
 
     // The day-1 outbound should have spawned and arrived (the sim was at home
     // after the cross-midnight return arrived, before the outbound departure).
@@ -1976,7 +1997,7 @@ fn return_trip_crossing_midnight_does_not_spawn_phantom_home_to_home_return() {
     let active_return = next
         .active_trips
         .iter()
-        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteReturn);
+        .find(|trip| trip.sim_id == "sim-003" && trip.purpose == TripPurpose::CommuteReturn);
     let active_return =
         active_return.expect("a day-1 return trip should be active and in progress");
     assert_eq!(
@@ -2697,4 +2718,436 @@ fn coarse_tick_detects_loss_when_good_outcomes_expire_before_bad_ones() {
         coarse_snapshot.metrics.loss_reason,
         fine_snapshot.metrics.loss_reason
     );
+}
+
+// === Stage B: Student, day-off, and bounded optional demand ===
+
+fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
+    f64::from(day) * clock::GAME_DAY_SECONDS
+        + (f64::from(minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS
+}
+
+/// Zoned, persistence-valid building placement for the Stage-B fixtures
+/// (`width` x 2 footprint, matching the canonical catalog shapes).
+fn place_stage_b_building(
+    state: &mut GameSnapshot,
+    id: &str,
+    building_type: &str,
+    origin: Point,
+    width: i32,
+    area: &str,
+) {
+    for y in origin.y..origin.y + 2 {
+        for x in origin.x..origin.x + width {
+            let tile = state
+                .map
+                .tile_mut(Point { x, y })
+                .expect("fixture tile exists");
+            tile.area = Some(area.to_string());
+        }
+    }
+    state.buildings.push(PlacedBuilding {
+        id: id.to_string(),
+        building_type: building_type.to_string(),
+        origin,
+        rotation: 0,
+        occupied_tiles: (origin.x..origin.x + width)
+            .flat_map(|x| [Point { x, y: origin.y }, Point { x, y: origin.y + 1 }])
+            .collect(),
+        placed_at: 0.0,
+        transit_node_id: None,
+    });
+}
+
+/// A quiet one-corridor sandbox with a school and one optional site (the
+/// only eligible outing building), starting at `start`. No housing, so no
+/// move-ins disturb the pinned flows; citizens are handed in directly.
+fn stage_b_fixture(sims: Vec<Sim>, start: f64) -> GameSnapshot {
+    let mut state = create_initial_snapshot();
+    clear_roads(&mut state);
+    common::corridor(
+        &mut state,
+        &(3..=24).map(|x| Point { x, y: 8 }).collect::<Vec<_>>(),
+        None,
+    );
+    place_stage_b_building(
+        &mut state,
+        "building-school",
+        "school",
+        Point { x: 6, y: 10 },
+        3,
+        "civic",
+    );
+    place_stage_b_building(
+        &mut state,
+        "building-market",
+        "supermarket",
+        Point { x: 18, y: 10 },
+        2,
+        "commercial",
+    );
+    state.sims = sims;
+    state.time = start;
+    state.day = clock::day_index(start);
+    state.clock_minutes = clock::clock_minutes(start);
+    state.paused = false;
+    state
+}
+
+fn stage_b_student(day0_wake: f64) -> Sim {
+    Sim {
+        id: "sim-010".to_string(),
+        home: Point { x: 2, y: 7 },
+        position: Point { x: 2, y: 7 },
+        routine: CitizenRoutine::Student,
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: day0_wake,
+        }),
+    }
+}
+
+fn stage_b_worker(id: &str, wake: f64, workplace: Option<Point>) -> Sim {
+    Sim {
+        id: id.to_string(),
+        home: Point { x: 2, y: 7 },
+        position: Point { x: 2, y: 7 },
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace,
+        },
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: wake,
+        }),
+    }
+}
+
+/// The first citizen id whose day off is `day` and whose optional-outing
+/// eligibility on that day matches `eligible`. Pure derivation over the
+/// published deterministic helpers, so the fixtures stay reproducible.
+fn day_off_citizen(day: u32, eligible: bool) -> String {
+    (1..=1000)
+        .map(|suffix| format!("sim-{suffix:03}"))
+        .find(|id| {
+            commute::is_day_off(id, day)
+                && commute::stable_daily_seed(id, day, commute::OPTIONAL_SALT).is_multiple_of(4)
+                    == eligible
+        })
+        .expect("a matching citizen exists within the first 1000 ids")
+}
+
+/// Drive two engines from the same fixture to `end` — one coarse tick, 1s
+/// steps — and assert every Stage-B observable matches.
+fn assert_stage_b_equivalence(base: GameSnapshot, end: f64) -> GameSnapshot {
+    let mut coarse = common::running_engine_from_fixture(base.clone());
+    coarse.tick(end - base.time);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut fine = common::running_engine_from_fixture(base);
+    while fine.snapshot().time + 1.0 <= end {
+        fine.tick(1.0);
+    }
+    fine.tick(end - fine.snapshot().time);
+    let fine_snapshot = fine.snapshot();
+
+    assert!(
+        (coarse_snapshot.time - fine_snapshot.time).abs() < 1e-6,
+        "coarse {} vs fine {}",
+        coarse_snapshot.time,
+        fine_snapshot.time
+    );
+    assert_eq!(
+        coarse_snapshot.sims.len(),
+        fine_snapshot.sims.len(),
+        "citizen sets diverge"
+    );
+    for (left, right) in coarse_snapshot.sims.iter().zip(&fine_snapshot.sims) {
+        assert_eq!(left.id, right.id);
+        assert_eq!(left.routine, right.routine);
+        assert_eq!(left.home, right.home);
+        assert_eq!(left.next_activity, right.next_activity);
+        assert_eq!(
+            left.position, right.position,
+            "{} position diverges",
+            left.id
+        );
+    }
+    assert_eq!(
+        coarse_snapshot.active_trips.len(),
+        fine_snapshot.active_trips.len(),
+        "active trip sets diverge"
+    );
+    for (left, right) in coarse_snapshot
+        .active_trips
+        .iter()
+        .zip(&fine_snapshot.active_trips)
+    {
+        assert_eq!(left.id, right.id);
+        assert_eq!(left.purpose, right.purpose);
+        assert_eq!(left.status, right.status);
+        assert_eq!(left.destination, right.destination);
+        assert!(
+            (left.position.x - right.position.x).abs() < 1e-6
+                && (left.position.y - right.position.y).abs() < 1e-6
+        );
+    }
+    assert_eq!(
+        coarse_snapshot.metrics.completed_trips,
+        fine_snapshot.metrics.completed_trips
+    );
+    assert_eq!(
+        coarse_snapshot.metrics.late_trips,
+        fine_snapshot.metrics.late_trips
+    );
+    assert_eq!(
+        coarse_snapshot.metrics.unserved_trips,
+        fine_snapshot.metrics.unserved_trips
+    );
+    coarse_snapshot
+}
+
+#[test]
+fn student_school_commute_matches_across_coarse_and_fine_ticks() {
+    let outbound_minute = commute::student_departure_minute("sim-010", "outbound");
+    let return_minute = commute::student_departure_minute("sim-010", "return");
+    let start = scheduled_time_seconds(0, outbound_minute) - 5.0;
+    let return_time = scheduled_time_seconds(0, return_minute);
+    let base = stage_b_fixture(vec![stage_b_student(start)], start);
+
+    // Stepped observation: the outbound heads to a school footprint tile and
+    // its arrival hands the student to the 15:00–16:00 return window.
+    let mut observer = common::running_engine_from_fixture(base.clone());
+    observer.tick(5.0);
+    let observer_snapshot = observer.snapshot();
+    let outbound = observer_snapshot
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-010" && trip.purpose == TripPurpose::CommuteOutbound)
+        .expect("school-day outbound spawns at the student window")
+        .clone();
+    let school_tiles: Vec<Point> = observer_snapshot
+        .buildings
+        .iter()
+        .filter(|building| building.building_type == "school")
+        .flat_map(|building| building.occupied_tiles.iter().copied())
+        .collect();
+    assert!(school_tiles.contains(&outbound.destination));
+
+    let mut observer = common::running_engine_from_fixture(base.clone());
+    observer.tick(return_time - start - 1.0);
+    let waiting = observer.snapshot();
+    let student = waiting.sims.iter().find(|sim| sim.id == "sim-010").unwrap();
+    assert_eq!(student.position, outbound.destination);
+    assert_eq!(
+        student.next_activity.clone(),
+        Some(ScheduledActivity {
+            kind: ScheduledActivityKind::PrimaryReturn,
+            due_time: return_time,
+        }),
+        "arrival at school schedules the afternoon return wake"
+    );
+
+    // Full-day granularity equivalence through outbound, return, and home.
+    let coarse = assert_stage_b_equivalence(base, return_time + 400.0);
+    let student = coarse.sims.iter().find(|sim| sim.id == "sim-010").unwrap();
+    assert_eq!(student.position, student.home, "the student is home again");
+    assert_eq!(
+        student.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine),
+        "the completed return hands the student to the next school morning"
+    );
+}
+
+#[test]
+fn day_off_suppresses_primary_demand_and_matches_across_granularity() {
+    // A worker whose day off is day 1 and who is NOT eligible for an outing
+    // that day: the day passes without their primary outbound despite the
+    // assigned workplace, and the commute resumes on day 2.
+    let id = day_off_citizen(1, false);
+    let wake = scheduled_time_seconds(
+        1,
+        commute::departure_minute_for_sim(&id, "standard", "outbound"),
+    );
+    // The workplace is a school tile: a job building that is not an optional
+    // site, so the day off cannot produce any demand at all.
+    let base = stage_b_fixture(
+        vec![stage_b_worker(&id, wake, Some(Point { x: 6, y: 10 }))],
+        scheduled_time_seconds(1, 0),
+    );
+
+    // End on day 2's evening: after the resumed commute's return, before the
+    // day-3 wake.
+    let coarse = assert_stage_b_equivalence(base, wake + 2.0 * clock::GAME_DAY_SECONDS - 200.0);
+
+    let worker = coarse
+        .sims
+        .iter()
+        .find(|sim| sim.id == id)
+        .expect("worker persists");
+    assert_eq!(
+        worker.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine),
+        "the day-off citizen hands back to the daily routine"
+    );
+    assert!(
+        coarse
+            .metrics
+            .completed_trips
+            .max(coarse.metrics.unserved_trips)
+            >= 1,
+        "day 2's commute proves the suppression was day-off specific"
+    );
+}
+
+#[test]
+fn optional_outing_dwell_and_return_match_across_coarse_and_fine_ticks() {
+    // A day-off citizen eligible for the outing: outbound in 11:00–15:00,
+    // exactly 120 in-game minutes of dwell, then the return home.
+    let day = 0_u32;
+    let id = day_off_citizen(day, true);
+    let morning_wake = scheduled_time_seconds(
+        day,
+        commute::departure_minute_for_sim(&id, "standard", "outbound"),
+    );
+    let base = stage_b_fixture(
+        vec![stage_b_worker(&id, morning_wake, None)],
+        morning_wake - 5.0,
+    );
+
+    // Stepped observation of the dwell boundary: the outing outbound's
+    // resolution schedules the OptionalReturn exactly 120 in-game minutes
+    // after the resolved-at time.
+    let mut stepped = common::running_engine_from_fixture(base.clone());
+    let mut saw_outing = false;
+    let mut dwell_boundary = None;
+    for _ in 0..2_000 {
+        stepped.tick(1.0);
+        let snapshot = stepped.snapshot();
+        saw_outing |= snapshot
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == id && trip.purpose == TripPurpose::OptionalOutbound);
+        if !saw_outing {
+            continue;
+        }
+        let outing_active = snapshot
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == id && trip.purpose == TripPurpose::OptionalOutbound);
+        let wake = snapshot
+            .sims
+            .iter()
+            .find(|sim| sim.id == id)
+            .and_then(|sim| sim.next_activity.clone());
+        if !outing_active {
+            let activity = wake.expect("an idle day-off citizen carries their next wake");
+            assert_eq!(activity.kind, ScheduledActivityKind::OptionalReturn);
+            dwell_boundary = Some((snapshot.time, activity.due_time));
+            break;
+        }
+    }
+    let (observed_at, return_due) =
+        dwell_boundary.expect("the outing outbound resolves into an OptionalReturn wake");
+    assert!(
+        (return_due - observed_at - 100.0).abs() < 1.0,
+        "OptionalReturn dwell is 120 in-game minutes (observed within one 1s step): {} - {}",
+        return_due,
+        observed_at
+    );
+
+    let coarse = assert_stage_b_equivalence(base, return_due + clock::GAME_DAY_SECONDS / 2.0);
+    let citizen = coarse.sims.iter().find(|sim| sim.id == id).unwrap();
+    assert_eq!(citizen.position, citizen.home, "the outing ends at home");
+    assert_eq!(
+        citizen.next_activity.as_ref().map(|activity| activity.kind),
+        Some(ScheduledActivityKind::DailyRoutine)
+    );
+    assert!(
+        coarse.active_trips.iter().all(|trip| trip.sim_id != id),
+        "at most one outing: nothing else stays active"
+    );
+}
+
+#[test]
+fn failed_optional_return_recovers_at_the_next_daily_routine() {
+    // A hand-authored OptionalReturn that cannot be served: the citizen waits
+    // at the outing site with no same-timestamp retry, and the next day's
+    // routine wake resolves them into a return home.
+    fn failed_return_fixture() -> GameSnapshot {
+        let home = Point { x: 2, y: 7 };
+        let site = Point { x: 18, y: 10 };
+        let mut state = stage_b_fixture(
+            vec![Sim {
+                id: "sim-003".to_string(),
+                home,
+                position: site,
+                routine: CitizenRoutine::Worker {
+                    shift_template: "standard".to_string(),
+                    workplace: None,
+                },
+                // The failing return owns the citizen.
+                next_activity: None,
+            }],
+            700.0,
+        );
+        state.active_trips = vec![ActiveTrip {
+            id: "trip-day-0-trip-001".to_string(),
+            sim_id: "sim-003".to_string(),
+            purpose: TripPurpose::OptionalReturn,
+            origin: site,
+            destination: home,
+            position: site.into(),
+            status: TripStatus::Waiting,
+            deadline: 1_600.0,
+            route_plan: Some(bus_plan(site, home, "route-001")),
+            current_leg_index: 0,
+            patience_remaining: 1.0,
+            current_leg_wait_seconds: 0.0,
+            private_car_trip: None,
+        }];
+        state
+    }
+
+    let mut engine = common::running_engine_from_fixture(failed_return_fixture());
+    engine.tick(2.0);
+    let failed = engine.snapshot();
+    let worker = failed.sims.iter().find(|sim| sim.id == "sim-003").unwrap();
+    let next_wake = scheduled_time_seconds(
+        1,
+        commute::departure_minute_for_sim("sim-003", "standard", "outbound"),
+    );
+    assert_eq!(
+        worker.next_activity.clone(),
+        Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: next_wake,
+        }),
+        "the unserved return waits until the next DailyRoutine"
+    );
+    assert!(
+        failed.active_trips.is_empty(),
+        "no same-day retry is scheduled for the failed return"
+    );
+
+    // At the next DailyRoutine the away-from-home guard resolves the citizen
+    // into the day's return window, which brings them home.
+    let return_minute = commute::departure_minute_for_sim("sim-003", "standard", "return");
+    let return_window = scheduled_time_seconds(1, return_minute);
+    // The walk home is a 19-tile manhattan leg (380s), so end well after it.
+    let end = return_window + 500.0;
+    let mut observer = common::running_engine_from_fixture(failed_return_fixture());
+    observer.tick(return_window - 700.0 + 1.0);
+    let wake_snapshot = observer.snapshot();
+    let return_demand = wake_snapshot
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-003" && trip.purpose == TripPurpose::CommuteReturn)
+        .expect("the recovery wake emits the return home");
+    assert_eq!(return_demand.origin, Point { x: 18, y: 10 });
+    assert_eq!(return_demand.destination, Point { x: 2, y: 7 });
+
+    let coarse = assert_stage_b_equivalence(failed_return_fixture(), end);
+    let citizen = coarse.sims.iter().find(|sim| sim.id == "sim-003").unwrap();
+    assert_eq!(citizen.position, citizen.home, "the recovery returns home");
 }

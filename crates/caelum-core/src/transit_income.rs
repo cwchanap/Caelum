@@ -34,6 +34,14 @@ mod tests {
     };
 
     fn trip(status: TripStatus, modes: &[TransitMode]) -> ActiveTrip {
+        trip_with_purpose(status, modes, TripPurpose::CommuteOutbound)
+    }
+
+    fn trip_with_purpose(
+        status: TripStatus,
+        modes: &[TransitMode],
+        purpose: TripPurpose,
+    ) -> ActiveTrip {
         let legs = modes
             .iter()
             .enumerate()
@@ -64,7 +72,7 @@ mod tests {
         ActiveTrip {
             id: "trip-income-fixture".to_string(),
             sim_id: "sim-income-fixture".to_string(),
-            purpose: TripPurpose::CommuteOutbound,
+            purpose,
             origin: Point { x: 0, y: 0 },
             destination: Point {
                 x: modes.len() as i32,
@@ -84,6 +92,38 @@ mod tests {
             patience_remaining: 240.0,
             current_leg_wait_seconds: 0.0,
             private_car_trip: None,
+        }
+    }
+
+    #[test]
+    fn optional_and_student_purposes_earn_the_same_transit_income() {
+        // Stage-B characterization: the fare rule qualifies by terminal status
+        // plus a transit route plan, never by trip purpose, so optional
+        // outings and Student school commutes earn the existing $200.
+        for purpose in [
+            TripPurpose::OptionalOutbound,
+            TripPurpose::OptionalReturn,
+            TripPurpose::CommuteOutbound,
+            TripPurpose::CommuteReturn,
+        ] {
+            assert_eq!(
+                completed_transit_trip_income(&trip_with_purpose(
+                    TripStatus::Arrived,
+                    &[TransitMode::Bus],
+                    purpose,
+                )),
+                200,
+                "{purpose:?} bus travel earns the standard fare"
+            );
+            assert_eq!(
+                completed_transit_trip_income(&trip_with_purpose(
+                    TripStatus::Late,
+                    &[TransitMode::Metro],
+                    purpose,
+                )),
+                200,
+                "{purpose:?} metro travel earns the standard fare"
+            );
         }
     }
 
