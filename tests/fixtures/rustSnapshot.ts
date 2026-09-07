@@ -73,6 +73,7 @@ export function createRustSnapshot(
     activeTrips: [],
     tripSequenceDay: 0,
     nextTripSequence: 1,
+    nextCitizenOrdinal: 1,
     metrics: {
       lateTrips: 0,
       completedTrips: 0,

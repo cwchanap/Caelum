@@ -237,7 +237,7 @@ impl GameEngine {
         Ok(Self::from_parts(snapshot, road_topology))
     }
 
-    /// Construct an engine from a schema-v10 snapshot, normalizing
+    /// Construct an engine from a schema-v11 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived
@@ -271,6 +271,7 @@ impl GameEngine {
     pub fn snapshot(&self) -> GameSnapshot {
         let mut snapshot = self.snapshot.clone();
         snapshot.sims = crate::population::snapshot_sims(&self.world, snapshot.day);
+        snapshot.next_citizen_ordinal = crate::population::next_citizen_ordinal(&self.world);
         crate::service_control::populate_snapshot_metrics(&mut snapshot);
         snapshot
     }

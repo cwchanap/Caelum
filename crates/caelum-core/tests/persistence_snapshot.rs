@@ -125,7 +125,7 @@ fn travelling_sim_without_next_activity_round_trips_through_save_and_restore() {
 }
 
 #[test]
-fn schema_9_rejects_with_expected_10_actual_9() {
+fn schema_9_rejects_with_expected_current_actual_9() {
     assert_eq!(
         check_schema_version(9),
         Err(SnapshotLoadError::UnsupportedSchema {
@@ -139,7 +139,7 @@ fn schema_9_rejects_with_expected_10_actual_9() {
     match GameEngine::from_snapshot(snapshot) {
         Err(SnapshotLoadError::UnsupportedSchema { expected, actual }) => {
             assert_eq!(expected, SNAPSHOT_SCHEMA_VERSION);
-            assert_eq!(expected, 10);
+            assert_eq!(expected, 11);
             assert_eq!(actual, 9);
         }
         Err(error) => panic!("schema 9 must be rejected as unsupported, got {error:?}"),

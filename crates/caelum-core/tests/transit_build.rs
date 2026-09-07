@@ -1508,7 +1508,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
 }
 
 #[test]
-fn removing_last_destination_drops_orphaned_outbound_trip() {
+fn removing_destination_keeps_outbound_trip_for_reconciliation() {
     let removed_tiles = vec![
         Point { x: 5, y: 5 },
         Point { x: 6, y: 5 },
@@ -1572,21 +1572,22 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         .find(|sim| sim.id == "sim-001")
         .expect("sim remains");
 
-    // The orphaned outbound trip is gone entirely (workplace state itself is
-    // left to ECS reconciliation), leaving the sim free to retry when a new
-    // destination is placed.
-    assert!(next
+    // The shell candidate keeps the orphaned outbound trip and its vehicle
+    // passenger reference intact: ECS building reconciliation (engine commit)
+    // owns retarget-vs-drop and recovery scheduling, so it must see the
+    // in-flight trip and the trip-owning citizen. Dropping it here would leave
+    // the citizen with neither an active trip nor a NextActivity.
+    let trip = next
         .active_trips
         .iter()
-        .all(|trip| trip.id != "trip-day-0-trip-001"));
-    assert!(!next
-        .active_trips
-        .iter()
-        .any(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound));
+        .find(|trip| trip.id == "trip-day-0-trip-001")
+        .expect("outbound trip remains for reconciliation");
+    assert_eq!(trip.purpose, TripPurpose::CommuteOutbound);
+    assert_eq!(trip.destination, removed_tiles[0]);
     assert!(next.transit.vehicles[0]
         .passenger_ids
         .iter()
-        .all(|id| id != "trip-day-0-trip-001"));
+        .any(|id| id == "trip-day-0-trip-001"));
 }
 
 #[test]

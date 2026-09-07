@@ -64,7 +64,7 @@ contract is deliberately a shared runtime seam, not a plugin or host-platform
 API. Neither adapter exposes a runtime identity, session object, validation
 operation, or mutating sandbox operation.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 8`. Every snapshot carries
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 11`. Every snapshot carries
 required Rust-owned `GameRules` plus a required `ScenarioConfig`.
 `rules.sandbox.startingCapital` is required and records the exact amount reset
 must restore; it is an integer from `0` through `i32::MAX`.
