@@ -1,8 +1,8 @@
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, EconomyPreset, GameSnapshot, Heading, MovementKind, PathGeometry,
-    PlacedBuilding, Point, RoadPathStep, RoundaboutSize, Route, RouteLeg, RouteLegKind,
-    RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
-    TransitNodeStatus, TransitPath, TripPurpose, TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, BusStopKind, CitizenRoutine, EconomyPreset, GameSnapshot, Heading, MovementKind,
+    PathGeometry, PlacedBuilding, Point, RoadPathStep, RoundaboutSize, Route, RouteLeg,
+    RouteLegKind, RouteLegStatus, RoutePlan, ServiceDirection, ServicePattern, Sim, TransitMode,
+    TransitNodeStatus, TransitPath, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
@@ -548,19 +548,17 @@ fn destination_building(
     }
 }
 
+/// A traveller anchored by a hand-authored commute trip for the same id.
 fn worker_sim(id: &str, position: Point, workplace: Point) -> Sim {
     Sim {
         id: id.to_string(),
         home: position,
         position,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: None,
-        workplace: Some(workplace),
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: Some(workplace),
+        },
+        next_activity: None,
     }
 }
 
@@ -1457,8 +1455,7 @@ fn removing_destination_keeps_return_trip_targeting_home() {
     // trip's destination is home. Clearing the workplace must not retarget this
     // return trip toward a replacement workplace.
     let mut sim = worker_sim("sim-001", home, removed_tiles[0]);
-    sim.outbound_resolved_today = true;
-    sim.outbound_arrived_today = true;
+    sim.next_activity = None; // the mid-return trip owns the citizen
     state.sims = vec![sim];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
@@ -1526,7 +1523,9 @@ fn removing_last_destination_drops_orphaned_outbound_trip() {
         "supermarket",
         removed_tiles.clone(),
     )];
-    state.sims = vec![worker_sim("sim-001", home, removed_tiles[0])];
+    let mut sim = worker_sim("sim-001", home, removed_tiles[0]);
+    sim.next_activity = None; // the mid-outbound trip owns the citizen
+    state.sims = vec![sim];
     state.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),

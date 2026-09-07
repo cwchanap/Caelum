@@ -425,7 +425,7 @@ pub fn advance_active_trips(
     flow: &traffic::RoadFlow,
     delta_seconds: f64,
 ) -> GameSnapshot {
-    let mut world = population::build_world_v9(state);
+    let mut world = population::build_world(state);
     let (mut next, _) = advance_active_trips_with_zero_delta_ids(
         state,
         flow,
@@ -433,7 +433,7 @@ pub fn advance_active_trips(
         &HashSet::new(),
         &mut world,
     );
-    next.sims = population::snapshot_sims_v9(&world, next.day);
+    next.sims = population::snapshot_sims(&world, next.day);
     next
 }
 
@@ -1436,7 +1436,7 @@ mod tests {
         topology: &RoadTopology,
         delta_seconds: f64,
     ) -> GameSnapshot {
-        let mut world = crate::population::build_world_v9(state);
+        let mut world = crate::population::build_world(state);
         let mut population_schedule = crate::population::build_schedule();
         super::tick_trips_with_objectives(
             state,
@@ -1718,8 +1718,8 @@ mod tests {
         sandbox_without_wave.paused = false;
         let flow = traffic::RoadFlow::new();
 
-        let sandbox_world = crate::population::build_world_v9(&sandbox_with_wave);
-        let baseline_world = crate::population::build_world_v9(&sandbox_without_wave);
+        let sandbox_world = crate::population::build_world(&sandbox_with_wave);
+        let baseline_world = crate::population::build_world(&sandbox_without_wave);
         assert_eq!(
             next_boundary_after(&sandbox_with_wave, &flow, &sandbox_world),
             next_boundary_after(&sandbox_without_wave, &flow, &baseline_world),

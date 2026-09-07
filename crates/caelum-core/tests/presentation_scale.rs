@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    ActiveTrip, GameSnapshot, PlacedBuilding, Point, Sim, TransitMode, TripPosition, TripPurpose,
-    TripStatus, Vehicle, WorkerProfile,
+    ActiveTrip, CitizenRoutine, GameSnapshot, PlacedBuilding, Point, ScheduledActivity,
+    ScheduledActivityKind, Sim, TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::state::create_initial_snapshot;
@@ -11,14 +11,14 @@ fn sim(index: usize) -> Sim {
         id: format!("sim-{index:06}"),
         home,
         position: home,
-        worker_profile: WorkerProfile::Worker,
-        shift_template: Some("standard".to_string()),
-        workplace: None,
-        commute_day: 0,
-        outbound_resolved_today: false,
-        outbound_arrived_today: false,
-        return_resolved_today: false,
-        returned_home_today: false,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: None,
+        },
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: 360.0,
+        }),
     }
 }
 

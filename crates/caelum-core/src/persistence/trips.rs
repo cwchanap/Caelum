@@ -1,11 +1,12 @@
-use crate::commute;
-use crate::model::{ActiveTrip, GameSnapshot, Point, TransitMode, TransitPath, TripStatus};
+use crate::model::{
+    ActiveTrip, CitizenRoutine, GameSnapshot, Point, TransitMode, TransitPath, TripStatus,
+};
 use crate::trips;
 
 use super::entities::{parse_trip_id, EntityIndexes};
 use super::{
-    DerivedStateError, EntityError, EntityKind, EntityRef, NumericError, PersistenceError,
-    PersistenceResult, SnapshotField,
+    AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, NumericError,
+    PersistenceError, PersistenceResult, SnapshotField,
 };
 
 pub(super) fn validate_trips(
@@ -98,11 +99,6 @@ pub(super) fn validate_trips(
 }
 
 pub(super) fn normalize_direct_fields(snapshot: &mut GameSnapshot) {
-    for sim in &mut snapshot.sims {
-        sim.worker_profile = commute::worker_profile_for_id(&sim.id);
-        sim.shift_template = commute::shift_template_for_id(&sim.id).map(str::to_string);
-    }
-
     let max_current_day_sequence = snapshot
         .active_trips
         .iter()
@@ -115,12 +111,49 @@ pub(super) fn normalize_direct_fields(snapshot: &mut GameSnapshot) {
 }
 
 fn validate_sims(snapshot: &GameSnapshot) -> PersistenceResult<()> {
+    // A non-terminal trip owns its citizen: exactly this set may (and must)
+    // persist without a next activity.
+    let travelling: std::collections::HashSet<&str> = snapshot
+        .active_trips
+        .iter()
+        .filter(|trip| !trips::is_terminal_status(trip.status))
+        .map(|trip| trip.sim_id.as_str())
+        .collect();
     for sim in &snapshot.sims {
         let entity = entity_ref(EntityKind::Sim, &sim.id);
         validate_point(snapshot, &entity, SnapshotField::SimHome, sim.home)?;
         validate_point(snapshot, &entity, SnapshotField::SimPosition, sim.position)?;
-        if let Some(workplace) = sim.workplace {
-            validate_point(snapshot, &entity, SnapshotField::SimWorkplace, workplace)?;
+        if let CitizenRoutine::Worker {
+            workplace: Some(workplace),
+            ..
+        } = &sim.routine
+        {
+            validate_point(snapshot, &entity, SnapshotField::SimWorkplace, *workplace)?;
+        }
+        if let Some(next_activity) = &sim.next_activity {
+            super::finite_non_negative(
+                Some(entity.clone()),
+                SnapshotField::SimNextActivityDueTime,
+                next_activity.due_time,
+            )?;
+        }
+        // The exact-time scheduler's world construction derives its wakes and
+        // its travellers from these two facts, so an impossible combination
+        // would silently strand or double-own a citizen after restore.
+        match (travelling.contains(sim.id.as_str()), &sim.next_activity) {
+            (true, Some(_)) => {
+                return Err(PersistenceError::InvalidAssignment {
+                    entity,
+                    reason: AssignmentError::ScheduledWhileTraveling,
+                })
+            }
+            (false, None) => {
+                return Err(PersistenceError::InvalidAssignment {
+                    entity,
+                    reason: AssignmentError::MissingNextActivity,
+                })
+            }
+            _ => {}
         }
     }
     Ok(())

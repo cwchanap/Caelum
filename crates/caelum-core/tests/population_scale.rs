@@ -8,8 +8,11 @@
 use std::collections::HashSet;
 
 use caelum_core::building_catalog::building_definition;
-use caelum_core::commute::{shift_template_for_id, worker_profile_for_id};
-use caelum_core::model::{GameSnapshot, Point, Sim, TripPurpose, WorkerProfile};
+use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
+use caelum_core::commute::{departure_minute_for_sim, is_student_id, shift_template_for_id};
+use caelum_core::model::{
+    CitizenRoutine, GameSnapshot, Point, ScheduledActivity, ScheduledActivityKind, Sim, TripPurpose,
+};
 use caelum_core::{create_sandbox_snapshot, GameEngine, GameIntent, SandboxCreationRequest};
 
 const TOTAL: usize = 200_000;
@@ -21,10 +24,10 @@ const DUE: usize = 1_000;
 const WINDOW_START: f64 = 270.0;
 const WINDOW_END: f64 = 730.0;
 
-/// One 200k-worker fixture. Profiles and shift templates are derived from the
-/// sim ids exactly like the durable snapshot normalization, so the fixture
+/// One 200k-worker fixture. Routines and shift templates are derived from the
+/// sim ids exactly like the canonical move-in classification, so the fixture
 /// matches what `from_snapshot` canonically loads. With `all_future == false`,
-/// the first `DUE` derived Workers carry `commute_day == 0` and become due
+/// the first `DUE` derived Workers carry a day-0 outbound wake and become due
 /// inside the window; every other citizen is future-scheduled on day 1.
 fn scale_snapshot(all_future: bool) -> GameSnapshot {
     let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
@@ -55,29 +58,41 @@ fn scale_snapshot(all_future: bool) -> GameSnapshot {
             .is_some_and(|definition| definition.resident_capacity == 0)
     });
 
+    let wake = |sim_id: &str, template: &str, day: u32| ScheduledActivity {
+        kind: ScheduledActivityKind::DailyRoutine,
+        due_time: f64::from(day) * GAME_DAY_SECONDS
+            + f64::from(departure_minute_for_sim(sim_id, template, "outbound"))
+                / f64::from(MINUTES_PER_DAY)
+                * GAME_DAY_SECONDS,
+    };
     let mut due_workers = 0usize;
     snapshot.sims = (1..=TOTAL)
         .map(|index| {
             let id = format!("sim-{index:06}");
-            let worker_profile = worker_profile_for_id(&id);
+            let student = is_student_id(&id);
             let shift_template = shift_template_for_id(&id);
-            let due = !all_future && worker_profile == WorkerProfile::Worker && {
+            let due = !all_future && !student && {
                 due_workers += 1;
                 due_workers <= DUE
             };
             let home = Point::from(((index % 8) as i32, ((index / 8) % 8) as i32));
+            let routine = match shift_template {
+                Some(template) => CitizenRoutine::Worker {
+                    shift_template: template.to_string(),
+                    workplace: Some(job_tile),
+                },
+                None => CitizenRoutine::Student,
+            };
             Sim {
+                next_activity: Some(wake(
+                    &id,
+                    shift_template.unwrap_or("standard"),
+                    if due { 0 } else { 1 },
+                )),
                 id,
                 home,
                 position: home,
-                worker_profile,
-                shift_template: shift_template.map(str::to_string),
-                workplace: (worker_profile == WorkerProfile::Worker).then_some(job_tile),
-                commute_day: if due { 0 } else { 1 },
-                outbound_resolved_today: false,
-                outbound_arrived_today: false,
-                return_resolved_today: false,
-                returned_home_today: false,
+                routine,
             }
         })
         .collect();
@@ -129,7 +144,7 @@ fn stage_a_two_hundred_thousand_worker_engine_structural_and_granularity() {
     // ordinals (every 10th id is a canonical NonWorker and is skipped).
     let mut due_ordinals = Vec::with_capacity(DUE);
     for index in 1..=TOTAL {
-        if worker_profile_for_id(&format!("sim-{index:06}")) == WorkerProfile::Worker {
+        if !is_student_id(&format!("sim-{index:06}")) {
             due_ordinals.push(index);
             if due_ordinals.len() == DUE {
                 break;

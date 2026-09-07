@@ -1,10 +1,30 @@
 use caelum_core::commute::departure_minute_for_sim;
-use caelum_core::model::{GameSnapshot, TripPurpose, WorkerProfile};
+use caelum_core::model::{CitizenRoutine, GameSnapshot, Point, Sim, TripPurpose};
 use caelum_core::{clock, GameEngine, GameIntent};
 
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
     f64::from(day) * clock::GAME_DAY_SECONDS
         + (f64::from(minute) / f64::from(clock::MINUTES_PER_DAY)) * clock::GAME_DAY_SECONDS
+}
+
+fn is_worker(sim: &Sim) -> bool {
+    matches!(sim.routine, CitizenRoutine::Worker { .. })
+}
+
+fn workplace_of(sim: &Sim) -> Option<Point> {
+    match &sim.routine {
+        CitizenRoutine::Worker { workplace, .. } => *workplace,
+        CitizenRoutine::Student => None,
+    }
+}
+
+fn set_workplace(sim: &mut Sim, workplace: Option<Point>) {
+    if let CitizenRoutine::Worker {
+        workplace: slot, ..
+    } = &mut sim.routine
+    {
+        *slot = workplace;
+    }
 }
 
 fn zoned_engine(building_type: &str, origin: (i32, i32), end: (i32, i32)) -> GameEngine {
@@ -112,11 +132,7 @@ fn two_small_houses_and_supermarket_assign_only_four_workers() {
 
     engine.tick(600.0);
     let snapshot = engine.snapshot();
-    let workers: Vec<_> = snapshot
-        .sims
-        .iter()
-        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
-        .collect();
+    let workers: Vec<_> = snapshot.sims.iter().filter(|sim| is_worker(sim)).collect();
     assert_eq!(
         workers.len(),
         8,
@@ -130,7 +146,7 @@ fn two_small_houses_and_supermarket_assign_only_four_workers() {
         .expect("supermarket")
         .occupied_tiles
         .clone();
-    let assigned: Vec<_> = workers.iter().filter_map(|sim| sim.workplace).collect();
+    let assigned: Vec<_> = workers.iter().filter_map(|sim| workplace_of(sim)).collect();
     assert_eq!(assigned.len(), 4);
     assert_eq!(assigned, supermarket_tiles);
 }
@@ -164,11 +180,7 @@ fn factory_assigns_six_workers_when_more_than_capacity() {
 
     engine.tick(600.0);
     let snapshot = engine.snapshot();
-    let workers: Vec<_> = snapshot
-        .sims
-        .iter()
-        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
-        .collect();
+    let workers: Vec<_> = snapshot.sims.iter().filter(|sim| is_worker(sim)).collect();
     assert_eq!(
         workers.len(),
         9,
@@ -182,7 +194,7 @@ fn factory_assigns_six_workers_when_more_than_capacity() {
         .expect("factory")
         .occupied_tiles
         .clone();
-    let assigned: Vec<_> = workers.iter().filter_map(|sim| sim.workplace).collect();
+    let assigned: Vec<_> = workers.iter().filter_map(|sim| workplace_of(sim)).collect();
     assert_eq!(assigned.len(), 6);
     assert_eq!(assigned, factory_tiles);
 }
@@ -420,8 +432,10 @@ fn move_in_at_exact_departure_spawns_today() {
         .iter()
         .find(|sim| sim.id == "sim-001")
         .expect("exact-departure move-in creates sim-001");
-    assert!(!sim.outbound_resolved_today);
-    assert!(!sim.outbound_arrived_today);
+    assert!(
+        sim.next_activity.is_none(),
+        "the spawned outbound trip owns the citizen"
+    );
     // The spawned trip carries its spawn-time plan and the implied status
     // (walking toward the workplace) instead of a planless Idle payload.
     assert!(due.active_trips.iter().any(|trip| {
@@ -506,9 +520,9 @@ fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
     let mut prepared = filled;
     for sim in &mut prepared.sims {
         if first_house_tiles.contains(&sim.home) {
-            sim.workplace = Some(supermarket_tile);
+            set_workplace(sim, Some(supermarket_tile));
         } else if second_house_tiles.contains(&sim.home) {
-            sim.workplace = None;
+            set_workplace(sim, None);
         }
     }
     engine = GameEngine::from_snapshot(prepared).expect("prepared occupancy snapshot");
@@ -518,17 +532,18 @@ fn demolishing_employed_house_removes_residents_and_refills_surplus_workers() {
     });
     assert!(removed.applied, "{removed:?}");
     assert_eq!(engine.snapshot().sims.len(), 4);
-    assert!(engine.snapshot().sims.iter().all(|sim| {
-        second_house_tiles.contains(&sim.home) && sim.worker_profile == WorkerProfile::Worker
-    }));
+    assert!(engine
+        .snapshot()
+        .sims
+        .iter()
+        .all(|sim| { second_house_tiles.contains(&sim.home) && is_worker(sim) }));
     assert_eq!(
         engine
             .snapshot()
             .sims
             .iter()
             .filter(|sim| {
-                sim.workplace
-                    .is_some_and(|workplace| supermarket_tiles.contains(&workplace))
+                workplace_of(sim).is_some_and(|workplace| supermarket_tiles.contains(&workplace))
             })
             .count(),
         4,
@@ -593,7 +608,7 @@ fn demolishing_workplace_clears_workers_and_refills_elsewhere_without_churn() {
         .clone();
     assert_eq!(supermarket_tiles.len(), 4);
     assert_eq!(cinema_tiles.len(), 6);
-    let assigned: Vec<_> = filled.sims.iter().filter_map(|sim| sim.workplace).collect();
+    let assigned: Vec<_> = filled.sims.iter().filter_map(workplace_of).collect();
     assert_eq!(assigned.len(), 8);
 
     let removed = engine.dispatch(GameIntent::RemoveAtTile {
@@ -607,8 +622,7 @@ fn demolishing_workplace_clears_workers_and_refills_elsewhere_without_churn() {
         .sims
         .iter()
         .filter(|sim| {
-            sim.workplace
-                .is_some_and(|workplace| supermarket_tiles.contains(&workplace))
+            workplace_of(sim).is_some_and(|workplace| supermarket_tiles.contains(&workplace))
         })
         .count();
     assert_eq!(
@@ -618,10 +632,7 @@ fn demolishing_workplace_clears_workers_and_refills_elsewhere_without_churn() {
     let cinema_workers = after
         .sims
         .iter()
-        .filter(|sim| {
-            sim.workplace
-                .is_some_and(|workplace| cinema_tiles.contains(&workplace))
-        })
+        .filter(|sim| workplace_of(sim).is_some_and(|workplace| cinema_tiles.contains(&workplace)))
         .count();
     assert_eq!(
         cinema_workers, 6,
@@ -631,7 +642,7 @@ fn demolishing_workplace_clears_workers_and_refills_elsewhere_without_churn() {
         after
             .sims
             .iter()
-            .filter(|sim| sim.workplace.is_none())
+            .filter(|sim| workplace_of(sim).is_none())
             .count(),
         2,
         "exactly the surplus workers stay unassigned"
@@ -702,7 +713,7 @@ fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
     let assigned = engine.snapshot();
     assert_eq!(assigned.sims.len(), 1);
     assert!(
-        assigned.sims[0].workplace.is_some(),
+        workplace_of(&assigned.sims[0]).is_some(),
         "reconcile assigns the free job slot immediately"
     );
     assert!(

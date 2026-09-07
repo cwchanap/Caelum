@@ -9,7 +9,7 @@ use caelum_core::road_topology::RoadTopology;
 use caelum_core::service_itinerary::{enumerate_ride_edges, service_visits, ServiceVisit};
 use caelum_core::traffic::RoadFlow;
 use caelum_core::{router, transit, GameEngine, GameIntent, RoadPreset, RoutingContext};
-use common::persistence_fixtures::dormant_worker_sim;
+use common::persistence_fixtures::travelling_worker_sim;
 
 fn ids(values: &[&str]) -> Vec<String> {
     values.iter().map(|value| (*value).to_string()).collect()
@@ -150,7 +150,7 @@ fn rider_shuttle_state() -> caelum_core::model::GameSnapshot {
         private_car_trip: None,
     }];
     state.transit.vehicles[0].passenger_ids = vec!["trip-001".to_string()];
-    state.sims = vec![dormant_worker_sim("sim-001", (2, 3).into())];
+    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
     state
 }
 

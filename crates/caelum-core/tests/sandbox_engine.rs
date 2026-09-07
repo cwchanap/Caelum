@@ -1,5 +1,5 @@
 use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
-use caelum_core::model::{GameMode, Point, TripPurpose, WorkerProfile};
+use caelum_core::model::{CitizenRoutine, GameMode, Point, TripPurpose};
 use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
@@ -136,10 +136,16 @@ fn small_town_resume_uses_existing_move_in_workplace_and_commute_rules_determini
     let workers = first
         .sims
         .iter()
-        .filter(|sim| sim.worker_profile == WorkerProfile::Worker)
+        .filter(|sim| matches!(sim.routine, CitizenRoutine::Worker { .. }))
         .collect::<Vec<_>>();
     assert_eq!(workers.len(), 8);
-    assert!(workers.iter().all(|sim| sim.workplace.is_some()));
+    assert!(workers.iter().all(|sim| matches!(
+        &sim.routine,
+        CitizenRoutine::Worker {
+            workplace: Some(_),
+            ..
+        }
+    )));
 
     assert!(first
         .active_trips

@@ -35,7 +35,9 @@ fn bus_leg_trip_fixture() -> caelum_core::GameSnapshot {
         plan.legs.iter().any(|leg| leg.mode == TransitMode::Bus),
         "plan must contain a bus leg"
     );
-    snapshot.sims = vec![worker_sim("sim-001", origin, Some(destination))];
+    let mut sim = worker_sim("sim-001", origin, Some(destination));
+    sim.next_activity = None; // the hand-authored trip owns the citizen
+    snapshot.sims = vec![sim];
     snapshot.active_trips = vec![ActiveTrip {
         id: "trip-day-0-trip-001".to_string(),
         sim_id: "sim-001".to_string(),

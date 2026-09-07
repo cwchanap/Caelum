@@ -88,10 +88,8 @@ export interface RustVehicle extends Omit<
   parkedPosition: TripPosition | null | undefined;
 }
 
-export interface RustSim extends Omit<Sim, "shiftTemplate" | "workplace"> {
-  shiftTemplate?: "standard" | "early" | "late" | "offPeak";
-  workplace?: Point;
-}
+// The v10 durable `Sim` serializes `nextActivity: null` while travelling and
+// omits an absent `workplace` entirely, so the wire shape matches `Sim` exactly.
 
 export interface RustTransitNetwork extends Omit<
   TransitNetwork,
@@ -165,7 +163,7 @@ export interface RustGameSnapshot {
   map: GameMap;
   buildings: PlacedBuilding[];
   transit: RustTransitNetwork;
-  sims: RustSim[];
+  sims: Sim[];
   activeTrips: RustActiveTrip[];
   tripSequenceDay: number;
   nextTripSequence: number;
