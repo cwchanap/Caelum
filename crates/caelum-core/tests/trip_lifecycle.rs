@@ -2976,6 +2976,30 @@ fn day_off_suppresses_primary_demand_and_matches_across_granularity() {
         scheduled_time_seconds(1, 0),
     );
 
+    // Falsifying observation: the day off itself must produce nothing. The
+    // fixture's only demand source is this citizen, so a deleted suppression
+    // (a day-1 commute from the assigned workplace) would show up as an
+    // in-flight trip or a nonzero counter by day 2's start.
+    let mut day1 = common::running_engine_from_fixture(base.clone());
+    day1.tick(scheduled_time_seconds(2, 0) - base.time);
+    let day1_snapshot = day1.snapshot();
+    assert!(
+        day1_snapshot
+            .active_trips
+            .iter()
+            .all(|trip| trip.sim_id != id),
+        "the day-off citizen has no trip in flight on their day off"
+    );
+    assert_eq!(
+        (
+            day1_snapshot.metrics.completed_trips,
+            day1_snapshot.metrics.unserved_trips,
+            day1_snapshot.metrics.waiting_trip_count,
+        ),
+        (0, 0, 0),
+        "the day-off citizen contributes no completed, unserved, or waiting trips"
+    );
+
     // End on day 2's evening: after the resumed commute's return, before the
     // day-3 wake.
     let coarse = assert_stage_b_equivalence(base, wake + 2.0 * clock::GAME_DAY_SECONDS - 200.0);
