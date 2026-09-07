@@ -133,8 +133,11 @@ fn measure_presentation(label: &str, snapshot: &GameSnapshot) {
 /// are dormant (their workplace point resolves to no job building), so the
 /// quiet tick exercises the exact-time scheduler without emitting demand.
 fn measure_ecs_row(label: &str, fixture: &GameSnapshot, count: usize) {
+    // Clone outside the timed window: only the engine build is measured.
+    let base_time = fixture.time;
+    let fixture = fixture.clone();
     let started = Instant::now();
-    let mut engine = GameEngine::from_snapshot(fixture.clone()).expect("scale fixture loads");
+    let mut engine = GameEngine::from_snapshot(fixture).expect("scale fixture loads");
     let runtime_build_us = started.elapsed().as_micros();
 
     assert!(
@@ -145,7 +148,7 @@ fn measure_ecs_row(label: &str, fixture: &GameSnapshot, count: usize) {
     let started = Instant::now();
     let result = engine.tick(0.5);
     let quiet_tick_us = started.elapsed().as_micros();
-    assert_eq!(result.update.frame.time - fixture.time, 0.5);
+    assert_eq!(result.update.frame.time - base_time, 0.5);
     assert!(result.applied, "quiet tick must still advance time");
 
     let started = Instant::now();
@@ -228,8 +231,8 @@ fn wave_snapshot(count: usize) -> GameSnapshot {
 /// demand bridge. `schedule_emit_us` covers the exact-time scheduler emission
 /// (`run_due` growth/scheduler pass plus the demand drain) without routing;
 /// `route_spawn_us` covers `spawn_pending_trip_demands` over the drained
-/// demands (route choice + private-car candidacy per row — the O(due demand)
-/// path HPA-348 owns batching for).
+/// demands (batch road-flow derivation plus route choice and private-car
+/// candidacy per row — the O(due demand) path HPA-348 owns batching for).
 fn measure_wave_row(label: &str, count: usize) {
     let mut engine = GameEngine::from_snapshot(wave_snapshot(count)).expect("wave fixture loads");
     assert!(
