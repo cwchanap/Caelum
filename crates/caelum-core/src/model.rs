@@ -968,6 +968,7 @@ pub struct Sim {
     pub home: Point,
     pub position: Point,
     pub routine: CitizenRoutine,
+    #[serde(deserialize_with = "deserialize_required_option")]
     pub next_activity: Option<ScheduledActivity>,
 }
 
