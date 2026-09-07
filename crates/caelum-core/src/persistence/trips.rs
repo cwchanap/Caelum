@@ -124,11 +124,22 @@ fn validate_sims(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         validate_point(snapshot, &entity, SnapshotField::SimHome, sim.home)?;
         validate_point(snapshot, &entity, SnapshotField::SimPosition, sim.position)?;
         if let CitizenRoutine::Worker {
-            workplace: Some(workplace),
-            ..
+            shift_template,
+            workplace,
         } = &sim.routine
         {
-            validate_point(snapshot, &entity, SnapshotField::SimWorkplace, *workplace)?;
+            // The TS parity union is `"standard" | "early" | "late" |
+            // "offPeak"` — exactly what `shift_template_for_id` mints. Any
+            // other value is an impossible gameplay state: reject it.
+            if !crate::commute::is_canonical_shift_template(shift_template) {
+                return Err(PersistenceError::InvalidAssignment {
+                    entity,
+                    reason: AssignmentError::NonCanonicalShiftTemplate,
+                });
+            }
+            if let Some(workplace) = workplace {
+                validate_point(snapshot, &entity, SnapshotField::SimWorkplace, *workplace)?;
+            }
         }
         if let Some(next_activity) = &sim.next_activity {
             super::finite_non_negative(

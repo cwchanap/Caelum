@@ -194,6 +194,24 @@ mod tests {
     }
 
     #[test]
+    fn non_canonical_shift_template_is_rejected() {
+        let mut snapshot = paused_snapshot();
+        snapshot.sims = vec![idle_sim("sim-001", scheduled(350.0))];
+        snapshot.sims[0].routine = CitizenRoutine::Worker {
+            shift_template: "swing".to_string(),
+            workplace: None,
+        };
+
+        assert_eq!(
+            validate_and_compile(snapshot).err(),
+            Some(PersistenceError::InvalidAssignment {
+                entity: sim_entity("sim-001"),
+                reason: AssignmentError::NonCanonicalShiftTemplate,
+            })
+        );
+    }
+
+    #[test]
     fn travelling_sim_with_a_next_activity_is_rejected() {
         let mut snapshot = paused_snapshot();
         snapshot.sims = vec![idle_sim("sim-001", scheduled(350.0))];

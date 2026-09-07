@@ -108,10 +108,10 @@ mod tests {
                     y: other_home.y,
                 },
                 routine: CitizenRoutine::Worker {
-                    shift_template: "swing".to_string(),
+                    shift_template: "standard".to_string(),
                     workplace: None,
                 },
-                ..worker("sim-002", "swing", None, other_home)
+                ..worker("sim-002", "standard", None, other_home)
             },
             worker("sim-003", "standard", Some(factory), home),
             Sim {
@@ -614,9 +614,10 @@ mod tests {
 
     #[test]
     fn late_workplace_assignment_stays_dormant_until_next_day() {
-        let departure = sim_departure_time("sim-001", 0);
+        // sim-002 keeps days 0/1 school-free: its day off is day 2.
+        let departure = sim_departure_time("sim-002", 0);
         let mut before = reconcile_sandbox(departure + 1.0);
-        before.sims = vec![reconcile_worker("sim-001", Point::from((2, 3)), None)];
+        before.sims = vec![reconcile_worker("sim-002", Point::from((2, 3)), None)];
         // A late load: today's departure already passed, so the durable wake is
         // tomorrow's routine.
         let dormant = ScheduledActivity {
@@ -629,7 +630,7 @@ mod tests {
             .buildings
             .push(reconcile_market("building-001", Point::from((8, 3)), 0.0));
         let mut world = build_world(&before);
-        let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
+        let entity = world.resource::<PopulationIndex>().by_id["sim-002"];
         let dormant = world.get::<NextActivity>(entity).unwrap().0.clone();
         assert_eq!(dormant.kind, ScheduledActivityKind::DailyRoutine);
         assert_eq!(dormant.due_time, departure + GAME_DAY_SECONDS);
@@ -639,7 +640,7 @@ mod tests {
         assert!(mutation.changed);
         assert_eq!(
             citizen_workplaces(&mut world, after.day),
-            vec![("sim-001".to_string(), Some(Point::from((8, 3))))]
+            vec![("sim-002".to_string(), Some(Point::from((8, 3))))]
         );
         assert_eq!(
             world.get::<NextActivity>(entity).unwrap().0,
@@ -657,7 +658,7 @@ mod tests {
         assert!(result.changed);
         let demands = drain_trip_demands(&mut world);
         assert_eq!(demands.len(), 1);
-        assert_eq!(demands[0].citizen_id, "sim-001");
+        assert_eq!(demands[0].citizen_id, "sim-002");
         assert_eq!(demands[0].scheduled_time, next_departure);
     }
 
@@ -717,16 +718,17 @@ mod tests {
 
     #[test]
     fn stranded_worker_schedules_next_day_recovery_without_phantom_outbound() {
+        // sim-003 keeps day 1 a working day (its day off is day 3).
         let mut before = reconcile_sandbox(100.0);
         before.buildings = vec![reconcile_market("building-001", Point::from((8, 3)), 0.0)];
         before.sims = vec![reconcile_worker(
-            "sim-001",
+            "sim-003",
             Point::from((2, 3)),
             Some(Point::from((8, 3))),
         )];
         before.active_trips = vec![reconcile_trip(
             "trip-1",
-            "sim-001",
+            "sim-003",
             TripPurpose::CommuteOutbound,
             Point::from((2, 3)),
             Point::from((8, 3)),
@@ -736,7 +738,7 @@ mod tests {
         let mut after = before.clone();
         after.buildings.clear();
         let mut world = build_world(&before);
-        let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
+        let entity = world.resource::<PopulationIndex>().by_id["sim-003"];
 
         let mutation = reconcile_buildings(&mut world, &before, &mut after);
 
@@ -754,7 +756,7 @@ mod tests {
         assert_eq!(recovery.kind, ScheduledActivityKind::DailyRoutine);
         assert_eq!(
             recovery.due_time,
-            sim_departure_time("sim-001", 0) + GAME_DAY_SECONDS,
+            sim_departure_time("sim-003", 0) + GAME_DAY_SECONDS,
             "recovery is next day's routine wake, never a phantom outbound"
         );
 

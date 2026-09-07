@@ -955,7 +955,7 @@ fn worker_routine_omits_absent_workplace_and_student_serializes_to_bare_string()
     let worker = v10_sim(
         "sim-001",
         CitizenRoutine::Worker {
-            shift_template: String::new(),
+            shift_template: "standard".to_string(),
             workplace: None,
         },
         None,
@@ -963,7 +963,7 @@ fn worker_routine_omits_absent_workplace_and_student_serializes_to_bare_string()
     let value = serde_json::to_value(&worker).expect("worker sim should serialize");
     assert_eq!(
         value["routine"],
-        json!({ "worker": { "shiftTemplate": "" } }),
+        json!({ "worker": { "shiftTemplate": "standard" } }),
         "absent workplace must be omitted from the worker wire: {value}"
     );
     assert!(value["nextActivity"].is_null());

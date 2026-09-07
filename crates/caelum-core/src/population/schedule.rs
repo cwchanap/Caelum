@@ -8,9 +8,11 @@ use super::components::{
 };
 use super::{scheduled_time_seconds, MOVE_IN_INTERVAL_SECONDS};
 use crate::building_catalog::building_definition;
-use crate::clock::day_index;
+use crate::clock::{day_index, GAME_DAY_SECONDS};
 use crate::commute::{
-    departure_minute_for_sim, numeric_id_suffix, shift_template_for_id, trip_deadline_seconds,
+    departure_minute_for_sim, is_day_off, numeric_id_suffix, optional_departure_minute,
+    shift_template_for_id, stable_daily_seed, student_departure_minute, trip_deadline_seconds,
+    OPTIONAL_SALT, SCHOOL_SALT,
 };
 use crate::ids::entity_id;
 use crate::model::{
@@ -33,6 +35,7 @@ pub(super) struct PopulationIndex {
 
 #[derive(Clone, Debug, PartialEq)]
 pub(super) struct PopulationBuilding {
+    pub(super) building_type: &'static str,
     pub(super) occupied_tiles: Vec<Point>,
     pub(super) resident_capacity: u16,
     pub(super) job_capacity: u16,
@@ -56,6 +59,7 @@ pub(crate) fn build_world(snapshot: &GameSnapshot) -> World {
         buildings.insert(
             building.id.clone(),
             PopulationBuilding {
+                building_type: definition.building_type,
                 occupied_tiles: building.occupied_tiles.clone(),
                 resident_capacity: definition.resident_capacity,
                 job_capacity: definition.job_capacity,
@@ -414,6 +418,7 @@ pub(crate) fn reconcile_buildings(
             index.buildings.insert(
                 building.id.clone(),
                 PopulationBuilding {
+                    building_type: definition.building_type,
                     occupied_tiles: building.occupied_tiles.clone(),
                     resident_capacity: definition.resident_capacity,
                     job_capacity: definition.job_capacity,
@@ -658,14 +663,18 @@ pub(crate) fn reconcile_buildings(
         if still_travelling || world.get::<NextActivity>(entity).is_some() {
             continue;
         }
-        let Some(Routine::Worker { shift_template, .. }) = world.get::<Routine>(entity) else {
+        let Some(routine) = world.get::<Routine>(entity).cloned() else {
             continue;
         };
-        let shift_template = shift_template.clone();
+        // Only Worker outbounds are retargeted/dropped by reconciliation, so
+        // only they recover here.
+        let Routine::Worker { .. } = routine else {
+            continue;
+        };
         schedule_activity(
             world,
             entity,
-            next_worker_daily_routine(citizen_id, &shift_template, day_index(now)),
+            next_daily_routine(&routine, citizen_id, day_index(now)),
         );
         changed = true;
     }
@@ -950,30 +959,26 @@ fn apply_move_in(world: &mut World, building_id: &str, slot: u16) {
     let ordinal = world.resource::<NextCitizenOrdinal>().0;
     let sim_id = entity_id("sim", ordinal);
     let home = building.occupied_tiles[slot as usize % building.occupied_tiles.len()];
-    let today = day_index(now);
 
     let shift_template = shift_template_for_id(&sim_id);
-    let (routine, next_activity) = match shift_template {
+    let routine = match shift_template {
         Some(shift_template) => {
             // Assign a workplace if one has a free slot (stable building-ID
             // order). Task 3's reconciliation owns the global
             // preserve-and-refill ordering.
             let workplace = find_available_workplace(world.resource::<PopulationIndex>());
-            (
-                Routine::Worker {
-                    shift_template: shift_template.to_string(),
-                    workplace: workplace.map(|(job_building_id, point)| BuildingAssignment {
-                        building_id: Some(job_building_id),
-                        point,
-                    }),
-                },
-                worker_routine_from_now(&sim_id, shift_template, now),
-            )
+            Routine::Worker {
+                shift_template: shift_template.to_string(),
+                workplace: workplace.map(|(job_building_id, point)| BuildingAssignment {
+                    building_id: Some(job_building_id),
+                    point,
+                }),
+            }
         }
-        // A canonical Student (every 10th id) stays dormant — Task 7 replaces
-        // this with real school demand.
-        None => (Routine::Student, next_student_daily_routine(today)),
+        // A canonical Student (every 10th id) keeps the school routine.
+        None => Routine::Student,
     };
+    let next_activity = routine_from_now(&routine, &sim_id, now);
 
     world.resource_mut::<NextCitizenOrdinal>().0 = ordinal + 1;
     let mut index = world
@@ -1012,7 +1017,9 @@ fn apply_activity(world: &mut World, entity: Entity, due_time: f64) {
         ScheduledActivityKind::DailyRoutine => {
             apply_daily_routine(world, entity, &citizen_id, due_time);
         }
-        ScheduledActivityKind::PrimaryReturn => {
+        // Both return kinds emit one return-to-home trip; the resolution
+        // handler owns what is scheduled next.
+        kind @ (ScheduledActivityKind::PrimaryReturn | ScheduledActivityKind::OptionalReturn) => {
             let Some(origin) = world
                 .get::<SettledPosition>(entity)
                 .map(|settled| settled.0)
@@ -1028,7 +1035,10 @@ fn apply_activity(world: &mut World, entity: Entity, due_time: f64) {
                 .0
                 .push(TripDemand {
                     citizen_id,
-                    purpose: TripPurpose::CommuteReturn,
+                    purpose: match kind {
+                        ScheduledActivityKind::PrimaryReturn => TripPurpose::CommuteReturn,
+                        _ => TripPurpose::OptionalReturn,
+                    },
                     origin,
                     destination,
                     scheduled_time: due_time,
@@ -1036,55 +1046,27 @@ fn apply_activity(world: &mut World, entity: Entity, due_time: f64) {
             // The return trip owns the citizen until its resolution handler
             // schedules the next DailyRoutine.
         }
-        // Stage B owns optional outings; Stage A never constructs this kind.
-        ScheduledActivityKind::OptionalReturn => {}
     }
 }
 
 fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_time: f64) {
     let today = day_index(due_time);
-    // A destination must resolve to a live job building, mirroring the
-    // `has_valid_workplace_destination` spawn condition. A Stage-A Student
-    // has none and stays dormant — Task 7 replaces this.
-    let destination = world
-        .get::<Routine>(entity)
-        .and_then(|routine| match routine {
-            Routine::Worker {
-                workplace: Some(assignment),
-                ..
-            } => assignment.building_id.as_ref().map(|_| assignment.point),
-            _ => None,
-        });
-    let Some(destination) = destination else {
-        let next_activity = match world.get::<Routine>(entity) {
-            Some(Routine::Worker { shift_template, .. }) => {
-                next_worker_daily_routine(citizen_id, shift_template, today)
-            }
-            _ => next_student_daily_routine(today),
-        };
-        schedule_activity(world, entity, next_activity);
-        return;
-    };
     let Some(origin) = world.get::<HomeAssignment>(entity).map(|home| home.point) else {
         return;
     };
+    let Some(routine) = world.get::<Routine>(entity).cloned() else {
+        return;
+    };
 
-    // Stranded-worker guard, mirroring the deleted spawn-scan guard: a worker
-    // with a valid destination who is not at home at the day's outbound wake
-    // was stranded by a previous unserved return. Emitting an outbound would
-    // anchor a phantom commute to a worker away from `origin`, so resolve the
-    // outbound instead and unlock today's return trip to bring them home.
+    // Rule 1: a citizen settled away from home returns home before any new
+    // outbound — a previous unserved return stranded them, and emitting an
+    // outbound would anchor a phantom commute away from `origin`. This also
+    // covers day-off and no-destination citizens.
     let stranded = world
         .get::<SettledPosition>(entity)
         .map(|settled| settled.0)
         .is_some_and(|position| position != origin);
     if stranded {
-        let Some(routine) = world.get::<Routine>(entity).cloned() else {
-            return;
-        };
-        let Routine::Worker { shift_template, .. } = routine else {
-            return;
-        };
         schedule_activity(
             world,
             entity,
@@ -1092,12 +1074,54 @@ fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_
                 kind: ScheduledActivityKind::PrimaryReturn,
                 due_time: scheduled_time_seconds(
                     today,
-                    departure_minute_for_sim(citizen_id, &shift_template, "return"),
+                    routine_minute(&routine, citizen_id, "return"),
                 ),
             },
         );
         return;
     }
+
+    // One day in seven is a day off: the primary work/school outbound is
+    // suppressed and the citizen may take their one bounded optional outing.
+    if is_day_off(citizen_id, today) {
+        let outing_departure =
+            scheduled_time_seconds(today, optional_departure_minute(citizen_id, today));
+        if outing_departure > due_time + EPSILON {
+            schedule_activity(
+                world,
+                entity,
+                ScheduledActivity {
+                    kind: ScheduledActivityKind::DailyRoutine,
+                    due_time: outing_departure,
+                },
+            );
+        } else {
+            apply_optional_outing(world, entity, citizen_id, &routine, today, due_time);
+        }
+        return;
+    }
+
+    // A destination must resolve for the primary outbound: a live assigned
+    // workplace for Workers, a placed school for Students.
+    let destination = match &routine {
+        Routine::Worker {
+            workplace: Some(assignment),
+            ..
+        } => assignment.building_id.as_ref().map(|_| assignment.point),
+        Routine::Worker {
+            workplace: None, ..
+        } => None,
+        Routine::Student => student_school_destination(world, citizen_id, today),
+    };
+    let Some(destination) = destination else {
+        // No destination: no primary trip; the next DailyRoutine re-checks.
+        schedule_activity(
+            world,
+            entity,
+            next_daily_routine(&routine, citizen_id, today),
+        );
+        return;
+    };
 
     world
         .resource_mut::<PendingTripDemands>()
@@ -1111,6 +1135,48 @@ fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_
         });
     // The outbound trip owns the citizen until its resolution handler
     // schedules the PrimaryReturn.
+}
+
+/// On a day off, emit the citizen's one bounded optional outing when the
+/// daily seed makes them eligible and an eligible building exists; otherwise
+/// hand them back to the next DailyRoutine.
+fn apply_optional_outing(
+    world: &mut World,
+    entity: Entity,
+    citizen_id: &str,
+    routine: &Routine,
+    today: u32,
+    due_time: f64,
+) {
+    let eligible = stable_daily_seed(citizen_id, today, OPTIONAL_SALT).is_multiple_of(4);
+    let destination = if eligible {
+        optional_outing_site(world, citizen_id, today)
+    } else {
+        None
+    };
+    let Some(destination) = destination else {
+        schedule_activity(
+            world,
+            entity,
+            next_daily_routine(routine, citizen_id, today),
+        );
+        return;
+    };
+    let Some(origin) = world.get::<HomeAssignment>(entity).map(|home| home.point) else {
+        return;
+    };
+    world
+        .resource_mut::<PendingTripDemands>()
+        .0
+        .push(TripDemand {
+            citizen_id: citizen_id.to_string(),
+            purpose: TripPurpose::OptionalOutbound,
+            origin,
+            destination,
+            scheduled_time: due_time,
+        });
+    // The outing trip owns the citizen until its resolution handler
+    // schedules the OptionalReturn.
 }
 
 // === Terminal trip resolution feedback ===
@@ -1158,56 +1224,42 @@ fn apply_trip_resolution(world: &mut World, row: &TripResolution, now_day: u32, 
     let Some(routine) = world.get::<Routine>(entity).cloned() else {
         return false;
     };
-    let Routine::Worker { shift_template, .. } = routine else {
-        return false;
-    };
     let citizen_id = row.citizen_id.clone();
     let same_day = row.service_day.is_some_and(|day| day == now_day);
     let return_due = || ScheduledActivity {
         kind: ScheduledActivityKind::PrimaryReturn,
-        due_time: scheduled_time_seconds(
-            now_day,
-            departure_minute_for_sim(&citizen_id, &shift_template, "return"),
-        ),
+        due_time: scheduled_time_seconds(now_day, routine_minute(&routine, &citizen_id, "return")),
+    };
+    let settle = |world: &mut World, entity: Entity| {
+        if let Some(mut position) = world.get_mut::<SettledPosition>(entity) {
+            position.0 = row.destination;
+        }
     };
 
     match row.purpose {
         TripPurpose::CommuteOutbound => {
             if row.completed {
-                if let Some(mut position) = world.get_mut::<SettledPosition>(entity) {
-                    position.0 = row.destination;
-                }
+                settle(world, entity);
                 if same_day {
-                    // Arrived at the workplace: today's return wake brings the
-                    // worker home.
+                    // Arrived at the destination: today's return wake brings
+                    // the citizen home.
                     schedule_activity(world, entity, return_due());
                 } else {
-                    // Cross-midnight arrival at the workplace: today's commute
-                    // window may still be ahead (in which case the worker
-                    // commutes today from the workplace — the daily-routine
-                    // stranded guard keeps that legitimate) or already closed.
-                    schedule_activity(
-                        world,
-                        entity,
-                        worker_routine_from_now(&citizen_id, &shift_template, now),
-                    );
+                    // Cross-midnight arrival: today's commute window may still
+                    // be ahead (in which case the daily-routine stranded guard
+                    // keeps that legitimate) or already closed.
+                    schedule_activity(world, entity, routine_from_now(&routine, &citizen_id, now));
                 }
             } else {
                 // Unserved or late outbound: the departure window closed, so
-                // the worker retries with tomorrow's (or today's, if still
+                // the citizen retries with tomorrow's (or today's, if still
                 // ahead) routine.
-                schedule_activity(
-                    world,
-                    entity,
-                    worker_routine_from_now(&citizen_id, &shift_template, now),
-                );
+                schedule_activity(world, entity, routine_from_now(&routine, &citizen_id, now));
             }
         }
         TripPurpose::CommuteReturn => {
             if row.completed {
-                if let Some(mut position) = world.get_mut::<SettledPosition>(entity) {
-                    position.0 = row.destination;
-                }
+                settle(world, entity);
             }
             if same_day {
                 // Home again (or the return window closed without service):
@@ -1215,24 +1267,61 @@ fn apply_trip_resolution(world: &mut World, row: &TripResolution, now_day: u32, 
                 schedule_activity(
                     world,
                     entity,
-                    next_worker_daily_routine(&citizen_id, &shift_template, now_day),
+                    next_daily_routine(&routine, &citizen_id, now_day),
                 );
             } else if row.completed {
                 // Cross-midnight arrival home: today's commute window may
                 // still be ahead or already closed (see the outbound case).
-                schedule_activity(
-                    world,
-                    entity,
-                    worker_routine_from_now(&citizen_id, &shift_template, now),
-                );
+                schedule_activity(world, entity, routine_from_now(&routine, &citizen_id, now));
             } else {
                 // Cross-midnight unserved return: the traveller is stranded at
                 // the far end. Unlock today's return trip to bring them home.
                 schedule_activity(world, entity, return_due());
             }
         }
-        // Stage B owns optional outings; Stage A never constructs them.
-        TripPurpose::OptionalOutbound | TripPurpose::OptionalReturn => {}
+        TripPurpose::OptionalOutbound => {
+            if row.completed {
+                settle(world, entity);
+                // Dwell at the outing site for exactly 120 in-game minutes,
+                // then the OptionalReturn wake brings the citizen home.
+                schedule_activity(
+                    world,
+                    entity,
+                    ScheduledActivity {
+                        kind: ScheduledActivityKind::OptionalReturn,
+                        due_time: now + OPTIONAL_DWELL_SECONDS,
+                    },
+                );
+            } else {
+                // The outing never started; back to the routine (today's
+                // primary departure is already past on a day off, so this is
+                // tomorrow's wake).
+                schedule_activity(world, entity, routine_from_now(&routine, &citizen_id, now));
+            }
+        }
+        TripPurpose::OptionalReturn => {
+            if row.completed {
+                settle(world, entity);
+                if same_day {
+                    schedule_activity(
+                        world,
+                        entity,
+                        next_daily_routine(&routine, &citizen_id, now_day),
+                    );
+                } else {
+                    schedule_activity(world, entity, routine_from_now(&routine, &citizen_id, now));
+                }
+            } else {
+                // Unserved optional return: no same-day retry — the citizen
+                // waits until the next DailyRoutine, whose away-from-home
+                // guard brings them home.
+                schedule_activity(
+                    world,
+                    entity,
+                    next_daily_routine(&routine, &citizen_id, now_day),
+                );
+            }
+        }
     }
     true
 }
@@ -1288,41 +1377,99 @@ fn find_available_workplace(index: &PopulationIndex) -> Option<(String, Point)> 
         })
 }
 
-/// The Worker's next `DailyRoutine` from `now`: today's outbound departure if
-/// it is still ahead, else tomorrow's. Replaces the v9 flag pairs (fresh or
-/// late-resolved outbound): both encoded "wait for the next future departure".
-fn worker_routine_from_now(sim_id: &str, shift_template: &str, now: f64) -> ScheduledActivity {
+/// The citizen's next `DailyRoutine` from `now`: today's primary outbound
+/// departure if it is still ahead, else tomorrow's. Mirrors the deleted v9
+/// flag pairs (fresh or late-resolved outbound): both encoded "wait for the
+/// next future departure".
+fn routine_from_now(routine: &Routine, citizen_id: &str, now: f64) -> ScheduledActivity {
     let today = day_index(now);
-    let departure = scheduled_time_seconds(
-        today,
-        departure_minute_for_sim(sim_id, shift_template, "outbound"),
-    );
+    let departure = scheduled_time_seconds(today, routine_minute(routine, citizen_id, "outbound"));
     if now <= departure + EPSILON {
         ScheduledActivity {
             kind: ScheduledActivityKind::DailyRoutine,
             due_time: departure,
         }
     } else {
-        next_worker_daily_routine(sim_id, shift_template, today)
+        next_daily_routine(routine, citizen_id, today)
     }
 }
 
-fn next_worker_daily_routine(sim_id: &str, shift_template: &str, today: u32) -> ScheduledActivity {
+fn next_daily_routine(routine: &Routine, citizen_id: &str, today: u32) -> ScheduledActivity {
     ScheduledActivity {
         kind: ScheduledActivityKind::DailyRoutine,
         due_time: scheduled_time_seconds(
             today + 1,
-            departure_minute_for_sim(sim_id, shift_template, "outbound"),
+            routine_minute(routine, citizen_id, "outbound"),
         ),
     }
 }
 
-/// Dormant Stage-A wake for Students: next midnight, emits nothing.
-fn next_student_daily_routine(today: u32) -> ScheduledActivity {
-    ScheduledActivity {
-        kind: ScheduledActivityKind::DailyRoutine,
-        due_time: scheduled_time_seconds(today + 1, 0),
+/// The routine's departure window minute: Workers jitter inside their shift
+/// template's windows, Students inside the fixed school windows.
+fn routine_minute(routine: &Routine, citizen_id: &str, direction: &str) -> u16 {
+    match routine {
+        Routine::Worker { shift_template, .. } => {
+            departure_minute_for_sim(citizen_id, shift_template, direction)
+        }
+        Routine::Student => student_departure_minute(citizen_id, direction),
     }
+}
+
+/// Dwell at an optional-outing site: exactly 120 in-game minutes.
+const OPTIONAL_DWELL_SECONDS: f64 = GAME_DAY_SECONDS / 12.0;
+
+/// Deterministic Student school destination: the stable building-ID order
+/// picks the school, then a footprint tile, from the day's per-citizen seed.
+/// `None` when no school is placed — no primary trip is emitted then.
+fn student_school_destination(world: &World, citizen_id: &str, today: u32) -> Option<Point> {
+    let index = world.resource::<PopulationIndex>();
+    let schools: Vec<&PopulationBuilding> = index
+        .buildings
+        .values()
+        .filter(|building| {
+            building.building_type == "school" && !building.occupied_tiles.is_empty()
+        })
+        .collect();
+    let seed = stable_daily_seed(citizen_id, today, SCHOOL_SALT);
+    let count = schools.len() as u64;
+    let building = if count == 0 {
+        return None;
+    } else {
+        schools[(seed % count) as usize]
+    };
+    let tile =
+        building.occupied_tiles[((seed >> 32) % building.occupied_tiles.len() as u64) as usize];
+    Some(tile)
+}
+
+/// Deterministic optional-outing destination among the eligible building
+/// types (supermarket, cinema, clinic, parkPlaza). No visitor capacity and no
+/// chained stops: the seed picks the site and tile outright.
+fn optional_outing_site(world: &World, citizen_id: &str, today: u32) -> Option<Point> {
+    let index = world.resource::<PopulationIndex>();
+    let sites: Vec<&PopulationBuilding> = index
+        .buildings
+        .values()
+        .filter(|building| is_optional_site_type(building.building_type))
+        .filter(|building| !building.occupied_tiles.is_empty())
+        .collect();
+    let seed = stable_daily_seed(citizen_id, today, OPTIONAL_SALT);
+    let count = sites.len() as u64;
+    let building = if count == 0 {
+        return None;
+    } else {
+        sites[((seed >> 16) % count) as usize]
+    };
+    let tile =
+        building.occupied_tiles[((seed >> 32) % building.occupied_tiles.len() as u64) as usize];
+    Some(tile)
+}
+
+fn is_optional_site_type(building_type: &str) -> bool {
+    matches!(
+        building_type,
+        "supermarket" | "cinema" | "clinic" | "parkPlaza"
+    )
 }
 
 #[cfg(test)]
@@ -1371,6 +1518,7 @@ mod tests {
 
     fn housing_building(tiles: &[Point]) -> PopulationBuilding {
         PopulationBuilding {
+            building_type: "smallHouse",
             occupied_tiles: tiles.to_vec(),
             resident_capacity: tiles.len() as u16,
             job_capacity: 0,
@@ -1629,7 +1777,15 @@ mod tests {
     }
 
     #[test]
-    fn student_daily_routine_is_dormant_and_reschedules_next_day() {
+    fn optional_dwell_is_exactly_120_in_game_minutes() {
+        // 120 in-game minutes at 1440 minutes per GAME_DAY_SECONDS day.
+        let expected = (120.0 / f64::from(crate::clock::MINUTES_PER_DAY)) * GAME_DAY_SECONDS;
+        assert_eq!(OPTIONAL_DWELL_SECONDS, expected);
+        assert_eq!(OPTIONAL_DWELL_SECONDS, 100.0);
+    }
+
+    #[test]
+    fn student_daily_routine_without_school_reschedules_to_next_school_window() {
         let mut snapshot = population_fixture();
         let student = snapshot.sims[3].clone();
         snapshot.sims = vec![student];
@@ -1646,10 +1802,72 @@ mod tests {
 
         assert!(result.changed);
         assert!(drain_trip_demands(&mut world).is_empty());
+        // No school is placed, so the wake emits no primary trip and hands
+        // the student to tomorrow's school-outbound window instead of
+        // emitting anything today.
         assert_eq!(
-            world.get::<NextActivity>(entity).unwrap().0.due_time,
-            midnight + GAME_DAY_SECONDS
+            world.get::<NextActivity>(entity).unwrap().0,
+            ScheduledActivity {
+                kind: ScheduledActivityKind::DailyRoutine,
+                due_time: scheduled_time_seconds(
+                    snapshot.day + 2,
+                    student_departure_minute("sim-004", "outbound")
+                ),
+            }
         );
+    }
+
+    #[test]
+    fn student_daily_routine_emits_school_outbound_to_the_seeded_tile() {
+        let mut snapshot = population_fixture();
+        let student = snapshot.sims[3].clone();
+        snapshot.sims = vec![student];
+        // Hand-place a school next to the retained job buildings.
+        snapshot.buildings.push(PlacedBuilding {
+            id: "building-school".to_string(),
+            building_type: "school".to_string(),
+            origin: Point::from((18, 10)),
+            rotation: 0,
+            occupied_tiles: vec![
+                Point::from((18, 10)),
+                Point::from((19, 10)),
+                Point::from((20, 10)),
+                Point::from((18, 11)),
+                Point::from((19, 11)),
+                Point::from((20, 11)),
+            ],
+            placed_at: 0.0,
+            transit_node_id: None,
+        });
+        let day = snapshot.day + 1;
+        let wake = scheduled_time_seconds(day, student_departure_minute("sim-004", "outbound"));
+        snapshot.sims[0].next_activity = Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: wake,
+        });
+        let mut world = build_world(&snapshot);
+        let entity = world.resource::<PopulationIndex>().by_id["sim-004"];
+
+        let mut schedule = build_schedule();
+        let result = run_due(&mut world, &mut schedule, wake);
+
+        assert!(result.changed);
+        let demands = drain_trip_demands(&mut world);
+        assert_eq!(demands.len(), 1);
+        assert_eq!(demands[0].citizen_id, "sim-004");
+        assert_eq!(demands[0].purpose, TripPurpose::CommuteOutbound);
+        assert_eq!(demands[0].origin, snapshot.sims[0].home);
+        assert!(
+            [18, 19, 20]
+                .iter()
+                .any(|&x| demands[0].destination == Point::from((x, 10)))
+                || [18, 19, 20]
+                    .iter()
+                    .any(|&x| demands[0].destination == Point::from((x, 11))),
+            "destination must be a seeded school footprint tile"
+        );
+        assert_eq!(demands[0].scheduled_time, wake);
+        assert!(world.get::<NextActivity>(entity).is_none());
     }
 
     #[test]
@@ -1784,6 +2002,7 @@ mod tests {
         buildings.insert(
             "building-j".to_string(),
             PopulationBuilding {
+                building_type: "supermarket",
                 occupied_tiles: vec![Point::from((8, 8))],
                 resident_capacity: 0,
                 job_capacity: 1,

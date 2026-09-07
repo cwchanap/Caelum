@@ -1,5 +1,9 @@
-use caelum_core::commute::{departure_minute_for_sim, is_student_id, shift_template_for_id};
-use caelum_core::model::{TripPurpose, TripStatus};
+use caelum_core::commute::{
+    departure_minute_for_sim, is_canonical_shift_template, is_day_off, is_student_id,
+    optional_departure_minute, shift_template_for_id, stable_daily_seed, student_departure_minute,
+    OPTIONAL_SALT,
+};
+use caelum_core::model::{CitizenRoutine, Point, TripPurpose, TripStatus};
 use caelum_core::{clock, GameEngine, GameIntent};
 
 fn assigned_worker_engine() -> GameEngine {
@@ -95,6 +99,79 @@ fn deterministic_worker_and_shift_distribution() {
     assert_eq!(shift_template_for_id("sim-010"), None);
     assert_eq!(shift_template_for_id("sim-011"), Some("offPeak"));
     assert_eq!(shift_template_for_id("sim-020"), None);
+}
+
+#[test]
+fn canonical_shift_templates_are_exactly_the_gameplay_minted_set() {
+    for template in ["standard", "early", "late", "offPeak"] {
+        assert!(is_canonical_shift_template(template));
+    }
+    assert!(!is_canonical_shift_template("swing"));
+    assert!(!is_canonical_shift_template(""));
+    for suffix in 1..=40usize {
+        let id = format!("sim-{suffix:03}");
+        if let Some(template) = shift_template_for_id(&id) {
+            assert!(
+                is_canonical_shift_template(template),
+                "shift_template_for_id minted a non-canonical template: {template}"
+            );
+        }
+    }
+}
+
+#[test]
+fn stable_daily_seed_is_deterministic_and_sensitive_to_salt_and_day() {
+    for id in ["sim-001", "sim-010", "sim-12345"] {
+        for day in [0_u32, 1, 6, 7] {
+            assert_eq!(
+                stable_daily_seed(id, day, OPTIONAL_SALT),
+                stable_daily_seed(id, day, OPTIONAL_SALT),
+                "same input must produce the same seed"
+            );
+            assert_ne!(
+                stable_daily_seed(id, day, OPTIONAL_SALT),
+                stable_daily_seed(id, day, OPTIONAL_SALT + 1),
+                "a distinct salt must change the seed"
+            );
+            assert_ne!(
+                stable_daily_seed(id, day, OPTIONAL_SALT),
+                stable_daily_seed(id, day + 1, OPTIONAL_SALT),
+                "a distinct day must change the seed"
+            );
+        }
+    }
+}
+
+#[test]
+fn day_off_follows_a_fixed_one_in_seven_rotation() {
+    // Representative Worker (sim-001) and Student (sim-010) ids each get
+    // exactly one day off per seven-day cycle, always the same one.
+    for (citizen_id, expected_day) in [("sim-001", 1_u32), ("sim-010", 3), ("sim-014", 0)] {
+        for day in 0..7_u32 {
+            assert_eq!(
+                is_day_off(citizen_id, day),
+                day == expected_day,
+                "{citizen_id} day {day} day-off mismatch"
+            );
+        }
+    }
+}
+
+#[test]
+fn student_windows_are_inside_the_school_morning_and_afternoon_spans() {
+    for id in ["sim-010", "sim-020", "sim-70000"] {
+        let outbound = student_departure_minute(id, "outbound");
+        let return_minute = student_departure_minute(id, "return");
+        assert_eq!(student_departure_minute(id, "outbound"), outbound);
+        assert!((450..=510).contains(&outbound), "outbound {outbound}");
+        assert!(
+            (900..=960).contains(&return_minute),
+            "return {return_minute}"
+        );
+        let optional = optional_departure_minute(id, 0);
+        assert!((660..=900).contains(&optional), "optional {optional}");
+        assert_eq!(optional_departure_minute(id, 0), optional);
+    }
 }
 
 #[test]
@@ -267,6 +344,89 @@ fn return_requirement_requires_successful_outbound() {
 
     assert_eq!(engine.snapshot().active_trips.len(), 0);
     assert_eq!(engine.snapshot().metrics.unserved_trips, 0);
+}
+
+fn student_school_engine() -> GameEngine {
+    let mut engine = GameEngine::new();
+    for origin in [(2, 3), (5, 3), (8, 3)] {
+        engine.dispatch(GameIntent::PaintAreaRectangle {
+            area: "residential".to_string(),
+            start: origin.into(),
+            end: (origin.0 + 1, origin.1).into(),
+        });
+        let placed = engine.dispatch(GameIntent::PlaceBuilding {
+            building_type: "smallHouse".to_string(),
+            origin: origin.into(),
+            rotation: 0,
+        });
+        assert!(placed.applied, "fixture house must place: {placed:?}");
+    }
+    engine.dispatch(GameIntent::PaintAreaRectangle {
+        area: "civic".to_string(),
+        start: (6, 10).into(),
+        end: (8, 11).into(),
+    });
+    let school = engine.dispatch(GameIntent::PlaceBuilding {
+        building_type: "school".to_string(),
+        origin: (6, 10).into(),
+        rotation: 0,
+    });
+    assert!(school.applied, "fixture school must place: {school:?}");
+    engine.dispatch(GameIntent::SetPaused { paused: false });
+    engine
+}
+
+#[test]
+fn student_school_destination_is_deterministic_across_independent_engines() {
+    // Two engines built by the same intents must derive the same seeded
+    // school destination for the canonical Student (every 10th move-in).
+    let mut first = student_school_engine();
+    let mut second = student_school_engine();
+    // Twelve housing slots move in within the first 550s; sim-010's day-0
+    // school departure has already passed by then, so their first school
+    // commute is day 1's outbound wake.
+    let _ = first.tick(1_600.0);
+    let _ = second.tick(1_600.0);
+
+    let first_snapshot = first.snapshot();
+    let second_snapshot = second.snapshot();
+    let school_tiles: Vec<Point> = first_snapshot
+        .buildings
+        .iter()
+        .filter(|building| building.building_type == "school")
+        .flat_map(|building| building.occupied_tiles.iter().copied())
+        .collect();
+    assert!(!school_tiles.is_empty());
+
+    for snapshot in [&first_snapshot, &second_snapshot] {
+        let student = snapshot
+            .sims
+            .iter()
+            .find(|sim| sim.id == "sim-010")
+            .expect("the tenth move-in is the canonical Student");
+        assert!(matches!(student.routine, CitizenRoutine::Student));
+        let outbound = snapshot
+            .active_trips
+            .iter()
+            .find(|trip| trip.sim_id == "sim-010" && trip.purpose == TripPurpose::CommuteOutbound)
+            .expect("the student commutes to school on a school day");
+        assert!(
+            school_tiles.contains(&outbound.destination),
+            "student destination must be a school footprint tile: {:?}",
+            outbound.destination
+        );
+    }
+    let first_destination = first_snapshot
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-010")
+        .map(|trip| trip.destination);
+    let second_destination = second_snapshot
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-010")
+        .map(|trip| trip.destination);
+    assert_eq!(first_destination, second_destination);
 }
 
 #[test]

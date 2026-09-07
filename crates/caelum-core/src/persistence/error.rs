@@ -407,6 +407,10 @@ pub enum AssignmentError {
     /// An idle citizen (no non-terminal trip) must carry the next scheduled
     /// activity the exact-time scheduler wakes them for.
     MissingNextActivity,
+    /// A worker's persisted shift template is not one of the canonical
+    /// templates gameplay mints (`standard`/`early`/`late`/`offPeak`).
+    /// Rejected, never migrated.
+    NonCanonicalShiftTemplate,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
