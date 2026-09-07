@@ -169,6 +169,7 @@ export interface RustGameSnapshot {
   activeTrips: RustActiveTrip[];
   tripSequenceDay: number;
   nextTripSequence: number;
+  nextCitizenOrdinal: number;
   metrics: RustMetrics;
   scenario: RustScenarioConfig;
 }

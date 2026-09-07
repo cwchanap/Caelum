@@ -6,7 +6,7 @@ mod schedule;
 pub const MOVE_IN_INTERVAL_SECONDS: f64 = GAME_DAY_SECONDS / 24.0;
 
 pub(crate) use schedule::{
-    apply_trip_resolutions, build_schedule, build_world, drain_trip_demands,
+    apply_trip_resolutions, build_schedule, build_world, drain_trip_demands, next_citizen_ordinal,
     next_population_boundary, presentation_aggregates, reconcile_buildings, run_due,
     scheduler_boundary_generation, scheduler_due_key_count, snapshot_sims, TripResolution,
 };
@@ -30,9 +30,9 @@ mod tests {
     use super::components::{CitizenId, HomeAssignment, NextActivity, Routine, SettledPosition};
     use super::schedule::{
         build_schedule, build_world, drain_trip_demands, job_occupancy_for_building,
-        population_count, rebuilt_index, reconcile_buildings, resident_occupancy_for_building,
-        run_due, snapshot_sims, spawn_indexed_citizen, NextCitizenOrdinal, PopulationIndex,
-        PopulationMutation,
+        next_citizen_ordinal, population_count, rebuilt_index, reconcile_buildings,
+        resident_occupancy_for_building, run_due, snapshot_sims, spawn_indexed_citizen,
+        NextCitizenOrdinal, PopulationIndex, PopulationMutation,
     };
     use super::{scheduled_time_seconds, MOVE_IN_INTERVAL_SECONDS};
     use crate::building_catalog::building_definition;
@@ -152,6 +152,49 @@ mod tests {
         let before = world.resource::<NextCitizenOrdinal>().0;
         despawn_highest_fixture_citizen(&mut world);
         assert_eq!(world.resource::<NextCitizenOrdinal>().0, before);
+    }
+
+    #[test]
+    fn allocator_high_water_mark_survives_save_and_restore() {
+        // After the highest-ID resident is despawned, a save/restore must not
+        // rewind the allocator: the persisted `next_citizen_ordinal` keeps it
+        // monotonic, so the next move-in mints sim-005, not a reused sim-004.
+        let snapshot = population_fixture();
+        let mut world = build_world(&snapshot);
+        let live_ordinal = world.resource::<NextCitizenOrdinal>().0;
+        despawn_highest_fixture_citizen(&mut world);
+        // Rebuild the population index so the despawned entity is no longer
+        // referenced (the engine's reconcile path does this; the bare helper
+        // only despawns the entity).
+        let fresh_index = rebuilt_index(&mut world);
+        world.insert_resource(fresh_index);
+        // The live allocator stays monotonic across the despawn...
+        assert_eq!(world.resource::<NextCitizenOrdinal>().0, live_ordinal);
+
+        // ...and the durable snapshot carries that high-water mark forward.
+        let mut saved = snapshot.clone();
+        saved.sims = snapshot_sims(&world, snapshot.day);
+        saved.next_citizen_ordinal = next_citizen_ordinal(&world);
+        assert_eq!(saved.next_citizen_ordinal, live_ordinal);
+
+        let restored = build_world(&saved);
+        assert_eq!(
+            restored.resource::<NextCitizenOrdinal>().0,
+            live_ordinal,
+            "persisted ordinal keeps the allocator monotonic across save/restore"
+        );
+
+        // The pre-v11 shape (no persisted ordinal) rewinds: with the field
+        // unset, build_world falls back to max(surviving suffix)+1, which is
+        // exactly the rewind the persisted field exists to prevent.
+        let mut unmarked = saved.clone();
+        unmarked.next_citizen_ordinal = 0;
+        let rewound = build_world(&unmarked);
+        assert_eq!(
+            rewound.resource::<NextCitizenOrdinal>().0,
+            live_ordinal - 1,
+            "without the persisted ordinal the allocator rewinds to the highest surviving id"
+        );
     }
 
     #[test]

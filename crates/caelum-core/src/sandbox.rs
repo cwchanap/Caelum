@@ -483,6 +483,11 @@ fn snapshot_shell(
         active_trips: Vec::new(),
         trip_sequence_day: day_index(0.0),
         next_trip_sequence: 1,
+        // The first move-in mints sim-001, so the high-water mark starts at 1.
+        // This matches what `build_world` derives from an empty sim list
+        // (`max(empty)+1 = 1`), keeping raw sandbox snapshots equal to engine
+        // snapshots.
+        next_citizen_ordinal: 1,
         metrics: Metrics {
             late_trips: 0,
             completed_trips: 0,

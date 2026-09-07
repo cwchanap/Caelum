@@ -43,8 +43,11 @@ pub(super) struct PopulationBuilding {
     pub(super) job_capacity: u16,
 }
 
-/// Monotonic citizen allocator. Initialized once from the durable sim ids and
-/// never recomputed after despawn, so a deleted highest id is never reused.
+/// Monotonic citizen allocator. Initialized once from the durable sim ids (or
+/// the persisted `next_citizen_ordinal` high-water mark) and never recomputed
+/// after despawn, so a deleted highest id is never reused — including across
+/// save/restore, where the persisted ordinal prevents the rewind that
+/// `max(surviving sim id suffix)+1` alone would suffer.
 #[derive(Resource, Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) struct NextCitizenOrdinal(pub(super) usize);
 
@@ -77,13 +80,18 @@ pub(crate) fn build_world(snapshot: &GameSnapshot) -> World {
         ..Default::default()
     };
     let mut world = World::new();
-    let next_ordinal = snapshot
+    // Prefer the persisted high-water mark so a save/restore after the
+    // highest-ID resident was despawned does not rewind the allocator. Fall
+    // back to deriving from surviving sims for snapshots that never set it
+    // (fixtures, pre-allocation sandboxes).
+    let derived_ordinal = snapshot
         .sims
         .iter()
         .map(|sim| numeric_id_suffix(&sim.id))
         .max()
         .unwrap_or(0)
         + 1;
+    let next_ordinal = snapshot.next_citizen_ordinal.max(derived_ordinal);
 
     let mut pending_activities = Vec::with_capacity(snapshot.sims.len());
     for sim in &snapshot.sims {
@@ -169,6 +177,14 @@ pub(crate) fn build_world(snapshot: &GameSnapshot) -> World {
         schedule_activity(&mut world, entity, next_activity);
     }
     world
+}
+
+/// The live citizen-ID high-water mark, for durable persistence: the next
+/// ordinal `apply_move_in` will mint. `snapshot()` writes this into
+/// `GameSnapshot::next_citizen_ordinal` so a save/restore does not rewind the
+/// allocator after the highest-ID resident was despawned.
+pub(crate) fn next_citizen_ordinal(world: &World) -> usize {
+    world.resource::<NextCitizenOrdinal>().0
 }
 
 pub(crate) fn snapshot_sims(world: &World, _day: u32) -> Vec<Sim> {
@@ -1230,9 +1246,18 @@ fn apply_trip_resolution(world: &mut World, row: &TripResolution, now_day: u32, 
     };
     let citizen_id = row.citizen_id.clone();
     let same_day = row.service_day.is_some_and(|day| day == now_day);
-    let return_due = || ScheduledActivity {
-        kind: ScheduledActivityKind::PrimaryReturn,
-        due_time: scheduled_time_seconds(now_day, routine_minute(&routine, &citizen_id, "return")),
+    // A same-day outbound that finally arrives after today's routine return
+    // time must not schedule a wake in the past: `run_due` would emit it at
+    // once but with a stale `TripDemand.scheduled_time`, so `build_trip` would
+    // derive the return deadline from that old time and the brand-new return
+    // would be late/unserved on birth. Clamp the wake to `now`.
+    let return_due = || {
+        let planned =
+            scheduled_time_seconds(now_day, routine_minute(&routine, &citizen_id, "return"));
+        ScheduledActivity {
+            kind: ScheduledActivityKind::PrimaryReturn,
+            due_time: planned.max(now),
+        }
     };
     let settle = |world: &mut World, entity: Entity| {
         if let Some(mut position) = world.get_mut::<SettledPosition>(entity) {
@@ -1917,6 +1942,48 @@ mod tests {
         assert_eq!(
             rebuilt_index(&mut world),
             *world.resource::<PopulationIndex>()
+        );
+    }
+
+    #[test]
+    fn late_same_day_outbound_clamps_return_wake_to_now() {
+        let mut snapshot = single_worker_fixture();
+        let day = snapshot.day;
+        let workplace = match snapshot.sims[0].routine {
+            CitizenRoutine::Worker {
+                workplace: Some(workplace),
+                ..
+            } => workplace,
+            _ => panic!("fixture worker must carry a workplace"),
+        };
+        let planned_return = scheduled_time_seconds(
+            day,
+            departure_minute_for_sim("sim-001", sim_shift_template(&snapshot.sims[0]), "return"),
+        );
+        // The outbound finally arrives AFTER today's routine return window.
+        let now = planned_return + 3600.0;
+        // The trip owns the citizen: no durable next activity.
+        snapshot.sims[0].next_activity = None;
+        let mut world = build_world(&snapshot);
+        let entity = world.resource::<PopulationIndex>().by_id["sim-001"];
+
+        let resolutions = [TripResolution {
+            citizen_id: "sim-001".to_string(),
+            purpose: TripPurpose::CommuteOutbound,
+            destination: workplace,
+            completed: true,
+            service_day: Some(day),
+        }];
+        assert!(apply_trip_resolutions(&mut world, &resolutions, day, now));
+
+        let activity = world.get::<NextActivity>(entity).unwrap().0.clone();
+        assert_eq!(activity.kind, ScheduledActivityKind::PrimaryReturn);
+        // The return wake is clamped to `now`, not the stale past planned return
+        // time — otherwise `run_due` emits it at once with a stale
+        // `TripDemand.scheduled_time` and the return is late/unserved on birth.
+        assert_eq!(
+            activity.due_time, now,
+            "return wake clamped to now, not the past planned return"
         );
     }
 

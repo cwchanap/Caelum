@@ -1,13 +1,12 @@
 use std::collections::{HashMap, HashSet};
 
-use crate::building_catalog::building_definition;
 use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::ids::next_entity_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     ActiveTrip, BusStopKind, GameMap, GameSnapshot, Platform, Point, RouteLegKind, RouteLegPath,
     Tile, TransitMode, TransitNodeStatus, TransitPath, TransitPathStepRef, TripPosition,
-    TripPurpose, TripStatus, Vehicle,
+    TripStatus, Vehicle,
 };
 use crate::platforms::{bus_platforms, metro_platforms, on_platform_trip_ids, platform_waiter_ids};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
@@ -200,15 +199,11 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
         .find(|building| building.occupied_tiles.iter().any(|tile| tile == point));
     let mut removed_stop_ids = HashSet::new();
     let mut removed_station_ids = HashSet::new();
-    let removed_destination_tiles: HashSet<String> = removed_building
-        .filter(|building| {
-            building_definition(&building.building_type)
-                .is_some_and(|definition| definition.job_capacity > 0)
-        })
-        .into_iter()
-        .flat_map(|building| building.occupied_tiles.iter().map(point_key))
-        .collect();
-
+    // Outbound trips targeting a bulldozed workplace are NOT dropped here:
+    // ECS building reconciliation (engine commit) owns retarget-vs-drop and
+    // recovery scheduling, so it must see the in-flight trip and the
+    // trip-owning citizen. Dropping the trip in the shell candidate first
+    // would leave the citizen with neither an active trip nor a NextActivity.
     if let Some(building) = removed_building {
         if let Some(transit_node_id) = &building.transit_node_id {
             if matches!(building.building_type.as_str(), "busStop" | "busTerminal") {
@@ -239,9 +234,6 @@ pub fn remove_at_tile(state: &GameSnapshot, point: &Point) -> GameplayResult<Gam
     if let Some(building) = removed_building {
         next.buildings
             .retain(|candidate| candidate.id != building.id);
-    }
-    if !removed_destination_tiles.is_empty() {
-        cleanup_removed_destination_references(&mut next, &removed_destination_tiles);
     }
     for stop_id in removed_stop_ids {
         next = remove_or_tombstone_node(&next, &stop_id);
@@ -996,36 +988,6 @@ fn remove_infrastructure_at_tile(
     Err(GameplayRejection::at(RejectionCode::BlockedTile, *point))
 }
 
-fn cleanup_removed_destination_references(
-    state: &mut GameSnapshot,
-    removed_destination_tiles: &HashSet<String>,
-) {
-    // Shell-only cleanup: ECS building reconciliation owns workplace clearing,
-    // refill, and retargeting. Outbound trips still targeting a bulldozed
-    // destination are dropped with their passenger references; every other
-    // trip (notably in-flight returns heading home) is left untouched.
-    let mut removed_trip_ids = HashSet::new();
-    for trip in &mut state.active_trips {
-        if trip.purpose == TripPurpose::CommuteOutbound
-            && removed_destination_tiles.contains(&point_key(&trip.destination))
-        {
-            removed_trip_ids.insert(trip.id.clone());
-        }
-    }
-
-    if removed_trip_ids.is_empty() {
-        return;
-    }
-    state
-        .active_trips
-        .retain(|trip| !removed_trip_ids.contains(&trip.id));
-    for vehicle in &mut state.transit.vehicles {
-        vehicle
-            .passenger_ids
-            .retain(|passenger_id| !removed_trip_ids.contains(passenger_id));
-    }
-}
-
 fn reassign_within_node<T>(
     nodes: &mut [T],
     node_id: &str,
@@ -1715,10 +1677,6 @@ fn final_route_name(kind: &str, id: &str, name: &str) -> String {
 
 fn position_key(x: i32, y: i32) -> String {
     format!("{x},{y}")
-}
-
-fn point_key(point: &Point) -> String {
-    position_key(point.x, point.y)
 }
 
 #[cfg(test)]

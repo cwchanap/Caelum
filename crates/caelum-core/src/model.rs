@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 10;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 11;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -264,6 +264,15 @@ pub struct GameSnapshot {
     pub trip_sequence_day: u32,
     #[serde(default)]
     pub next_trip_sequence: u32,
+    /// Monotonic citizen-ID high-water mark: the next ordinal `apply_move_in`
+    /// mints as `sim-{ordinal:03}`. Persisted so a save/restore after the
+    /// highest-ID resident was despawned does not rewind the allocator and mint
+    /// a reused id (which would diverge Worker/Student classification, shift
+    /// jitter, days off, and daily seeds from uninterrupted play). `0` means
+    /// "not yet allocated"; `build_world` falls back to `max(sim id suffix)+1`
+    /// so fixtures that never set it keep the pre-v11 derive-from-sims behavior.
+    #[serde(default)]
+    pub next_citizen_ordinal: usize,
     pub metrics: Metrics,
     /// Static scenario identity plus optional campaign objectives.
     /// `growth_waves` carries scenario-authored growth; entries' `applied` flag
