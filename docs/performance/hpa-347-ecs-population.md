@@ -97,11 +97,15 @@ that crosses no wake. `runtime_presentation_us` is `engine.presentation()`
 `full_snapshot_us` is the explicit durable reconstruction `engine.snapshot()`
 (O(population) — ordinary ticks never call it).
 
+`runtime_build_us` was re-measured after a harness correction (the O(population)
+`fixture.clone()` moved outside the timed window, so the figure covers only the
+engine build); the other columns are from the original Task-8 pass above.
+
 | Row        |   Sims | runtime_build_us | quiet_tick_us | runtime_presentation_us | full_snapshot_us |
 | ---------- | -----: | ---------------: | ------------: | ----------------------: | ---------------: |
-| ecs-10000  |  10000 |            13018 |           170 |                      19 |             1595 |
-| ecs-50000  |  50000 |            67864 |           138 |                      19 |             8029 |
-| ecs-200000 | 200000 |           298386 |           138 |                      20 |            35573 |
+| ecs-10000  |  10000 |            12379 |           170 |                      19 |             1595 |
+| ecs-50000  |  50000 |            69152 |           138 |                      19 |             8029 |
+| ecs-200000 | 200000 |           292989 |           138 |                      20 |            35573 |
 
 The dormant-population quiet tick is flat from 10k through 200k sims (~140 us,
 versus 95295 us pre-ECS): an ordinary tick costs O(1) in latent population.
@@ -116,7 +120,8 @@ citizens excluded, so exactly N demands emit). `schedule_emit_us` covers the
 exact-time scheduler emission — the due `run_due` pass (collect, canonicalize,
 apply, emit) plus the demand drain — without route spawning.
 `route_spawn_us` covers `spawn_pending_trip_demands` over the drained demands
-(route choice plus private-car candidacy per row, the O(due demand) bridge).
+(batch road-flow derivation plus route choice and private-car candidacy per
+row, the O(due demand) bridge).
 
 | Row        | Due demands | schedule_emit_us | route_spawn_us |
 | ---------- | ----------: | ---------------: | -------------: |
