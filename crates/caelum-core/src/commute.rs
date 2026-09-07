@@ -11,12 +11,6 @@ pub fn numeric_id_suffix(id: &str) -> usize {
         .unwrap_or(1)
 }
 
-/// Canonical Students are every 10th ID (sim-010, sim-020, ...). Only fresh
-/// move-ins consult this; a restored citizen's durable routine is authoritative.
-pub fn is_student_id(id: &str) -> bool {
-    numeric_id_suffix(id).is_multiple_of(10)
-}
-
 /// The canonical shift templates gameplay mints (`shift_template_for_id`);
 /// persistence rejects any other value instead of migrating it.
 pub fn is_canonical_shift_template(template: &str) -> bool {

@@ -110,7 +110,7 @@ pub(crate) fn tick_trips_with_objectives(
 /// Apply due growth waves (reconciling the ECS population with any placed
 /// buildings) and run the exact-time population scheduler up to `state.time`.
 /// Returns whether ECS population state changed.
-fn apply_due_world_events(
+pub(crate) fn apply_due_world_events(
     state: &mut GameSnapshot,
     world: &mut World,
     population_schedule: &mut Schedule,
@@ -143,7 +143,7 @@ fn drain_and_spawn(
 
 /// Route pending ECS demand through the existing trip builder. ECS emits
 /// demand; it never routes.
-fn spawn_pending_trip_demands(
+pub(crate) fn spawn_pending_trip_demands(
     state: &mut GameSnapshot,
     road_topology: &RoadTopology,
     road_flow: &mut traffic::RoadFlow,
@@ -410,7 +410,7 @@ fn advance_tick_substep(
     )
 }
 
-fn sync_clock(state: &mut GameSnapshot) {
+pub(crate) fn sync_clock(state: &mut GameSnapshot) {
     state.day = clock::day_index(state.time);
     state.clock_minutes = clock::clock_minutes(state.time);
 }

@@ -13,6 +13,16 @@ use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{GameEngine, GameIntent, GameSnapshot};
 
+/// Canonical Students are every 10th ID (sim-010, sim-020, ...). Test-side
+/// mirror of the move-in classification rule; production mints the routine
+/// durably, so no production caller remains.
+pub fn is_student_id(id: &str) -> bool {
+    id.rsplit_once('-')
+        .and_then(|(_, suffix)| suffix.parse::<usize>().ok())
+        .unwrap_or(1)
+        .is_multiple_of(10)
+}
+
 pub fn heading_between(from: Point, to: Point) -> Heading {
     match (to.x - from.x, to.y - from.y) {
         (0, -1) => Heading::North,

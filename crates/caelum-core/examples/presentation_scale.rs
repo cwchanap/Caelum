@@ -1,11 +1,12 @@
 use std::time::Instant;
 
+use caelum_core::building_catalog::building_definition;
 use caelum_core::model::{
     ActiveTrip, CitizenRoutine, GameSnapshot, PlacedBuilding, Point, ScheduledActivity,
     ScheduledActivityKind, Sim, TransitMode, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
-use caelum_core::GameEngine;
+use caelum_core::{create_sandbox_snapshot, GameEngine, SandboxCreationRequest};
 
 fn sim(index: usize) -> Sim {
     let home = Point {
@@ -123,27 +124,131 @@ fn measure_presentation(label: &str, snapshot: &GameSnapshot) {
     );
 }
 
-/// Time one quiet engine tick over a worker-only latent population. The fixture
-/// workers are dormant (their workplace point resolves to no job building), so
-/// the tick exercises the ECS scheduler path without emitting trips.
-fn measure_population_tick(label: &str, snapshot: &GameSnapshot, delta_seconds: f64) {
-    let mut fixture = snapshot.clone();
-    fixture.paused = false;
-    fixture.speed = 1;
+/// Final runtime rows for the ECS-owned population. Times, in order: the
+/// candidate-first runtime build (`from_snapshot`: shell validation, topology
+/// compile, ECS world/schedule construction, shell mirror clear), one quiet
+/// engine tick that crosses no wake, the runtime presentation (ECS-built
+/// aggregates through the one projector), and the explicit durable snapshot
+/// reconstruction (`engine.snapshot()`, O(population)). The fixture workers
+/// are dormant (their workplace point resolves to no job building), so the
+/// quiet tick exercises the exact-time scheduler without emitting demand.
+fn measure_ecs_row(label: &str, fixture: &GameSnapshot, count: usize) {
+    let started = Instant::now();
     let mut engine = GameEngine::from_snapshot(fixture.clone()).expect("scale fixture loads");
-    // `prepare_snapshot` forces `paused`; resume through the public intent.
-    let resumed = engine.dispatch(caelum_core::GameIntent::SetPaused { paused: false });
-    assert!(resumed.applied, "fixture must resume");
+    let runtime_build_us = started.elapsed().as_micros();
+
+    assert!(
+        engine
+            .dispatch(caelum_core::GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let started = Instant::now();
+    let result = engine.tick(0.5);
+    let quiet_tick_us = started.elapsed().as_micros();
+    assert_eq!(result.update.frame.time - fixture.time, 0.5);
+    assert!(result.applied, "quiet tick must still advance time");
 
     let started = Instant::now();
-    let result = engine.tick(delta_seconds);
-    let tick_us = started.elapsed().as_micros();
+    let update = engine.presentation();
+    let runtime_presentation_us = started.elapsed().as_micros();
+    let presentation_bytes = serde_json::to_vec(&update)
+        .expect("presentation serialization")
+        .len();
 
+    let started = Instant::now();
+    let durable = engine.snapshot();
+    let full_snapshot_us = started.elapsed().as_micros();
+
+    assert_eq!(durable.sims.len(), count, "durable reconstruction size");
     println!(
-        "{label}\tpopulation_tick_us={tick_us}\tadvanced_time={}\tapplied={}",
-        result.update.frame.time - fixture.time,
-        result.applied,
+        "{label}\truntime_build_us={runtime_build_us}\tquiet_tick_us={quiet_tick_us}\truntime_presentation_us={runtime_presentation_us}\tfull_snapshot_us={full_snapshot_us}\tsims={}\tpresentation_bytes={presentation_bytes}",
+        durable.sims.len(),
     );
+}
+
+/// A due-wave fixture: `count` Workers on the small-town template, every one
+/// waking at the same exact time (t = 300 s on day 0) with a live job-building
+/// workplace. Day-0 day-off citizens (`numeric id suffix % 7 == 0`) are
+/// excluded from generation so exactly `count` demands emit; template housing
+/// is dropped so no move-in competes with the wave.
+fn wave_snapshot(count: usize) -> GameSnapshot {
+    let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
+        template_id: "smallTown".to_string(),
+        economy_preset: "standard".to_string(),
+        starting_capital: Some(f64::from(caelum_core::DEFAULT_STARTING_CAPITAL)),
+        demand_multiplier: Some(1.0),
+    })
+    .expect("small town template must remain valid");
+    snapshot.day = 0;
+    snapshot.time = 0.0;
+    snapshot.paused = true;
+    snapshot.speed = 1;
+
+    let job_tile = snapshot
+        .buildings
+        .iter()
+        .find(|building| {
+            building_definition(&building.building_type)
+                .is_some_and(|definition| definition.job_capacity > 0)
+        })
+        .map(|building| building.occupied_tiles[0])
+        .expect("small town template must contain a job building");
+    snapshot.buildings.retain(|building| {
+        building_definition(&building.building_type)
+            .is_some_and(|definition| definition.resident_capacity == 0)
+    });
+
+    let mut sims = Vec::with_capacity(count);
+    let mut index = 1usize;
+    while sims.len() < count {
+        if !index.is_multiple_of(7) {
+            let id = format!("sim-{index:06}");
+            let home = Point::from(((index % 8) as i32, ((index / 8) % 8) as i32));
+            sims.push(Sim {
+                id: id.clone(),
+                home,
+                position: home,
+                routine: CitizenRoutine::Worker {
+                    shift_template: "standard".to_string(),
+                    workplace: Some(job_tile),
+                },
+                next_activity: Some(ScheduledActivity {
+                    kind: ScheduledActivityKind::DailyRoutine,
+                    due_time: 300.0,
+                }),
+            });
+        }
+        index += 1;
+    }
+    snapshot.sims = sims;
+    snapshot
+}
+
+/// Wave rows: time the two due-wave phases separately, mirroring the tick's
+/// demand bridge. `schedule_emit_us` covers the exact-time scheduler emission
+/// (`run_due` growth/scheduler pass plus the demand drain) without routing;
+/// `route_spawn_us` covers `spawn_pending_trip_demands` over the drained
+/// demands (route choice + private-car candidacy per row — the O(due demand)
+/// path HPA-348 owns batching for).
+fn measure_wave_row(label: &str, count: usize) {
+    let mut engine = GameEngine::from_snapshot(wave_snapshot(count)).expect("wave fixture loads");
+    assert!(
+        engine
+            .dispatch(caelum_core::GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let _ = engine.tick(299.0); // quiet advance to just before the shared wake
+
+    let started = Instant::now();
+    let demands = engine.run_due_and_drain_for_scale_harness(2.0);
+    let schedule_emit_us = started.elapsed().as_micros();
+    assert_eq!(demands.len(), count, "exactly the wave emits demand");
+
+    let started = Instant::now();
+    engine.spawn_drained_demands_for_scale_harness(demands);
+    let route_spawn_us = started.elapsed().as_micros();
+
+    println!("{label}\tschedule_emit_us={schedule_emit_us}\troute_spawn_us={route_spawn_us}");
 }
 
 fn main() {
@@ -151,13 +256,12 @@ fn main() {
     measure_snapshot("current", &baseline);
     measure_presentation("current", &baseline);
 
+    // HPA-544 presentation-cardinality rows (retained).
     for count in [10_000, 50_000, 200_000] {
         let mut fixture = baseline.clone();
         fixture.sims = (0..count).map(sim).collect();
         measure_snapshot(&format!("sims-{count}"), &fixture);
         measure_presentation(&format!("sims-{count}"), &fixture);
-        // Small delta that does not intentionally cross a commute departure.
-        measure_population_tick(&format!("sims-{count}"), &fixture, 0.5);
     }
 
     for count in [1_000, 5_000, 20_000] {
@@ -179,5 +283,16 @@ fn main() {
         fixture.transit.vehicles = (0..count).map(vehicle).collect();
         measure_snapshot(&format!("vehicles-{count}"), &fixture);
         measure_presentation(&format!("vehicles-{count}"), &fixture);
+    }
+
+    // Final HPA-347 runtime rows.
+    for count in [10_000, 50_000, 200_000] {
+        let mut fixture = baseline.clone();
+        fixture.sims = (0..count).map(sim).collect();
+        measure_ecs_row(&format!("ecs-{count}"), &fixture, count);
+    }
+
+    for count in [1_000, 5_000, 20_000] {
+        measure_wave_row(&format!("wave-{count}"), count);
     }
 }

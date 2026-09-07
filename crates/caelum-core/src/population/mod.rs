@@ -8,9 +8,10 @@ pub const MOVE_IN_INTERVAL_SECONDS: f64 = GAME_DAY_SECONDS / 24.0;
 pub(crate) use schedule::{
     apply_trip_resolutions, build_schedule, build_world, drain_trip_demands,
     next_population_boundary, presentation_aggregates, reconcile_buildings, run_due,
-    scheduler_boundary_generation, scheduler_due_key_count, snapshot_sims, TripDemand,
-    TripResolution,
+    scheduler_boundary_generation, scheduler_due_key_count, snapshot_sims, TripResolution,
 };
+
+pub use schedule::TripDemand;
 
 #[cfg(test)]
 pub(crate) use schedule::population_count;
