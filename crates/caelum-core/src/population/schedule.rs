@@ -32,7 +32,11 @@ pub(super) struct PopulationIndex {
     // Numeric ordinal (the `sim-{ordinal:03}` suffix) so selection picks the
     // globally lowest citizen by numeric id, not lexicographic String order
     // (which diverges above sim-999: "sim-1000" < "sim-999" lexicographically).
-    unassigned_workers: BTreeSet<usize>,
+    // The exact id is the tie-break/lookup key: the refill path reconstructs no
+    // id from the ordinal — it reads the stored id and looks it up in `by_id`
+    // directly, so two citizens can never collapse onto one entry even if a
+    // non-canonical id slipped past the persistence boundary.
+    unassigned_workers: BTreeSet<(usize, String)>,
     buildings: BTreeMap<String, PopulationBuilding>,
 }
 
@@ -346,7 +350,7 @@ fn index_citizen(
         } => {
             index
                 .unassigned_workers
-                .insert(numeric_id_suffix(&citizen_id.0));
+                .insert((numeric_id_suffix(&citizen_id.0), citizen_id.0.clone()));
         }
         Routine::Student => {}
     }
@@ -515,7 +519,7 @@ pub(crate) fn reconcile_buildings(
                 index.by_id.remove(&citizen_id);
                 index
                     .unassigned_workers
-                    .remove(&numeric_id_suffix(&citizen_id));
+                    .remove(&(numeric_id_suffix(&citizen_id), citizen_id.clone()));
                 if let Some(job_building_id) = job_building_id {
                     if let Some(rows) = index.workers_by_building.get_mut(&job_building_id) {
                         rows.retain(|row| *row != entity);
@@ -542,7 +546,7 @@ pub(crate) fn reconcile_buildings(
                 }
                 index
                     .unassigned_workers
-                    .insert(numeric_id_suffix(&citizen_id));
+                    .insert((numeric_id_suffix(&citizen_id), citizen_id.clone()));
                 cleared.push((entity, citizen_id));
                 changed = true;
             }
@@ -572,15 +576,20 @@ pub(crate) fn reconcile_buildings(
                 if used >= usize::from(building.job_capacity) {
                     break;
                 }
-                let Some(&ordinal) = index.unassigned_workers.iter().next() else {
+                let Some((ordinal, citizen_id)) = index.unassigned_workers.iter().next() else {
                     break;
                 };
-                let citizen_id = entity_id("sim", ordinal);
+                let ordinal = *ordinal;
+                let citizen_id = citizen_id.clone();
                 let Some(&entity) = index.by_id.get(&citizen_id) else {
+                    // The unassigned set and `by_id` are maintained together by
+                    // `index_citizen` and the despawn/clear paths above, so a
+                    // missing entry is an impossible state — stop rather than
+                    // minting a wrong canonical id from the ordinal alone.
                     break;
                 };
                 let point = building.occupied_tiles[used % building.occupied_tiles.len()];
-                index.unassigned_workers.remove(&ordinal);
+                index.unassigned_workers.remove(&(ordinal, citizen_id));
                 index
                     .workers_by_building
                     .entry(building_id.clone())

@@ -653,6 +653,112 @@ fn demolishing_workplace_clears_workers_and_refills_elsewhere_without_churn() {
 }
 
 #[test]
+fn unassigned_worker_refill_selects_the_globally_lowest_canonical_ordinal_by_exact_id() {
+    // Regression for the unassigned-worker ordering key: the refill path must
+    // pick the globally lowest citizen by numeric ordinal and look the entity
+    // up by its exact id (not by reconstructing `sim-{ordinal:03}` from the
+    // ordinal alone, which collapsed distinct ids sharing a suffix). Two houses
+    // mint sim-001..sim-008; the supermarket absorbs sim-001..sim-004; demolish
+    // it to push all eight back into the unassigned set, then add a cinema with
+    // six slots and assert the six lowest ordinals refill it in order.
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("commercial", (8, 3), (9, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for origin in [(2, 3), (2, 7)] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: "smallHouse".to_string(),
+                    origin: origin.into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(600.0);
+    let filled = engine.snapshot();
+    assert_eq!(filled.sims.len(), 8);
+
+    let demolished = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (8, 3).into(),
+    });
+    assert!(demolished.applied, "{demolished:?}");
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "commercial".to_string(),
+                start: (8, 5).into(),
+                end: (10, 6).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "cinema".to_string(),
+                origin: (8, 5).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+
+    let after = engine.snapshot();
+    let mut assigned: Vec<String> = after
+        .sims
+        .iter()
+        .filter(|sim| workplace_of(sim).is_some())
+        .map(|sim| sim.id.clone())
+        .collect();
+    assigned.sort();
+    assert_eq!(
+        assigned,
+        (1..=6)
+            .map(|ordinal| format!("sim-{ordinal:03}"))
+            .collect::<Vec<_>>(),
+        "the six lowest-ordinal sims refill the cinema in stable order"
+    );
+    let mut unassigned: Vec<String> = after
+        .sims
+        .iter()
+        .filter(|sim| workplace_of(sim).is_none())
+        .map(|sim| sim.id.clone())
+        .collect();
+    unassigned.sort();
+    assert_eq!(
+        unassigned,
+        vec!["sim-007".to_string(), "sim-008".to_string()],
+        "the surplus highest-ordinal sims stay unassigned"
+    );
+}
+
+#[test]
 fn late_workplace_assignment_stays_dormant_until_next_day_end_to_end() {
     let mut engine = GameEngine::new();
     assert!(

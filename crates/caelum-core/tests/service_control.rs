@@ -192,6 +192,7 @@ fn waiting_sim(id: &str, position: Point) -> Sim {
 
 fn waiting_transit_trip(
     id: &str,
+    sim_id: &str,
     line_id: &str,
     mode: TransitMode,
     position: Point,
@@ -200,7 +201,7 @@ fn waiting_transit_trip(
 ) -> ActiveTrip {
     ActiveTrip {
         id: id.to_string(),
-        sim_id: format!("sim-{id}"),
+        sim_id: sim_id.to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: position,
         destination,
@@ -872,7 +873,7 @@ fn shortfall_bus_engine() -> GameEngine {
         .expect("fixture has a road service path");
     for index in 0..8 {
         let suffix = format!("{:03}", index + 1);
-        let sim_id = format!("sim-traffic-{suffix}");
+        let sim_id = format!("sim-{suffix}");
         slowed.sims.push(Sim {
             id: sim_id.clone(),
             home: Point { x: 2, y: 4 },
@@ -915,9 +916,10 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
     let destination = Point { x: 27, y: 4 };
     let mut state = shortfall_bus_engine().snapshot_for_save();
     state.paused = true;
-    state.sims.push(waiting_sim("sim-waiting", waiting_point));
+    state.sims.push(waiting_sim("sim-009", waiting_point));
     state.active_trips.push(waiting_transit_trip(
         "waiting",
+        "sim-009",
         "route-001",
         TransitMode::Bus,
         waiting_point,
@@ -1445,9 +1447,10 @@ fn engine_snapshot_publishes_waiting_health_for_bus_and_metro() {
     bus_state.transit.routes[0].target_headway_seconds = Some(60);
     bus_state
         .sims
-        .push(waiting_sim("sim-bus-health", bus_waiting_point));
+        .push(waiting_sim("sim-001", bus_waiting_point));
     bus_state.active_trips.push(waiting_transit_trip(
         "bus-health",
+        "sim-001",
         "route-001",
         TransitMode::Bus,
         bus_waiting_point,
@@ -1470,9 +1473,10 @@ fn engine_snapshot_publishes_waiting_health_for_bus_and_metro() {
     metro_state.transit.metro_lines[0].target_headway_seconds = Some(60);
     metro_state
         .sims
-        .push(waiting_sim("sim-metro-health", metro_waiting_point));
+        .push(waiting_sim("sim-001", metro_waiting_point));
     metro_state.active_trips.push(waiting_transit_trip(
         "metro-health",
+        "sim-001",
         "metro-001",
         TransitMode::Metro,
         metro_waiting_point,
@@ -1595,9 +1599,10 @@ fn snapshot_restore_rejects_current_leg_wait_above_trip_wide_elapsed_wait() {
     let engine = bus_route_engine();
     let waiting_point = Point { x: 2, y: 4 };
     let mut state = engine.snapshot();
-    state.sims.push(waiting_sim("sim-leg-wait", waiting_point));
+    state.sims.push(waiting_sim("sim-001", waiting_point));
     let mut trip = waiting_transit_trip(
         "leg-wait",
+        "sim-001",
         "route-001",
         TransitMode::Bus,
         waiting_point,
@@ -1660,9 +1665,10 @@ fn snapshot_restore_accepts_current_leg_wait_within_floating_point_tolerance() {
     let engine = bus_route_engine();
     let waiting_point = Point { x: 2, y: 4 };
     let mut state = engine.snapshot();
-    state.sims.push(waiting_sim("sim-fp-wait", waiting_point));
+    state.sims.push(waiting_sim("sim-001", waiting_point));
     let mut trip = waiting_transit_trip(
         "fp-wait",
+        "sim-001",
         "route-001",
         TransitMode::Bus,
         waiting_point,
@@ -1691,11 +1697,10 @@ fn snapshot_for_save_omits_derived_service_metrics() {
     let mut state = engine.snapshot();
     state.transit.routes[0].target_headway_seconds = Some(60);
     let waiting_point = Point { x: 2, y: 4 };
-    state
-        .sims
-        .push(waiting_sim("sim-save-health", waiting_point));
+    state.sims.push(waiting_sim("sim-001", waiting_point));
     state.active_trips.push(waiting_transit_trip(
         "save-health",
+        "sim-001",
         "route-001",
         TransitMode::Bus,
         waiting_point,
