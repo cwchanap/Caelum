@@ -43,7 +43,7 @@ fn driving_path() -> TransitPath {
 fn driving_trip() -> ActiveTrip {
     ActiveTrip {
         id: "trip-driving".to_string(),
-        sim_id: "sim-driving".to_string(),
+        sim_id: "sim-001".to_string(),
         purpose: TripPurpose::CommuteOutbound,
         origin: Point { x: 1, y: 1 },
         destination: Point { x: 2, y: 1 },
@@ -63,7 +63,7 @@ fn driving_trip() -> ActiveTrip {
 
 fn valid_driving_snapshot() -> caelum_core::GameSnapshot {
     let mut snapshot = GameEngine::new().snapshot();
-    let mut sim = worker_sim("sim-driving", Point { x: 1, y: 1 }, None);
+    let mut sim = worker_sim("sim-001", Point { x: 1, y: 1 }, None);
     sim.next_activity = None; // the driving trip owns the citizen
     snapshot.sims.push(sim);
     snapshot.active_trips.push(driving_trip());
@@ -164,7 +164,7 @@ fn non_driving_trip_rejects_a_private_car_payload() {
 #[test]
 fn driving_trip_rejects_transit_vehicle_membership() {
     let mut snapshot = engine_with_bus_route().snapshot();
-    let mut sim = worker_sim("sim-driving", Point { x: 1, y: 1 }, None);
+    let mut sim = worker_sim("sim-001", Point { x: 1, y: 1 }, None);
     sim.next_activity = None; // the driving trip owns the citizen
     snapshot.sims.push(sim);
     snapshot.active_trips.push(driving_trip());
@@ -276,6 +276,35 @@ fn duplicate_entity_id_is_rejected() {
     });
 
     invalid_snapshot(from_snapshot_error(candidate));
+}
+
+#[test]
+fn restore_rejects_non_canonical_sim_ids_that_would_collide_on_suffix_parsing() {
+    // Two distinct ids whose suffixes fail to parse: `numeric_id_suffix` falls
+    // back to `1` for both, so under the old `BTreeSet<usize>` unassigned-worker
+    // key they collapsed to one entry and the refill path reconstructed
+    // `sim-001` — assigning the wrong id or `break`ing and leaving both workers
+    // permanently invisible to workplace refill. The persistence boundary now
+    // rejects every non-canonical sim id at restore.
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot
+        .sims
+        .push(worker_sim("sim-alpha", Point { x: 1, y: 1 }, None));
+    snapshot
+        .sims
+        .push(worker_sim("sim-beta", Point { x: 1, y: 1 }, None));
+    assert_invalid_trip_field(snapshot, "entityId", "nonCanonicalId");
+
+    // A non-canonical padding (`sim-1` instead of `sim-001`) shares ordinal 1
+    // with a canonical id and is rejected on the same boundary.
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot
+        .sims
+        .push(worker_sim("sim-001", Point { x: 1, y: 1 }, None));
+    snapshot
+        .sims
+        .push(worker_sim("sim-1", Point { x: 1, y: 1 }, None));
+    assert_invalid_trip_field(snapshot, "entityId", "nonCanonicalId");
 }
 
 #[test]

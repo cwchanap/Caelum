@@ -121,6 +121,20 @@ fn validate_sims(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         .collect();
     for sim in &snapshot.sims {
         let entity = entity_ref(EntityKind::Sim, &sim.id);
+        // The engine only mints canonical `sim-{ordinal:03}` ids, and every
+        // `numeric_id_suffix` derivation (day-off, shift, daily seed,
+        // departure jitter, the unassigned-worker ordering key) keys on the
+        // parsed ordinal. A non-canonical id either parses to a colliding
+        // ordinal or falls back to `1`, corrupting those derivations and
+        // collapsing the unassigned-worker key — so reject it at the boundary
+        // rather than accommodating an impossible state.
+        if !crate::ids::is_canonical_sim_id(&sim.id) {
+            return Err(PersistenceError::InvalidEntity {
+                entity,
+                field: SnapshotField::EntityId,
+                reason: EntityError::NonCanonicalId,
+            });
+        }
         validate_point(snapshot, &entity, SnapshotField::SimHome, sim.home)?;
         validate_point(snapshot, &entity, SnapshotField::SimPosition, sim.position)?;
         if let CitizenRoutine::Worker {

@@ -205,7 +205,7 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, f64) {
     place_destination(&mut state, "home", Point { x: 1, y: 2 });
     place_destination(&mut state, "work", workplace);
     state.sims = std::iter::once(worker_sim("sim-001", home, Some(workplace)))
-        .chain((0..4).map(|id| travelling_worker_sim(&format!("seed-car-sim-{id:03}"), home)))
+        .chain((0..4).map(|id| travelling_worker_sim(&format!("sim-{:03}", id + 2), home)))
         .collect();
     let departure_minute = commute::departure_minute_for_sim("sim-001", "standard", "outbound");
     let departure_time =
@@ -223,7 +223,7 @@ fn bus_fractional_progress_fixture() -> (GameSnapshot, f64) {
     state.active_trips = (0..4)
         .map(|id| ActiveTrip {
             id: format!("seed-car-trip-{id:03}"),
-            sim_id: format!("seed-car-sim-{id:03}"),
+            sim_id: format!("sim-{:03}", id + 2),
             purpose: TripPurpose::CommuteOutbound,
             origin: home,
             destination: workplace,
@@ -271,7 +271,7 @@ fn bus_arrival_order_fixture() -> GameSnapshot {
     let mut state = engine.snapshot();
     state.paused = false;
     state.sims = (0..5)
-        .map(|id| travelling_worker_sim(&format!("arrival-car-sim-{id:03}"), (2, 3).into()))
+        .map(|id| travelling_worker_sim(&format!("sim-{id:03}"), (2, 3).into()))
         .collect();
     let bus_path = state.transit.routes[0].legs[0]
         .current_path
@@ -279,7 +279,7 @@ fn bus_arrival_order_fixture() -> GameSnapshot {
         .expect("bus route has a path");
     let make_car = |id: usize, arrival_time: f64| ActiveTrip {
         id: format!("arrival-car-trip-{id:03}"),
-        sim_id: format!("arrival-car-sim-{id:03}"),
+        sim_id: format!("sim-{id:03}"),
         purpose: TripPurpose::CommuteOutbound,
         origin: (2, 3).into(),
         destination: (10, 3).into(),
@@ -317,14 +317,14 @@ fn staggered_car_arrival_fixture() -> GameSnapshot {
     )
     .expect("staggered arrival fixture has a valid car path");
     state.sims = (0..5)
-        .map(|index| travelling_worker_sim(&format!("arrival-sim-{index:03}"), home))
+        .map(|index| travelling_worker_sim(&format!("sim-{index:03}"), home))
         .collect();
     state.active_trips = [0.5, 1.0, 1.5, 2.0, 2.5]
         .into_iter()
         .enumerate()
         .map(|(index, offset)| ActiveTrip {
             id: format!("trip-day-0-trip-{:03}", index + 1),
-            sim_id: format!("arrival-sim-{index:03}"),
+            sim_id: format!("sim-{index:03}"),
             purpose: TripPurpose::CommuteOutbound,
             origin: home,
             destination: workplace,
@@ -423,7 +423,7 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     state.active_trips = (0..4)
         .map(|index| ActiveTrip {
             id: format!("seed-trip-{index}"),
-            sim_id: format!("seed-sim-{index}"),
+            sim_id: format!("sim-{:03}", index + 2),
             purpose: TripPurpose::CommuteOutbound,
             origin: home,
             destination: workplace,
@@ -444,7 +444,7 @@ fn same_time_worker_sees_prior_selected_car_flow_in_stable_sim_order() {
     // spawn pass never adds commute traffic for them.
     state
         .sims
-        .extend((0..4).map(|index| travelling_worker_sim(&format!("seed-sim-{index}"), home)));
+        .extend((0..4).map(|index| travelling_worker_sim(&format!("sim-{:03}", index + 2), home)));
 
     let mut engine = common::running_engine_from_fixture(state);
     let result = engine.tick(0.0);
