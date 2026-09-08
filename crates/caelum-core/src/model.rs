@@ -271,7 +271,6 @@ pub struct GameSnapshot {
     /// jitter, days off, and daily seeds from uninterrupted play). `0` means
     /// "not yet allocated"; `build_world` falls back to `max(sim id suffix)+1`
     /// so fixtures that never set it keep the pre-v11 derive-from-sims behavior.
-    #[serde(default)]
     pub next_citizen_ordinal: usize,
     pub metrics: Metrics,
     /// Static scenario identity plus optional campaign objectives.

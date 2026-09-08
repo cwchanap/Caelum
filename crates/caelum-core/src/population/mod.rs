@@ -523,6 +523,56 @@ mod tests {
     }
 
     #[test]
+    fn unassigned_worker_selection_orders_by_numeric_ordinal_above_sim_999() {
+        // Lexicographic String order puts "sim-1000" before "sim-999" because
+        // '1' < '9' at the fourth character. The numeric-ordinal BTreeSet must
+        // select the four lowest numeric ordinals (996–999) for the four
+        // supermarket slots, leaving sim-1000 unassigned — not the reverse
+        // where lexicographic order would pick sim-1000 first and leave
+        // sim-999 unassigned.
+        let mut before = reconcile_sandbox(0.0);
+        before.sims = vec![
+            reconcile_worker("sim-996", Point::from((1, 1)), None),
+            reconcile_worker("sim-997", Point::from((1, 2)), None),
+            reconcile_worker("sim-998", Point::from((1, 3)), None),
+            reconcile_worker("sim-999", Point::from((1, 4)), None),
+            reconcile_worker("sim-1000", Point::from((1, 5)), None),
+        ];
+        before.next_citizen_ordinal = 1001;
+        let mut after = before.clone();
+        after
+            .buildings
+            .push(reconcile_market("building-001", Point::from((8, 3)), 0.0));
+        let mut world = build_world(&before);
+
+        let mutation = reconcile_buildings(&mut world, &before, &mut after);
+
+        assert!(mutation.changed);
+        let workplaces = citizen_workplaces(&mut world, after.day);
+        let assigned: Vec<&str> = workplaces
+            .iter()
+            .filter(|(_, workplace)| workplace.is_some())
+            .map(|(id, _)| id.as_str())
+            .collect();
+        let unassigned: Vec<&str> = workplaces
+            .iter()
+            .filter(|(_, workplace)| workplace.is_none())
+            .map(|(id, _)| id.as_str())
+            .collect();
+        assert_eq!(
+            assigned,
+            ["sim-996", "sim-997", "sim-998", "sim-999"],
+            "the four lowest numeric ordinals fill the slots"
+        );
+        assert_eq!(
+            unassigned,
+            ["sim-1000"],
+            "sim-1000 (highest numeric ordinal) stays unassigned, not sim-999"
+        );
+        assert_index_rebuilt(&mut world);
+    }
+
+    #[test]
     fn housing_removal_despawns_only_its_residents_and_scrubs_their_trips() {
         let mut before = reconcile_sandbox(0.0);
         let house_one_tiles = [Point::from((2, 3)), Point::from((3, 3))];
