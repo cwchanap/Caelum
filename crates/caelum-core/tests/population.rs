@@ -1305,3 +1305,97 @@ fn bulldozing_optional_site_with_in_flight_outing_schedules_recovery() {
         "the factory workplace survives the unrelated parkPlaza demolition"
     );
 }
+
+/// [P2] Restoring a partially occupied building must not replay move-ins for
+/// slots already filled by durable residents. Before the fix, `build_world`
+/// scheduled every slot `0..capacity`; past-due events for already-occupied
+/// slots minted extra citizens at the wrong due time and home tile. After the
+/// fix, only vacant slots are scheduled, so restore preserves resident IDs and
+/// home assignments without minting duplicates, and the remaining slots still
+/// fill on subsequent ticks.
+#[test]
+fn restore_preserves_partially_occupied_building_without_replaying_filled_slots() {
+    let mut engine = zoned_engine("smallHouse", (2, 3), (3, 3));
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    // Move in 2 of 4 residents (slots at t=0 and t=50; interval = 50s).
+    engine.tick(75.0);
+    let partial = engine.snapshot();
+    assert_eq!(partial.sims.len(), 2, "two residents moved in before save");
+    let saved_ids: Vec<String> = partial.sims.iter().map(|sim| sim.id.clone()).collect();
+    let saved_homes: Vec<Point> = partial.sims.iter().map(|sim| sim.home).collect();
+    assert_eq!(
+        saved_ids,
+        vec!["sim-001".to_string(), "sim-002".to_string()]
+    );
+
+    // Save and restore through the real engine pipeline.
+    let saved = engine.snapshot_for_save();
+    let mut restored = GameEngine::from_snapshot(saved).expect("restore succeeds");
+
+    // Restore must not mint duplicate residents for already-occupied slots.
+    let restored_snapshot = restored.snapshot();
+    assert_eq!(
+        restored_snapshot.sims.len(),
+        2,
+        "restore does not replay move-ins for already-occupied slots"
+    );
+    assert_eq!(
+        restored_snapshot
+            .sims
+            .iter()
+            .map(|sim| sim.id.clone())
+            .collect::<Vec<_>>(),
+        saved_ids,
+        "resident IDs preserved across restore"
+    );
+    assert_eq!(
+        restored_snapshot
+            .sims
+            .iter()
+            .map(|sim| sim.home)
+            .collect::<Vec<_>>(),
+        saved_homes,
+        "home assignments preserved across restore"
+    );
+
+    // A small tick (t=75 → t=76) must not mint past-due replay residents.
+    // With the bug, slots 0 and 1 (at t=0 and t=50) would fire as past-due
+    // and mint two extra citizens immediately. With the fix, the next
+    // move-ins are at t=100 and t=150 — still in the future at t=76.
+    assert!(
+        restored
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    restored.tick(1.0);
+    let after_small_tick = restored.snapshot();
+    assert_eq!(
+        after_small_tick.sims.len(),
+        2,
+        "no past-due move-in replays fire on the first small tick"
+    );
+
+    // The remaining 2 slots (at t=100 and t=150) still fill when ticked
+    // far enough.
+    restored.tick(100.0);
+    let filled = restored.snapshot();
+    assert_eq!(
+        filled.sims.len(),
+        4,
+        "remaining vacant slots fill after restore"
+    );
+    for id in &saved_ids {
+        assert!(
+            filled.sims.iter().any(|sim| &sim.id == id),
+            "original resident {id} still present after remaining slots fill"
+        );
+    }
+    assert_eq!(
+        filled.next_citizen_ordinal, 5,
+        "allocator advanced to 5 after two post-restore move-ins"
+    );
+}

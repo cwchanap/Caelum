@@ -29,9 +29,10 @@ pub(super) struct PopulationIndex {
     pub(super) by_id: BTreeMap<String, Entity>,
     residents_by_building: BTreeMap<String, Vec<Entity>>,
     workers_by_building: BTreeMap<String, Vec<Entity>>,
-    // ponytail: lexicographic ID order diverges from numeric above sim-999; add a
-    // numeric sort key if assignment distribution becomes observable.
-    unassigned_workers: BTreeSet<String>,
+    // Numeric ordinal (the `sim-{ordinal:03}` suffix) so selection picks the
+    // globally lowest citizen by numeric id, not lexicographic String order
+    // (which diverges above sim-999: "sim-1000" < "sim-999" lexicographically).
+    unassigned_workers: BTreeSet<usize>,
     buildings: BTreeMap<String, PopulationBuilding>,
 }
 
@@ -137,12 +138,20 @@ pub(crate) fn build_world(snapshot: &GameSnapshot) -> World {
 
     world.insert_resource(index);
     world.insert_resource(NextCitizenOrdinal(next_ordinal));
-    // Template and restored housing: schedule every housing slot as an
-    // exact-time move-in (Sandbox only), mirroring `reconcile_buildings` for
-    // added housing. This replaces the deleted shell move-in scan;
-    // `apply_move_in` revalidates occupancy, so slots already filled by
-    // durable sims are skipped when their due time arrives.
+    // Template and restored housing: schedule each still-vacant housing slot
+    // as an exact-time move-in (Sandbox only), mirroring `reconcile_buildings`
+    // for added housing. Slots already filled by durable residents are skipped
+    // so restore does not replay their move-ins (which would mint citizens at
+    // the wrong due time and home tile). Residents are only ever despawned
+    // alongside their whole building, so the first N slots are always the
+    // occupied ones.
     if snapshot.rules.game_mode == GameMode::Sandbox {
+        let resident_counts: HashMap<String, usize> = world
+            .resource::<PopulationIndex>()
+            .residents_by_building
+            .iter()
+            .map(|(building_id, residents)| (building_id.clone(), residents.len()))
+            .collect();
         let mut scheduler = PopulationScheduler::default();
         for building in &snapshot.buildings {
             let Some(definition) = building_definition(&building.building_type) else {
@@ -151,7 +160,10 @@ pub(crate) fn build_world(snapshot: &GameSnapshot) -> World {
             if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
                 continue;
             }
-            for slot in 0..definition.resident_capacity {
+            let occupied_slots =
+                u16::try_from(resident_counts.get(&building.id).copied().unwrap_or(0))
+                    .unwrap_or(u16::MAX);
+            for slot in occupied_slots..definition.resident_capacity {
                 insert_scheduler_event(
                     &mut scheduler,
                     building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS,
@@ -332,7 +344,9 @@ fn index_citizen(
         Routine::Worker {
             workplace: None, ..
         } => {
-            index.unassigned_workers.insert(citizen_id.0.clone());
+            index
+                .unassigned_workers
+                .insert(numeric_id_suffix(&citizen_id.0));
         }
         Routine::Student => {}
     }
@@ -499,7 +513,9 @@ pub(crate) fn reconcile_buildings(
                 };
                 world.despawn(entity);
                 index.by_id.remove(&citizen_id);
-                index.unassigned_workers.remove(&citizen_id);
+                index
+                    .unassigned_workers
+                    .remove(&numeric_id_suffix(&citizen_id));
                 if let Some(job_building_id) = job_building_id {
                     if let Some(rows) = index.workers_by_building.get_mut(&job_building_id) {
                         rows.retain(|row| *row != entity);
@@ -524,7 +540,9 @@ pub(crate) fn reconcile_buildings(
                         *workplace = None;
                     }
                 }
-                index.unassigned_workers.insert(citizen_id.clone());
+                index
+                    .unassigned_workers
+                    .insert(numeric_id_suffix(&citizen_id));
                 cleared.push((entity, citizen_id));
                 changed = true;
             }
@@ -554,23 +572,15 @@ pub(crate) fn reconcile_buildings(
                 if used >= usize::from(building.job_capacity) {
                     break;
                 }
-                let Some((citizen_id, &entity)) =
-                    index
-                        .unassigned_workers
-                        .iter()
-                        .next()
-                        .and_then(|citizen_id| {
-                            index
-                                .by_id
-                                .get(citizen_id)
-                                .map(|entity| (citizen_id, entity))
-                        })
-                else {
+                let Some(&ordinal) = index.unassigned_workers.iter().next() else {
                     break;
                 };
-                let citizen_id = citizen_id.clone();
+                let citizen_id = entity_id("sim", ordinal);
+                let Some(&entity) = index.by_id.get(&citizen_id) else {
+                    break;
+                };
                 let point = building.occupied_tiles[used % building.occupied_tiles.len()];
-                index.unassigned_workers.remove(&citizen_id);
+                index.unassigned_workers.remove(&ordinal);
                 index
                     .workers_by_building
                     .entry(building_id.clone())

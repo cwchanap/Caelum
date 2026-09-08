@@ -1,8 +1,8 @@
 use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
 use caelum_core::commute::departure_minute_for_sim;
 use caelum_core::model::{
-    CitizenRoutine, Point, ScheduledActivity, ScheduledActivityKind, ServicePattern, Sim,
-    TransitMode, TripStatus, SNAPSHOT_SCHEMA_VERSION,
+    CitizenRoutine, GameSnapshot, Point, ScheduledActivity, ScheduledActivityKind, ServicePattern,
+    Sim, TransitMode, TripStatus, SNAPSHOT_SCHEMA_VERSION,
 };
 use caelum_core::{check_schema_version, GameEngine, GameIntent, RoadPreset, SnapshotLoadError};
 
@@ -267,4 +267,20 @@ fn save_accepts_last_tick_waiting_metrics_after_route_deletion() {
     assert!(engine.tick(1.0).applied);
     apply(&mut engine, GameIntent::SetPaused { paused: true });
     let _ = engine.snapshot_for_save();
+}
+
+#[test]
+fn schema_v11_snapshot_missing_next_citizen_ordinal_is_rejected() {
+    let mut value = serde_json::to_value(paused_snapshot()).expect("snapshot serializes");
+    let map = value
+        .as_object_mut()
+        .expect("snapshot serializes to a JSON object");
+    assert!(
+        map.remove("nextCitizenOrdinal").is_some(),
+        "fixture snapshot must carry nextCitizenOrdinal"
+    );
+    assert!(
+        serde_json::from_value::<GameSnapshot>(value).is_err(),
+        "schema-v11 snapshot missing nextCitizenOrdinal must fail deserialization"
+    );
 }
