@@ -77,6 +77,10 @@ pub use preview::{
     RoutePreviewResponse, TurnSummary, WarningCode,
 };
 pub use rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
+/// Hidden evidence type for the release scale-harness seam; not gameplay
+/// contract.
+#[doc(hidden)]
+pub use route_choice::RouteChoiceBatchStats;
 pub use route_lifecycle::{project_position_onto_path, PathProjection};
 pub use sandbox::{
     canonical_default_request, canonical_default_settings, create_sandbox_snapshot,

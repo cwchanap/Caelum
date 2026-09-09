@@ -13,6 +13,17 @@ use crate::model::{GameSnapshot, Point, PrivateCarTrip, RoutePlan};
 use crate::road_topology::RoadTopology;
 use crate::{router, traffic};
 
+/// Final structural counts of one finished demand batch. Evidence tooling for
+/// the release scale harness — not part of the gameplay contract.
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RouteChoiceBatchStats {
+    pub transit_service_count: usize,
+    pub transit_shape_count: usize,
+    pub transit_flow_refreshes: usize,
+    pub car_prepared_access_paths: usize,
+}
+
 /// One demand's mode decision. `Unserved` means neither mode could serve the
 /// OD; spawn leaves the fresh trip Idle + planless and lets `tick_trip` own
 /// the eventual Unserved marking.
@@ -69,6 +80,18 @@ impl DemandBatchPlanner {
     /// local generation so the next `choose` refreshes Bus ride durations.
     pub(crate) fn note_road_flow_changed(&mut self) {
         self.flow_generation = self.flow_generation.saturating_add(1);
+    }
+
+    /// Final structural counts of the finished batch: transit service/shape
+    /// cardinality and flow refreshes from the router, prepared car access
+    /// paths from the traffic planner.
+    pub(crate) fn stats(&self) -> RouteChoiceBatchStats {
+        RouteChoiceBatchStats {
+            transit_service_count: self.non_car.service_count(),
+            transit_shape_count: self.non_car.shape_count(),
+            transit_flow_refreshes: self.non_car.flow_refresh_count(),
+            car_prepared_access_paths: self.private_car.prepared_access_path_count(),
+        }
     }
 }
 

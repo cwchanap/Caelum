@@ -1,6 +1,7 @@
-//! HPA-348 pre-batching baseline: times route spawning and one post-spawn
-//! tick for the shared mixed/stress workload. Not part of the default test
-//! run — execute with:
+//! HPA-348 route-choice batching evidence: times batched route spawning and
+//! one post-spawn tick for the shared mixed/stress workload and records the
+//! batch's final structural counts. Not part of the default test run —
+//! execute with:
 //!
 //! ```bash
 //! cargo test --release -p caelum-core --test route_choice_scale -- --ignored --nocapture
@@ -12,9 +13,10 @@ use std::collections::HashSet;
 use std::time::Instant;
 
 use caelum_core::model::TransitMode;
-use caelum_core::{GameEngine, GameIntent};
+use caelum_core::{GameEngine, GameIntent, RouteChoiceBatchStats};
 use common::route_choice_fixture::mixed_peak_snapshot;
 
+#[derive(Clone, Copy)]
 struct ScaleRow {
     label: &'static str,
     count: usize,
@@ -46,13 +48,58 @@ const ROWS: [ScaleRow; 4] = [
 
 #[test]
 #[ignore]
-fn measures_pre_batching_route_spawn_and_post_spawn_tick() {
+fn measures_batched_route_spawn_and_post_spawn_tick() {
+    let mut base_shape_count: Option<usize> = None;
+    let mut stress_shape_count: Option<usize> = None;
+    let mut any_access_paths_strictly_below_od = false;
     for row in ROWS {
-        measure_row(row);
+        let evidence = measure_row(row);
+
+        let expected_services = if row.bus_route_count == 1 { 2 } else { 8 };
+        assert_eq!(
+            evidence.stats.transit_service_count, expected_services,
+            "{} must plan against {} active services",
+            row.label, expected_services
+        );
+        assert!(
+            evidence.stats.transit_shape_count > 0,
+            "{} must enumerate batch-invariant route shapes",
+            row.label
+        );
+
+        let shape_slot = if row.bus_route_count == 1 {
+            &mut base_shape_count
+        } else {
+            &mut stress_shape_count
+        };
+        match *shape_slot {
+            None => *shape_slot = Some(evidence.stats.transit_shape_count),
+            Some(previous) => assert_eq!(
+                evidence.stats.transit_shape_count, previous,
+                "shape cardinality must not depend on demand count for the same service fixture"
+            ),
+        }
+
+        assert!(
+            evidence.stats.car_prepared_access_paths <= evidence.distinct_od,
+            "{} prepared access paths are keyed per access pair, never per tile OD",
+            row.label
+        );
+        any_access_paths_strictly_below_od |=
+            evidence.stats.car_prepared_access_paths < evidence.distinct_od;
     }
+    assert!(
+        any_access_paths_strictly_below_od,
+        "multi-tile buildings sharing one access pair must collapse several tile ODs onto one prepared path"
+    );
 }
 
-fn measure_row(row: ScaleRow) {
+struct RowEvidence {
+    stats: RouteChoiceBatchStats,
+    distinct_od: usize,
+}
+
+fn measure_row(row: ScaleRow) -> RowEvidence {
     let snapshot = mixed_peak_snapshot(row.count, row.bus_route_count);
     let mut engine = GameEngine::from_snapshot(snapshot).expect("fixture loads");
     assert!(
@@ -64,7 +111,7 @@ fn measure_row(row: ScaleRow) {
     let demands = engine.run_due_and_drain_for_scale_harness(301.0);
     assert_eq!(demands.len(), row.count, "exactly count demands must drain");
     let spawn_start = Instant::now();
-    engine.spawn_drained_demands_for_scale_harness(demands);
+    let stats = engine.spawn_drained_demands_for_scale_harness(demands);
     let route_spawn_us = spawn_start.elapsed().as_micros();
 
     let snapshot = engine.snapshot();
@@ -105,8 +152,11 @@ fn measure_row(row: ScaleRow) {
     let post_spawn_tick_us = tick_start.elapsed().as_micros();
 
     println!(
-        "{} count={} services={} distinct_od={} route_spawn_us={} post_spawn_tick_us={} walk={} car={} bus={} metro={} planless={}",
+        "{} count={} services={} distinct_od={} route_spawn_us={} post_spawn_tick_us={} walk={} car={} bus={} metro={} planless={} transit_service_count={} transit_shape_count={} transit_flow_refreshes={} car_prepared_access_paths={}",
         row.label, row.count, services, distinct_od, route_spawn_us, post_spawn_tick_us,
-        walk, car, bus, metro, planless
+        walk, car, bus, metro, planless,
+        stats.transit_service_count, stats.transit_shape_count, stats.transit_flow_refreshes,
+        stats.car_prepared_access_paths,
     );
+    RowEvidence { stats, distinct_od }
 }

@@ -146,13 +146,14 @@ fn drain_and_spawn(
 /// mutating it, a chosen car is registered into `road_flow` immediately (and
 /// the planner told) so later same-time demands plan against it, and equal-
 /// ETA ties stay non-car — the exact sequential-congestion semantics of
-/// per-demand one-shot planning.
+/// per-demand one-shot planning. Returns the planner's final structural
+/// stats (evidence tooling; ordinary callers ignore the value).
 pub(crate) fn spawn_pending_trip_demands(
     state: &mut GameSnapshot,
     road_topology: &RoadTopology,
     road_flow: &mut traffic::RoadFlow,
     demands: Vec<population::TripDemand>,
-) {
+) -> crate::route_choice::RouteChoiceBatchStats {
     let mut planner = crate::route_choice::DemandBatchPlanner::new(state);
     for demand in demands {
         let choice = planner.choose(
@@ -193,6 +194,7 @@ pub(crate) fn spawn_pending_trip_demands(
         }
         state.active_trips.push(trip);
     }
+    planner.stats()
 }
 
 /// Widen the substep cap by every new population scheduler boundary the

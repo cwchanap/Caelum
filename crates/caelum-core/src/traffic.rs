@@ -142,6 +142,12 @@ impl PrivateCarPlanner {
             estimated_seconds,
         })
     }
+
+    /// Prepared (origin access, destination access) road-path count. Evidence
+    /// for the release scale harness, read by `DemandBatchPlanner::stats`.
+    pub(crate) fn prepared_access_path_count(&self) -> usize {
+        self.prepared_paths.len()
+    }
 }
 
 pub fn private_car_candidate(
