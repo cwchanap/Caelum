@@ -48,7 +48,7 @@ rustc 1.96.0 (ac68faa20 2026-05-25)
 | mixed-wave-1000      |  1000 |        2 |               40 |         133653 |               3045 |  425 |  426 | 125 |    24 |        0 |
 | mixed-wave-5000      |  5000 |        2 |               40 |         677708 |              33213 | 2125 | 2126 | 625 |   124 |        0 |
 | mixed-wave-20000     | 20000 |        2 |               40 |        2728805 |             343065 | 8500 | 8501 | 2500 |   499 |        0 |
-| transit-stress-20000 | 20000 |        8 |               40 |       74640685 |             336532 | 8500 | 8501 | 250 |   499 |        0 |
+| transit-stress-20000 | 20000 |        8 |               40 |       74640685 |             336532 | 8500 | 8501 | 2500 |   499 |        0 |
 
 `Due` is the drained demand count, asserted equal to `count`. Mode counts are
 per active trip: car = `private_car_trip` present; bus/metro = the route plan
