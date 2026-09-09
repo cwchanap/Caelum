@@ -7,6 +7,7 @@
 #![allow(dead_code)]
 
 pub mod persistence_fixtures;
+pub mod route_choice_fixture;
 
 use caelum_core::model::{Heading, Point};
 use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
