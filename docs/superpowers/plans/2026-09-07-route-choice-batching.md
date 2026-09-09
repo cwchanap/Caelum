@@ -2,233 +2,319 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Make large same-time commute/leisure demand waves reuse static transit and private-car route work while preserving Caelum's existing sequential congestion-sensitive mode choice.
+**Goal:** Make large same-time commute/leisure waves reuse static transit and private-car route work while preserving Caelum's sequential congestion-sensitive mode choice exactly.
 
-**Architecture:** Create one batch-local `DemandBatchPlanner` for each `spawn_pending_trip_demands` call. It composes a reusable `router::RoutePlanner` and `traffic::PrivateCarPlanner`; exact-OD candidate/path preparation is cached only for the lifetime of that batch, while Bus/private-car ETA scoring still reads the mutable `RoadFlow` for every citizen in canonical demand order. No persistent cache/revision system, broad trip/vehicle ECS migration, frontend change, or compatibility layer is planned.
+**Architecture:** Build one crate-private `DemandBatchPlanner` per `spawn_pending_trip_demands` call. Transit candidate shapes are cached by exact tile OD; private-car road paths are cached by resolved building road-access pair while exact-tile access walk and all flow-sensitive ETA are re-scored per citizen. One shared mixed-peak fixture feeds the benchmark, integration smoke, and coarse/split scale proof.
 
-**Tech Stack:** Rust 1.95+, `caelum-core`, existing standalone `bevy_ecs` 0.19.1 population runtime, deterministic `RoadTopology`, existing Rust benchmark example; no new dependency.
+**Tech Stack:** Rust 1.95+, `caelum-core`, existing `bevy_ecs` 0.19.1 population runtime, `RoadTopology`, existing Rust release benchmark; no new dependency.
 
 **Spec:** `docs/superpowers/specs/2026-09-07-route-choice-batching-design.md`
 
 ## Global Constraints
 
-- One Linear ticket = one GitHub PR; implementation stays on the HPA-348 PR branch.
-- Preserve the existing canonical `TripDemand` order and mutate `RoadFlow` immediately after every chosen private car.
-- Cache only static exact-OD work; never cache a congestion-sensitive Bus/private-car ETA or final mode choice across citizens.
-- Cache lifetime is one `spawn_pending_trip_demands` call. Do not add network revisions, persistent caches, eviction, TTLs, zones, or departure bands.
-- Keep current `ActiveTrip`/passenger/transit-vehicle lifecycle storage unless Task 0 demonstrates it is the dominant HPA-348 cost after route batching; do not migrate it speculatively.
-- No per-car Bevy entity. Private-car congestion remains aggregate `RoadFlow`.
-- No TypeScript/Svelte/WebGPU changes are expected.
-- No schema compatibility code. A schema break is only justified if a measured implementation requirement appears and the spec is amended first.
-- Preserve deterministic equal-time route tie-breaking and coarse-vs-split simulation equivalence.
-- Wall-clock benchmark values are evidence, never CI thresholds.
+- One Linear ticket = one GitHub PR; all implementation and evidence stay on PR #57.
+- Preserve canonical `TripDemand` order.
+- Preserve strict car choice: car wins only when `car.estimated_seconds < non_car.estimated_seconds`; ties remain non-car.
+- Mutate `RoadFlow` only after a private-car win and before scoring the next demand.
+- Never cache Bus/private-car congestion ETA or final mode choice across citizens.
+- Transit preparation cache key is exact `(origin, destination)` tile OD.
+- Private-car Dijkstra cache key is resolved origin/destination road access point + preferred heading, not exact citizen tile OD.
+- Cache lifetime is one `spawn_pending_trip_demands` call. No revision counter, persistent cache, eviction, TTL, zones, or time bands.
+- `RoutePlanner`, `PrivateCarPlanner`, `DemandBatchPlanner`, and their internal cache counters stay `pub(crate)`.
+- External integration tests continue through one-shot public routing APIs or the existing `GameEngine` scale-harness seam.
+- Keep `ActiveTrip`, passenger, and transit-vehicle lifecycle ownership unchanged unless measured evidence requires a separately reviewed design revision.
+- No per-car Bevy entity; congestion remains aggregate `RoadFlow`.
+- No TypeScript/Svelte/WebGPU/persistence-store changes.
+- No compatibility layer for development saves.
+- Wall-clock numbers are evidence, not CI thresholds.
+
+## Main Risk
+
+The correctness regression needs a real point where admitting one car flips a later identical OD from car to non-car. Existing access/boarding penalties may make the gap too wide in the first geometry.
+
+Use actual production scoring to search a deterministic initial `RoadFlow` level where this one-car switch exists. If the mixed benchmark geometry cannot provide a clean switch, create a smaller dedicated Rust test fixture. Change fixture geometry only; do not alter gameplay costs to force the test.
 
 ---
 
-### Task 0: Replace the walking-only wave measurement with a representative mixed-route baseline
+### Task 0: Create one shared mixed-peak fixture and record the pre-batching baseline
 
 **Files:**
+- Create: `crates/caelum-core/src/scale_fixture.rs`
+- Modify: `crates/caelum-core/src/lib.rs`
 - Modify: `crates/caelum-core/examples/presentation_scale.rs`
+- Create: `crates/caelum-core/tests/route_choice_batching.rs`
 - Create: `docs/performance/hpa-348-route-choice-batching.md`
 
 **Interfaces:**
-- Consumes: existing `GameEngine::run_due_and_drain_for_scale_harness`, `GameEngine::spawn_drained_demands_for_scale_harness`, `SandboxCreationRequest`, Bus/Metro authoring intents, `population::TripDemand` output.
-- Produces: deterministic 1k/5k/20k mixed peak fixtures and the pre-batching HPA-348 baseline that every later task measures against.
+- Consumes: `GameEngine`, `GameIntent`, sandbox creation, building catalog, existing Bus/Metro authoring paths, `run_due_and_drain_for_scale_harness`, `spawn_drained_demands_for_scale_harness`.
+- Produces: one documentation-hidden `mixed_peak_snapshot(count)` constructor used by every HPA-348 scale/composition test, plus measured 1k/5k/20k pre-batching rows.
 
-- [ ] **Step 1: Add a real mixed peak fixture without touching production routing code**
+- [ ] **Step 1: Add the shared evidence fixture**
 
-Keep the HPA-347 `wave_snapshot` rows for historical comparison. Add a separate `mixed_peak_snapshot(count)` fixture that uses actual placed residential/job destinations, connected roads, one useful Bus line, and one useful Metro line. Reuse the same authoring APIs exercised by `tests/router_planning.rs`; do not write route internals by hand when the engine can author them.
-
-The fixture must create a bounded number of exact OD pairs and then repeat them so batching potential is visible. Use 16 origins × 4 destinations (at most 64 exact OD pairs) and choose canonical sim IDs that are not day-off on the fixture day. Every synthetic citizen's `home` and `workplace` must be a tile owned by a real building retained in `snapshot.buildings`.
-
-Add a helper with this shape:
+Create `crates/caelum-core/src/scale_fixture.rs` with one external-test/example-visible helper:
 
 ```rust
-fn mixed_peak_snapshot(count: usize) -> GameSnapshot {
-    let mut engine = scale_route_engine();
+use crate::model::{CitizenRoutine, GameSnapshot, Point, ScheduledActivity, ScheduledActivityKind, Sim, TransitMode};
+use crate::{GameEngine, GameIntent, SandboxCreationRequest};
+
+#[doc(hidden)]
+pub fn mixed_peak_snapshot(count: usize) -> GameSnapshot {
+    assert!(count > 0);
+
+    let mut engine = GameEngine::from_sandbox_request(SandboxCreationRequest {
+        template_id: "blankGrid".to_string(),
+        economy_preset: "creative".to_string(),
+        starting_capital: Some(crate::DEFAULT_STARTING_CAPITAL.into()),
+        demand_multiplier: Some(1.0),
+    })
+    .expect("mixed peak sandbox must construct");
+
+    author_mixed_network(&mut engine);
     let mut snapshot = engine.snapshot();
     snapshot.day = 0;
     snapshot.time = 0.0;
     snapshot.paused = true;
     snapshot.speed = 1;
+    snapshot.active_trips.clear();
 
-    let origins = mixed_peak_home_tiles(&snapshot);
-    let destinations = mixed_peak_job_tiles(&snapshot);
-    assert!(!origins.is_empty());
-    assert!(!destinations.is_empty());
+    let origins = residential_tiles(&snapshot);
+    let destinations = job_tiles(&snapshot);
+    assert!(origins.len() >= 4);
+    assert!(destinations.len() >= 4);
     assert!(origins.len() * destinations.len() <= 64);
 
-    snapshot.sims = repeated_worker_wave(count, &origins, &destinations, 300.0);
+    snapshot.sims = repeated_due_workers(count, &origins, &destinations);
     snapshot
 }
 ```
 
-`scale_route_engine()` must author the road/track/service fixture through `GameIntent` and deploy at least one Bus and one Metro vehicle, following the proven fixture pattern in `tests/router_planning.rs` (`CreateRoute` + `AssignVehicle`). Keep the geometry compact; it only needs to make all four mode classes reachable somewhere in the matrix, not model a full city.
+Keep the helper's subordinate functions private to `scale_fixture.rs`.
 
-- [ ] **Step 2: Add mode-mix and OD-count reporting to the benchmark**
+`author_mixed_network` must author through `GameIntent`, not by mutating route internals:
 
-After `spawn_drained_demands_for_scale_harness`, inspect the engine snapshot and report the spawned wave's final mode classes using the existing trip state:
+- four `smallHouse` buildings on retained tiles adjacent to a connected road corridor;
+- two job buildings (`supermarket` and `factory`) with multiple occupied destination tiles;
+- one connected road corridor serving every residential/job building;
+- one Bus route with two present stops and one assigned Bus;
+- one Metro line with two present stations and one assigned train;
+- enough spatial separation that walk/car/transit can compete naturally.
+
+Use the same production authoring operations already exercised by `tests/router_planning.rs`: `LayRoad`, `LayTrack`, `PlaceBuilding`, `AddBusStop`, `AddMetroStation`, `CreateRoute`, `AssignVehicle`.
+
+`repeated_due_workers` must generate only canonical Worker IDs that are not day-0 days off and are not canonical Student ordinals. Every row has:
 
 ```rust
-#[derive(Default)]
-struct ModeCounts {
-    walk: usize,
-    car: usize,
-    bus: usize,
-    metro: usize,
-    unserved: usize,
+Sim {
+    id,
+    home,
+    position: home,
+    routine: CitizenRoutine::Worker {
+        shift_template: "standard".to_string(),
+        workplace: Some(destination),
+    },
+    next_activity: Some(ScheduledActivity {
+        kind: ScheduledActivityKind::DailyRoutine,
+        due_time: 300.0,
+    }),
 }
 ```
 
-Classify a private-car trip by `private_car_trip.is_some()`, otherwise inspect `route_plan.legs` for Bus/Metro, otherwise walking; planless/terminal-unserved rows count as unserved. Also print `distinct_od` from the drained `TripDemand` vector before it is consumed.
+Cycle through the bounded exact-tile OD matrix. Deliberately include multiple occupied tiles from the same residential/job building so exact tile OD cardinality is larger than private-car road-access-pair cardinality.
 
-Use row names:
+In `lib.rs` register only the evidence module as documentation-hidden:
 
-```text
-mixed-wave-1000
-mixed-wave-5000
-mixed-wave-20000
+```rust
+#[doc(hidden)]
+pub mod scale_fixture;
 ```
 
-and print at least:
+Do not export planner/cache types.
 
-```text
-count=<N> distinct_od=<N> route_spawn_us=<N> walk=<N> car=<N> bus=<N> metro=<N> unserved=<N>
+- [ ] **Step 2: Add a fast non-ignored mixed-fixture smoke test**
+
+Create `tests/route_choice_batching.rs` with a composition smoke that uses only public/hidden harness APIs:
+
+```rust
+use caelum_core::model::TransitMode;
+use caelum_core::scale_fixture::mixed_peak_snapshot;
+use caelum_core::{GameEngine, GameIntent};
+
+#[test]
+fn mixed_peak_fixture_produces_real_car_and_transit_choices() {
+    let mut engine = GameEngine::from_snapshot(mixed_peak_snapshot(64)).unwrap();
+    assert!(engine.dispatch(GameIntent::SetPaused { paused: false }).applied);
+
+    let demands = engine.run_due_and_drain_for_scale_harness(301.0);
+    assert_eq!(demands.len(), 64);
+    engine.spawn_drained_demands_for_scale_harness(demands);
+
+    let snapshot = engine.snapshot();
+    assert!(snapshot.active_trips.iter().any(|trip| trip.private_car_trip.is_some()));
+    assert!(snapshot.active_trips.iter().any(|trip| {
+        trip.route_plan.as_ref().is_some_and(|plan| {
+            plan.legs.iter().any(|leg| matches!(leg.mode, TransitMode::Bus | TransitMode::Metro))
+        })
+    }));
+}
 ```
 
-- [ ] **Step 3: Run the release baseline and prove the fixture is actually mixed**
+Both Bus and Metro services must be operational/reachable in the fixture. The smoke requires at least one transit winner rather than making CI depend on both modes winning a narrow cost race.
+
+- [ ] **Step 3: Observe fixture RED/GREEN before routing abstraction**
 
 Run:
 
 ```bash
+cargo test -p caelum-core --test route_choice_batching mixed_peak_fixture_produces_real_car_and_transit_choices -- --nocapture
+```
+
+Expected: first RED while the shared fixture is absent or walking-only; after fixture geometry is corrected, PASS with both a car trip and a Bus/Metro route-plan trip.
+
+Do not modify production route scoring to make this pass.
+
+- [ ] **Step 4: Extend the release example with mixed rows**
+
+In `examples/presentation_scale.rs`, keep HPA-347 rows unchanged and add:
+
+```rust
+fn measure_mixed_wave(label: &str, count: usize) {
+    let mut engine = GameEngine::from_snapshot(
+        caelum_core::scale_fixture::mixed_peak_snapshot(count),
+    )
+    .expect("mixed peak fixture loads");
+    assert!(engine.dispatch(caelum_core::GameIntent::SetPaused { paused: false }).applied);
+
+    let demands = engine.run_due_and_drain_for_scale_harness(301.0);
+    assert_eq!(demands.len(), count);
+
+    let started = std::time::Instant::now();
+    engine.spawn_drained_demands_for_scale_harness(demands);
+    let route_spawn_us = started.elapsed().as_micros();
+
+    let snapshot = engine.snapshot();
+    let distinct_od = snapshot
+        .active_trips
+        .iter()
+        .map(|trip| (trip.origin, trip.destination))
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let modes = mode_counts(&snapshot.active_trips);
+
+    println!(
+        "{label}\tcount={count}\tdistinct_od={distinct_od}\troute_spawn_us={route_spawn_us}\twalk={}\tcar={}\tbus={}\tmetro={}\tunserved={}",
+        modes.walk, modes.car, modes.bus, modes.metro, modes.unserved
+    );
+}
+```
+
+`mode_counts` classifies `private_car_trip` first; otherwise Bus/Metro from route-plan legs; walking-only from a non-empty walk route; planless/unserved rows as unserved.
+
+Run 1k/5k/20k:
+
+```rust
+for count in [1_000, 5_000, 20_000] {
+    measure_mixed_wave(&format!("mixed-wave-{count}"), count);
+}
+```
+
+- [ ] **Step 5: Record actual baseline evidence**
+
+Run:
+
+```bash
+uname -a
+rustc --version
 cargo run --release -p caelum-core --example presentation_scale
 ```
 
-Expected:
-
-- all three `mixed-wave-*` rows appear;
-- `distinct_od < count` for every row;
-- private-car candidates are reachable (`car > 0` in at least one row);
-- an operational transit mode is selected (`bus > 0 || metro > 0`);
-- no fixture home is rejected merely because it is not a building tile.
-
-If the first authored geometry naturally makes one of Bus/Metro never win, adjust fixture geometry/costs only; do not change production scoring to force a desired benchmark mix.
-
-- [ ] **Step 4: Record the baseline evidence**
-
-Create `docs/performance/hpa-348-route-choice-batching.md` with:
+Create `docs/performance/hpa-348-route-choice-batching.md` with the actual environment and rows:
 
 ```markdown
 # HPA-348 Route Choice Batching — Baseline and Final Evidence
 
-## Reference environment
-
-Reuse the HPA-347 reference-machine description and record the current `rustc --version`/OS for this run.
-
 ## Task 0 mixed-wave baseline
 
-| Row | Due demands | Distinct OD | Route spawn µs | Walk | Car | Bus | Metro | Unserved |
+| Row | Due demands | Distinct tile OD | Route spawn µs | Walk | Car | Bus | Metro | Unserved |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| mixed-wave-1000 | ... | ... | ... | ... | ... | ... | ... | ... |
-| mixed-wave-5000 | ... | ... | ... | ... | ... | ... | ... | ... |
-| mixed-wave-20000 | ... | ... | ... | ... | ... | ... | ... | ... |
+| mixed-wave-1000 | <actual> |
+| mixed-wave-5000 | <actual> |
+| mixed-wave-20000 | <actual> |
 
-Wall-clock measurements are reference evidence, not CI thresholds.
+Wall-clock values are reference evidence, not CI thresholds.
 ```
 
-Do not invent values; paste the actual run.
+Replace `<actual>` with copied command output before committing; do not estimate values.
 
-- [ ] **Step 5: Verify the baseline-only change and commit**
+- [ ] **Step 6: Verify and commit Task 0**
 
 Run:
 
 ```bash
 cargo fmt --all -- --check
+cargo test -p caelum-core --test route_choice_batching
 cargo test -p caelum-core --test router_planning
 cargo run --release -p caelum-core --example presentation_scale
 ```
 
-Expected: all pass and the new benchmark rows have repeated OD plus real car/transit outcomes.
+Expected: PASS; `distinct_od < count`; car count > 0; Bus+Metro count > 0.
 
 Commit:
 
 ```bash
-git add crates/caelum-core/examples/presentation_scale.rs docs/performance/hpa-348-route-choice-batching.md
-git commit -m "perf: add mixed route-choice wave baseline"
+git add crates/caelum-core/src/scale_fixture.rs crates/caelum-core/src/lib.rs crates/caelum-core/examples/presentation_scale.rs crates/caelum-core/tests/route_choice_batching.rs docs/performance/hpa-348-route-choice-batching.md
+git commit -m "perf: add shared mixed route-choice baseline"
 ```
 
 ---
 
-### Task 1: Make transit candidate preparation reusable within one demand batch
+### Task 1: Reuse transit candidate preparation without exposing a planner API
 
 **Files:**
 - Modify: `crates/caelum-core/src/router.rs`
-- Modify: `crates/caelum-core/tests/router_planning.rs`
 
 **Interfaces:**
-- Consumes: current `active_services`, `RideEdge`, `ride_seconds`, `best_candidate`, and deterministic `plan_identity_key` behavior.
-- Produces: `router::RoutePlanner::new(&GameSnapshot)` and mutable `RoutePlanner::find_route_plan(&RoadFlow, Point, Point)` with exact-OD preparation reuse; existing public `router::find_route_plan` remains a one-shot wrapper.
+- Consumes: current `find_route_plan`, `active_services`, `RideEdge`, `best_candidate`, `plan_identity_key`.
+- Produces: crate-private `RoutePlanner::new(&GameSnapshot)` + `find_route_plan(&RoadFlow, Point, Point)`; existing public one-shot `router::find_route_plan` remains unchanged in signature.
 
-- [ ] **Step 1: Write RED planner parity tests before refactoring**
+- [ ] **Step 1: Add RED unit tests inside `router.rs`**
 
-In `tests/router_planning.rs`, extend the existing natural Bus/Metro fixtures with tests that describe the new reusable interface:
-
-```rust
-#[test]
-fn reusable_route_planner_matches_one_shot_route_choice() {
-    let (state, _, home, workplace) = bus_commute_fixture(false);
-    let flow = RoadFlow::new();
-    let expected = router::find_route_plan(&state, &flow, &home, &workplace);
-
-    let mut planner = router::RoutePlanner::new(&state);
-    let actual = planner.find_route_plan(&flow, home, workplace);
-
-    assert_eq!(actual, expected);
-}
-```
-
-Add a second regression using the existing congestion fixture pattern:
+Under the existing `#[cfg(test)]` module add:
 
 ```rust
 #[test]
-fn reusable_route_planner_rescores_bus_eta_after_flow_changes() {
-    let engine = bus_route_state();
-    let state = engine.snapshot();
+fn route_planner_reuses_exact_od_and_rescores_bus_flow() {
+    let state = reusable_bus_fixture();
     let origin = Point::from((1, 4));
     let destination = Point::from((13, 4));
-    let mut planner = router::RoutePlanner::new(&state);
+    let mut planner = RoutePlanner::new(&state);
 
     let free = planner.find_route_plan(&RoadFlow::new(), origin, destination).unwrap();
-    let congested_flow = flow_over_service_path(&state, 6);
+    let congested_flow = flow_over_first_bus_path(&state, 6);
     let congested = planner.find_route_plan(&congested_flow, origin, destination).unwrap();
 
     assert!(congested.estimated_seconds > free.estimated_seconds);
-    assert_eq!(planner.prepared_od_count_for_test(), 1);
+    assert_eq!(planner.prepared.len(), 1);
 }
 ```
 
-The test-only count is structural proof that changing flow re-scores one prepared OD instead of preparing a second candidate set.
+Add a second unit test that compares `RoutePlanner` output with the public one-shot wrapper for Bus, Metro, and equal-time tie ordering.
 
-- [ ] **Step 2: Run the targeted tests and observe RED**
-
-Run:
+- [ ] **Step 2: Run RED**
 
 ```bash
-cargo test -p caelum-core --test router_planning reusable_route_planner -- --nocapture
+cargo test -p caelum-core router:: --lib -- --nocapture
 ```
 
-Expected: FAIL because `router::RoutePlanner` does not exist.
+Expected: FAIL because `RoutePlanner` does not exist.
 
-- [ ] **Step 3: Extract owned active-service preparation from `find_route_plan`**
+- [ ] **Step 3: Add crate-private prepared types**
 
-In `router.rs`, add:
+In `router.rs` change the collection import to include `BTreeMap` and add:
 
 ```rust
-use std::collections::{BTreeMap, HashMap};
-
 type OdKey = (Point, Point);
 
-pub struct RoutePlanner {
+pub(crate) struct RoutePlanner {
     map_width: u16,
     map_height: u16,
     services: Vec<TransitService>,
@@ -249,35 +335,39 @@ struct PreparedRide {
 }
 ```
 
-`static_seconds` contains only walking time; each `PreparedRide` is scored dynamically through the current service and `RoadFlow`. For walking-only candidates, `rides` is empty and `static_seconds` is the full walking estimate.
+`static_seconds` contains all walking + fixed boarding time for that candidate. Each `PreparedRide` records the exact service/edge whose ride time must be scored. Metro scoring may remain fixed through its path duration; Bus scoring reads current `RoadFlow`.
 
-`RoutePlanner::new` must call the current `active_services(state)` exactly once and copy only the map bounds needed for out-of-bounds checks.
+- [ ] **Step 4: Extract preparation and scoring**
 
-- [ ] **Step 4: Extract OD candidate enumeration without changing candidate semantics**
-
-Move the current walking/one-service/two-service enumeration into a private method:
+Add private methods:
 
 ```rust
 impl RoutePlanner {
     fn prepare(&self, origin: Point, destination: Point) -> Option<Vec<PreparedCandidate>>;
-
     fn score(&self, prepared: &[PreparedCandidate], flow: &RoadFlow) -> Option<RoutePlan>;
 }
 ```
 
-For each prepared transit candidate, keep the exact current `RouteLeg` values and remember the service index + `RideEdge` used to score each transit ride. `score` clones only the candidate's final `RoutePlan`, sets its current `estimated_seconds`, then applies the existing `best_candidate` ordering.
+`prepare` performs the current walking, one-service, and two-service enumeration exactly once per exact tile OD. Preserve route legs, line IDs, service direction, board/alight indexes, transfer walking, boarding constants, and candidate ordering.
 
-Do not cache `estimated_seconds` for Bus. Do not alter `boarding_seconds`, transfer enumeration, service-operational checks, or tie-breaking.
+`score` clones each prepared `RoutePlan`, recomputes the current `estimated_seconds`, then uses existing `best_candidate`. Never store a flow-sensitive Bus ETA in the cache.
 
-- [ ] **Step 5: Implement exact-OD caching and keep the one-shot API**
+- [ ] **Step 5: Add exact-OD lookup and keep one-shot wrapper**
 
-Add:
+Implement:
 
 ```rust
 impl RoutePlanner {
-    pub fn new(state: &GameSnapshot) -> Self { /* one active_services extraction */ }
+    pub(crate) fn new(state: &GameSnapshot) -> Self {
+        Self {
+            map_width: state.map.width,
+            map_height: state.map.height,
+            services: active_services(state),
+            prepared: BTreeMap::new(),
+        }
+    }
 
-    pub fn find_route_plan(
+    pub(crate) fn find_route_plan(
         &mut self,
         flow: &RoadFlow,
         origin: Point,
@@ -285,23 +375,18 @@ impl RoutePlanner {
     ) -> Option<RoutePlan> {
         let key = (origin, destination);
         if !self.prepared.contains_key(&key) {
-            let value = self.prepare(origin, destination);
-            self.prepared.insert(key, value);
+            let prepared = self.prepare(origin, destination);
+            self.prepared.insert(key, prepared);
         }
         self.prepared
             .get(&key)
-            .and_then(|prepared| prepared.as_deref())
-            .and_then(|prepared| self.score(prepared, flow))
-    }
-
-    #[cfg(test)]
-    pub(crate) fn prepared_od_count_for_test(&self) -> usize {
-        self.prepared.len()
+            .and_then(|value| value.as_deref())
+            .and_then(|value| self.score(value, flow))
     }
 }
 ```
 
-Keep:
+Keep the public one-shot signature:
 
 ```rust
 pub fn find_route_plan(
@@ -314,163 +399,165 @@ pub fn find_route_plan(
 }
 ```
 
-If the integration test cannot access a `pub(crate)` test method, put the cache-count assertion in a `#[cfg(test)]` unit test inside `router.rs` and keep the integration test on behavioral parity. Do not make a production/public metrics API solely for tests.
-
-- [ ] **Step 6: Run router regressions**
-
-Run:
+- [ ] **Step 6: Run router gates and commit**
 
 ```bash
-cargo test -p caelum-core --test router_planning
 cargo test -p caelum-core router:: --lib
+cargo test -p caelum-core --test router_planning
+cargo fmt --all -- --check
 ```
 
-Expected: PASS, including current walk/Bus/Metro/transfers/tie behavior and the new flow-rescore parity.
+Expected: PASS; external router tests still compile without seeing `RoutePlanner`.
 
-- [ ] **Step 7: Commit the transit-planner extraction**
+Commit:
 
 ```bash
-git add crates/caelum-core/src/router.rs crates/caelum-core/tests/router_planning.rs
+git add crates/caelum-core/src/router.rs
 git commit -m "refactor: reuse transit route preparation"
 ```
 
 ---
 
-### Task 2: Cache building access and private-car road paths without caching congestion ETA
+### Task 2: Cache private-car Dijkstra at the road-access grain
 
 **Files:**
 - Modify: `crates/caelum-core/src/traffic.rs`
-- Modify: `crates/caelum-core/tests/traffic.rs`
 
 **Interfaces:**
-- Consumes: `derive_stop_access_for_footprint`, `RoadTopology::find_path_between_access_tiles`, `congestion_multiplier`, `PrivateCarCandidate`.
-- Produces: `traffic::PrivateCarPlanner::new(&GameSnapshot)` and mutable `candidate(&GameMap, &RoadTopology, &RoadFlow, Point, Point)`; existing public `private_car_candidate` remains a one-shot wrapper.
+- Consumes: `derive_stop_access_for_footprint`, `StopRoadAccess`, `RoadTopology::find_path_between_access_tiles`, `congestion_multiplier`, `PrivateCarCandidate`.
+- Produces: crate-private `PrivateCarPlanner`; public `private_car_candidate` signature remains unchanged.
 
-- [ ] **Step 1: Write RED tests for exact-OD path reuse with dynamic ETA**
+- [ ] **Step 1: Add RED unit tests inside `traffic.rs`**
 
-In `tests/traffic.rs`, add a connected two-building fixture based on the existing private-car tests and assert behavioral parity:
+Add a fixture with two exact origin tiles belonging to the same building and two exact destination tiles belonging to the same destination building. Both tiles in each building resolve to the same `StopRoadAccess`.
+
+Add:
 
 ```rust
 #[test]
-fn reusable_private_car_planner_reuses_path_but_rescores_flow() {
-    let (state, topology, origin, destination) = connected_car_fixture();
-    let mut planner = traffic::PrivateCarPlanner::new(&state);
+fn private_car_planner_keys_dijkstra_by_access_pair_not_exact_tile_od() {
+    let (state, topology, origin_a, origin_b, destination_a, destination_b) = shared_access_fixture();
+    let mut planner = PrivateCarPlanner::new(&state);
 
-    let free = planner
-        .candidate(&state.map, &topology, &RoadFlow::new(), origin, destination)
-        .unwrap();
+    let first = planner.candidate(
+        &state.map,
+        &topology,
+        &RoadFlow::new(),
+        origin_a,
+        destination_a,
+    ).unwrap();
+    let second = planner.candidate(
+        &state.map,
+        &topology,
+        &RoadFlow::new(),
+        origin_b,
+        destination_b,
+    ).unwrap();
 
-    let mut flow = RoadFlow::new();
-    traffic::add_car_path_to_flow(&mut flow, &free.path);
-    traffic::add_car_path_to_flow(&mut flow, &free.path);
-    traffic::add_car_path_to_flow(&mut flow, &free.path);
-    traffic::add_car_path_to_flow(&mut flow, &free.path);
-
-    let congested = planner
-        .candidate(&state.map, &topology, &flow, origin, destination)
-        .unwrap();
-
-    assert_eq!(congested.path, free.path);
-    assert!(congested.estimated_seconds > free.estimated_seconds);
+    assert_eq!(first.path, second.path);
+    assert_eq!(planner.prepared_paths.len(), 1);
+    assert_ne!(first.estimated_seconds, second.estimated_seconds);
 }
 ```
 
-Add an internal unit assertion (if needed for visibility) that repeated exact OD leaves `prepared.len() == 1`, while a second destination increments it to 2.
+Choose tile coordinates with different Manhattan distance to the shared road access so the final assertion proves access walk remains exact-tile specific.
 
-- [ ] **Step 2: Run the new targeted test and observe RED**
+Add a flow-rescore test: add the first path to `RoadFlow` four times, call `candidate` again, assert same path, higher ETA, and still one prepared path.
+
+- [ ] **Step 2: Run RED**
 
 ```bash
-cargo test -p caelum-core --test traffic reusable_private_car_planner -- --nocapture
+cargo test -p caelum-core traffic:: --lib -- --nocapture
 ```
 
 Expected: FAIL because `PrivateCarPlanner` does not exist.
 
-- [ ] **Step 3: Extract the static private-car route representation**
+- [ ] **Step 3: Build one access index**
 
-In `traffic.rs`, add:
+In `traffic.rs` add:
 
 ```rust
-use crate::model::{GameMap, StopRoadAccess};
+use crate::model::{GameMap, Heading, StopRoadAccess};
 
-type OdKey = (Point, Point);
+type CarPathKey = (
+    Point,
+    Option<Heading>,
+    Point,
+    Option<Heading>,
+);
 
-#[derive(Clone, Debug, PartialEq)]
-struct PreparedPrivateCarRoute {
-    path: TransitPath,
-    access_seconds: f64,
-}
-
-pub struct PrivateCarPlanner {
+pub(crate) struct PrivateCarPlanner {
     access_by_tile: BTreeMap<Point, Option<StopRoadAccess>>,
-    prepared: BTreeMap<OdKey, Option<PreparedPrivateCarRoute>>,
+    prepared_paths: BTreeMap<CarPathKey, Option<TransitPath>>,
 }
 ```
 
-`PrivateCarPlanner::new(state)` must walk `state.buildings` once. For each building, call `derive_stop_access_for_footprint(&state.map, &building.occupied_tiles)` once, then map every occupied building tile to that result. This replaces the current per-demand `state.buildings.iter().find(...)` scans and access derivation.
-
-- [ ] **Step 4: Split path preparation from ETA scoring**
-
-Add private helpers:
+`PrivateCarPlanner::new(state)` iterates buildings once. For each building:
 
 ```rust
-fn prepare_private_car_route(
-    access_by_tile: &BTreeMap<Point, Option<StopRoadAccess>>,
-    map: &GameMap,
-    road_topology: &RoadTopology,
-    origin: Point,
-    destination: Point,
-) -> Option<PreparedPrivateCarRoute>;
-
-fn score_private_car_route(
-    prepared: &PreparedPrivateCarRoute,
-    flow: &RoadFlow,
-) -> PrivateCarCandidate;
+let access = derive_stop_access_for_footprint(&state.map, &building.occupied_tiles);
+for tile in &building.occupied_tiles {
+    access_by_tile.insert(*tile, access);
+}
 ```
 
-`prepare_private_car_route` performs the current access lookup + Dijkstra exactly once per OD and stores:
+This removes the current per-demand `buildings.iter().find` scans and repeated access derivation.
+
+- [ ] **Step 4: Split access-pair path lookup from exact-tile/current-flow scoring**
+
+Add:
+
+```rust
+fn path_key(origin: StopRoadAccess, destination: StopRoadAccess) -> CarPathKey {
+    (
+        origin.road_point,
+        origin.preferred_heading,
+        destination.road_point,
+        destination.preferred_heading,
+    )
+}
+```
+
+On a cache miss, call:
+
+```rust
+road_topology.find_path_between_access_tiles(
+    map,
+    origin_access.road_point,
+    destination_access.road_point,
+    origin_access.preferred_heading,
+    destination_access.preferred_heading,
+)
+```
+
+and store only the resulting static `TransitPath` (or `None`) by `CarPathKey`.
+
+On every `candidate` call compute:
 
 ```text
-access_seconds = origin building-to-road walk
+access_seconds = manhattan(origin, origin_access.road_point) * WALK_SECONDS_PER_TILE
                + CAR_ACCESS_SECONDS
-               + destination road-to-building walk
+               + manhattan(destination_access.road_point, destination) * WALK_SECONDS_PER_TILE
 ```
 
-`score_private_car_route` recomputes only the current-flow road step cost, including the existing candidate `+1` load on every step, then returns an owned `PrivateCarCandidate` with `path: prepared.path.clone()`.
+Then compute current road seconds exactly as today, including `flow + 1` on every step, and return an owned `PrivateCarCandidate` with a cloned path.
 
-- [ ] **Step 5: Implement the reusable planner and one-shot wrapper**
+- [ ] **Step 5: Keep the one-shot wrapper**
+
+Implement:
 
 ```rust
-impl PrivateCarPlanner {
-    pub fn new(state: &GameSnapshot) -> Self { /* one access-index build */ }
-
-    pub fn candidate(
-        &mut self,
-        map: &GameMap,
-        road_topology: &RoadTopology,
-        flow: &RoadFlow,
-        origin: Point,
-        destination: Point,
-    ) -> Option<PrivateCarCandidate> {
-        let key = (origin, destination);
-        if !self.prepared.contains_key(&key) {
-            let value = prepare_private_car_route(
-                &self.access_by_tile,
-                map,
-                road_topology,
-                origin,
-                destination,
-            );
-            self.prepared.insert(key, value);
-        }
-        self.prepared
-            .get(&key)
-            .and_then(|prepared| prepared.as_ref())
-            .map(|prepared| score_private_car_route(prepared, flow))
-    }
-}
+pub(crate) fn candidate(
+    &mut self,
+    map: &GameMap,
+    road_topology: &RoadTopology,
+    flow: &RoadFlow,
+    origin: Point,
+    destination: Point,
+) -> Option<PrivateCarCandidate>
 ```
 
-Rewrite the current public function as:
+and keep:
 
 ```rust
 pub fn private_car_candidate(
@@ -490,95 +577,113 @@ pub fn private_car_candidate(
 }
 ```
 
-Do not change `RoadFlow`, `derive_road_flow`, congestion multipliers, pathfinding, or per-step candidate-load semantics.
+Do not change `RoadFlow`, congestion constants, Dijkstra, or `+1` candidate load.
 
-- [ ] **Step 6: Run traffic and routing regressions**
+- [ ] **Step 6: Run traffic/routing gates and commit**
 
 ```bash
+cargo test -p caelum-core traffic:: --lib
 cargo test -p caelum-core --test traffic
 cargo test -p caelum-core --test router_planning
-cargo test -p caelum-core traffic:: --lib
+cargo fmt --all -- --check
 ```
 
 Expected: PASS.
 
-- [ ] **Step 7: Commit the private-car planner extraction**
+Commit:
 
 ```bash
-git add crates/caelum-core/src/traffic.rs crates/caelum-core/tests/traffic.rs
-git commit -m "refactor: reuse private car route preparation"
+git add crates/caelum-core/src/traffic.rs
+git commit -m "refactor: reuse private car access paths"
 ```
 
 ---
 
-### Task 3: Add one batch-local mode-choice coordinator with a congestion-switch lock
+### Task 3: Add the crate-private mode-choice coordinator without touching `trips.rs`
 
 **Files:**
 - Create: `crates/caelum-core/src/route_choice.rs`
 - Modify: `crates/caelum-core/src/lib.rs`
-- Modify: `crates/caelum-core/src/trips.rs`
 
 **Interfaces:**
-- Consumes: `router::RoutePlanner`, `traffic::PrivateCarPlanner`, current strict private-car comparison from `trips::private_car_trip_if_faster`.
-- Produces: `route_choice::DemandBatchPlanner` and `RouteChoice`; no public/wire API.
+- Consumes: `RoutePlanner`, `PrivateCarPlanner`, current strict `<` car selection.
+- Produces: crate-private `DemandBatchPlanner::choose` returning owned `PrivateCarTrip`/`RoutePlan`; does not mutate `RoadFlow`.
 
-- [ ] **Step 1: Write RED unit tests for the coordinator before wiring it into trips**
+- [ ] **Step 1: Add RED coordinator unit tests**
 
-Create `route_choice.rs` with a `#[cfg(test)] mod tests` that builds the proven connected Bus/car fixture through `GameEngine`/`GameIntent` and describes two requirements:
+In `route_choice.rs` add tests for:
 
-1. one planner returns the same choice as the current one-shot comparison for free flow;
-2. repeated identical OD is re-scored after `RoadFlow` changes.
+- free-flow choice equals a reference one-shot calculation;
+- equal ETA does not choose car;
+- repeated identical OD is re-scored after the test mutates flow;
+- `choose` itself leaves the supplied `RoadFlow` unchanged.
 
-The important test must search or construct a deterministic flow level at which mode choice flips, then prove it is not frozen:
+The switch test must use actual scoring. Find a deterministic starting flow:
 
 ```rust
-#[test]
-fn identical_od_is_rescored_after_prior_car_changes_flow() {
-    let (state, topology, origin, destination) = congestion_switch_fixture();
-    let mut planner = DemandBatchPlanner::new(&state);
-    let mut flow = traffic::derive_road_flow(&state);
-
-    let first = planner.choose(
-        &state.map,
-        &topology,
-        &flow,
-        origin,
-        destination,
-        state.time,
-    );
-    if let RouteChoice::PrivateCar(ref car) = first {
-        traffic::add_car_path_to_flow(&mut flow, &car.path);
+fn flow_before_one_car_switch(
+    state: &GameSnapshot,
+    topology: &RoadTopology,
+    origin: Point,
+    destination: Point,
+) -> RoadFlow {
+    let mut flow = RoadFlow::new();
+    for _ in 0..64 {
+        let non_car = crate::router::find_route_plan(state, &flow, &origin, &destination);
+        let car = crate::traffic::private_car_candidate(
+            state,
+            topology,
+            &flow,
+            origin,
+            destination,
+        );
+        let car_wins_now = car.as_ref().is_some_and(|candidate| {
+            non_car.as_ref().is_none_or(|plan| candidate.estimated_seconds < plan.estimated_seconds)
+        });
+        if !car_wins_now {
+            break;
+        }
+        let candidate = car.expect("winning car candidate exists");
+        let mut after = flow.clone();
+        crate::traffic::add_car_path_to_flow(&mut after, &candidate.path);
+        let next_non_car = crate::router::find_route_plan(state, &after, &origin, &destination);
+        let next_car = crate::traffic::private_car_candidate(
+            state,
+            topology,
+            &after,
+            origin,
+            destination,
+        );
+        let car_wins_after = next_car.as_ref().is_some_and(|next| {
+            next_non_car.as_ref().is_none_or(|plan| next.estimated_seconds < plan.estimated_seconds)
+        });
+        if !car_wins_after {
+            return flow;
+        }
+        flow = after;
     }
-
-    let second = planner.choose(
-        &state.map,
-        &topology,
-        &flow,
-        origin,
-        destination,
-        state.time,
-    );
-
-    assert_ne!(choice_mode(&first), choice_mode(&second));
+    panic!("fixture must provide a one-car congestion switch");
 }
 ```
 
-Do not hard-code a fabricated ETA. Build the switch fixture from actual road step costs and existing Bus/walk costs, as current router tests do.
+If this fails for the mixed fixture, use a smaller dedicated road/Bus fixture; do not modify gameplay constants.
 
-- [ ] **Step 2: Run the module test and observe RED**
+- [ ] **Step 2: Run RED**
 
 ```bash
 cargo test -p caelum-core route_choice:: --lib -- --nocapture
 ```
 
-Expected: FAIL because the coordinator types are not implemented.
+Expected: FAIL because the module/types do not exist.
 
-- [ ] **Step 3: Move the strict mode-choice decision behind the new coordinator**
+- [ ] **Step 3: Add the coordinator and single strict comparison helper**
 
-Add:
+Create:
 
 ```rust
 use crate::model::{GameMap, Point, PrivateCarTrip, RoutePlan};
+use crate::road_topology::RoadTopology;
+use crate::traffic::RoadFlow;
 
 pub(crate) enum RouteChoice {
     PrivateCar(PrivateCarTrip),
@@ -592,38 +697,27 @@ pub(crate) struct DemandBatchPlanner {
 }
 ```
 
-`DemandBatchPlanner::new(state)` constructs each sub-planner once.
-
-Move the current `private_car_trip_if_faster` comparison from `trips.rs` into a private helper here **without changing its strict comparison**. `choose` must:
+Add one private helper with today's strict behavior:
 
 ```rust
-pub(crate) fn choose(
-    &mut self,
-    map: &GameMap,
-    road_topology: &RoadTopology,
-    road_flow: &RoadFlow,
-    origin: Point,
-    destination: Point,
+fn private_car_trip_if_faster(
+    non_car_plan: Option<&RoutePlan>,
+    car: Option<crate::traffic::PrivateCarCandidate>,
     current_time: f64,
-) -> RouteChoice
+) -> Option<PrivateCarTrip> {
+    let car = car.filter(|candidate| {
+        non_car_plan.is_none_or(|plan| candidate.estimated_seconds < plan.estimated_seconds)
+    })?;
+    Some(PrivateCarTrip {
+        path: car.path,
+        arrival_time: current_time + car.estimated_seconds,
+    })
+}
 ```
 
-and execute:
+`choose` calls both planners against the supplied current flow, returns `PrivateCar` if the helper wins, otherwise `NonCar` when a route exists, otherwise `Unserved`. It does not modify `road_flow`.
 
-```text
-non_car = RoutePlanner::find_route_plan(current flow)
-car = PrivateCarPlanner::candidate(current flow)
-if existing strict comparison picks car:
-    return PrivateCar(PrivateCarTrip { path, arrival_time })
-else if non_car exists:
-    return NonCar(plan)
-else:
-    return Unserved
-```
-
-The coordinator does not mutate the flow.
-
-- [ ] **Step 4: Register only a private module**
+- [ ] **Step 4: Register only a private production module**
 
 In `lib.rs` add:
 
@@ -631,85 +725,89 @@ In `lib.rs` add:
 pub(crate) mod route_choice;
 ```
 
-Do not export `DemandBatchPlanner` from the crate root and do not add host/TS types.
+Do not re-export coordinator/planner types.
 
-- [ ] **Step 5: Run the coordinator and existing mode-choice tests**
+- [ ] **Step 5: Run coordinator + existing mode-choice gates and commit**
 
 ```bash
 cargo test -p caelum-core route_choice:: --lib
 cargo test -p caelum-core --test router_planning
+cargo test -p caelum-core --test traffic
 cargo test -p caelum-core --test trip_lifecycle
+cargo fmt --all -- --check
 ```
 
-Expected: PASS. The congestion-switch test must demonstrate two identical OD calls can produce different choices after flow mutation.
+Expected: PASS. `trips.rs` is unchanged in this task.
 
-- [ ] **Step 6: Commit the coordinator**
+Commit:
 
 ```bash
-git add crates/caelum-core/src/route_choice.rs crates/caelum-core/src/lib.rs crates/caelum-core/src/trips.rs
+git add crates/caelum-core/src/route_choice.rs crates/caelum-core/src/lib.rs
 git commit -m "feat: add batch route choice coordinator"
 ```
 
 ---
 
-### Task 4: Wire one planner per pending-demand batch and prove sequential equivalence
+### Task 4: Cut over the spawn loop once and lock sequential equivalence at the real seam
 
 **Files:**
 - Modify: `crates/caelum-core/src/trips.rs`
-- Create: `crates/caelum-core/tests/route_choice_batching.rs`
+- Modify: `crates/caelum-core/tests/route_choice_batching.rs`
 - Modify: `crates/caelum-core/tests/population_scale.rs`
 
 **Interfaces:**
-- Consumes: `DemandBatchPlanner::new`, `DemandBatchPlanner::choose`, existing `spawn_pending_trip_demands`, mutable `RoadFlow`, `population::TripDemand` canonical order.
-- Produces: production route spawning that performs one batch setup and exact-OD cache reuse without changing `ActiveTrip` results.
+- Consumes: `DemandBatchPlanner`, shared `mixed_peak_snapshot`, existing `spawn_pending_trip_demands`, mutable `RoadFlow`.
+- Produces: one planner per batch; ordered car admission; crate-private reference-vs-batched spawn regression; external engine-harness smoke; coarse/split mixed proof.
 
-- [ ] **Step 1: Add an end-to-end RED regression through the existing scale-harness seam**
+- [ ] **Step 1: Add the crate-private RED spawn-seam reference test before production cutover**
 
-In `tests/route_choice_batching.rs`, build a deterministic mixed wave with repeated exact OD demand and use the existing hidden scale-harness methods to drain and spawn it. Assert:
+Inside `trips.rs`'s `#[cfg(test)]` module, construct a repeated identical-OD `Vec<population::TripDemand>` and a starting flow returned by the Task-3 congestion-switch fixture helper pattern.
+
+Add a test-only descriptor:
 
 ```rust
-#[test]
-fn same_time_repeated_od_wave_preserves_canonical_trip_order_and_mode_mix() {
-    let mut engine = mixed_wave_engine(200);
-    let demands = engine.run_due_and_drain_for_scale_harness(301.0);
-    let expected_sim_order = demands
-        .iter()
-        .map(|demand| demand.citizen_id.clone())
-        .collect::<Vec<_>>();
-
-    engine.spawn_drained_demands_for_scale_harness(demands);
-    let snapshot = engine.snapshot();
-    let actual_sim_order = snapshot
-        .active_trips
-        .iter()
-        .map(|trip| trip.sim_id.clone())
-        .collect::<Vec<_>>();
-
-    assert_eq!(actual_sim_order, expected_sim_order);
-    assert!(snapshot.active_trips.iter().any(|trip| trip.private_car_trip.is_some()));
-    assert!(snapshot.active_trips.iter().any(|trip| {
-        trip.route_plan.as_ref().is_some_and(|plan| {
-            plan.legs.iter().any(|leg| matches!(leg.mode, TransitMode::Bus | TransitMode::Metro))
-        })
-    }));
+#[derive(Debug, PartialEq)]
+enum ChoiceDescriptor {
+    Car { path: crate::model::TransitPath, arrival_time: f64 },
+    NonCar(crate::model::RoutePlan),
+    Planless,
 }
 ```
 
-Before production wiring, add a test-only reference helper that reproduces the **current** per-demand one-shot algorithm and compare the final ordered trip modes + final road flow with the future batched algorithm. Keep this helper in the test file; do not keep a second production route-choice implementation.
+Add a test-only reference helper that loops the demand vector in order and uses **only the current one-shot APIs**:
 
-- [ ] **Step 2: Run the new integration test against the current implementation**
-
-Run:
-
-```bash
-cargo test -p caelum-core --test route_choice_batching -- --nocapture
+```text
+non_car = router::find_route_plan(current flow)
+car = traffic::private_car_candidate(current flow)
+car wins only on strict <
+if car wins: record car descriptor and add its path to reference flow
+else if non-car exists and has non-empty legs: record route descriptor
+else: record Planless
 ```
 
-Expected before wiring: behavioral assertions may already pass, but the structural batch-cache assertion added in Step 4 must remain RED until production uses one planner. This test is both a behavior oracle and the future optimization lock.
+Run the existing production `spawn_pending_trip_demands` on cloned state/flow/demands and derive actual descriptors from appended `ActiveTrip` rows.
 
-- [ ] **Step 3: Replace per-demand one-shot planning in `spawn_pending_trip_demands`**
+The final assertions must compare:
 
-Change the production loop to:
+```rust
+assert_eq!(actual_sim_order, expected_sim_order);
+assert_eq!(actual_descriptors, expected_descriptors);
+assert_eq!(actual_flow, expected_flow);
+```
+
+The chosen starting flow must make the descriptor sequence include at least one `Car` followed later by `NonCar` for the same exact OD. This is the load-bearing anti-freeze regression.
+
+- [ ] **Step 2: Run the spawn test on the current one-shot implementation**
+
+```bash
+cargo test -p caelum-core trips::tests::same_time_batch_matches_sequential_one_shot_reference --lib -- --nocapture
+```
+
+Expected: PASS on current behavior. This records the reference before replacing the production loop.
+
+- [ ] **Step 3: Replace per-demand route calls with one batch planner**
+
+In `spawn_pending_trip_demands` construct one planner before the loop:
 
 ```rust
 pub(crate) fn spawn_pending_trip_demands(
@@ -717,7 +815,7 @@ pub(crate) fn spawn_pending_trip_demands(
     road_topology: &RoadTopology,
     road_flow: &mut traffic::RoadFlow,
     demands: Vec<population::TripDemand>,
-) {
+) -> crate::route_choice::RouteChoiceBatchStats {
     let mut planner = crate::route_choice::DemandBatchPlanner::new(state);
 
     for demand in demands {
@@ -729,82 +827,111 @@ pub(crate) fn spawn_pending_trip_demands(
             demand.destination,
             state.time,
         );
-        let trip = build_commute_trip_from_choice(state, &demand, choice, road_flow);
+        let trip = build_commute_trip_from_choice(state, road_flow, &demand, choice);
         state.active_trips.push(trip);
     }
+
+    planner.stats()
 }
 ```
 
-Replace `build_commute_trip` with a smaller `build_commute_trip_from_choice` that only creates the `ActiveTrip` and installs the already-chosen car/non-car state. The private-car branch must still call:
+Add `RouteChoiceBatchStats` as a crate-private struct in `route_choice.rs` for now:
+
+```rust
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct RouteChoiceBatchStats {
+    pub(crate) transit_prepared_od: usize,
+    pub(crate) car_prepared_access_paths: usize,
+}
+```
+
+`DemandBatchPlanner::stats` reads the two internal cache lengths. Do not add separate transit/car stats types.
+
+- [ ] **Step 4: Preserve the current ActiveTrip state transitions exactly**
+
+Replace the old `build_commute_trip` with `build_commute_trip_from_choice`.
+
+For `RouteChoice::PrivateCar(car)`:
 
 ```rust
 traffic::add_car_path_to_flow(road_flow, &car.path);
+trip.status = TripStatus::Driving;
+trip.private_car_trip = Some(car);
 ```
 
-**before the next demand is scored**.
+This flow mutation happens inside the current loop before the next `choose` call.
 
-Delete the old per-demand calls to `router::find_route_plan` and `traffic::private_car_candidate` from production trip spawning. Keep those one-shot APIs for focused tests and non-batch callers.
-
-- [ ] **Step 4: Add a test-only structural cache snapshot at the batch seam**
-
-Do not add production telemetry. Under `#[cfg(test)]`, expose a small `DemandBatchPlannerStats` snapshot from the planner containing:
+For `RouteChoice::NonCar(plan)`:
 
 ```rust
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct DemandBatchPlannerStats {
-    pub(crate) transit_prepared_od: usize,
-    pub(crate) car_prepared_od: usize,
+if !plan.legs.is_empty() {
+    trip.status = status_after_leg(&plan, 0);
+    trip.route_plan = Some(plan);
 }
 ```
 
-Use it in a unit-level batch test to prove a 200-demand fixture with `K` exact OD pairs ends with both prepared-OD counts `<= K`, never 200. Do not assert timing in CI.
+For `RouteChoice::Unserved`, leave the freshly built trip `Idle`/planless. Do not mark it `Unserved` at spawn time.
 
-If integration visibility makes this awkward, keep the assertion inside `route_choice.rs` unit tests and let `route_choice_batching.rs` remain the public engine behavior proof.
+Delete the old in-loop `router::find_route_plan`, `traffic::private_car_candidate`, and old `trips.rs::private_car_trip_if_faster`. Tick-time replans elsewhere in `trips.rs` remain one-shot.
 
-- [ ] **Step 5: Run trip and routing regressions**
+- [ ] **Step 5: Re-run the spawn-seam equality test after cutover**
 
 ```bash
-cargo test -p caelum-core --test route_choice_batching
-cargo test -p caelum-core --test trip_lifecycle
-cargo test -p caelum-core --test router_planning
-cargo test -p caelum-core --test traffic
+cargo test -p caelum-core trips::tests::same_time_batch_matches_sequential_one_shot_reference --lib -- --nocapture
 ```
 
-Expected: PASS and reference one-shot vs batch output equality.
+Expected: PASS with exactly the same descriptors and final `RoadFlow` as Step 2.
 
-- [ ] **Step 6: Add coarse-vs-split mixed-wave proof**
+- [ ] **Step 6: Strengthen the external engine integration smoke without exposing internals**
 
-In `tests/population_scale.rs`, add an ignored release-scale test next to the HPA-347 granularity proof. Build two engines from the same mixed peak fixture; advance one in one coarse interval and the other through split intervals that cross the same demand wave and trip boundaries; compare durable snapshots:
+Extend `tests/route_choice_batching.rs` to build `mixed_peak_snapshot(200)`, drain/spawn through `GameEngine`, and assert:
+
+- exactly 200 trips were spawned/resolved from the drained wave at the spawn seam;
+- active-trip order follows the shared fixture's canonical sim ordering as observed in the resulting snapshot;
+- at least one private-car trip exists;
+- at least one Bus/Metro route-plan trip exists.
+
+Do not instantiate `RoutePlanner`, `PrivateCarPlanner`, `DemandBatchPlanner`, or inspect private `TripDemand` fields from this integration test.
+
+- [ ] **Step 7: Add coarse-vs-split mixed-wave proof using the same shared fixture**
+
+In `tests/population_scale.rs` add:
 
 ```rust
 #[test]
 #[ignore = "release scale evidence"]
 fn mixed_route_choice_wave_is_coarse_split_deterministic() {
-    let fixture = mixed_scale_fixture(20_000);
+    let fixture = caelum_core::scale_fixture::mixed_peak_snapshot(20_000);
     let mut coarse = GameEngine::from_snapshot(fixture.clone()).unwrap();
     let mut split = GameEngine::from_snapshot(fixture).unwrap();
-    resume(&mut coarse);
-    resume(&mut split);
+    assert!(coarse.dispatch(GameIntent::SetPaused { paused: false }).applied);
+    assert!(split.dispatch(GameIntent::SetPaused { paused: false }).applied);
 
-    coarse.tick(PEAK_WINDOW_SECONDS);
-    for _ in 0..SPLIT_STEPS {
-        split.tick(PEAK_WINDOW_SECONDS / SPLIT_STEPS as f64);
+    let window = 900.0;
+    coarse.tick(window);
+    for _ in 0..30 {
+        split.tick(window / 30.0);
     }
 
     assert_eq!(coarse.snapshot(), split.snapshot());
 }
 ```
 
-Use constants that cross the due wave and enough travel progression to exercise mode choice; do not use wall-clock thresholds in this assertion.
+The 900-second window crosses the 300-second demand wave and subsequent trip progression. If fixture travel boundaries extend beyond it, increase this fixture-local window in both branches; do not weaken equality.
 
-- [ ] **Step 7: Run the release granularity proof and commit**
+- [ ] **Step 8: Run Task-4 gates and commit**
 
 ```bash
-cargo test --release -p caelum-core --test population_scale mixed_route_choice_wave_is_coarse_split_deterministic -- --ignored --nocapture
+cargo test -p caelum-core --lib
 cargo test -p caelum-core --test route_choice_batching
+cargo test -p caelum-core --test trip_lifecycle
+cargo test -p caelum-core --test router_planning
+cargo test -p caelum-core --test traffic
+cargo test --release -p caelum-core --test population_scale mixed_route_choice_wave_is_coarse_split_deterministic -- --ignored --nocapture
+cargo fmt --all -- --check
 ```
 
-Expected: PASS.
+Expected: all PASS.
 
 Commit:
 
@@ -815,44 +942,84 @@ git commit -m "perf: batch repeated route choice work"
 
 ---
 
-### Task 5: Record final 1k/5k/20k route-choice evidence and lock the remaining bottleneck
+### Task 5: Expose one hidden stats snapshot and record final scale evidence
 
 **Files:**
+- Modify: `crates/caelum-core/src/route_choice.rs`
+- Modify: `crates/caelum-core/src/engine.rs`
+- Modify: `crates/caelum-core/src/lib.rs`
 - Modify: `crates/caelum-core/examples/presentation_scale.rs`
 - Modify: `docs/performance/hpa-348-route-choice-batching.md`
 
 **Interfaces:**
-- Consumes: Task 0 benchmark fixture and Task 4 production batch planner.
-- Produces: final evidence rows with static-cache reuse counts and a clear next-bottleneck statement; no new optimization subsystem.
+- Consumes: Task-4 internal `RouteChoiceBatchStats`, existing scale-harness spawn method, shared mixed fixture.
+- Produces: one documentation-hidden stats value for the example and final 1k/5k/20k evidence; no host/wire telemetry.
 
-- [ ] **Step 1: Expose benchmark-only cache counts without adding production telemetry**
+- [ ] **Step 1: Make only the stats snapshot documentation-hidden public**
 
-If the production `spawn_drained_demands_for_scale_harness` currently discards planner stats, add a `#[doc(hidden)]` scale-harness-only result type in `engine.rs`/`trips.rs` only if needed by the example. Prefer returning stats from an existing hidden harness method rather than changing normal `tick`/presentation contracts.
-
-The benchmark needs:
+Change the Task-4 internal stats type to:
 
 ```rust
+#[doc(hidden)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct RouteChoiceBatchStats {
     pub transit_prepared_od: usize,
-    pub car_prepared_od: usize,
+    pub car_prepared_access_paths: usize,
 }
 ```
 
-No host serialization, no snapshot field, no UI field.
+Keep `DemandBatchPlanner` and both sub-planners crate-private.
 
-- [ ] **Step 2: Extend the mixed-wave output with cache reuse counts**
+Re-export only this evidence type if needed by the public `GameEngine` harness method:
 
-Print:
-
-```text
-mixed-wave-20000 count=20000 distinct_od=64 route_spawn_us=... transit_prepared_od=64 car_prepared_od=64 ...
+```rust
+#[doc(hidden)]
+pub use route_choice::RouteChoiceBatchStats;
 ```
 
-The exact counts may be lower than `distinct_od` when an OD is out of map/access, but must never exceed the number of distinct exact OD pairs processed by the batch.
+- [ ] **Step 2: Return stats from the existing hidden scale-harness spawn seam**
 
-- [ ] **Step 3: Run final release evidence on the same reference machine**
+Change:
 
-Run:
+```rust
+pub fn spawn_drained_demands_for_scale_harness(
+    &mut self,
+    demands: Vec<TripDemand>,
+) -> RouteChoiceBatchStats {
+    let mut road_flow = traffic::derive_road_flow(&self.snapshot);
+    trips::spawn_pending_trip_demands(
+        &mut self.snapshot,
+        &self.road_topology,
+        &mut road_flow,
+        demands,
+    )
+}
+```
+
+Normal callers may ignore the returned value. Do not change `tick`, `presentation`, snapshot schema, WASM/Tauri commands, or TypeScript.
+
+- [ ] **Step 3: Add cache-grain output to mixed rows**
+
+In `measure_mixed_wave`, store the returned stats and print:
+
+```text
+transit_prepared_od=<N>
+car_prepared_access_paths=<N>
+```
+
+Also derive `distinct_od` from post-spawn `(trip.origin, trip.destination)` rows.
+
+The shared fixture uses multiple exact tiles from the same buildings, so final evidence must show:
+
+```text
+car_prepared_access_paths < distinct_od
+```
+
+for at least one mixed row. It must never exceed the number of distinct resolved road-access pairs used by the fixture.
+
+- [ ] **Step 4: Run final release evidence**
+
+Run on the same reference machine:
 
 ```bash
 uname -a
@@ -861,50 +1028,50 @@ cargo run --release -p caelum-core --example presentation_scale
 cargo test --release -p caelum-core --test population_scale -- --ignored --nocapture
 ```
 
-Record actual output. Do not smooth, extrapolate, or convert wall-clock values into CI gates.
+Record exact output.
 
-- [ ] **Step 4: Complete the performance document**
+- [ ] **Step 5: Complete the evidence document**
 
-Append:
+Append actual final rows:
 
 ```markdown
 ## Final batched route-choice evidence
 
-| Row | Due demands | Distinct OD | Route spawn µs | Transit prepared OD | Car prepared OD | Walk | Car | Bus | Metro | Unserved |
+| Row | Due | Distinct tile OD | Route spawn µs | Transit prepared OD | Car prepared access paths | Walk | Car | Bus | Metro | Unserved |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| mixed-wave-1000 | ... |
-| mixed-wave-5000 | ... |
-| mixed-wave-20000 | ... |
+| mixed-wave-1000 | <actual> |
+| mixed-wave-5000 | <actual> |
+| mixed-wave-20000 | <actual> |
 
 ### Result
 
-- Repeated static route work is bounded by exact OD cardinality, not citizen count.
-- Congestion-sensitive scoring remains per demand and sequential.
-- <name the measured dominant remaining cost from the final run>.
+- Transit static work is bounded by exact tile OD cardinality.
+- Private-car Dijkstra work is bounded by road-access-pair cardinality, not citizen tile OD cardinality.
+- Flow-sensitive scoring still runs once per demand in canonical order.
+- <measured dominant remaining cost>.
 ```
 
-Replace the final sentence with the measured result. If scheduler emission remains larger, say so and stop. If active-trip progression is now larger, record that as follow-up evidence; do not add a second subsystem to this PR without first revising the design.
+Replace all bracketed values with actual output. If scheduler emission remains largest, say so and stop. If another subsystem becomes dominant, record it as follow-up evidence; do not widen this PR without revising the design first.
 
-- [ ] **Step 5: Commit evidence**
+- [ ] **Step 6: Commit final evidence**
 
 ```bash
-git add crates/caelum-core/examples/presentation_scale.rs docs/performance/hpa-348-route-choice-batching.md
-git commit -m "docs: record HPA-348 scale evidence"
+git add crates/caelum-core/src/route_choice.rs crates/caelum-core/src/engine.rs crates/caelum-core/src/lib.rs crates/caelum-core/examples/presentation_scale.rs docs/performance/hpa-348-route-choice-batching.md
+git commit -m "docs: record HPA-348 route choice evidence"
 ```
 
 ---
 
-### Task 6: Run the whole-product gate and close the scope cleanly
+### Task 6: Run the whole-product gate and close scope
 
 **Files:**
-- Modify only if verification finds a task-scoped defect in files already owned by this plan.
-- Verify: all files changed by HPA-348.
+- Modify only task-owned files if verification reveals a concrete HPA-348 defect.
 
 **Interfaces:**
 - Consumes: completed HPA-348 branch.
-- Produces: review-ready single PR with no frontend/wire/schema drift and no leftover duplicate route-choice path in production.
+- Produces: one review-ready PR with no public planner API, no duplicate production mode-choice path, and final evidence in the PR body.
 
-- [ ] **Step 1: Run Rust formatting, lint, workspace tests, and build**
+- [ ] **Step 1: Run Rust gates**
 
 ```bash
 cargo fmt --all -- --check
@@ -915,7 +1082,7 @@ cargo build --workspace --locked
 
 Expected: PASS.
 
-- [ ] **Step 2: Run the normal frontend/browser gates even though no frontend behavior changes**
+- [ ] **Step 2: Run frontend/browser gates**
 
 ```bash
 bun install --frozen-lockfile
@@ -928,37 +1095,48 @@ bun run test:e2e
 bun run build
 ```
 
-Expected: PASS. Do not add a new Playwright scenario solely for a Rust-internal optimization unless a real browser behavior changed.
+Expected: PASS. No new Playwright test is added solely for a Rust-internal performance refactor.
 
-- [ ] **Step 3: Run the scale gates one final time**
+- [ ] **Step 3: Re-run scale gates**
 
 ```bash
 cargo run --release -p caelum-core --example presentation_scale
 cargo test --release -p caelum-core --test population_scale -- --ignored --nocapture
 ```
 
-Expected: PASS and final evidence matches the committed document.
+Expected: PASS and command output matches the committed performance document.
 
-- [ ] **Step 4: Perform scope and duplicate-work scans**
+- [ ] **Step 4: Scan scope and duplicate decision paths**
 
 Run:
 
 ```bash
 git diff --stat origin/main...HEAD
 git diff --name-only origin/main...HEAD
+rg "private_car_trip_if_faster" crates/caelum-core/src
 rg "find_route_plan\(state, road_flow|private_car_candidate\(state, road_topology, road_flow" crates/caelum-core/src/trips.rs
-rg "RoutePlanner|PrivateCarPlanner|DemandBatchPlanner" crates/caelum-core/src
+rg "struct (RoutePlanner|PrivateCarPlanner|DemandBatchPlanner)" crates/caelum-core/src
+rg "network_revision|RouteCache|Lru|TTL" crates/caelum-core/src
 ```
 
 Expected:
 
-- no old one-shot per-demand route calls remain in `trips.rs`;
-- no TS/Svelte/WebGPU/persistence files changed;
-- no second cache framework/network revision type exists;
-- one batch planner composes the two focused planners.
+- exactly one `private_car_trip_if_faster`, inside `route_choice.rs`;
+- no one-shot router/car calls remain in the demand-spawn loop; tick-time replans may still call `find_route_plan`;
+- all three planner structs are crate-private;
+- no revision/cache framework exists;
+- no TS/Svelte/WebGPU/persistence-store files changed.
 
-- [ ] **Step 5: Update the PR summary with final evidence**
+- [ ] **Step 5: Update PR #57 summary**
 
-Add the actual 1k/5k/20k before/after rows, structural cache counts, granularity result, full-gate result, and measured remaining bottleneck to the existing HPA-348 PR body. Keep the PR as the single delivery artifact for the ticket.
+Replace the planning-only body with actual:
 
-No extra implementation PR is created for verification or evidence.
+- Task-0 baseline 1k/5k/20k rows;
+- final 1k/5k/20k rows;
+- transit exact-OD and car access-pair structural counts;
+- spawn-seam sequential reference equality/congestion-switch result;
+- coarse/split result;
+- full gate result;
+- measured remaining bottleneck.
+
+Keep PR #57 as the only delivery PR for HPA-348.
