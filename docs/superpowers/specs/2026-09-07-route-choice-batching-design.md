@@ -2,11 +2,11 @@
 
 **Linear:** HPA-348 — [Scale] Batch route choice and traffic-demand processing for large commute waves
 
-**Status:** Proposed implementation design
+**Status:** Proposed implementation design, revised after reuse/scope review
 
 ## Context
 
-HPA-347 is now merged. Caelum's latent population is ECS-owned and wakes through an exact-time scheduler instead of scanning the full population every tick. The HPA-347 reference evidence shows the next CPU-side scale seam clearly:
+HPA-347 is merged. Caelum's latent population is ECS-owned and wakes through an exact-time scheduler instead of scanning all citizens every tick. Its final release evidence measured:
 
 | Due demand wave | Scheduler emission | Route spawning |
 | ---: | ---: | ---: |
@@ -14,176 +14,164 @@ HPA-347 is now merged. Caelum's latent population is ECS-owned and wakes through
 | 5,000 | 1,626 µs | 1,272 µs |
 | 20,000 | 6,175 µs | 4,784 µs |
 
-Route spawning is already a close second to scheduler emission and grows linearly with the number of due demands. HPA-348 owns that route-choice term.
-
-The current route-spawn path is intentionally simple:
+HPA-348 owns the route-spawn term. The current production path is intentionally sequential:
 
 ```text
-ECS due activities
-  -> Vec<TripDemand> in canonical order
+Vec<TripDemand> in canonical order
   -> derive one mutable RoadFlow
   -> for each demand
        find walk/transit plan
        find private-car candidate
-       choose faster mode
-       if car wins, add its path to RoadFlow immediately
+       choose car only when car ETA < non-car ETA
+       if car wins, add its road path to RoadFlow immediately
        create ActiveTrip
 ```
 
-That sequential `RoadFlow` mutation is a gameplay invariant, not incidental implementation detail. A car admitted for citizen N can make a later citizen's private-car path or bus ride slower and can therefore change citizen N+1's mode choice. HPA-348 must remove repeated **static network work** without freezing the dynamic congestion-sensitive result for an entire batch.
+That mutable-flow ordering is gameplay behavior. A chosen car may make the next citizen's car or Bus ETA slower and may change that citizen's mode. HPA-348 must remove repeated static route work without freezing a final answer for an OD cohort.
 
-There is also an evidence gap in the current HPA-347 wave fixture: its synthetic home points are not placed buildings, so `traffic::private_car_candidate` cannot produce a car candidate, and no Bus/Metro service exists. The current `route_spawn_us` row therefore measures a walking-heavy bridge rather than the mixed road/transit workload HPA-348 is meant to optimize.
+The HPA-347 wave evidence also needs a better workload: its synthetic home points are not building-owned tiles and it has no Bus/Metro service, so private-car access cannot resolve and the row is walking-heavy. HPA-348 establishes a real mixed benchmark before changing routing code.
 
 ## Goals
 
-- Measure a real mixed road/transit peak before changing algorithms.
-- Reuse static route work across exact repeated origin/destination pairs in one due-demand batch.
-- Preserve flow-sensitive car ETA, bus ETA, and strict mode-choice semantics in canonical demand order.
-- Build the active transit service catalog once per batch instead of once per citizen.
-- Resolve building road access and road Dijkstra paths once per exact OD pair per batch instead of once per citizen.
-- Keep private-car congestion mesoscopic through the existing aggregate `RoadFlow`; do not introduce one Bevy entity per car.
-- Preserve detailed `ActiveTrip`, waiting, transfer, capacity, transit vehicle, route-health, and trip-resolution behavior.
-- Record 1k/5k/20k representative peak evidence and the dominant remaining CPU cost.
-- Deliver design, implementation, deterministic regression tests, and evidence in the same HPA-348 PR.
+- Establish one deterministic mixed road/transit peak fixture and reuse it across benchmark, batch integration, and coarse/split tests.
+- Build active Bus/Metro service preparation once per demand batch.
+- Reuse transit candidate enumeration per exact `(origin, destination)` tile pair.
+- Resolve building road access once per building and reuse road Dijkstra by **road-access pair**, not by citizen tile pair.
+- Recompute exact-tile access walk time and all congestion-sensitive Bus/private-car ETA for every demand.
+- Preserve strict private-car comparison (`car < non-car`; ties stay non-car), canonical demand order, and immediate `RoadFlow` mutation after each car win.
+- Keep private-car traffic mesoscopic through aggregate `RoadFlow`; do not create ECS car entities.
+- Keep existing detailed trip/passenger/transit-vehicle operations behavior.
+- Record 1k/5k/20k reference evidence and the dominant remaining cost.
+- Deliver everything in the existing HPA-348 PR.
 
 ## Non-goals
 
-- No WebGPU, viewport/LOD, presentation cadence, or interpolation work; HPA-640 owns those.
-- No full Bevy application or Bevy renderer/UI.
-- No generic routing service, cache framework, cache eviction policy, LRU, TTL, or cross-city cache.
-- No spatial zoning system solely to create cache keys.
-- No frozen one-mode answer for a whole commute wave.
-- No microscopic lane changing or persistent ECS car entity.
-- No broad migration of the established `ActiveTrip`, passenger, or transit-vehicle lifecycle into ECS unless Task 0 profiling proves that shell-side lifecycle processing becomes the dominant HPA-348 cost after route batching.
-- No save compatibility layer. If a measured, load-bearing change later requires a schema break, development saves can move directly to the new schema.
+- No WebGPU, viewport/LOD, presentation cadence, or interpolation; HPA-640 owns those.
+- No scheduler redesign.
+- No broad `ActiveTrip`, passenger, or transit-vehicle ECS migration unless profiling proves that lifecycle becomes the dominant HPA-348 cost after batching and the design is explicitly revised first.
+- No persistent route cache, network revision counter, eviction policy, TTL, zones, or departure bands.
+- No frozen cohort mode choice.
+- No microscopic traffic or per-car ECS entity.
+- No TypeScript/Svelte/host contract change.
+- No save compatibility layer.
 
-## Approaches considered
+## Reuse decisions
 
-### A. Batch-local exact-OD preparation — chosen
+HPA-348 extends the existing authorities rather than replacing them:
 
-Create one demand-batch planning context for each `drain_and_spawn` call. It owns a transit planner built once from the current snapshot and lazy exact-OD caches for non-car candidate preparation and private-car road paths. Each citizen still gets a fresh congestion-sensitive score against the current mutable `RoadFlow`.
+- `router::find_route_plan` / `active_services` remain the transit-routing authority.
+- `traffic::private_car_candidate` remains the car-routing authority.
+- `trips::spawn_pending_trip_demands` remains the only production same-time admission loop and the owner of ordered `RoadFlow` mutation.
+- `traffic::add_car_path_to_flow` and the existing strict `<` comparison remain the semantics to preserve.
+- Tick-time replans stay on the one-shot route path unless Task 0 profiling shows they dominate.
 
-Advantages:
-
-- preserves current semantics exactly;
-- cache invalidation is automatic because the context dies at the end of the batch;
-- no network revision counter or persistent cache lifecycle;
-- repeated households/jobs naturally reuse work;
-- exact OD keys are already present in `TripDemand`, so no new zoning abstraction is needed.
-
-Trade-off: work is repeated across later substeps even when the network is unchanged. That is acceptable until profiling proves cross-batch reuse is necessary.
-
-### B. Persistent cache keyed by network revision — rejected for this slice
-
-A long-lived cache could reuse results across ticks, but it immediately requires a stable revision model covering road edits, stop/station lifecycle, route edits, fleet availability, line activation, and other service changes. Flow-sensitive scoring would still need to run per demand.
-
-This adds invalidation complexity before the existing benchmark proves it is useful. HPA-348 starts batch-local; a cross-batch cache is a later profiling-driven optimization, not scaffolding for this PR.
-
-### C. Aggregate by zones/time bands and choose one mode for each cohort — rejected
-
-This would reduce work further, but it changes current semantics. Different exact buildings can have different road access and walking distance, and same-time cars alter later congestion. A zone-wide or frozen cohort answer can therefore change mode choice, service use, and road flow.
-
-HPA-348 can batch exact repeated OD work without inventing a new behavioral approximation.
+Prepared transit candidates, prepared private-car road paths, the batch coordinator, cache maps, and benchmark stats are new because no equivalent cache/planner types exist today.
 
 ## Chosen architecture
 
-Add one small orchestration module over the existing routing authorities:
+Use one batch-local coordinator per `spawn_pending_trip_demands` call:
 
 ```text
-population::TripDemand (already canonicalized)
-              |
-              v
-       route_choice::DemandBatchPlanner
-          /                         \
-         v                           v
- router::RoutePlanner       traffic::PrivateCarPlanner
- (transit catalog +          (building access +
-  exact-OD candidates)        exact-OD road path)
-         \                           /
-          \                         /
-           +---- current RoadFlow --+
-                     |
-              per-demand score
-                     |
-        NonCar | PrivateCar | Unserved
-                     |
-             existing ActiveTrip
+TripDemand sequence
+       |
+       v
+route_choice::DemandBatchPlanner   (pub(crate))
+   /                         \
+  v                           v
+router::RoutePlanner        traffic::PrivateCarPlanner
+(pub(crate))                (pub(crate))
+exact-tile OD cache         building-access index
+                            + access-pair path cache
+   \                           /
+    +------ current RoadFlow -+
+                |
+         per-demand scoring
+                |
+   PrivateCar | NonCar | Unserved
+                |
+       existing ActiveTrip builder
 ```
 
-The new module coordinates mode choice only. It does not own topology, transit lifecycle, traffic progression, trip progression, or persistence.
+The planners are crate-private implementation details. Integration tests continue to use one-shot public APIs or the existing `GameEngine` scale-harness seam; they do not make planner structs into public crate API.
 
 ### `router::RoutePlanner`
 
-Refactor the current `find_route_plan` implementation behind an owned planner that extracts the active Bus/Metro service catalog once.
-
-Conceptual interface:
+Refactor the current `find_route_plan` implementation behind an owned crate-private planner:
 
 ```rust
-pub(crate) struct RoutePlanner { /* owned active-service data + OD cache */ }
-
-impl RoutePlanner {
-    pub(crate) fn new(state: &GameSnapshot) -> Self;
-
-    pub(crate) fn find_route_plan(
-        &mut self,
-        flow: &RoadFlow,
-        origin: Point,
-        destination: Point,
-    ) -> Option<RoutePlan>;
+pub(crate) struct RoutePlanner {
+    map_width: u16,
+    map_height: u16,
+    services: Vec<TransitService>,
+    prepared: BTreeMap<(Point, Point), Option<Vec<PreparedCandidate>>>,
 }
 ```
 
-`find_route_plan` lazily prepares the candidate **shape** for an exact `(origin, destination)` pair and caches that prepared set. A prepared set contains enough stable information to rebuild the winning `RoutePlan` without enumerating services/ride-edge combinations again.
+`RoutePlanner::new(&GameSnapshot)` extracts active Bus/Metro services once.
 
-Scoring remains dynamic:
+`find_route_plan(&mut self, &RoadFlow, Point, Point)` lazily prepares the exact-tile OD candidate shapes once and then re-scores them against current flow. Transit preparation remains exact-OD because walk-to-board, transfer walk, and walk-from-alight distances are citizen-tile specific.
 
-- walking time is static;
-- Metro ride time is static while the prepared service shape is alive;
-- Bus ride time is recomputed from the current `RoadFlow` through the existing `effective_road_path_seconds` behavior;
-- equal-time plans keep the existing `estimated_seconds` then `plan_identity_key` ordering.
+Dynamic scoring rules remain unchanged:
 
-The existing public `router::find_route_plan(...)` remains a thin one-shot wrapper around `RoutePlanner` so focused router tests and non-batch callers do not need a second routing algorithm.
+- walking time is fixed for one prepared exact OD;
+- Metro ride time is fixed while the batch snapshot is fixed;
+- Bus road time is recomputed from current `RoadFlow`;
+- candidate selection still uses `estimated_seconds` followed by the existing deterministic identity key.
+
+`router::find_route_plan(...)` remains a thin one-shot wrapper for current integration tests and tick-time replans.
+
+Prepared-candidate/cache tests live in `router.rs`'s `#[cfg(test)]` module so `RoutePlanner` does not become public only for tests.
 
 ### `traffic::PrivateCarPlanner`
 
-Refactor private-car preparation into two phases:
+Private-car work has three grains that must not be conflated:
 
-1. static access/path preparation;
-2. current-flow ETA scoring.
+1. **Building access lookup** — stable for the batch and shared by every occupied tile of a building.
+2. **Road path** — determined by the resolved road access points/headings.
+3. **Access walk + road ETA** — exact citizen tiles and current flow still matter per call.
 
-Conceptual interface:
+The planner therefore owns:
 
 ```rust
-pub(crate) struct PrivateCarPlanner { /* building access index + OD path cache */ }
+type CarPathKey = (
+    Point, Option<Heading>,
+    Point, Option<Heading>,
+);
 
-impl PrivateCarPlanner {
-    pub(crate) fn new(state: &GameSnapshot) -> Self;
-
-    pub(crate) fn candidate(
-        &mut self,
-        road_topology: &RoadTopology,
-        flow: &RoadFlow,
-        origin: Point,
-        destination: Point,
-    ) -> Option<PrivateCarCandidate>;
+pub(crate) struct PrivateCarPlanner {
+    access_by_tile: BTreeMap<Point, Option<StopRoadAccess>>,
+    prepared_paths: BTreeMap<CarPathKey, Option<TransitPath>>,
 }
 ```
 
-Construction builds a point-to-building-road-access lookup once from the current buildings and map. On the first exact OD request, it runs `RoadTopology::find_path_between_access_tiles` and stores the resulting static path plus access-walk seconds. Later requests for the same OD reuse that path.
+Construction walks `state.buildings` once. For each building it derives one `StopRoadAccess` and maps all occupied tiles to that result.
 
-Every call still computes `estimated_seconds` from the **current** `RoadFlow`, including the existing `+1` candidate load on every road step. A cached path is not a cached ETA.
+For each demand:
 
-The existing public `traffic::private_car_candidate(...)` remains a one-shot wrapper for focused tests and callers outside demand batching.
+1. read origin/destination access from `access_by_tile`;
+2. key the Dijkstra cache by resolved `(road_point, preferred_heading)` pairs;
+3. run `RoadTopology::find_path_between_access_tiles` only on a path-cache miss;
+4. compute the exact-tile access seconds every call:
+
+```text
+origin tile -> origin road access walk
++ CAR_ACCESS_SECONDS
++ destination road access -> destination tile walk
+```
+
+5. score the cached road path against the current `RoadFlow`, including the existing candidate `+1` load per step.
+
+This means two occupied tiles in the same house can have different access-walk seconds while sharing one Dijkstra result. The benchmark and structural tests must demonstrate that car path preparation follows **access-pair cardinality**, not exact citizen-tile OD cardinality.
+
+`traffic::private_car_candidate(...)` remains a one-shot wrapper. Planner/cache tests stay inside `traffic.rs`.
 
 ### `route_choice::DemandBatchPlanner`
 
-This is the only new cross-module seam.
-
-Conceptual interface:
+The coordinator is crate-private:
 
 ```rust
 pub(crate) enum RouteChoice {
-    PrivateCar(PrivateCarCandidate),
+    PrivateCar(PrivateCarTrip),
     NonCar(RoutePlan),
     Unserved,
 }
@@ -192,182 +180,244 @@ pub(crate) struct DemandBatchPlanner {
     non_car: router::RoutePlanner,
     private_car: traffic::PrivateCarPlanner,
 }
+```
 
-impl DemandBatchPlanner {
-    pub(crate) fn new(state: &GameSnapshot) -> Self;
+Its compiling interface is:
 
-    pub(crate) fn choose(
-        &mut self,
-        road_topology: &RoadTopology,
-        road_flow: &RoadFlow,
-        origin: Point,
-        destination: Point,
-        current_time: f64,
-    ) -> RouteChoice;
+```rust
+pub(crate) fn choose(
+    &mut self,
+    map: &GameMap,
+    road_topology: &RoadTopology,
+    road_flow: &RoadFlow,
+    origin: Point,
+    destination: Point,
+    current_time: f64,
+) -> RouteChoice;
+```
+
+It owns the one strict car-vs-non-car decision:
+
+```text
+car wins only when car.estimated_seconds < non_car.estimated_seconds
+```
+
+`choose` returns an owned `PrivateCarTrip` because arrival time depends on `current_time`. It does **not** mutate `RoadFlow` and it does not borrow the whole `GameSnapshot`, so the spawn loop can push to `active_trips` after each choice without holding a conflicting snapshot borrow.
+
+`BTreeMap` is used for cache maps to match the deterministic collection style already used by `RoadFlow`; cache iteration is not gameplay input in any case.
+
+### Spawn integration
+
+`spawn_pending_trip_demands` creates exactly one `DemandBatchPlanner`, then processes the existing demand vector in order.
+
+For each demand:
+
+1. call `choose` against the current `RoadFlow`;
+2. create the base `ActiveTrip` exactly as today;
+3. for `PrivateCar`, add the car path to `RoadFlow` **before** the next demand and install `Driving` + `private_car_trip`;
+4. for `NonCar`, install the route only when `plan.legs` is non-empty, preserving the existing empty-leg filter;
+5. for `Unserved`, leave the spawn-time trip planless/`Idle` exactly as today's builder does. Do **not** prematurely mark it `TripStatus::Unserved`; the normal trip lifecycle owns that transition.
+
+Task 3 adds/tests the coordinator without modifying `trips.rs`. Task 4 performs the single production cutover, so there is never an intermediate second mode-choice path in production.
+
+## Cache lifetime and invalidation
+
+The cache lives for one synchronous `spawn_pending_trip_demands` call and is then dropped.
+
+That lifetime is the invalidation mechanism:
+
+- no player edit can interleave inside the spawn loop;
+- the next batch rebuilds from the next map/transit state;
+- no network revision, invalidation registry, or cross-tick ownership is needed.
+
+Transit cache key: exact `(origin, destination)` points.
+
+Private-car path cache key: resolved origin/destination road access point + preferred heading pairs.
+
+No congestion-sensitive ETA or final mode choice is cached across citizens.
+
+## Shared mixed-peak fixture
+
+The mixed workload is fiddly enough that it must have one constructor, not three copies.
+
+Add one evidence/test helper in `caelum-core`, exposed only as a documentation-hidden harness surface because examples and integration tests compile as external crates:
+
+```rust
+#[doc(hidden)]
+pub fn mixed_peak_snapshot(count: usize) -> GameSnapshot;
+```
+
+The helper lives in a focused `scale_fixture` module and is reused by:
+
+- `examples/presentation_scale.rs`;
+- `tests/route_choice_batching.rs`;
+- `tests/population_scale.rs`.
+
+The fixture:
+
+- uses canonical non-Student/non-day-off worker IDs so exactly `count` demands wake;
+- places all synthetic home/workplace points on real retained building tiles;
+- deliberately reuses multiple occupied tiles from the same buildings, creating more exact tile ODs than road-access pairs;
+- authors connected roads plus one operational Bus and one operational Metro line through existing `GameIntent` APIs;
+- repeats a bounded deterministic OD matrix for 1k/5k/20k waves;
+- starts without active trips so post-spawn mode/OD counts can be derived from the resulting snapshot.
+
+A small non-ignored test must assert the fixture actually produces private-car demand and transit demand. CI does not require both Bus and Metro to win a fragile cost race, but both services must be operational/reachable and existing router tests continue to lock Bus/Metro correctness separately.
+
+## Sequential-congestion correctness lock
+
+The load-bearing regression belongs at the actual spawn seam, where `RoadFlow` is mutated.
+
+Because `TripDemand` fields and `spawn_pending_trip_demands` are intentionally crate-private, the exact reference-vs-batched comparison lives as a `trips.rs` unit test rather than leaking those internals to integration tests.
+
+For one ordered repeated-OD demand vector:
+
+1. a test-only reference helper runs the current one-shot `find_route_plan` + `private_car_candidate` algorithm and the strict `<` comparison, updating a reference `RoadFlow` after each car;
+2. the production batched `spawn_pending_trip_demands` runs on the same starting state/flow and cloned demands;
+3. compare, in order:
+   - citizen/trip order;
+   - chosen mode;
+   - `RoutePlan` identity for non-car trips;
+   - car path identity and arrival time for driving trips;
+   - final `RoadFlow`.
+
+The fixture must include an identical-OD switch: initial flow is chosen so one demand selects car and, after that car is admitted, a later identical OD selects non-car. The test may search a deterministic starting flow level using real scoring to find the switch. It must not alter production costs to manufacture the result.
+
+`tests/route_choice_batching.rs` remains an external engine-harness integration proof: the shared mixed fixture drains/spawns through `GameEngine`, retains canonical trip order, and yields real car + transit outcomes. It does not need access to crate-private planner or demand fields.
+
+## Stats and benchmark evidence
+
+Use one stats shape only:
+
+```rust
+#[doc(hidden)]
+pub struct RouteChoiceBatchStats {
+    pub transit_prepared_od: usize,
+    pub car_prepared_access_paths: usize,
 }
 ```
 
-It reuses the existing strict private-car-vs-non-car comparison. It does not mutate `RoadFlow`; `trips::spawn_pending_trip_demands` retains that responsibility immediately after a car wins, preserving the current ordering contract.
+Internally it is derived from the two crate-private planners. The existing documentation-hidden scale-harness spawn method may return this value so the example can print it; normal tick/presentation/host contracts do not expose it.
 
-`DemandBatchPlanner` is created exactly once inside each `spawn_pending_trip_demands` invocation and dropped when that batch is complete.
+The benchmark derives exact-OD count and mode counts from the post-spawn `ActiveTrip` rows, avoiding any need to make `TripDemand` fields public.
 
-## Cache key and lifetime
+Record:
 
-Use exact points, not zones or departure bands:
+- due/spawned demand count;
+- distinct exact tile OD count;
+- route-spawn wall time;
+- `transit_prepared_od`;
+- `car_prepared_access_paths`;
+- walk/car/Bus/Metro/unserved counts;
+- road-flow summary.
 
-```text
-(origin.x, origin.y, destination.x, destination.y)
-```
+Add one fixture row/assertion where multiple exact home tiles share a small set of building road accesses. `car_prepared_access_paths` must track access-pair cardinality rather than exact tile OD cardinality.
 
-Current route choice has no independent departure-time-band input. Adding one to the cache key would be speculative.
-
-Cache lifetime is the invalidation strategy:
-
-- a batch sees one current map/transit structure;
-- edits cannot interleave inside the synchronous demand-spawn loop;
-- the next `drain_and_spawn` creates fresh planners from the next snapshot;
-- no network revision or explicit invalidation API is required.
-
-Hash-map iteration order must never affect gameplay. Caches are lookup-only; all user-visible selection continues through existing deterministic candidate ordering and the already canonical `TripDemand` sequence.
-
-## Sequential congestion invariant
-
-The critical regression is:
-
-```text
-base RoadFlow
-  -> demand A scores
-  -> if A chooses car, add A path to RoadFlow
-  -> demand B scores against the new RoadFlow
-  -> ...
-```
-
-The implementation must not:
-
-- pre-score all demands against the base flow;
-- cache `PrivateCarCandidate.estimated_seconds` across citizens;
-- cache a final `RoutePlan.estimated_seconds` for Bus across citizens;
-- group all identical OD rows and assign one frozen mode.
-
-A targeted test will use repeated identical OD demand where the first admitted car raises congestion enough for a later demand to make a different choice. Batched output must match a reference sequence using the existing one-shot planners step by step.
-
-## Private-car simulation boundary
-
-HPA-348 keeps the existing per-citizen `ActiveTrip` lifecycle because that row currently owns:
-
-- citizen/purpose linkage;
-- trip deadline and outcome;
-- population terminal resolution;
-- presentation/metrics inputs;
-- save/restore of in-flight travel.
-
-It does **not** create a separate Bevy car entity. Road congestion remains the aggregate `RoadFlow` derived from driving trips, and same-time new car demand is accumulated directly into that flow.
-
-This is the smallest interpretation of the roadmap's mesoscopic-car requirement that preserves existing lifecycle semantics. Migrating `ActiveTrip`/passenger/vehicle storage itself into ECS is a distinct subsystem change. Task 0 records active-trip progression separately; if that becomes the dominant HPA-348 cost after batching, the design must be amended with that measured seam before implementation expands. Otherwise it remains out of scope.
-
-## Representative benchmark
-
-### Correct the fixture first
-
-The HPA-347 wave fixture is retained for scheduler history, but HPA-348 adds a new peak fixture that actually exercises mode choice:
-
-- use real residential building tiles as origins so private-car access can resolve;
-- use real job/optional-destination building tiles as destinations;
-- author connected road access;
-- provide at least one operational Bus service and one operational Metro service on useful OD paths;
-- generate 1k/5k/20k same-time demands across a bounded set of repeated exact OD pairs;
-- retain a mix where walk, private car, Bus, and Metro are all reachable outcomes;
-- keep the fixture deterministic and generated in Rust; no external benchmark data.
-
-The fixture may repeat a small number of authored origin/destination buildings rather than pretending to represent 200k unique buildings. HPA-348 is testing route-choice work under a 200k-population-style **demand wave**, not city generation.
-
-### Evidence rows
-
-Record at minimum:
-
-- due demand count;
-- distinct exact OD count;
-- total route-spawn wall time;
-- transit prepared-OD misses;
-- private-car path misses;
-- final mode counts (walk/car/bus/metro/unserved);
-- resulting road-flow cardinality/load summary.
-
-Run the same fixture through the pre-batching reference path and the batch planner in Task 0/implementation evidence where practical. Wall-clock values remain reference evidence, not CI thresholds.
-
-Structural tests, not wall-clock CI thresholds, enforce that repeated exact OD input does not cause one static route search per citizen.
+Wall-clock measurements are evidence only; structural counts and semantic equality are the CI locks.
 
 ## Testing strategy
 
-### Router parity
+### Crate-private planner unit tests
 
-Existing router planning tests continue to call the one-shot wrapper. Add focused parity coverage showing one `RoutePlanner` reused across repeated OD requests returns the same plan as the one-shot API under:
+`router.rs`:
 
-- free flow;
-- changed bus congestion between calls;
-- equal-time deterministic tie ordering;
-- Bus and Metro service availability.
+- active service catalog is built once per planner;
+- repeated exact OD reuses preparation;
+- changed `RoadFlow` changes Bus ETA without another prepared OD;
+- tie ordering remains deterministic.
 
-### Private-car parity
+`traffic.rs`:
 
-Add focused tests showing:
+- several exact tile ODs sharing the same building access pair run one Dijkstra preparation;
+- exact-tile access seconds still differ when tiles differ;
+- current flow re-scores ETA on the cached path;
+- a different access pair creates a second path entry;
+- missing building road access remains `None`.
 
-- repeated exact OD uses one prepared road path;
-- ETA changes when `RoadFlow` changes despite path reuse;
-- different OD creates a separate prepared path;
-- no-road-access remains `None`.
+`route_choice.rs`:
 
-Test-only cache statistics may be exposed behind `#[cfg(test)]`; do not add production telemetry or public cache APIs only for assertions.
+- one-shot semantic parity for a representative choice;
+- strict `<` tie behavior;
+- repeated identical OD re-scores when flow changes;
+- `choose` never mutates `RoadFlow`.
 
-### Batch equivalence
+### Spawn-seam unit test
 
-Add a new integration test file for the real demand-spawn seam. For an identical ordered demand vector:
+`trips.rs` owns the reference-vs-batched ordered comparison described above, including the congestion switch and final flow equality.
 
-1. run a reference one-shot route choice sequence, mutating `RoadFlow` after every chosen car;
-2. run the batch planner path;
-3. compare trip mode, route plan/path identity, arrival time, final `RoadFlow`, and deterministic trip order.
+### Integration smoke
 
-Include the congestion-switch case where identical OD rows do not all choose the same mode.
+`tests/route_choice_batching.rs` uses only the shared hidden fixture + `GameEngine` harness. It proves the real composition yields canonical order and a mixed car/transit result without making internal planner types public.
 
 ### Granularity
 
-Extend the scale/lifecycle proof with a mixed due wave and assert coarse vs split advancement reaches the same durable simulation state. HPA-347 already established the exact-time population scheduler; HPA-348 must prove batching does not weaken that invariant.
+`tests/population_scale.rs` uses the same `mixed_peak_snapshot` and compares coarse vs split advancement over a window that crosses the due wave and travel progression. Durable snapshots must match.
+
+## Risks and controls
+
+### 1. No natural congestion switch in the first fixture geometry
+
+This is the main correctness-test risk. Bus boarding penalty, car access penalty, road step cost, and candidate `+1` load may leave a wide gap between modes.
+
+Control: search deterministic initial flow using actual production scoring to find a one-car switch. If the mixed benchmark geometry cannot provide one cleanly, use a smaller dedicated test fixture. Adjust test/benchmark geometry only; do not change gameplay scoring.
+
+### 2. Fixture drift
+
+Bus/Metro/road/building authoring is easy to fork between example and tests.
+
+Control: one hidden `mixed_peak_snapshot` constructor is the only mixed-peak source.
+
+### 3. Accidental public routing API
+
+Integration tests cannot access `pub(crate)` planners.
+
+Control: keep planner/cache assertions in module tests; external tests use one-shot APIs or engine harness only. The only documentation-hidden public surfaces are evidence fixture/stats seams required by examples/integration tests.
+
+### 4. Wrong private-car cache grain
+
+Exact tile OD would miss reuse when different tiles share one building access.
+
+Control: key only the road path by access point/headings and assert path-preparation count on shared-building tiles.
+
+### 5. Premature lifecycle expansion
+
+After route batching, another cost may become dominant.
+
+Control: record it. Do not add scheduler redesign or `ActiveTrip` ECS migration to this PR without first revising HPA-348 around measured evidence.
 
 ## Files and ownership
 
-Expected production changes stay focused:
+Expected changes:
 
-- `crates/caelum-core/src/route_choice.rs` — new batch-level mode-choice orchestration only;
-- `crates/caelum-core/src/router.rs` — reusable active-service/OD preparation plus dynamic scoring;
-- `crates/caelum-core/src/traffic.rs` — reusable building-access/road-path preparation plus dynamic scoring;
-- `crates/caelum-core/src/trips.rs` — construct one batch planner in `spawn_pending_trip_demands`, preserve ordered flow mutation;
-- `crates/caelum-core/src/lib.rs` — register the private module/test seam;
-- `crates/caelum-core/examples/presentation_scale.rs` — representative mixed peak harness;
-- `crates/caelum-core/tests/router_planning.rs` — planner parity;
-- `crates/caelum-core/tests/traffic.rs` — private-car path/ETA parity;
-- `crates/caelum-core/tests/route_choice_batching.rs` — end-to-end batch equivalence and deterministic congestion switch;
-- `crates/caelum-core/tests/population_scale.rs` — coarse/split mixed-wave scale proof if the existing harness seam fits cleanly;
-- `docs/performance/hpa-348-route-choice-batching.md` — baseline/final evidence.
+- `crates/caelum-core/src/scale_fixture.rs` — one documentation-hidden mixed peak constructor.
+- `crates/caelum-core/src/router.rs` — crate-private transit preparation/cache + one-shot wrapper.
+- `crates/caelum-core/src/traffic.rs` — crate-private access/path preparation/cache + one-shot wrapper.
+- `crates/caelum-core/src/route_choice.rs` — crate-private mode-choice coordinator + one stats snapshot source.
+- `crates/caelum-core/src/trips.rs` — one production batch planner and ordered flow mutation; spawn-seam unit regression.
+- `crates/caelum-core/src/engine.rs` — only the existing hidden scale-harness return plumbing for batch stats.
+- `crates/caelum-core/src/lib.rs` — private coordinator registration + documentation-hidden scale fixture/stats exposure.
+- `crates/caelum-core/examples/presentation_scale.rs` — baseline/final mixed-wave evidence.
+- `crates/caelum-core/tests/route_choice_batching.rs` — external engine-harness composition smoke.
+- `crates/caelum-core/tests/population_scale.rs` — coarse/split mixed-wave proof using the same fixture.
+- `docs/performance/hpa-348-route-choice-batching.md` — measured evidence.
 
-No TypeScript, Svelte, host backend, persistence-store, renderer, or WebGPU file should change unless implementation profiling exposes a concrete contract break that this design does not currently predict.
+Existing `tests/router_planning.rs` and `tests/traffic.rs` remain on the public one-shot APIs; internal planner/cache tests belong beside their crate-private types.
+
+No TypeScript, Svelte, persistence/store, renderer, or WebGPU files should change.
 
 ## Acceptance
 
 HPA-348 is complete when:
 
-1. the representative mixed peak exercises real road access plus Bus/Metro route choice;
-2. repeated exact OD input does not rebuild the active transit service catalog or run road Dijkstra once per citizen;
-3. flow-sensitive ETA and strict mode choice still run in canonical demand order;
-4. a congestion-switch regression proves batching does not freeze one answer for an OD cohort;
-5. private-car load still contributes to aggregate `RoadFlow` without a separate per-car ECS entity;
-6. existing Bus/Metro waiting, transfers, capacity, vehicle movement, route health, and income behavior remain green;
-7. coarse/split deterministic behavior remains green;
-8. 1k/5k/20k benchmark evidence records throughput, cache reuse, mode mix, and the dominant remaining cost;
-9. full Rust/frontend/browser gates pass, even though no frontend behavior is expected to change;
-10. the work remains one HPA-348 PR.
-
-## Follow-up boundary
-
-The evidence may show that scheduler emission remains the dominant peak cost after route batching. That is a result, not a reason to absorb scheduler redesign into HPA-348.
-
-Likewise, if active-trip progression rather than route planning becomes the dominant measured cost, create/amend a later focused scale slice for that lifecycle ownership change instead of pre-building a broad ECS trip/vehicle migration here. HPA-640 remains independently responsible for GPU presentation, viewport/LOD extraction, and publication/interpolation cadence.
+1. one shared mixed-peak fixture exercises real building road access and operational Bus/Metro service;
+2. a non-ignored smoke prevents the benchmark from regressing to walking-only;
+3. active transit catalog preparation is once per batch and transit candidate preparation is bounded by exact tile OD cardinality;
+4. private-car Dijkstra preparation is bounded by **road-access-pair** cardinality, with exact-tile access walks still scored per citizen;
+5. the spawn-seam reference test proves ordered mode/plan/path/arrival/final-flow equality and includes an identical-OD congestion switch;
+6. strict `<` car choice, empty-leg handling, and spawn-time planless `Idle` behavior remain unchanged;
+7. planners stay crate-private and no second production mode-choice path exists;
+8. private-car load remains aggregate `RoadFlow` with no per-car ECS entity;
+9. coarse/split deterministic behavior remains green on the shared mixed fixture;
+10. 1k/5k/20k evidence records throughput, preparation counts, mode mix, and the measured remaining bottleneck;
+11. the full Rust/frontend/browser gate remains green;
+12. the ticket remains one PR.
