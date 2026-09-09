@@ -16,7 +16,8 @@ use caelum_core::model::{
 use caelum_core::{create_sandbox_snapshot, GameEngine, GameIntent, SandboxCreationRequest};
 
 mod common;
-use common::is_student_id;
+use common::route_choice_fixture::mixed_peak_snapshot;
+use common::{is_student_id, running_engine_from_fixture};
 
 const TOTAL: usize = 200_000;
 const DUE: usize = 1_000;
@@ -248,4 +249,32 @@ fn stage_a_two_hundred_thousand_worker_engine_structural_and_granularity() {
         "quiet tick still advances time: {:?}",
         result.update.frame.time
     );
+}
+
+/// Release proof that the batched same-time route choice keeps coarse and
+/// split ticks exactly equal across a mixed wave: 20k same-time Workers
+/// route through one batched spawn (cars congestion-switching to transit
+/// mid-batch, bus/metro plans, planless rejections), then 900 seconds of
+/// real travel progression. Both engines see identical flow state at every
+/// decision instant, so the durable snapshots must be exactly equal —
+/// partitioning the window must not weaken the batch's sequential-congestion
+/// semantics. Not part of the default debug test run — execute with:
+///
+/// ```bash
+/// cargo test --release -p caelum-core --test population_scale \
+///     mixed_route_choice_wave_is_coarse_split_deterministic -- --ignored --nocapture
+/// ```
+#[test]
+#[ignore]
+fn mixed_route_choice_wave_is_coarse_split_deterministic() {
+    let fixture = mixed_peak_snapshot(20_000, 1);
+    let mut coarse = running_engine_from_fixture(fixture.clone());
+    let mut split = running_engine_from_fixture(fixture);
+
+    coarse.tick(900.0);
+    for _ in 0..30 {
+        split.tick(30.0);
+    }
+
+    assert_eq!(coarse.snapshot(), split.snapshot());
 }
