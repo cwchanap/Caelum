@@ -190,6 +190,8 @@ fn mixed_peak_fixture_has_real_car_transit_and_service_stress() {
 }
 ```
 
+Both Bus and Metro must be operational/reachable in the base fixture. The smoke requires at least one transit winner rather than making CI depend on both modes winning a narrow cost race.
+
 Run:
 
 ```bash
@@ -579,7 +581,7 @@ current demand: car wins
 same OD after one add_car_path_to_flow: non-car wins
 ```
 
-This search uses only current `router::find_route_plan` and `traffic::private_car_candidate`; never alter gameplay constants.
+This search uses only current `router::find_route_plan` and `traffic::private_car_candidate`; never alter gameplay constants. It reuses already-characterized geometry rather than treating the switch as a new subsystem risk.
 
 Define a test-only descriptor:
 
