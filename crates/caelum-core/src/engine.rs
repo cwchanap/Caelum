@@ -313,15 +313,19 @@ impl GameEngine {
 
     /// Release scale-harness seam: route previously drained demands through
     /// the shared trip builder with one derived road flow, exactly as the
-    /// tick's demand-drain phase does. Evidence tooling.
-    pub fn spawn_drained_demands_for_scale_harness(&mut self, demands: Vec<TripDemand>) {
+    /// tick's demand-drain phase does. Returns the batch's final structural
+    /// stats. Evidence tooling.
+    pub fn spawn_drained_demands_for_scale_harness(
+        &mut self,
+        demands: Vec<TripDemand>,
+    ) -> crate::RouteChoiceBatchStats {
         let mut road_flow = traffic::derive_road_flow(&self.snapshot);
         trips::spawn_pending_trip_demands(
             &mut self.snapshot,
             &self.road_topology,
             &mut road_flow,
             demands,
-        );
+        )
     }
 
     pub fn restore_snapshot(

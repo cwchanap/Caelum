@@ -320,17 +320,14 @@ impl RoutePlanner {
             && point.y < i32::from(self.map_height)
     }
 
-    #[cfg(test)]
-    fn service_count(&self) -> usize {
+    pub(crate) fn service_count(&self) -> usize {
         self.services.len()
     }
 
-    #[cfg(test)]
-    fn shape_count(&self) -> usize {
+    pub(crate) fn shape_count(&self) -> usize {
         self.shapes.len()
     }
 
-    #[cfg(test)]
     pub(crate) fn flow_refresh_count(&self) -> usize {
         self.flow_refreshes
     }
