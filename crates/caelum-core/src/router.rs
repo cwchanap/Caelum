@@ -331,7 +331,7 @@ impl RoutePlanner {
     }
 
     #[cfg(test)]
-    fn flow_refresh_count(&self) -> usize {
+    pub(crate) fn flow_refresh_count(&self) -> usize {
         self.flow_refreshes
     }
 }

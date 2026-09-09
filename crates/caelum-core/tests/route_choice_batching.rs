@@ -60,4 +60,26 @@ fn mixed_peak_fixture_has_real_car_transit_and_service_stress() {
         .metro_lines
         .iter()
         .all(|line| line.station_ids.len() >= 4));
+
+    // Batched spawn must preserve the canonical sim order: the drained
+    // demands arrive in fixture sim order and every spawned trip (driving,
+    // transit, or planless) keeps that order in `active_trips`.
+    let expected = mixed_peak_snapshot(256, 1);
+    let expected_sim_order: Vec<String> = expected.sims.iter().map(|sim| sim.id.clone()).collect();
+    let mut engine = GameEngine::from_snapshot(expected).unwrap();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let demands = engine.run_due_and_drain_for_scale_harness(301.0);
+    assert_eq!(demands.len(), 256);
+    engine.spawn_drained_demands_for_scale_harness(demands);
+    let spawned_sim_order: Vec<String> = engine
+        .snapshot()
+        .active_trips
+        .iter()
+        .map(|trip| trip.sim_id.clone())
+        .collect();
+    assert_eq!(spawned_sim_order, expected_sim_order);
 }

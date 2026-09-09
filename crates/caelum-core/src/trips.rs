@@ -6,8 +6,7 @@ use crate::clock::{self, GAME_DAY_SECONDS};
 use crate::commute::{trip_deadline_seconds, WALK_SECONDS_PER_TILE};
 use crate::model::{
     ActiveTrip, GameMode, GameSnapshot, Metrics, MetricsState, ObjectiveThresholds, Point,
-    PrivateCarTrip, RoutePlan, TransitMode, TripOutcome, TripOutcomeKind, TripPosition,
-    TripPurpose, TripStatus,
+    RoutePlan, TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus,
 };
 use crate::objectives;
 use crate::population;
@@ -141,16 +140,57 @@ fn drain_and_spawn(
     road_flow
 }
 
-/// Route pending ECS demand through the existing trip builder. ECS emits
-/// demand; it never routes.
+/// Route pending ECS demand through the batch route-choice coordinator. ECS
+/// emits demand; it never routes. One [`DemandBatchPlanner`] serves the whole
+/// same-time batch: each `choose` scores against the current flow without
+/// mutating it, a chosen car is registered into `road_flow` immediately (and
+/// the planner told) so later same-time demands plan against it, and equal-
+/// ETA ties stay non-car — the exact sequential-congestion semantics of
+/// per-demand one-shot planning.
 pub(crate) fn spawn_pending_trip_demands(
     state: &mut GameSnapshot,
     road_topology: &RoadTopology,
     road_flow: &mut traffic::RoadFlow,
     demands: Vec<population::TripDemand>,
 ) {
+    let mut planner = crate::route_choice::DemandBatchPlanner::new(state);
     for demand in demands {
-        let trip = build_commute_trip(state, road_topology, road_flow, &demand);
+        let choice = planner.choose(
+            state,
+            road_topology,
+            road_flow,
+            demand.origin,
+            demand.destination,
+        );
+        let mut trip = build_trip(
+            state,
+            &demand.citizen_id,
+            demand.purpose,
+            demand.origin,
+            demand.destination,
+            demand.origin.into(),
+            demand.scheduled_time,
+        );
+        match choice {
+            crate::route_choice::RouteChoice::PrivateCar(car) => {
+                traffic::add_car_path_to_flow(road_flow, &car.path);
+                planner.note_road_flow_changed();
+                trip.status = TripStatus::Driving;
+                trip.private_car_trip = Some(car);
+            }
+            crate::route_choice::RouteChoice::NonCar(plan) => {
+                // An empty-leg plan would leave the trip Arrived before any
+                // tick scores it; leave planless trips to `tick_trip`'s own
+                // handling.
+                if !plan.legs.is_empty() {
+                    trip.status = status_after_leg(&plan, 0);
+                    trip.route_plan = Some(plan);
+                }
+            }
+            // No route at spawn: stay Idle + planless; `tick_trip` owns the
+            // eventual Unserved marking.
+            crate::route_choice::RouteChoice::Unserved => {}
+        }
         state.active_trips.push(trip);
     }
 }
@@ -565,20 +605,6 @@ fn just_disembarked_trip_ids(before: &GameSnapshot, after: &GameSnapshot) -> Has
         .collect()
 }
 
-fn private_car_trip_if_faster(
-    non_car_plan: Option<&RoutePlan>,
-    car: Option<traffic::PrivateCarCandidate>,
-    current_time: f64,
-) -> Option<PrivateCarTrip> {
-    let car = car.filter(|car| {
-        non_car_plan.is_none_or(|plan| car.estimated_seconds < plan.estimated_seconds)
-    })?;
-    Some(PrivateCarTrip {
-        path: car.path,
-        arrival_time: current_time + car.estimated_seconds,
-    })
-}
-
 fn next_boundary_after(
     state: &GameSnapshot,
     flow: &traffic::RoadFlow,
@@ -871,53 +897,6 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) 
     if next.as_ref().is_none_or(|current| sample < *current) {
         *next = Some(sample);
     }
-}
-
-/// Plan one due commute trip: compare the non-car route plan against the
-/// private-car candidate, then build the trip in the chosen mode. A chosen car
-/// is registered into `road_flow` immediately so same-time sims plan against
-/// it. When the non-car plan wins, it is stored on the trip (with the status
-/// and leg index it implies) so `tick_trip` and boundary tracking reuse it
-/// instead of re-planning the same origin/destination.
-fn build_commute_trip(
-    state: &mut GameSnapshot,
-    road_topology: &RoadTopology,
-    road_flow: &mut traffic::RoadFlow,
-    demand: &population::TripDemand,
-) -> ActiveTrip {
-    let non_car_plan =
-        router::find_route_plan(state, road_flow, &demand.origin, &demand.destination);
-    let chosen_car = private_car_trip_if_faster(
-        non_car_plan.as_ref(),
-        traffic::private_car_candidate(
-            state,
-            road_topology,
-            road_flow,
-            demand.origin,
-            demand.destination,
-        ),
-        state.time,
-    );
-    let mut trip = build_trip(
-        state,
-        &demand.citizen_id,
-        demand.purpose,
-        demand.origin,
-        demand.destination,
-        demand.origin.into(),
-        demand.scheduled_time,
-    );
-    if let Some(car) = chosen_car {
-        traffic::add_car_path_to_flow(road_flow, &car.path);
-        trip.status = TripStatus::Driving;
-        trip.private_car_trip = Some(car);
-    } else if let Some(plan) = non_car_plan.filter(|plan| !plan.legs.is_empty()) {
-        // An empty-leg plan would leave the trip Arrived before any tick
-        // scores it; leave planless trips to `tick_trip`'s own handling.
-        trip.status = status_after_leg(&plan, 0);
-        trip.route_plan = Some(plan);
-    }
-    trip
 }
 
 fn build_trip(
@@ -1384,15 +1363,19 @@ fn same_position_and_point(position: &TripPosition, point: &Point) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::engine::GameEngine;
+    use crate::intent::GameIntent;
     use crate::model::{
         ActiveTrip, EconomyPreset, GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio,
-        MaxUnservedRatio, MetricsState, ObjectiveThresholds, Point, PrivateCarTrip,
-        RollingWindowSeconds, RouteLeg, RoutePlan, ServiceDirection, SurvivalTimeSeconds,
-        TransitPath, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus,
+        MaxUnservedRatio, MetricsState, ObjectiveThresholds, PlacedBuilding, Point, PrivateCarTrip,
+        RollingWindowSeconds, RouteLeg, RoutePlan, ServiceDirection, ServicePattern,
+        SurvivalTimeSeconds, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
+        TripPurpose, TripStatus,
     };
     use crate::road_topology::RoadTopology;
     use crate::scenario::{growing_suburb_campaign, growing_suburb_growth_waves};
     use crate::state::create_initial_snapshot;
+    use crate::SandboxCreationRequest;
 
     /// Build a campaign snapshot with custom objectives, paused=false, speed=1.
     fn campaign_snapshot(
@@ -1660,50 +1643,255 @@ mod tests {
         assert!(trip.private_car_trip.is_none());
     }
 
-    #[test]
-    fn equal_private_car_eta_keeps_the_non_car_plan() {
-        let non_car_plan = RoutePlan {
-            legs: Vec::new(),
-            estimated_seconds: 10.0,
-        };
-        let car = crate::traffic::PrivateCarCandidate {
-            path: TransitPath::Road {
-                steps: Vec::new(),
-                total_travel_seconds: 10.0,
-            },
-            estimated_seconds: 10.0,
-        };
-
-        assert!(private_car_trip_if_faster(Some(&non_car_plan), Some(car), 100.0).is_none());
+    fn commute_building(id: &str, point: Point) -> PlacedBuilding {
+        PlacedBuilding {
+            id: id.to_string(),
+            building_type: "smallHouse".to_string(),
+            origin: point,
+            rotation: 0,
+            occupied_tiles: vec![point],
+            placed_at: 0.0,
+            transit_node_id: None,
+        }
     }
 
-    #[test]
-    fn strict_car_choice_switches_when_non_car_eta_becomes_slower() {
-        let free_flow_non_car_plan = RoutePlan {
-            legs: Vec::new(),
-            estimated_seconds: 100.0,
-        };
-        let congested_non_car_plan = RoutePlan {
-            legs: Vec::new(),
-            estimated_seconds: 110.0,
-        };
-        let car = crate::traffic::PrivateCarCandidate {
-            path: TransitPath::Road {
-                steps: Vec::new(),
-                total_travel_seconds: 0.0,
-            },
-            estimated_seconds: 105.0,
-        };
-
-        assert!(private_car_trip_if_faster(
-            Some(&free_flow_non_car_plan),
-            Some(car.clone()),
-            100.0
-        )
-        .is_none());
+    /// One direct Bus/car corridor, mirroring the natural geometry already
+    /// characterized by `tests/router_planning.rs`: two-way road at y=5,
+    /// home/work buildings on y=4, and a 2-stop Loop bus route whose ride
+    /// runs along that same road — so the car and the Bus share congestible
+    /// tiles and congestion alone flips the strict-`<` mode choice.
+    fn route_choice_batch_fixture() -> (GameSnapshot, RoadTopology, Point, Point) {
+        let home = Point { x: 1, y: 4 };
+        let workplace = Point { x: 13, y: 4 };
+        let mut engine = GameEngine::from_sandbox_request(SandboxCreationRequest {
+            template_id: "blankGrid".to_string(),
+            economy_preset: "standard".to_string(),
+            starting_capital: Some(120_000.0),
+            demand_multiplier: Some(1.0),
+        })
+        .expect("blank-grid fixture should construct");
+        for x in 1..=13 {
+            let result = engine.dispatch(GameIntent::LayRoad {
+                point: (x, 5).into(),
+            });
+            assert!(result.applied, "fixture road should apply: {result:?}");
+        }
+        for point in [Point { x: 3, y: 4 }, Point { x: 11, y: 4 }] {
+            let result = engine.dispatch(GameIntent::AddBusStop { point });
+            assert!(result.applied, "fixture stop should apply: {result:?}");
+        }
+        let created = engine.dispatch(GameIntent::CreateRoute {
+            mode: TransitMode::Bus,
+            pattern: ServicePattern::Loop,
+            waypoint_ids: vec!["stop-001".to_string(), "stop-002".to_string()],
+        });
+        assert!(created.applied, "fixture route should apply: {created:?}");
+        let assigned = engine.dispatch(GameIntent::AssignVehicle {
+            mode: "bus".to_string(),
+            line_id: "route-001".to_string(),
+        });
         assert!(
-            private_car_trip_if_faster(Some(&congested_non_car_plan), Some(car), 100.0).is_some()
+            assigned.applied,
+            "fixture vehicle should apply: {assigned:?}"
         );
+        let mut state = engine.snapshot();
+        state.buildings = vec![
+            commute_building("home", home),
+            commute_building("work", workplace),
+        ];
+        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
+        (state, topology, home, workplace)
+    }
+
+    /// Test-only outcome of one sequential spawn decision, mirroring the
+    /// observable trip payload the spawn loop produces.
+    #[derive(Debug, PartialEq)]
+    enum ChoiceDescriptor {
+        Car {
+            path: TransitPath,
+            arrival_time: f64,
+        },
+        NonCar(RoutePlan),
+        Planless,
+    }
+
+    /// Run today's exact sequential one-shot sequence over `demands`: one-shot
+    /// non-car plan against the current flow, one-shot car candidate against
+    /// the same flow, strict `<` picks the car; a chosen car is registered into
+    /// `road_flow` immediately so later same-time demands plan against it; a
+    /// winning non-car plan is kept only when its legs are non-empty.
+    fn reference_spawn_choices(
+        state: &GameSnapshot,
+        road_topology: &RoadTopology,
+        road_flow: &mut traffic::RoadFlow,
+        demands: &[population::TripDemand],
+    ) -> Vec<ChoiceDescriptor> {
+        demands
+            .iter()
+            .map(|demand| {
+                let non_car_plan =
+                    router::find_route_plan(state, road_flow, &demand.origin, &demand.destination);
+                let car = traffic::private_car_candidate(
+                    state,
+                    road_topology,
+                    road_flow,
+                    demand.origin,
+                    demand.destination,
+                )
+                .filter(|car| {
+                    non_car_plan
+                        .as_ref()
+                        .is_none_or(|plan| car.estimated_seconds < plan.estimated_seconds)
+                });
+                if let Some(car) = car {
+                    traffic::add_car_path_to_flow(road_flow, &car.path);
+                    ChoiceDescriptor::Car {
+                        path: car.path,
+                        arrival_time: state.time + car.estimated_seconds,
+                    }
+                } else if let Some(plan) = non_car_plan.filter(|plan| !plan.legs.is_empty()) {
+                    ChoiceDescriptor::NonCar(plan)
+                } else {
+                    ChoiceDescriptor::Planless
+                }
+            })
+            .collect()
+    }
+
+    fn descriptor_of_trip(trip: &ActiveTrip) -> ChoiceDescriptor {
+        if trip.status == TripStatus::Driving {
+            if let Some(car) = trip.private_car_trip.as_ref() {
+                return ChoiceDescriptor::Car {
+                    path: car.path.clone(),
+                    arrival_time: car.arrival_time,
+                };
+            }
+        }
+        if let Some(plan) = trip.route_plan.as_ref() {
+            return ChoiceDescriptor::NonCar(plan.clone());
+        }
+        ChoiceDescriptor::Planless
+    }
+
+    /// Characterization oracle: the same-time batch spawn must exactly match
+    /// the sequential one-shot reference over the same starting flow —
+    /// canonical trip order, per-row mode/path/arrival descriptors, and the
+    /// identical final RoadFlow. The starting flow is the first level in
+    /// `0..=64` of identical pre-existing car-path loads where one-shot
+    /// scoring yields a car win that flips to non-car once that car joins the
+    /// flow, so the assertions observe the sequential-congestion switch
+    /// rather than a degenerate all-car or all-non-car batch.
+    #[test]
+    fn same_time_batch_matches_sequential_one_shot_reference() {
+        let (state, topology, home, workplace) = route_choice_batch_fixture();
+        let demands: Vec<population::TripDemand> = (1..=4)
+            .map(|index| population::TripDemand {
+                citizen_id: format!("sim-{index:03}"),
+                purpose: TripPurpose::CommuteOutbound,
+                origin: home,
+                destination: workplace,
+                scheduled_time: 300.0,
+            })
+            .collect();
+
+        // Deterministic congestion-switch search over identical pre-existing
+        // car-path loads, using only current one-shot production scoring.
+        let probe = traffic::private_car_candidate(
+            &state,
+            &topology,
+            &traffic::RoadFlow::new(),
+            home,
+            workplace,
+        )
+        .expect("fixture OD has a car candidate");
+        let starting_flow = (0..=64u16)
+            .map(|level| {
+                let mut flow = traffic::RoadFlow::new();
+                for step in probe.path.road_steps() {
+                    flow.insert(step.position, level);
+                }
+                flow
+            })
+            .find(|flow| {
+                let non_car = router::find_route_plan(&state, flow, &home, &workplace);
+                let car = traffic::private_car_candidate(&state, &topology, flow, home, workplace);
+                let car_wins = car.as_ref().is_some_and(|car| {
+                    non_car
+                        .as_ref()
+                        .is_none_or(|plan| car.estimated_seconds < plan.estimated_seconds)
+                });
+                if !car_wins {
+                    return false;
+                }
+                let mut after = flow.clone();
+                if let Some(car) = car.as_ref() {
+                    traffic::add_car_path_to_flow(&mut after, &car.path);
+                }
+                let non_car_after = router::find_route_plan(&state, &after, &home, &workplace);
+                let car_after =
+                    traffic::private_car_candidate(&state, &topology, &after, home, workplace);
+                !car_after.is_some_and(|car| {
+                    non_car_after
+                        .as_ref()
+                        .is_none_or(|plan| car.estimated_seconds < plan.estimated_seconds)
+                })
+            })
+            .expect("congestion-switch level not found in 0..=64; widen the fixture geometry");
+
+        let mut reference_flow = starting_flow.clone();
+        let expected = reference_spawn_choices(&state, &topology, &mut reference_flow, &demands);
+        let car_row = expected
+            .iter()
+            .position(|descriptor| matches!(descriptor, ChoiceDescriptor::Car { .. }))
+            .expect("switch search guarantees a leading car win");
+        assert!(
+            expected[car_row + 1..]
+                .iter()
+                .any(|descriptor| matches!(descriptor, ChoiceDescriptor::NonCar(_))),
+            "fixture must switch to non-car after the first car joins the flow"
+        );
+
+        let mut production_state = state.clone();
+        let mut production_flow = starting_flow;
+        spawn_pending_trip_demands(
+            &mut production_state,
+            &topology,
+            &mut production_flow,
+            demands,
+        );
+
+        // Canonical sim/trip order.
+        let expected_sim_order: Vec<String> =
+            (1..=4).map(|index| format!("sim-{index:03}")).collect();
+        let expected_ids: Vec<String> = (1..=4)
+            .map(|index| format!("trip-day-0-trip-{index:03}"))
+            .collect();
+        assert_eq!(
+            production_state.active_trips.len(),
+            expected_sim_order.len()
+        );
+        assert_eq!(
+            production_state
+                .active_trips
+                .iter()
+                .map(|trip| trip.sim_id.clone())
+                .collect::<Vec<_>>(),
+            expected_sim_order
+        );
+        assert_eq!(
+            production_state
+                .active_trips
+                .iter()
+                .map(|trip| trip.id.clone())
+                .collect::<Vec<_>>(),
+            expected_ids
+        );
+        // Descriptor equality for every row.
+        for (trip, descriptor) in production_state.active_trips.iter().zip(&expected) {
+            assert_eq!(&descriptor_of_trip(trip), descriptor);
+        }
+        // Identical final RoadFlow.
+        assert_eq!(production_flow, reference_flow);
     }
 
     #[test]

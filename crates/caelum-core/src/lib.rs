@@ -47,6 +47,7 @@ pub mod rejection;
 pub mod road;
 pub mod road_topology;
 pub mod roundabouts;
+pub(crate) mod route_choice;
 pub mod route_editor;
 pub mod route_lifecycle;
 pub mod router;
