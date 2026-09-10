@@ -154,6 +154,15 @@ pub(crate) fn spawn_pending_trip_demands(
     road_flow: &mut traffic::RoadFlow,
     demands: Vec<population::TripDemand>,
 ) -> crate::route_choice::RouteChoiceBatchStats {
+    // `drain_and_spawn` reaches here on every substep, including the common
+    // no-demand progression where `drain_trip_demands` returns empty. Skip the
+    // batch-planner setup in that case — `DemandBatchPlanner::new` eagerly
+    // derives road access for every building and enumerates all direct/
+    // transfer transit shapes (O(buildings + S^2*E1*E2)), which before this PR
+    // was a no-op. Returning default stats matches an empty batch.
+    if demands.is_empty() {
+        return crate::route_choice::RouteChoiceBatchStats::default();
+    }
     let mut planner = crate::route_choice::DemandBatchPlanner::new(state);
     for demand in demands {
         let choice = planner.choose(
