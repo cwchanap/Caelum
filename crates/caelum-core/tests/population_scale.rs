@@ -72,7 +72,7 @@ fn scale_snapshot(all_future: bool) -> GameSnapshot {
     let mut due_workers = 0usize;
     snapshot.sims = (1..=TOTAL)
         .map(|index| {
-            let id = format!("sim-{index:06}");
+            let id = format!("sim-{index:03}");
             let student = is_student_id(&id);
             let shift_template = shift_template_for_id(&id);
             // Stage B: one day in seven is off (`day % 7 == suffix % 7`); on
@@ -155,7 +155,7 @@ fn stage_a_two_hundred_thousand_worker_engine_structural_and_granularity() {
     // every 7th is on a day-0 day off, and both are skipped.
     let mut due_ordinals = Vec::with_capacity(DUE);
     for index in 1..=TOTAL {
-        if !is_student_id(&format!("sim-{index:06}")) && !index.is_multiple_of(7) {
+        if !is_student_id(&format!("sim-{index:03}")) && !index.is_multiple_of(7) {
             due_ordinals.push(index);
             if due_ordinals.len() == DUE {
                 break;
@@ -164,7 +164,7 @@ fn stage_a_two_hundred_thousand_worker_engine_structural_and_granularity() {
     }
     let due_ids: HashSet<String> = due_ordinals
         .iter()
-        .map(|index| format!("sim-{index:06}"))
+        .map(|index| format!("sim-{index:03}"))
         .collect();
     assert!(coarse_snapshot.active_trips.len() <= DUE);
     for trip in &coarse_snapshot.active_trips {
