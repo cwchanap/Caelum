@@ -59,9 +59,11 @@ fn assert_mixed_peak_composition(count: usize, bus_route_count: usize, expected_
                     .any(|leg| matches!(leg.mode, TransitMode::Metro));
                 if has_bus {
                     bus += 1;
-                } else if has_metro {
+                }
+                if has_metro {
                     metro += 1;
-                } else {
+                }
+                if !has_bus && !has_metro {
                     walk_only += 1;
                 }
             }
