@@ -34,3 +34,29 @@ frames of CPU draw time. The spec skips in normal E2E.
   is the ceiling the batched renderer must hold without changing the
   `PresentationUpdate`/`GameSnapshot` contracts.
 - Later HPA-640 tasks append their rows to this file as the WebGPU path lands.
+
+## Production cutover gates (Task 4)
+
+### Chromium (full Playwright through the WebGPU production path)
+
+`bun run test:e2e` after switching the production default to `createWebGpuHost`:
+27 passed, 1 skipped (the renderer-scale benchmark spec skips by design). The
+road-marker oracle in `routes.spec.ts` was retargeted from the Canvas2D fillRect
+trace to probing the presented WebGPU canvas (PNG decode + pixel sampling of a
+10×10 world-pixel marker blob), preserving the original assertion: a filled
+bus-colored marker renders at each passenger stop and never at the road-access
+tile. No build/track/demolish, route-edit, overlay, save/restore, pointer,
+resize, or simulation-control assertion was weakened.
+
+### Tauri / WKWebView smoke (non-interactive session)
+
+`bun run tauri:dev` on macOS 26.6.2 (arm64): the native shell (caelum-core +
+tauri/wry/tao, 392 crates) compiled clean in the dev profile and launched
+`target/debug/caelum`; the app process stayed alive with the Vite dev server
+serving the frontend (HTTP 200) and zero error/panic lines in the captured
+stdout/stderr. The session was locked (login window, no on-screen window, no
+assistive access), so the following remain **unverified non-interactively** and
+need a human smoke pass before Canvas deletion: visible map render in
+WKWebView, WKWebView WebGPU adapter availability, resize/pointer alignment,
+build/select/drag input, overlay/route layering, and visibly continuous moving
+vehicles.

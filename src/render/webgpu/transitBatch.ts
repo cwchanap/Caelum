@@ -410,6 +410,13 @@ function editedRouteId(ui: UiState): string | null {
     : null;
 }
 
+/** Cache key for committed route geometry: scene revision plus the
+ *  selected/edited-route emphasis. Hosts reuse it to skip re-tessellation
+ *  while the structural scene and emphasis are unchanged. */
+export function routeStyleKeyFor(ui: UiState, sceneRevision: number): string {
+  return `routes:${sceneRevision}:${ui.selectedRouteId ?? "-"}:${editedRouteId(ui) ?? "-"}`;
+}
+
 /**
  * Tessellates committed transit presentation — emphasis halos, route legs
  * with corridor offsets, direction arrows, stop access indicators, stop and
@@ -422,7 +429,7 @@ export function buildTransitBatch(
   sceneRevision: number,
 ): { vertices: Float32Array<ArrayBuffer>; routeStyleKey: string } {
   const editedId = editedRouteId(ui);
-  const routeStyleKey = `routes:${sceneRevision}:${ui.selectedRouteId ?? "-"}:${editedId ?? "-"}`;
+  const routeStyleKey = routeStyleKeyFor(ui, sceneRevision);
   const emphasizedIds = new Set(
     [ui.selectedRouteId, editedId].filter(
       (routeId): routeId is string => routeId !== null,

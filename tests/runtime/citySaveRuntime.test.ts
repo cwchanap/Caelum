@@ -15,6 +15,7 @@ import type {
 } from "../../src/runtime/backend/types";
 import type { SnapshotError } from "../../src/runtime/backend/persistenceContract";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createFakeGameHost, lastFakeHost } from "../helpers/gameHost";
 import {
   createPresentationUpdate,
   createRustSnapshot,
@@ -106,6 +107,7 @@ async function runtimeWithStore(
   } = {},
 ) {
   return createGameRuntime({
+    createHost: createFakeGameHost,
     backend: options.backend ?? backend(),
     saveStore,
     initialCity:
@@ -205,6 +207,9 @@ describe("runtime working-save integration", () => {
       state: { budget: 77_000 },
       persistence: { activeCity: LOADED_CITY, dirty: false },
     });
+    // A successful restore is a structural acceptance: the scene revision
+    // advanced exactly once through acceptPresentationUpdate.
+    expect(lastFakeHost()!.context.getSceneRevision()).toBe(2);
 
     targetBackend.setRestoreOutcome({
       ok: false,

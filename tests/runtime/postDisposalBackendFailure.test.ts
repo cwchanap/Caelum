@@ -5,25 +5,13 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createFakeGameHost, lastFakeHost } from "../helpers/gameHost";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
   createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
-
-const canvasHost = vi.hoisted(() => ({
-  mount: vi.fn(() => () => {}),
-  render: vi.fn(),
-  start: vi.fn(),
-  stop: vi.fn(),
-  syncAnimationLoop: vi.fn(),
-  isRunning: vi.fn(() => false),
-}));
-
-vi.mock("../../src/runtime/createCanvasHost", () => ({
-  createCanvasHost: vi.fn(() => canvasHost),
-}));
 
 // ---------------------------------------------------------------------------
 // Delayed dispatch backend — a mutable backend whose `dispatch` can be
@@ -116,15 +104,16 @@ function createDelayedDispatchBackend(): DelayedDispatchBackend {
 describe("post-disposal backend failure publication", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    canvasHost.isRunning.mockReturnValue(false);
   });
 
   it("does not notify subscribers or render when a backend operation rejects after disposal", async () => {
     const backend = createDelayedDispatchBackend();
     const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
       backend,
       initialCity: null,
     });
+    const host = lastFakeHost()!;
 
     const listener = vi.fn();
     runtime.subscribe(listener);
@@ -136,7 +125,7 @@ describe("post-disposal backend failure publication", () => {
     await dispatchBlocked;
 
     // Record render count before disposal.
-    const rendersBeforeDispose = canvasHost.render.mock.calls.length;
+    const rendersBeforeDispose = host.render.mock.calls.length;
 
     // Disposal is terminal immediately even though this dispatch is still in
     // flight. It must suppress any later render or subscriber notification.
@@ -156,7 +145,7 @@ describe("post-disposal backend failure publication", () => {
     expect(listener).not.toHaveBeenCalled();
 
     // No canvas render after disposal.
-    expect(canvasHost.render.mock.calls.length).toBe(rendersBeforeDispose);
+    expect(host.render.mock.calls.length).toBe(rendersBeforeDispose);
 
     // The runtime is terminal with the backend error recorded.
     expect(runtime.getSnapshot().backendError).toBe("backend exploded");
@@ -165,15 +154,17 @@ describe("post-disposal backend failure publication", () => {
   it("a comparable failure without disposal still publishes exactly once", async () => {
     const backend = createDelayedDispatchBackend();
     const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
       backend,
       initialCity: null,
     });
+    const host = lastFakeHost()!;
 
     const listener = vi.fn();
     runtime.subscribe(listener);
     listener.mockClear();
 
-    const rendersBefore = canvasHost.render.mock.calls.length;
+    const rendersBefore = host.render.mock.calls.length;
 
     // Start a dispatch that blocks inside backend.dispatch.
     const dispatchBlocked = backend.blockNextDispatch();
@@ -197,14 +188,14 @@ describe("post-disposal backend failure publication", () => {
     expect(errorCalls).toHaveLength(1);
 
     // At least one render occurred (the terminal snapshot render).
-    expect(canvasHost.render.mock.calls.length).toBeGreaterThan(rendersBefore);
+    expect(host.render.mock.calls.length).toBeGreaterThan(rendersBefore);
 
     // The runtime is terminal.
     expect(runtime.getSnapshot().backendError).toBe("live backend failure");
 
     // A second rejection does not publish again.
     listener.mockClear();
-    canvasHost.render.mockClear();
+    host.render.mockClear();
     // The runtime is already dead; a second dispatch short-circuits.
     await runtime.debugSetBudget(99_000);
     expect(listener).not.toHaveBeenCalled();
