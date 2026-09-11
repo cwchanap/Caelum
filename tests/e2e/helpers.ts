@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import type { SandboxTemplateId } from "../../src/domain/types";

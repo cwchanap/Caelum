@@ -1,5 +1,5 @@
 import type { BuildingType, GameState } from "../domain/types";
-import { tileSize } from "./canvas";
+import { tileSize } from "./boardTransform";
 import { colors } from "./colors";
 
 const buildingColors = {

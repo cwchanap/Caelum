@@ -3,8 +3,6 @@ import {
   type GameState,
   type Point,
   type RoadStructure,
-  type RouteLegPath,
-  type TransitPath,
   type TripPosition,
 } from "../domain/types";
 import type { AuthoredRoadTilePreview } from "../runtime/backend/types";
@@ -21,10 +19,14 @@ import { getBuildingFootprint } from "../domain/catalog/buildings";
 import { stopCoverageRadius } from "../domain/catalog/transit";
 import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
-import { tileSize, type BoardTransform } from "./canvas";
+import { tileSize, type BoardTransform } from "./boardTransform";
 import { colors } from "./colors";
+import {
+  failedLegMarkerPoint,
+  selectMapTextOverlayItems,
+  type MapTextOverlayItem,
+} from "./mapTextOverlay";
 import { drawDirectionArrow } from "./mapRenderer";
-import { pointAndTangentAt } from "./pathRenderer";
 import {
   canPlaceBuilding,
   canPlaceBusStop,
@@ -162,41 +164,13 @@ function drawAuthoredRoadConnections(
   }
 }
 
-function compareRouteImpacts(
-  left: RoadMutationPreviewView["routeImpacts"][number],
-  right: RoadMutationPreviewView["routeImpacts"][number],
-): number {
-  if (left.routeName !== right.routeName) {
-    return left.routeName < right.routeName ? -1 : 1;
-  }
-  if (left.kind === right.kind) return 0;
-  return left.kind < right.kind ? -1 : 1;
-}
-
-function roadPreviewFeedback(preview: RoadMutationPreviewView): string {
-  const impacts = [...preview.routeImpacts]
-    .sort(compareRouteImpacts)
-    .map((impact) => `${impact.routeName} ${impact.kind}`)
-    .join(" · ");
-  const cost = preview.costLabel;
-  return impacts.length === 0 ? cost : `${cost} · ${impacts}`;
-}
-
-function roadPreviewAnchor(preview: RoadMutationPreviewView): Point {
-  return (
-    preview.authoredTiles[0]?.point ??
-    preview.changedTiles[0] ??
-    preview.generatedStructures[0]?.footprint[0] ?? { x: 0, y: 0 }
-  );
-}
-
 function renderRoadPreviewFeedback(
   ctx: CanvasRenderingContext2D,
-  preview: RoadMutationPreviewView,
+  item: Extract<MapTextOverlayItem, { kind: "roadPreview" }>,
   transform: BoardTransform,
 ): void {
-  const text = roadPreviewFeedback(preview);
-  const anchor = roadPreviewAnchor(preview);
+  const text = item.text;
+  const anchor = item.anchor;
   // Position math bakes in the board transform (offset + scale) so this
   // can be drawn in the untransformed context (after ctx.restore()), just
   // like renderCursorBadge. DPR scaling keeps the on-screen size constant.
@@ -440,13 +414,6 @@ function renderDragPreview(
   );
 }
 
-function transitNode(state: GameState, nodeId: string) {
-  return (
-    state.transit.stops.find((node) => node.id === nodeId) ??
-    state.transit.stations.find((node) => node.id === nodeId)
-  );
-}
-
 function drawNumberedHandle(
   ctx: CanvasRenderingContext2D,
   position: TripPosition,
@@ -513,53 +480,6 @@ export function renderRouteDraftHandleOverlay(
       ]),
     ),
   );
-}
-
-function pathMidpoint(path: TransitPath): TripPosition | null {
-  if (path.steps.length === 0) {
-    return null;
-  }
-  const target = path.totalTravelSeconds / 2;
-  let elapsed = 0;
-  for (const step of path.steps) {
-    const next = elapsed + step.travelSeconds;
-    if (target <= next || step === path.steps.at(-1)) {
-      const progress =
-        step.travelSeconds <= 0 ? 0.5 : (target - elapsed) / step.travelSeconds;
-      return pointAndTangentAt(
-        step.geometry,
-        Math.max(0, Math.min(1, progress)),
-      ).point;
-    }
-    elapsed = next;
-  }
-  return null;
-}
-
-function failedLegMarkerPoint(
-  state: GameState,
-  leg: RouteLegPath,
-): TripPosition | null {
-  const from = transitNode(state, leg.fromWaypointId);
-  const to = transitNode(state, leg.toWaypointId);
-  if (leg.status === "missingNode") {
-    return (
-      (from?.status === "missing" ? from.position : undefined) ??
-      (to?.status === "missing" ? to.position : undefined) ??
-      from?.position ??
-      to?.position ??
-      null
-    );
-  }
-  if (leg.lastValidPath !== null) {
-    return pathMidpoint(leg.lastValidPath);
-  }
-  return from !== undefined && to !== undefined
-    ? {
-        x: (from.position.x + to.position.x) / 2,
-        y: (from.position.y + to.position.y) / 2,
-      }
-    : (from?.position ?? to?.position ?? null);
 }
 
 function renderBrokenRouteMarkers(
@@ -744,18 +664,20 @@ export function renderOverlays(
 /**
  * Draws the road-mutation preview feedback badge (cost / route impacts) in
  * the untransformed context (after `ctx.restore()`), so its on-screen size
- * stays consistent with the cursor badge regardless of board scale.
+ * stays consistent with the cursor badge regardless of board scale. The
+ * wording/anchor come from the shared map text overlay selector.
  */
 export function renderRoadPreviewFeedbackBadge(
   ctx: CanvasRenderingContext2D,
   state: GameState,
   ui: UiState,
   transform: BoardTransform,
-  precomputed: RoadMutationPreviewView | null | undefined = undefined,
 ): void {
-  const preview = precomputed ?? buildRoadMutationPreview(state, ui);
-  if (preview === null) {
+  const item = selectMapTextOverlayItems(state, ui).find(
+    (candidate) => candidate.kind === "roadPreview",
+  );
+  if (item === undefined || item.kind !== "roadPreview") {
     return;
   }
-  renderRoadPreviewFeedback(ctx, preview, transform);
+  renderRoadPreviewFeedback(ctx, item, transform);
 }

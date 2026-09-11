@@ -14,7 +14,7 @@ import type {
   TransitPath,
 } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
-import { tileSize, type BoardTransform } from "../../src/render/canvas";
+import { tileSize, type BoardTransform } from "../../src/render/boardTransform";
 import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";
 import type { RouteEditorView } from "../../src/runtime/types";
 

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { renderCursorBadge } from "../../src/render/cursorBadge";
-import { getBoardTransform } from "../../src/render/canvas";
+import { getBoardTransform } from "../../src/render/boardTransform";
 import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
 import { withAreas, withRoads, withTracks } from "../helpers/mapFixtures";

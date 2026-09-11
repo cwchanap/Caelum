@@ -4,7 +4,7 @@ import type {
   TransitPath,
   TripPosition,
 } from "../domain/types";
-import { pointAndTangentAt } from "./pathRenderer";
+import { pointAndTangentAt } from "./pathGeometry";
 
 const GEOMETRY_SAMPLE_SEGMENTS = 32;
 

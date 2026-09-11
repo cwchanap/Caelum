@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { MovementKind, RouteLegPath } from "../../src/domain/types";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { colors } from "../../src/render/colors";
 import {
   selectBuildLeaf,
