@@ -20,6 +20,9 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },
+        // Headless Chromium hides the WebGPU adapter without this flag;
+        // proven by tests/e2e/webgpuProbe.spec.ts. Not performance evidence.
+        launchOptions: { args: ["--enable-unsafe-webgpu"] },
       },
     },
   ],
