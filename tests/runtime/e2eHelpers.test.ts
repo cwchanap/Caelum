@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { getBoardTransform } from "../../src/render/canvas";
+import { getBoardTransform } from "../../src/render/boardTransform";
 import type { GameMap } from "../../src/domain/types";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import { _boardTransformForTest as boardTransform } from "../e2e/helpers";

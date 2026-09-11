@@ -7,7 +7,7 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { RuntimeController } from "../../src/runtime/types";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { createTestGameState } from "../helpers/gameState";
 import {
   createPresentationUpdate,

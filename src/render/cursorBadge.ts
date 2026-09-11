@@ -1,79 +1,9 @@
 import type { GameState } from "../domain/types";
-import { AREA_LABELS } from "../domain/catalog/areas";
-import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import type { UiState } from "../ui/uiState";
-import type { BoardTransform } from "./canvas";
-import { tileSize } from "./canvas";
+import type { BoardTransform } from "./boardTransform";
+import { tileSize } from "./boardTransform";
 import { colors } from "./colors";
-import {
-  canPlaceBuilding,
-  getTile,
-  isAreaPaintable,
-  isBuildingAffordableForPresentation,
-  isValidRoadPlacement,
-  isValidTrackPlacement,
-} from "./placementValidation";
-
-/** The tile under the pointer: the drag's current tile while a gesture is
- *  active, otherwise the idle hover tile. */
-function cursorTile(ui: UiState) {
-  return ui.drag?.current ?? ui.hoverTile;
-}
-
-/** Tool/preset label shown on the cursor, or null when no badge applies. */
-function badgeText(state: GameState, ui: UiState): string | null {
-  const cursor = cursorTile(ui);
-  if (cursor === null) {
-    return null;
-  }
-  if (ui.selectedBuilding !== null) {
-    const def = BUILDING_CATALOG[ui.selectedBuilding];
-    const ok =
-      isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
-      canPlaceBuilding(state, ui.selectedBuilding, cursor, ui.buildingRotation);
-    return `⦿ ${def.label} ${ui.buildingRotation}°${ok ? "" : " ⊘"}`;
-  }
-  switch (ui.activeTool) {
-    case "road": {
-      const glyph =
-        ui.roadPreset === "oneWay"
-          ? " →"
-          : ui.roadPreset === "dualBidirectional"
-            ? " ⇄"
-            : "";
-      const tile = getTile(state.map, cursor);
-      // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
-      // reject cycleRoadDirection, so exclude them from the existing-road fallback.
-      const ok =
-        isValidRoadPlacement(state, cursor) ||
-        (tile?.kind === "road" && tile.roadStructureId === undefined);
-      return `⦿ Road${glyph}${ok ? "" : " ⊘"}`;
-    }
-    case "track":
-      return `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`;
-    case "roundabout": {
-      const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
-      const preview = ui.roadMutationPreview;
-      const matching =
-        preview !== null && preview.generation === ui.roadPreviewGeneration;
-      if (!matching) {
-        return `⦿ Roundabout ${sizeLabel} …`;
-      }
-      return `⦿ Roundabout ${sizeLabel}${preview.rejection === null ? "" : " ⊘"}`;
-    }
-    case "area": {
-      if (ui.selectedArea === null) {
-        return null;
-      }
-      const ok = isAreaPaintable(state, cursor);
-      return `⦿ Area ${AREA_LABELS[ui.selectedArea]}${ok ? "" : " ⊘"}`;
-    }
-    case "remove":
-      return "⦿ Demolish";
-    default:
-      return null;
-  }
-}
+import { selectMapTextOverlayItems } from "./mapTextOverlay";
 
 export function renderCursorBadge(
   ctx: CanvasRenderingContext2D,
@@ -81,11 +11,13 @@ export function renderCursorBadge(
   ui: UiState,
   transform: BoardTransform,
 ): void {
-  const text = badgeText(state, ui);
-  const cursor = cursorTile(ui);
-  if (text === null || cursor === null) {
+  const item = selectMapTextOverlayItems(state, ui).find(
+    (candidate) => candidate.kind === "cursorBadge",
+  );
+  if (item === undefined || item.kind !== "cursorBadge") {
     return;
   }
+  const cursor = item.anchor;
   const centerX =
     transform.offsetX + (cursor.x + 0.5) * tileSize * transform.scale;
   const tileTop = transform.offsetY + cursor.y * tileSize * transform.scale;
@@ -107,16 +39,17 @@ export function renderCursorBadge(
   ctx.font = `${12 * dpr}px ui-monospace, monospace`;
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  const width = ctx.measureText(text).width + padding * 2;
+  const width = ctx.measureText(item.text).width + padding * 2;
   const boxX = centerX - width / 2;
-  // Default to above the tile, but flip below when the badge would clip the top
-  // row (e.g. hovering row 0) so the label stays fully visible.
+  // placement "aboveOrBelow": default above the tile, but flip below when the
+  // badge would clip the top row (e.g. hovering row 0) so the label stays
+  // fully visible.
   const aboveY = tileTop - height - gap;
   const boxY = aboveY < 0 ? tileBottom + gap : aboveY;
 
   ctx.fillStyle = colors.badgeBackground;
   ctx.fillRect(boxX, boxY, width, height);
   ctx.fillStyle = colors.badgeText;
-  ctx.fillText(text, centerX, boxY + height / 2);
+  ctx.fillText(item.text, centerX, boxY + height / 2);
   ctx.restore();
 }

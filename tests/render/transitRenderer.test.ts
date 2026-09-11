@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { renderTransit } from "../../src/render/transitRenderer";
 import type { RouteLegPath, TransitPath } from "../../src/domain/types";
 import { colors } from "../../src/render/colors";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import {

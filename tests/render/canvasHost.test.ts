@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameState } from "../../src/domain/types";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { createCanvasHost } from "../../src/runtime/createCanvasHost";
 import type {
   CanvasHost,

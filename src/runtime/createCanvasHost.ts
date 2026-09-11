@@ -3,9 +3,9 @@ import type { UiState } from "../ui/uiState";
 import {
   applyCanvasPixelSize,
   canvasToTile,
-  renderGame,
   syncCanvasSize,
-} from "../render/canvas";
+} from "../render/boardTransform";
+import { renderGame } from "../render/canvas";
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);

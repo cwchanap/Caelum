@@ -7,7 +7,7 @@ import type {
   Tile,
 } from "../domain/types";
 import { ROAD_DIRECTION_OFFSET } from "../domain/types";
-import { tileSize } from "./canvas";
+import { tileSize } from "./boardTransform";
 import { areaColors, colors } from "./colors";
 import { renderRoundabout } from "./roundaboutRenderer";
 

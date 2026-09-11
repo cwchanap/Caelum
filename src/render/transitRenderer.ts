@@ -7,9 +7,10 @@ import type {
   Vehicle,
 } from "../domain/types";
 import type { UiState } from "../ui/uiState";
-import { tileSize } from "./canvas";
+import { tileSize } from "./boardTransform";
 import { colors } from "./colors";
-import { drawPathGeometry, pointAndTangentAt } from "./pathRenderer";
+import { drawPathGeometry } from "./pathRenderer";
+import { pointAndTangentAt } from "./pathGeometry";
 import {
   canonicalCorridorPrimitive,
   corridorOffsets,
