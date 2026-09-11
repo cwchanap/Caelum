@@ -17,139 +17,14 @@ import {
   addTestBusStop,
 } from "../helpers/gameState";
 import { pointsOnRow, withRoads } from "../helpers/mapFixtures";
-
-interface FakeBuffer {
-  size: number;
-  destroyed: boolean;
-  destroy(): void;
-}
-
-interface FakePipeline {
-  descriptor: GPURenderPipelineDescriptor;
-}
-
-type FakePassOp =
-  | { kind: "setPipeline"; pipeline: FakePipeline }
-  | { kind: "setVertexBuffer"; slot: number; buffer: FakeBuffer }
-  | { kind: "draw"; vertexCount: number; instanceCount: number };
-
-interface FakePass {
-  ops: FakePassOp[];
-}
-
-interface FakeWrite {
-  buffer: FakeBuffer;
-  data: Float32Array;
-}
-
-interface FakeHarness {
-  buffers: FakeBuffer[];
-  pipelines: FakePipeline[];
-  writes: FakeWrite[];
-  passes: FakePass[];
-  device: GPUDevice;
-  resolveLost(info: { reason?: string; message: string }): void;
-}
-
-function createFakeDevice(): FakeHarness {
-  const harness: FakeHarness = {
-    buffers: [],
-    pipelines: [],
-    writes: [],
-    passes: [],
-    device: null as unknown as GPUDevice,
-    resolveLost: () => {},
-  };
-  let resolveLost: (info: {
-    reason?: string;
-    message: string;
-  }) => void = () => {};
-  const lost = new Promise<{ reason?: string; message: string }>((resolve) => {
-    resolveLost = resolve;
-  });
-  const makeBuffer = (descriptor: GPUBufferDescriptor): FakeBuffer => {
-    const buffer: FakeBuffer = {
-      size: descriptor.size,
-      destroyed: false,
-      destroy() {
-        buffer.destroyed = true;
-      },
-    };
-    harness.buffers.push(buffer);
-    return buffer;
-  };
-  const device = {
-    lost,
-    createBuffer: makeBuffer,
-    createRenderPipeline(descriptor: GPURenderPipelineDescriptor) {
-      const pipeline: FakePipeline = { descriptor };
-      harness.pipelines.push(pipeline);
-      return pipeline;
-    },
-    createShaderModule() {
-      return {};
-    },
-    createCommandEncoder() {
-      const encoderPasses: FakePass[] = [];
-      return {
-        beginRenderPass(): GPURenderPassEncoder {
-          const pass: FakePass = { ops: [] };
-          encoderPasses.push(pass);
-          return {
-            setPipeline(pipeline: FakePipeline) {
-              pass.ops.push({ kind: "setPipeline", pipeline });
-            },
-            setVertexBuffer(slot: number, buffer: FakeBuffer) {
-              pass.ops.push({ kind: "setVertexBuffer", slot, buffer });
-            },
-            draw(vertexCount: number, instanceCount = 1) {
-              pass.ops.push({ kind: "draw", vertexCount, instanceCount });
-            },
-            end() {},
-          } as unknown as GPURenderPassEncoder;
-        },
-        finish() {
-          return { passes: encoderPasses };
-        },
-      } as unknown as GPUCommandEncoder;
-    },
-    queue: {
-      writeBuffer(buffer: FakeBuffer, _offset: number, data: Float32Array) {
-        harness.writes.push({ buffer, data });
-      },
-      submit(commandBuffers: { passes: FakePass[] }[]) {
-        for (const commandBuffer of commandBuffers) {
-          harness.passes.push(...commandBuffer.passes);
-        }
-      },
-    },
-  };
-  harness.device = device as unknown as GPUDevice;
-  harness.resolveLost = resolveLost;
-  return harness;
-}
-
-function createFakeCanvas(): {
-  canvas: HTMLCanvasElement;
-  unconfigured: () => boolean;
-} {
-  let unconfigureCount = 0;
-  const context = {
-    configure() {},
-    unconfigure() {
-      unconfigureCount += 1;
-    },
-    getCurrentTexture() {
-      return { createView: () => ({}) };
-    },
-  };
-  const canvas = {
-    getContext(type: string) {
-      return type === "webgpu" ? context : null;
-    },
-  } as unknown as HTMLCanvasElement;
-  return { canvas, unconfigured: () => unconfigureCount > 0 };
-}
+import {
+  createFakeCanvas,
+  createFakeDevice,
+  type FakeBuffer,
+  type FakePass,
+  type FakePassOp,
+  type FakeWrite,
+} from "../helpers/fakeWebGpu";
 
 function solidVertices(vertexCount: number): Float32Array<ArrayBuffer> {
   return new Float32Array(vertexCount * SOLID_VERTEX_FLOATS);
