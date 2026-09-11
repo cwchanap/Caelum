@@ -29,6 +29,7 @@ const ROAD_FLOW_CAPACITY = 4;
 const MAX_CONGESTION_MULTIPLIER = 3;
 
 const HOVER = parseColor(colors.hover);
+const MISSING_HANDLE_DASH = { dash: 4, gap: 3 };
 const BADGE_BACKGROUND = parseColor(colors.badgeBackground);
 const BADGE_TEXT = parseColor(colors.badgeText);
 const UNSERVED = parseColor(colors.unserved);
@@ -479,8 +480,25 @@ function drawNumberedHandle(
   const stroke = missing ? UNSERVED : BADGE_TEXT;
   g.circle({ x, y }, radius, BADGE_BACKGROUND);
   // Canvas strokes the arc centered on the radius; the ring spans inward
-  // from its radius, so pass radius + half the stroke width.
-  g.ring({ x, y }, radius + lineWidth / 2, lineWidth, stroke);
+  // from its radius, so pass radius + half the stroke width. The missing
+  // ring is dashed [4,3] like the canvas renderer's setLineDash.
+  if (missing) {
+    g.dashedCurve(
+      {
+        kind: "arc",
+        center: { x, y },
+        radius,
+        startRadians: 0,
+        sweepRadians: Math.PI * 2,
+      },
+      lineWidth,
+      MISSING_HANDLE_DASH.dash,
+      MISSING_HANDLE_DASH.gap,
+      stroke,
+    );
+  } else {
+    g.ring({ x, y }, radius + lineWidth / 2, lineWidth, stroke);
+  }
   if (missing) {
     g.thickLine(
       { x: x - 6, y: y - 6 },

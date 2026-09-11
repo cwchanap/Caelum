@@ -15,6 +15,7 @@ import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createTestGameState } from "../helpers/gameState";
 import { withAreas } from "../helpers/mapFixtures";
+import { coveredStripFraction } from "../helpers/vertexCoverage";
 
 const EPSILON = 1e-4;
 
@@ -510,5 +511,38 @@ describe("buildOverlayRanges route handles", () => {
     expect(hasVertexNear(overVehicles, colors.unserved, 170, 170, 2)).toBe(
       true,
     );
+  });
+
+  it("dashes the missing-waypoint ring", () => {
+    const base = withStops(createTestGameState(), [
+      presentStop("stop-1", { x: 2, y: 2 }),
+      {
+        id: "stop-gone",
+        kind: "busStop" as const,
+        status: "missing" as const,
+        position: { x: 5, y: 5 },
+        platforms: [],
+      },
+    ]);
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-1", "stop-gone"],
+      },
+    };
+    const { overVehicles } = buildOverlayRanges(base, ui);
+
+    // Canvas dashes the missing ring [4,3]; a solid ring covers everything.
+    // The canvas arc sits at radius 10 (band 9..11) — probe its centerline.
+    const covered = coveredStripFraction(overVehicles, colors.unserved, {
+      kind: "arc",
+      center: { x: 176, y: 176 },
+      radius: 10,
+      startRadians: 0,
+      sweepRadians: Math.PI * 2,
+    });
+    expect(covered).toBeGreaterThan(0.3);
+    expect(covered).toBeLessThan(0.95);
   });
 });

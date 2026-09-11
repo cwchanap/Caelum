@@ -200,20 +200,22 @@ function drawSteps(
       offsetForRoute(step.geometry, routeId, corridors),
       center,
     );
-    if (geometry.kind === "line" && dash !== undefined) {
-      g.dashedLine(
-        geometry.from,
-        geometry.to,
-        lineWidth,
-        dash.dash,
-        dash.gap,
-        color,
-      );
-    } else if (geometry.kind === "line") {
-      g.thickLine(geometry.from, geometry.to, lineWidth, color);
+    if (geometry.kind === "line") {
+      if (dash !== undefined) {
+        g.dashedLine(
+          geometry.from,
+          geometry.to,
+          lineWidth,
+          dash.dash,
+          dash.gap,
+          color,
+        );
+      } else {
+        g.thickLine(geometry.from, geometry.to, lineWidth, color);
+      }
+    } else if (dash !== undefined) {
+      g.dashedCurve(geometry, lineWidth, dash.dash, dash.gap, color);
     } else {
-      // ponytail: dashed curves tessellate solid; add per-segment dash
-      // sampling if a broken curved leg ever needs visible gaps.
       g.curve(geometry, lineWidth, color);
     }
   }
