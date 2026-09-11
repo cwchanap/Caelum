@@ -6,6 +6,7 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createCanvasHost } from "../../src/runtime/createCanvasHost";
 import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/boardTransform";
 import { createTestGameState } from "../helpers/gameState";
@@ -210,6 +211,9 @@ async function mount() {
   const runtime = await createGameRuntime({
     hoverPreviewDebounceMs: 0,
     backend: backendSpy(),
+    // This test's subject is the real host pointer lifecycle, so it injects
+    // the Canvas host through the seam (until Task 5 deletes it).
+    createHost: async (ctx) => createCanvasHost(ctx),
   });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;

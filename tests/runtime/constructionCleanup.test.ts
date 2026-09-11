@@ -1,25 +1,13 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { GameBackend } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createFakeGameHost } from "../helpers/gameHost";
 import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
 import {
   createPresentationUpdate,
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
-
-const canvasHost = vi.hoisted(() => ({
-  mount: vi.fn(() => () => {}),
-  render: vi.fn(),
-  start: vi.fn(),
-  stop: vi.fn(),
-  syncAnimationLoop: vi.fn(),
-  isRunning: vi.fn(() => false),
-}));
-
-vi.mock("../../src/runtime/createCanvasHost", () => ({
-  createCanvasHost: vi.fn(() => canvasHost),
-}));
 
 // Hoisted mock for `createPreviewCoordinator` so a test can inject a
 // post-lease construction failure (the call site runs after the persistence
@@ -68,8 +56,6 @@ function createBackend(): GameBackend {
 
 describe("construction exception cleanup (P2)", () => {
   beforeEach(() => {
-    canvasHost.mount.mockClear();
-    canvasHost.render.mockClear();
     previewCoordinatorFactory.create.mockClear();
   });
 
@@ -84,12 +70,20 @@ describe("construction exception cleanup (P2)", () => {
       throw constructionError;
     });
 
-    await expect(createGameRuntime({ backend, saveStore: store })).rejects.toBe(
-      constructionError,
-    );
+    await expect(
+      createGameRuntime({
+        createHost: createFakeGameHost,
+        backend,
+        saveStore: store,
+      }),
+    ).rejects.toBe(constructionError);
 
     // A replacement runtime using the same backend and store must succeed.
-    const runtime = await createGameRuntime({ backend, saveStore: store });
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      backend,
+      saveStore: store,
+    });
     await runtime.dispose();
   });
 });

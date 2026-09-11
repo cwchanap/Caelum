@@ -260,3 +260,78 @@ export async function debugSetBudget(
     return runtime.debugSetBudget(amount);
   }, budget);
 }
+
+export interface PixelProbe {
+  tile: { x: number; y: number };
+  /** World-pixel offsets from the tile center. */
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Samples RGB triples from the presented gameplay canvas (WebGPU path) at
+ * world-space points expressed as tile + world-pixel offsets. One drawImage
+ * readback covers every probe; off-board probes return null.
+ */
+export async function sampleTilePixels(
+  page: Page,
+  probes: PixelProbe[],
+): Promise<Array<[number, number, number] | null>> {
+  // page.evaluate cannot capture Node-scope imports, so pass board constants
+  // in explicitly.
+  const boardWidth = MAP_WIDTH * tileSize;
+  const boardHeight = MAP_HEIGHT * tileSize;
+  return page.evaluate(
+    async ({ points, size, width, height }) => {
+      const canvas = document.querySelector(
+        "canvas[data-runtime-canvas='true']",
+      );
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error("Runtime canvas is unavailable");
+      }
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        return points.map(() => null);
+      }
+      // The WebGPU drawing buffer is cleared after present, so drawImage from
+      // the canvas itself reads blank; its PNG encoding still carries the
+      // presented frame.
+      const framePng = new Image();
+      const decoded = new Promise<void>((resolve, reject) => {
+        framePng.onload = () => resolve();
+        framePng.onerror = () => reject(new Error("canvas PNG decode failed"));
+      });
+      framePng.src = canvas.toDataURL();
+      await decoded;
+      const probe = document.createElement("canvas");
+      probe.width = canvas.width;
+      probe.height = canvas.height;
+      const ctx = probe.getContext("2d");
+      if (ctx === null) {
+        throw new Error("2D probe context is unavailable");
+      }
+      ctx.drawImage(framePng, 0, 0);
+      const image = ctx.getImageData(0, 0, probe.width, probe.height);
+      const scale = Math.min(rect.width / width, rect.height / height);
+      const offsetX = (rect.width - width * scale) / 2;
+      const offsetY = (rect.height - height * scale) / 2;
+      const dpr = canvas.width / rect.width;
+      return points.map(({ tile, dx, dy }) => {
+        const cssX = offsetX + ((tile.x + 0.5) * size + dx) * scale;
+        const cssY = offsetY + ((tile.y + 0.5) * size + dy) * scale;
+        const px = Math.round(cssX * dpr);
+        const py = Math.round(cssY * dpr);
+        if (px < 0 || py < 0 || px >= probe.width || py >= probe.height) {
+          return null;
+        }
+        const index = (py * probe.width + px) * 4;
+        return [
+          image.data[index],
+          image.data[index + 1],
+          image.data[index + 2],
+        ] as [number, number, number];
+      });
+    },
+    { points: probes, size: tileSize, width: boardWidth, height: boardHeight },
+  );
+}

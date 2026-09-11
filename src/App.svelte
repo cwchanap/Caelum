@@ -646,6 +646,7 @@
         <GameCanvas
           bind:this={gameCanvas}
           {runtime}
+          {snapshot}
           onShellError={handleShellError}
         />
         {#if snapshot.shell.inspector !== null && snapshot.ui.activeCommandDestination === null}
