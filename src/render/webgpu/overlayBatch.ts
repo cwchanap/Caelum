@@ -499,17 +499,22 @@ function drawNumberedHandle(
   } else {
     g.ring({ x, y }, radius + lineWidth / 2, lineWidth, stroke);
   }
+  // The cross is dashed [4,3] too, matching the canvas renderer.
   if (missing) {
-    g.thickLine(
+    g.dashedLine(
       { x: x - 6, y: y - 6 },
       { x: x + 6, y: y + 6 },
       lineWidth,
+      MISSING_HANDLE_DASH.dash,
+      MISSING_HANDLE_DASH.gap,
       stroke,
     );
-    g.thickLine(
+    g.dashedLine(
       { x: x + 6, y: y - 6 },
       { x: x - 6, y: y + 6 },
       lineWidth,
+      MISSING_HANDLE_DASH.dash,
+      MISSING_HANDLE_DASH.gap,
       stroke,
     );
   }
