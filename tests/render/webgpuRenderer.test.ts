@@ -5,6 +5,18 @@ import {
   VEHICLE_INSTANCE_FLOATS,
   type WebGpuRenderFrame,
 } from "../../src/render/webgpu/renderer";
+import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
+import { buildTransitBatch } from "../../src/render/webgpu/transitBatch";
+import { buildOverlayRanges } from "../../src/render/webgpu/overlayBatch";
+import type { GameState } from "../../src/domain/types";
+import { createUiState, type UiState } from "../../src/ui/uiState";
+import { createDraft } from "../../src/ui/routeDraft";
+import {
+  createTestGameState,
+  addTestBusRoute,
+  addTestBusStop,
+} from "../helpers/gameState";
+import { pointsOnRow, withRoads } from "../helpers/mapFixtures";
 
 interface FakeBuffer {
   size: number;
@@ -337,5 +349,223 @@ describe("WebGpuRenderer", () => {
     expect(buffers.length).toBeGreaterThan(0);
     expect(buffers.every((buffer) => buffer.destroyed)).toBe(true);
     expect(unconfigured()).toBe(true);
+  });
+
+  describe("gameplay painter order and caching", () => {
+    function gameplayState(): GameState {
+      let state = createTestGameState();
+      state = withRoads(state, pointsOnRow(8, 7, 15));
+      state = addTestBusStop(state, { x: 7, y: 8 });
+      state = addTestBusStop(state, { x: 15, y: 8 });
+      return addTestBusRoute(state, ["stop-001", "stop-002"]);
+    }
+
+    function gameplayUi(
+      state: GameState,
+      overrides: Partial<UiState> = {},
+    ): UiState {
+      return {
+        ...createUiState(),
+        activeOverlay: "coverage",
+        routeDraft: {
+          ...createDraft("bus", 1),
+          waypointIds: ["stop-001", "stop-002"],
+          generation: 1,
+          preview: {
+            generation: 1,
+            legs: state.transit.routes[0].legs,
+            totalTravelSeconds: 1,
+            turnSummary: {
+              straight: 0,
+              rightTurn: 0,
+              leftTurn: 0,
+              uTurn: 0,
+              roundaboutEntry: 0,
+            },
+            missingWaypointIds: [],
+            warnings: [],
+            rejection: null,
+          },
+        },
+        ...overrides,
+      };
+    }
+
+    function gameplayFrame(
+      state: GameState,
+      ui: UiState,
+      sceneRevision: number,
+      vehicleData: number[],
+    ): {
+      frame: WebGpuRenderFrame;
+      route: ReturnType<typeof buildTransitBatch>;
+      overlay: ReturnType<typeof buildOverlayRanges>;
+      structural: Float32Array<ArrayBuffer>;
+    } {
+      const route = buildTransitBatch(state, ui, sceneRevision);
+      const overlay = buildOverlayRanges(state, ui);
+      const structural = buildMapBatch(state);
+      const instances = new Float32Array(Array.from(vehicleData));
+      return {
+        structural,
+        overlay,
+        route,
+        frame: {
+          solids: [
+            { key: `scene:${sceneRevision}`, vertices: structural },
+            { key: "dynamic:underRoutes", vertices: overlay.underRoutes },
+            { key: route.routeStyleKey, vertices: route.vertices },
+            { key: "dynamic:routeDraft", vertices: overlay.routeDraft },
+          ],
+          vehicles: [{ key: "route-001", instances }],
+          overVehicles: [
+            { key: "dynamic:overVehicles", vertices: overlay.overVehicles },
+          ],
+        },
+      };
+    }
+
+    function drawStages(
+      pass: FakePass,
+      writes: FakeWrite[],
+      labeled: Array<[Float32Array, string]>,
+      quadBuffer: FakeBuffer,
+    ): string[] {
+      const bufferLabel = new Map<FakeBuffer, string>();
+      for (const [data, label] of labeled) {
+        const write = writes.find((candidate) => candidate.data === data);
+        if (write !== undefined) {
+          bufferLabel.set(write.buffer, label);
+        }
+      }
+      const slots = new Map<number, FakeBuffer>();
+      const stages: string[] = [];
+      for (const op of pass.ops) {
+        if (op.kind === "setVertexBuffer") {
+          slots.set(op.slot, op.buffer);
+        }
+        if (op.kind === "draw") {
+          stages.push(
+            slots.get(0) === quadBuffer && op.vertexCount === 6
+              ? "vehicles"
+              : (bufferLabel.get(slots.get(0)!) ?? "unknown"),
+          );
+        }
+      }
+      return stages;
+    }
+
+    function bufferFor(writes: FakeWrite[], data: Float32Array): FakeBuffer {
+      const write = writes.find((candidate) => candidate.data === data);
+      expect(write).toBeDefined();
+      return write!.buffer;
+    }
+
+    it("draws the six gameplay stages in painter order", () => {
+      const { device, buffers, passes, writes } = createFakeDevice();
+      const renderer = createWebGpuRenderer(device, "bgra8unorm");
+      const { canvas } = createFakeCanvas();
+      renderer.configure(canvas);
+
+      const state = gameplayState();
+      const ui = gameplayUi(state);
+      const { frame, route, overlay, structural } = gameplayFrame(
+        state,
+        ui,
+        3,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      );
+
+      renderer.render(frame);
+
+      expect(passes).toHaveLength(1);
+      expect(
+        drawStages(
+          passes[0],
+          writes,
+          [
+            [structural, "structural"],
+            [overlay.underRoutes, "underRoutes"],
+            [route.vertices, "routes"],
+            [overlay.routeDraft, "routeDraft"],
+            [overlay.overVehicles, "overVehicles"],
+          ],
+          buffers[0],
+        ),
+      ).toEqual([
+        "structural",
+        "underRoutes",
+        "routes",
+        "routeDraft",
+        "vehicles",
+        "overVehicles",
+      ]);
+    });
+
+    it("reuses structural and route buffers across frame-only vehicle changes", () => {
+      const { device, buffers, writes } = createFakeDevice();
+      const renderer = createWebGpuRenderer(device, "bgra8unorm");
+      const { canvas } = createFakeCanvas();
+      renderer.configure(canvas);
+
+      const state = gameplayState();
+      const ui = gameplayUi(state);
+      const first = gameplayFrame(state, ui, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
+      const second = gameplayFrame(state, ui, 3, [9, 8, 7, 6, 5, 4, 3, 2, 1]);
+
+      renderer.render(first.frame);
+      const bufferCount = buffers.length;
+      renderer.render(second.frame);
+
+      // Same keys: no buffers created or destroyed.
+      expect(buffers).toHaveLength(bufferCount);
+      expect(buffers.every((buffer) => !buffer.destroyed)).toBe(true);
+      // Structural and route geometry are re-uploaded into the same buffers.
+      expect(bufferFor(writes, second.structural)).toBe(
+        bufferFor(writes, first.structural),
+      );
+      expect(bufferFor(writes, second.route.vertices)).toBe(
+        bufferFor(writes, first.route.vertices),
+      );
+      expect(first.route.routeStyleKey).toBe(second.route.routeStyleKey);
+    });
+
+    it("selection emphasis invalidates only the route geometry buffer", () => {
+      const { device, buffers, writes } = createFakeDevice();
+      const renderer = createWebGpuRenderer(device, "bgra8unorm");
+      const { canvas } = createFakeCanvas();
+      renderer.configure(canvas);
+
+      const state = gameplayState();
+      const unselected = gameplayFrame(
+        state,
+        gameplayUi(state),
+        2,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      );
+      const selected = gameplayFrame(
+        state,
+        gameplayUi(state, { selectedRouteId: "route-001" }),
+        2,
+        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+      );
+
+      renderer.render(unselected.frame);
+      const bufferCount = buffers.length;
+      renderer.render(selected.frame);
+
+      expect(unselected.route.routeStyleKey).toBe("routes:2:-:-");
+      expect(selected.route.routeStyleKey).toBe("routes:2:route-001:-");
+      // New emphasis key: exactly one new buffer for the route stage.
+      expect(buffers).toHaveLength(bufferCount + 1);
+      // Structural geometry keeps its scene-key buffer.
+      expect(bufferFor(writes, selected.structural)).toBe(
+        bufferFor(writes, unselected.structural),
+      );
+      // Route geometry moved to a fresh buffer for the new key.
+      expect(bufferFor(writes, selected.route.vertices)).not.toBe(
+        bufferFor(writes, unselected.route.vertices),
+      );
+    });
   });
 });

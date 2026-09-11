@@ -6,12 +6,51 @@ export const SOLID_VERTEX_FLOATS = 6;
 
 export type Rgba = readonly [number, number, number, number];
 
-/** Parses the CSS color subset the canvas renderers use (#rgb, #rrggbb, rgb(), rgba()). */
+/** Multiplies a color's alpha (canvas `globalAlpha` bakes into vertices). */
+export function withAlpha(color: Rgba, alpha: number): Rgba {
+  return [color[0], color[1], color[2], color[3] * alpha];
+}
+
+/** Converts tile-space path geometry (see drawPathGeometry's tileToPixel)
+ *  into the pixel-space geometry the batch tessellators consume. */
+export function toPixelGeometry(
+  geometry: PathGeometry,
+  tileToPixel: (point: TripPosition) => TripPosition,
+): PathGeometry {
+  if (geometry.kind === "line") {
+    return {
+      kind: "line",
+      from: tileToPixel(geometry.from),
+      to: tileToPixel(geometry.to),
+    };
+  }
+  if (geometry.kind === "quadraticBezier") {
+    return {
+      kind: "quadraticBezier",
+      from: tileToPixel(geometry.from),
+      control: tileToPixel(geometry.control),
+      to: tileToPixel(geometry.to),
+    };
+  }
+  const center = tileToPixel(geometry.center);
+  const radiusPoint = tileToPixel({
+    x: geometry.center.x + geometry.radius,
+    y: geometry.center.y,
+  });
+  return {
+    ...geometry,
+    center,
+    radius: Math.hypot(radiusPoint.x - center.x, radiusPoint.y - center.y),
+  };
+}
+
+/** Parses the CSS color subset the canvas renderers use
+ *  (#rgb, #rgba, #rrggbb, #rrggbbaa, rgb(), rgba()). */
 export function parseColor(css: string): Rgba {
-  const hex = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(css);
+  const hex = /^#([0-9a-f]{3}|[0-9a-f]{4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(css);
   if (hex) {
     const digits =
-      hex[1].length === 3
+      hex[1].length <= 4
         ? hex[1]
             .split("")
             .map((digit) => digit + digit)
@@ -21,7 +60,7 @@ export function parseColor(css: string): Rgba {
       Number.parseInt(digits.slice(0, 2), 16) / 255,
       Number.parseInt(digits.slice(2, 4), 16) / 255,
       Number.parseInt(digits.slice(4, 6), 16) / 255,
-      1,
+      digits.length === 8 ? Number.parseInt(digits.slice(6, 8), 16) / 255 : 1,
     ];
   }
   const rgb =
@@ -106,6 +145,17 @@ export class SolidGeometry {
       distance += step;
       drawing = !drawing;
     }
+    return this;
+  }
+
+  /** Fills one triangle (canvas-style arrowheads). */
+  triangle(
+    a: TripPosition,
+    b: TripPosition,
+    c: TripPosition,
+    color: Rgba,
+  ): this {
+    this.pushTriangle(a, b, c, color);
     return this;
   }
 
