@@ -545,4 +545,35 @@ describe("buildOverlayRanges route handles", () => {
     expect(covered).toBeGreaterThan(0.3);
     expect(covered).toBeLessThan(0.95);
   });
+
+  it("dashes the missing-waypoint cross", () => {
+    const base = withStops(createTestGameState(), [
+      presentStop("stop-1", { x: 2, y: 2 }),
+      {
+        id: "stop-gone",
+        kind: "busStop" as const,
+        status: "missing" as const,
+        position: { x: 5, y: 5 },
+        platforms: [],
+      },
+    ]);
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-1", "stop-gone"],
+      },
+    };
+    const { overVehicles } = buildOverlayRanges(base, ui);
+
+    // Canvas dashes the missing cross [4,3]; a solid cross covers
+    // everything. Probe the (170,170)->(182,182) diagonal centerline.
+    const covered = coveredStripFraction(overVehicles, colors.unserved, {
+      kind: "line",
+      from: { x: 170, y: 170 },
+      to: { x: 182, y: 182 },
+    });
+    expect(covered).toBeGreaterThan(0.3);
+    expect(covered).toBeLessThan(0.95);
+  });
 });
