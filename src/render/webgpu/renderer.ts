@@ -20,8 +20,12 @@ export interface WebGpuVehicleBatch {
 }
 
 export interface WebGpuRenderFrame {
+  /** Solid batches drawn before vehicles, in painter order. */
   solids: readonly WebGpuSolidBatch[];
+  /** Instanced vehicle batches, concatenated into one upload in frame order. */
   vehicles: readonly WebGpuVehicleBatch[];
+  /** Solid batches drawn after vehicles (route handles), in painter order. */
+  overVehicles?: readonly WebGpuSolidBatch[];
 }
 
 export interface WebGpuRenderStats {
@@ -244,24 +248,28 @@ export function createWebGpuRenderer(
 
       let solidBatches = 0;
       let solidVertices = 0;
-      pass.setPipeline(solidPipeline);
-      for (const batch of frame.solids) {
-        if (batch.vertices.length === 0) {
-          continue;
+      const drawSolids = (batches: readonly WebGpuSolidBatch[]): void => {
+        pass.setPipeline(solidPipeline);
+        for (const batch of batches) {
+          if (batch.vertices.length === 0) {
+            continue;
+          }
+          const buffer = acquireBuffer(batch.key, batch.vertices.length);
+          device.queue.writeBuffer(
+            buffer,
+            0,
+            batch.vertices,
+            0,
+            batch.vertices.length,
+          );
+          pass.setVertexBuffer(0, buffer);
+          pass.draw(batch.vertices.length / SOLID_VERTEX_FLOATS);
+          solidBatches += 1;
+          solidVertices += batch.vertices.length;
         }
-        const buffer = acquireBuffer(batch.key, batch.vertices.length);
-        device.queue.writeBuffer(
-          buffer,
-          0,
-          batch.vertices,
-          0,
-          batch.vertices.length,
-        );
-        pass.setVertexBuffer(0, buffer);
-        pass.draw(batch.vertices.length / SOLID_VERTEX_FLOATS);
-        solidBatches += 1;
-        solidVertices += batch.vertices.length;
-      }
+      };
+
+      drawSolids(frame.solids);
 
       let vehicleInstances = 0;
       const instanceFloats = frame.vehicles.reduce(
@@ -283,6 +291,8 @@ export function createWebGpuRenderer(
         pass.setVertexBuffer(1, buffer);
         pass.draw(6, vehicleInstances);
       }
+
+      drawSolids(frame.overVehicles ?? []);
 
       pass.end();
       device.queue.submit([encoder.finish()]);
