@@ -1,10 +1,14 @@
 import { describe, expect, it } from "vitest";
 import type {
   GameState,
+  PathGeometry,
   RouteLegPath,
   TransitPath,
 } from "../../src/domain/types";
-import { buildTransitBatch } from "../../src/render/webgpu/transitBatch";
+import {
+  buildTransitBatch,
+  draftLegVertices,
+} from "../../src/render/webgpu/transitBatch";
 import {
   SOLID_VERTEX_FLOATS,
   parseColor,
@@ -14,6 +18,7 @@ import { colors } from "../../src/render/colors";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createTestGameState } from "../helpers/gameState";
+import { coveredStripFraction } from "../helpers/vertexCoverage";
 
 const EPSILON = 1e-4;
 
@@ -102,7 +107,13 @@ function routeLeg(
   };
 }
 
-function stateWithLegs(legs: RouteLegPath[]): GameState {
+function stateWithLegs(
+  legs: RouteLegPath[],
+  stopPositions: { x: number; y: number }[] = [
+    { x: 1, y: 1 },
+    { x: 2, y: 1 },
+  ],
+): GameState {
   const base = createTestGameState();
   return {
     ...base,
@@ -112,7 +123,7 @@ function stateWithLegs(legs: RouteLegPath[]): GameState {
         id,
         kind: "busStop" as const,
         status: "present" as const,
-        position: { x: 1 + index, y: 1 },
+        position: stopPositions[index],
         platforms: [],
       })),
       routes: [
@@ -137,6 +148,73 @@ function stateWithLegs(legs: RouteLegPath[]): GameState {
 
 function emptyLineDraft() {
   return { ...createDraft("bus", 1) };
+}
+
+/** Curved corner step (1,1) -> control (3,1) -> (3,3); stops sit on the
+ *  curve endpoints so no endpoint connectors muddy the strip. */
+function cornerPath(): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: { x: 1, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "south",
+        movement: "rightTurn",
+        geometry: {
+          kind: "quadraticBezier",
+          from: { x: 1, y: 1 },
+          control: { x: 3, y: 1 },
+          to: { x: 3, y: 3 },
+        },
+        travelSeconds: 4,
+      },
+    ],
+    totalTravelSeconds: 4,
+  };
+}
+
+function pixelCorner(): PathGeometry {
+  return {
+    kind: "quadraticBezier",
+    from: { x: 48, y: 48 },
+    control: { x: 112, y: 48 },
+    to: { x: 112, y: 112 },
+  };
+}
+
+/** Render-only roundabout-style arc: quarter circle around (2,2), r=1. */
+function arcPath(): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: { x: 2, y: 2 },
+        enteringHeading: "east",
+        leavingHeading: "south",
+        movement: "rightTurn",
+        geometry: {
+          kind: "arc",
+          center: { x: 2, y: 2 },
+          radius: 1,
+          startRadians: 0,
+          sweepRadians: Math.PI / 2,
+        },
+        travelSeconds: 4,
+      },
+    ],
+    totalTravelSeconds: 4,
+  };
+}
+
+function pixelArc(): PathGeometry {
+  return {
+    kind: "arc",
+    center: { x: 80, y: 80 },
+    radius: 32,
+    startRadians: 0,
+    sweepRadians: Math.PI / 2,
+  };
 }
 
 describe("buildTransitBatch route style key", () => {
@@ -270,6 +348,37 @@ describe("buildTransitBatch committed legs", () => {
     expect(xs.has(59)).toBe(true); // start of the second dash, after a gap
   });
 
+  it("dashes a broken leg's curved corner step with on/off gaps", () => {
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "networkDisconnected", cornerPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 3, y: 3 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    // A solid strip covers the whole centerline; dash [6,5] leaves gaps.
+    const covered = coveredStripFraction(vertices, "#e04f39", pixelCorner());
+    expect(covered).toBeGreaterThan(0.3);
+    expect(covered).toBeLessThan(0.95);
+  });
+
+  it("dashes a broken leg's arc step with on/off gaps", () => {
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "networkDisconnected", arcPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 1, y: 3 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const covered = coveredStripFraction(vertices, "#e04f39", pixelArc());
+    expect(covered).toBeGreaterThan(0.3);
+    expect(covered).toBeLessThan(0.95);
+  });
+
   it("uses a direct dotted fallback when no last-valid geometry exists", () => {
     const state = stateWithLegs([
       routeLeg("a", "b", "networkDisconnected", null),
@@ -346,6 +455,25 @@ describe("buildTransitBatch emphasis", () => {
     );
 
     // Halo width = 5 + 4; corners at y 48 ± 4.5. Halo color is #ffffffaa.
+    expect(hasVertexNear(vertices, "#ffffffaa", 48, 43.5)).toBe(true);
+    expect(hasVertexNear(vertices, "#ffffffaa", 176, 52.5)).toBe(true);
+  });
+
+  it("draws the halo under an edited but unselected route", () => {
+    const state = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const editing = {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        source: {
+          kind: "edit" as const,
+          routeId: "route-001",
+          expectedRevision: 1,
+        },
+      },
+    };
+    const { vertices } = buildTransitBatch(state, editing, 1);
+
     expect(hasVertexNear(vertices, "#ffffffaa", 48, 43.5)).toBe(true);
     expect(hasVertexNear(vertices, "#ffffffaa", 176, 52.5)).toBe(true);
   });
@@ -456,6 +584,46 @@ describe("buildTransitBatch nodes and cues", () => {
 
     // Cue circle at stop a's center (48,48), radius 3, route color.
     expect(hasVertexNear(vertices, "#e04f39", 48, 48)).toBe(true);
+  });
+});
+
+describe("buildTransitBatch draft stroke", () => {
+  it("dashes curved draft steps", () => {
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "connected", cornerPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 3, y: 3 },
+      ],
+    );
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        generation: 1,
+        preview: {
+          generation: 1,
+          legs: [routeLeg("a", "b", "connected", cornerPath())],
+          totalTravelSeconds: 4,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        },
+      },
+    };
+    const vertices = draftLegVertices(state, ui);
+
+    // Draft dash [6,6]: half the centerline is covered, with gaps.
+    const covered = coveredStripFraction(vertices, "#f4d35e", pixelCorner());
+    expect(covered).toBeGreaterThan(0.3);
+    expect(covered).toBeLessThan(0.95);
   });
 });
 

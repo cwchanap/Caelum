@@ -1,5 +1,6 @@
 import type { PathGeometry, TripPosition } from "../../domain/types";
 import { pointAndTangentAt } from "../pathGeometry";
+import { measureGeometry, progressAtDistance } from "../routeGeometry";
 
 /** Interleaved solid vertex layout: x, y, r, g, b, a. */
 export const SOLID_VERTEX_FLOATS = 6;
@@ -291,6 +292,41 @@ export class SolidGeometry {
         offsetByNormal(end, half),
         color,
       );
+    }
+    return this;
+  }
+
+  /** Dashes along a sampled curve — the batch equivalent of canvas
+   *  `setLineDash`, which natively dashes bezier/arc strokes. Dash and gap
+   *  are pixel arc lengths; each dash is emitted as a thick-line chord
+   *  following the curve (same arc-length sampler as direction arrows). */
+  dashedCurve(
+    geometry: PathGeometry,
+    width: number,
+    dashLength: number,
+    gapLength: number,
+    color: Rgba,
+  ): this {
+    const measured = measureGeometry(geometry);
+    const pointAtLength = (distance: number): TripPosition =>
+      pointAndTangentAt(geometry, progressAtDistance(measured, distance)).point;
+    let distance = 0;
+    let drawing = true;
+    while (distance < measured.length - 1e-6) {
+      const end = Math.min(
+        distance + (drawing ? dashLength : gapLength),
+        measured.length,
+      );
+      if (drawing) {
+        this.pushSegment(
+          pointAtLength(distance),
+          pointAtLength(end),
+          width,
+          color,
+        );
+      }
+      distance = end;
+      drawing = !drawing;
     }
     return this;
   }
