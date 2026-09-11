@@ -4,82 +4,91 @@
 
 Planning design for HPA-640, based on `main` at `717bd841ece76a6b34a09e9d2a94a423b54f8d69` after HPA-544, HPA-347, and HPA-348.
 
-This revision incorporates the pre-implementation review of vehicle interpolation, painter's order, and WebGPU host risk. HPA-640 remains one implementation ticket and one PR; implementation, parity work, performance evidence, and Canvas2D deletion continue on this same branch.
+This revision incorporates the second pre-implementation review. HPA-640 remains one implementation ticket and one PR; implementation, browser/Tauri parity, performance evidence, and Canvas2D deletion stay on this draft PR.
 
 ## Goal
 
-Replace the Canvas2D gameplay renderer with one focused TypeScript WebGPU path that can batch roughly 5,000 visible transit vehicles while preserving the current transport-sandbox interactions. Keep Svelte as application/HUD/map-text UI and Rust as gameplay authority.
+Replace the Canvas2D gameplay renderer with one focused TypeScript WebGPU path while keeping Svelte as application/HUD/map-text UI and Rust as gameplay authority.
 
-## Current shape
+The renderer is designed against the roadmap's future presentation contract of roughly **5,000 simultaneously visible road/public-transport vehicles**. That is deliberately a capacity target, not a claim that today's 28×18 sandbox economy can naturally buy 5,000 transit vehicles. The benchmark therefore records both:
 
-The current architecture already provides the important scale boundary:
+- **200 vehicles** as a near-term stress/reference row for the current small-map presentation; and
+- **5,000 vehicles** as the committed HPA-336/HPA-640 future-scale ceiling.
 
-- Rust publishes compact `PresentationUpdate` data; ordinary frontend state no longer carries the latent 200k-citizen population.
+The benchmark is evidence, not a gate that reopens the already-approved WebGPU roadmap decision. It does let us attribute the eventual improvement correctly between lower publication cadence and GPU rendering.
+
+## Existing constraints
+
+The current architecture already supplies the important scale boundary:
+
+- Rust publishes compact `PresentationUpdate` data; ordinary frontend state does not carry the latent 200k-citizen population.
 - `createGameRuntime.ts` folds those updates into the flat `GameState` used by Svelte and rendering.
-- `createCanvasHost.ts` owns the real `<canvas>`, pointer input, resize lifecycle, and requestAnimationFrame loop.
-- The current rAF loop also calls backend `tick(deltaSeconds)`, so display cadence and simulation/presentation publication are coupled.
-- `render/canvas.ts` fits the whole 28×18 map into the board. There is no player camera, pan, or zoom state on `main` today.
-- Canvas painter order is `map -> buildings -> overlays -> transit -> route handles -> text badges`.
-- The Canvas renderer is mostly geometric: tiles, roads, tracks, buildings, paths, circles, overlays, previews, and vehicle rectangles.
-- Canvas text is limited to map-local status/guidance: cursor/tool badge, preview feedback, route waypoint numbers, and broken-route guidance.
+- `createCanvasHost.ts` owns the `<canvas>`, pointer input, resize lifecycle, requestAnimationFrame loop, and currently requests one backend tick per rAF.
+- `render/canvas.ts` fits the whole 28×18 map into the board. There is no player camera/pan/zoom state on `main`.
+- Current painter order is `map -> buildings -> overlays -> transit -> route handles -> text badges`.
+- Current visuals are mostly flat geometric shapes.
 - `routeGeometry.ts` already owns Canvas-independent route/corridor presentation math.
-- `pointAndTangentAt()` already samples line, quadratic-bezier, and arc `PathGeometry`; vehicle rendering uses that sampler with `Vehicle.stepProgress`.
-- `placementValidation.ts` and runtime selectors are presentation logic and should survive the renderer cutover.
+- `pointAndTangentAt()` already samples line, quadratic-bezier, and arc `PathGeometry`.
+- `placementValidation.ts`, catalogs, and runtime selectors are renderer-neutral presentation logic.
+- `createSerializedQueue` is the one gameplay-operation serializer and remains authoritative for backend ordering.
+- `GameCanvas.svelte` expects `mountCanvas(host): () => void` to remain synchronous after runtime creation.
 
 Two current details constrain the cutover.
 
-First, `applyPresentationUpdate()` rebuilds live route/metro rows on every frame so it can merge the latest service metrics. Route-array reference equality is therefore not a valid structural-scene signal even on frame-only updates. The runtime must preserve the authoritative wire distinction: `PresentationUpdate.scene !== null`.
+First, `applyPresentationUpdate()` rebuilds live route/metro rows on every frame to merge `serviceMetrics`. Route-array identity is therefore not a structural-scene signal. `PresentationUpdate.scene !== null` is the correct source for one runtime `sceneRevision`.
 
-Second, 10 Hz publication means a 100 ms wall interval advances 400 ms of simulation at speed 4. A bus tile is 1.25 s and a metro tile is 0.625 s, so a published vehicle can move a substantial fraction of a curved step and can cross a step boundary. Interpolating sampled world `x/y` endpoints would cut chords through bezier/arc paths and can disagree with the route tangent. Interpolation must remain in path/cursor space.
+Second, lower-frequency publication cannot be smoothed with world-space pose lerp. At speed 4 a 100 ms wall interval advances 400 ms of simulation; a bus tile is 1.25 s and a metro tile is 0.625 s. Vehicles can move far enough to traverse curves or cross a step boundary. Interpolation must stay in path/cursor space and derive heading from the sampled tangent.
 
-HPA-544's reference evidence gives the wire-side scale relevant here. On the reference M1 Pro, the 5,000-vehicle row is 765,206 frame-only bytes with 496 µs projection and 1,203 µs serialization. HPA-640 does not enlarge that wire contract. It publishes it less often and reduces each received frame to bounded GPU geometry/instance uploads.
+## Review disposition
 
-## Options considered
+### Accepted
 
-### A. Raw WebGPU with a small 2D batch builder — selected
+The design adopts these review corrections before coding:
 
-Use browser WebGPU directly from TypeScript. Keep Caelum's CPU-side route/path geometry and build only the primitives the game needs: colored triangles/strokes plus one instanced vehicle quad.
+1. Preserve painter order; do not fuse base transit into the structural map buffer.
+2. Keep current Canvas renderer tests until their production modules are deleted.
+3. Prove real Chromium WebGPU early, before production host cutover.
+4. Run the Tauri/WKWebView smoke after host cutover and **before** deleting Canvas2D.
+5. Thread a host factory through `CreateGameRuntimeOptions` so Node/jsdom runtime tests never require `navigator.gpu`.
+6. Surface unexpected `GPUDevice.lost` through the existing runtime fatal/shell-error path; deliberate `device.destroy()` during teardown is ignored.
+7. Compute vehicle interpolation alpha from the observed interval between the two accepted presentation states, not a fixed 100 ms.
+8. Preserve the existing `canvasToTile` name; moving it to `boardTransform.ts` is enough.
+9. Use string cache keys consistently.
+10. Make the runtime's direct render calls coalesce with the active rAF loop so accepted ticks do not double-render while running; paused/stopped state still repaints immediately.
 
-Why this fits:
+### Not adopted
 
-- smallest runtime dependency surface;
-- no retained scene graph or display-object lifecycle;
-- explicit batching/upload behavior;
-- current visuals are flat colored transport geometry;
-- leaves Svelte and Rust boundaries unchanged.
+Two review recommendations change product/delivery decisions rather than correct the design:
 
-The cost is a small amount of WebGPU setup/WGSL, justified by the narrow renderer surface.
-
-### B. PixiJS or another retained 2D renderer — rejected
-
-This removes some primitive boilerplate but adds a scene graph, object lifecycle, runtime dependency, and another abstraction boundary primarily to draw simple geometry. It is more architecture than Caelum currently needs.
-
-### C. Ship Canvas2D and WebGPU together — rejected
-
-A long-lived fallback doubles parity and maintenance work. Temporary comparison code is fine while implementing the branch, but the merged result has one gameplay renderer. Unsupported WebGPU environments receive a clear bootstrap error rather than a Canvas fallback.
+- **Do not make WebGPU conditional on current 200-vehicle Canvas performance.** HPA-336 explicitly commits to a ~5k-visible-vehicle GPU presentation direction, and HPA-640 explicitly owns the WebGPU cutover. The 200-row measurement provides current-scale context; the 5k row proves the future capacity contract.
+- **Do not split HPA-640 into multiple PRs/tickets.** Both the roadmap and HPA-640 specify one implementation slice/ticket = one PR. The branch uses task/commit checkpoints so review can happen incrementally without creating a long-lived dual-renderer delivery model. A split requires an explicit product decision, not an implementation-review rewrite.
 
 ## Decision summary
 
-1. Use raw WebGPU in TypeScript. Do not add Rust `wgpu`, Bevy rendering, PixiJS, a scene graph, or a renderer plugin system.
-2. Add only WebGPU ambient TypeScript types if needed (`@webgpu/types` as a dev dependency); no runtime renderer library.
-3. Preserve `PresentationUpdate`, `GameBackend`, and durable snapshot contracts. This slice needs no Rust/schema/backend-method change.
-4. Keep the latest compact `GameState` as the frontend presentation view. WebGPU never consumes a durable gameplay snapshot.
-5. Add one runtime-internal integer `sceneRevision`. Increment it whenever an accepted `PresentationUpdate` contains `scene !== null`; frame-only updates leave it unchanged.
-6. Centralize every accepted presentation update — initial presentation, dispatch, restore, and reset — behind the same runtime helper so `sceneRevision` cannot drift from state installation.
-7. Extract `pointAndTangentAt`/`pointAt` into a Canvas-neutral `pathGeometry.ts`; both WebGPU stroke tessellation and vehicle sampling reuse it. Do not reimplement bezier/arc math in `primitives.ts`.
-8. Keep `routeGeometry.ts`, `placementValidation.ts`, catalogs, and selectors. Replace only Canvas-specific drawing code.
-9. Display at requestAnimationFrame cadence while requesting backend simulation/presentation updates at 10 Hz (100 ms wall-clock cadence).
-10. Keep at most one backend tick in flight on top of the existing `createSerializedQueue`; do not replace or duplicate the gameplay queue. Accumulate wall time while a tick is pending and cap one submitted delta to the existing 250 ms background-jump limit.
-11. Interpolate vehicles in route/path cursor space, not world-space pose space. Sample position and tangent from the existing path geometry at the interpolated cursor.
-12. Snap to the latest vehicle pose across discontinuities: new/missing vehicle, scene change, line/itinerary discontinuity, parked↔path transition, backward/non-adjacent step jump, pause, or speed 0.
-13. Cull sampled/interpolated vehicle poses against a `WorldViewport` before instance encoding and GPU upload.
-14. Preserve Canvas painter order explicitly: map/buildings below data/placement overlays, routes above those overlays, vehicles above routes, handle markers above vehicles, DOM text above the GPU canvas.
-15. Enable source-alpha blending in the solid pipeline from the first WebGPU renderer task; existing overlay colors/global alpha require it.
-16. Keep static caching narrow: map/building/road/track geometry caches by `sceneRevision`; route geometry caches by `sceneRevision` plus the current selected/edited route emphasis IDs. Route-draft strokes and other preview geometry stay dynamic.
-17. Do not add camera controls. Current production viewport is the whole fitted map; tests feed a smaller viewport to prove the culling seam for a future camera.
-18. Render map-local text in a Svelte/DOM overlay. Do not build a GPU font atlas and do not retain a secondary Canvas2D surface.
-19. Add an early real Chromium WebGPU functional probe before the production host cutover. If the Playwright worker needs an explicit software adapter/configuration for functional tests, pin the minimum configuration and keep reference performance measurements on the real GPU.
-20. Delete Canvas2D gameplay modules/tests in this same PR after parity is proven.
+1. Raw browser WebGPU in TypeScript; no PixiJS, retained scene graph, Rust `wgpu`, or Bevy renderer.
+2. Add only ambient WebGPU TypeScript types if needed (`@webgpu/types` as a dev dependency).
+3. Keep `PresentationUpdate`, `GameBackend`, and durable snapshot/schema contracts unchanged.
+4. Add one runtime-internal integer `sceneRevision`, incremented only when an accepted update has `scene !== null`.
+5. Route initial presentation, dispatch, restore, and reset through one `acceptPresentationUpdate()` helper.
+6. Extract `pointAndTangentAt`/`pointAt` into Canvas-neutral `pathGeometry.ts`; Canvas transition code and WebGPU reuse the same sampler.
+7. Extract board transform/picking into `boardTransform.ts`; keep `canvasToTile` unchanged.
+8. Display at rAF cadence while requesting backend updates at 10 Hz with at most one host tick request in flight on top of the existing serialized queue.
+9. Keep the 250 ms submitted wall-delta cap; retain overflow while a tick is pending.
+10. When rAF owns continuous display, runtime `render()` requests do not perform a second immediate draw. Paused/stopped state still repaints immediately.
+11. Interpolate vehicles in path cursor space; heading always comes from `pointAndTangentAt()` on the interpolated cursor.
+12. Use the **observed previous-to-latest publication interval** to compute alpha, clamped to `[0, 1]`.
+13. Snap across discontinuities rather than inventing a general route timeline.
+14. Cull after path sampling/interpolation and before instance encoding/upload.
+15. Preserve painter order explicitly.
+16. Enable source-alpha blending in the solid pipeline from the first WebGPU task.
+17. Structural map geometry caches by a string `sceneRevision` key; committed route geometry caches by scene revision plus selected/edited-route emphasis.
+18. Keep route-draft and preview geometry dynamic.
+19. Keep HUD/map-local text in Svelte/DOM; no GPU font atlas or second Canvas surface.
+20. Keep whole-map fit behavior; `WorldViewport` is a plain tested rectangle, not a camera/LOD framework.
+21. `createGameRuntime` accepts an optional async `createHost` factory; production defaults to `createWebGpuHost`, tests inject a fake host.
+22. `createWebGpuHost` remains async, so adapter/device setup finishes before runtime is returned while public `mountCanvas()` stays synchronous.
+23. Real Chromium WebGPU probe runs before cutover; full Playwright and Tauri/WKWebView gates run after cutover but before Canvas deletion.
+24. Delete Canvas2D production modules and their Canvas-specific tests together in this same PR only after both browser and desktop gates pass.
 
 ## Target architecture
 
@@ -91,37 +100,37 @@ Rust simulation authority
 createGameRuntime
   |- latest compact GameState / UiState
   |- existing serialized gameplay queue
-  `- sceneRevision (increments only when update.scene != null)
+  |- sceneRevision
+  `- createHost? test seam
         |
         v
-createWebGpuHost ---------------------------------------------+
-  | requestAnimationFrame display loop                        |
-  | 10 Hz / one-in-flight tick gate                           |
-  | previous/latest vehicle cursor history                    |
-  | shared board transform + pointer mapping                  |
-  |                                                           |
-  +--> WebGPU renderer                                        |
-  |      1. map/buildings/roads/tracks       [sceneRevision]  |
-  |      2. data + placement overlays        [dynamic]        |
-  |      3. routes/stops/arrows              [scene+emphasis] |
-  |      4. route-draft stroke               [dynamic]        |
-  |      5. transit vehicles                 [instanced]      |
-  |      6. route-handle marker geometry     [dynamic]        |
-  |                                                           |
-  `--> GameCanvas + MapTextOverlay (Svelte DOM) <-------------+
+createWebGpuHost --------------------------------------------------+
+  | rAF display loop                                               |
+  | 10 Hz / one-in-flight backend tick admission                  |
+  | previous/latest accepted-state timestamps                     |
+  | shared board transform + pointer mapping                      |
+  | device-loss -> runtime fatal callback                         |
+  |                                                                |
+  +--> WebGPU renderer                                             |
+  |      1. map/buildings/roads/tracks       [scene key]           |
+  |      2. data + placement overlays        [dynamic]             |
+  |      3. committed routes/stops/arrows    [route style key]     |
+  |      4. route-draft stroke               [dynamic]             |
+  |      5. transit vehicles                 [instanced]           |
+  |      6. route-handle marker geometry     [dynamic]             |
+  |                                                                |
+  `--> GameCanvas + MapTextOverlay (Svelte DOM) <-----------------+
          cursor badge / preview feedback / waypoint numbers /
          broken-route guidance
 
-Svelte HUD/panels remain normal DOM UI.
+Svelte HUD/panels remain ordinary DOM UI.
 ```
 
-These are logical painter-order stages, not a scene graph. The renderer may pack dynamic triangle stages into one reusable vertex buffer with explicit draw ranges; stage boundaries must still preserve the order above.
+The six GPU stages are painter-order ranges, not a scene graph. Dynamic triangle ranges may share one grow-only vertex buffer.
 
-## Scene revision
+## Scene revision and update acceptance
 
-Do not infer structural change from `GameState` object/array identity. `presentationView.ts` reconstructs route and metro view rows on frame-only updates to attach current `serviceMetrics`.
-
-Instead, `createGameRuntime.ts` owns:
+`createGameRuntime.ts` owns:
 
 ```ts
 let sceneRevision = 0;
@@ -135,36 +144,108 @@ function acceptPresentationUpdate(
 }
 ```
 
-Every state-installation path uses that helper:
+Every accepted presentation update uses this helper:
 
 - initial `backend.presentation()`;
 - `commitDispatchResult()`;
-- successful restore via `installRestoredGameplay()`;
+- successful restore through `installRestoredGameplay()`;
 - successful reset.
 
-Initial presentation therefore installs revision 1. Normal frame-only ticks/rejected no-op updates leave it unchanged. Successful structural dispatch/reset/restore updates advance it once.
+Initial presentation installs revision 1. Frame-only ticks/no-op updates leave it unchanged. Structural dispatch/reset/restore advances it exactly once.
 
-`createWebGpuHost` receives `getSceneRevision: () => number` alongside `getState/getUi`.
+No array identity, deep comparison, fingerprint, or persisted renderer revision is added.
 
-Consequences:
+## Runtime host injection
 
-- map/building/road/track GPU geometry rebuilds only when `sceneRevision` changes;
-- frame-only service-metric/vehicle/aggregate updates do not rebuild structural geometry;
-- route geometry can use `sceneRevision` plus a tiny UI emphasis key rather than state identity;
-- vehicle interpolation resets immediately across structural scene replacement;
-- no deep comparison/fingerprint/revision framework is needed.
+Async WebGPU creation changes test construction semantics. Do not force all Node/jsdom runtime tests to mock `navigator.gpu`.
+
+Extend only the runtime constructor options:
+
+```ts
+export type CreateGameHost = (
+  context: WebGpuHostContext,
+) => Promise<GameHost>;
+
+export interface CreateGameRuntimeOptions {
+  backend: GameBackend;
+  saveStore?: CitySaveStore;
+  initialCity?: CitySummary | null;
+  now?: () => string;
+  createCityId?: () => string;
+  hoverPreviewDebounceMs?: number;
+  createHost?: CreateGameHost;
+}
+```
+
+Production uses:
+
+```ts
+const createHost = options.createHost ?? createWebGpuHost;
+const gameHost = await createHost(hostContext);
+```
+
+Runtime tests inject `async () => fakeHost`. This is a construction seam only; it does not become a renderer plugin system and does not alter `RuntimeController`.
+
+## Cadence and repaint contract
+
+### Backend publication
+
+While runtime is started, simulation is running/unpaused, and speed is non-zero:
+
+- every rAF is a display opportunity;
+- wall time accumulates;
+- at/after 100 ms, if no host tick is pending, submit one `api.tick(accumulatedDelta)`;
+- clamp that submitted wall delta to 250 ms;
+- retain excess accumulated time;
+- while that tick is unresolved, keep drawing but submit no second host tick.
+
+The call still enters the existing `createSerializedQueue`; the host gate does not replace or bypass it.
+
+Pausing/stopping resets wall timestamps/accumulator so resume does not catch up stale background time.
+
+### Runtime-triggered repaint
+
+Today `publish()`/`commit()` call the host renderer directly. With a free-running rAF display loop, doing the same would draw twice around every accepted tick.
+
+The new `GameHost.render()` contract is therefore:
+
+- while an active rAF loop owns display, record that latest state/UI is available and let the next rAF draw it; do not synchronously draw a second frame;
+- when paused/stopped/no rAF is scheduled, draw immediately so hover/tool/restore/error UI can repaint without simulation time advancing;
+- terminal publication stops the loop first and then performs one final immediate render.
+
+Tests pin that one accepted running tick does not create an extra draw, while paused UI commits still repaint synchronously.
+
+### Observed-interval interpolation alpha
+
+The host retains:
+
+- previous accepted `GameState` + scene revision + `observedAtMs`;
+- latest accepted `GameState` + scene revision + `observedAtMs`.
+
+For two compatible accepted states:
+
+```text
+interval = max(1 ms, latestObservedAt - previousObservedAt)
+alpha = clamp((rafNow - latestObservedAt) / interval, 0, 1)
+```
+
+This intentionally renders vehicle motion one observed publication interval behind authority; it never extrapolates.
+
+A 130 ms accepted-state interval therefore interpolates for 130 ms rather than saturating at the nominal 100 ms and freezing for the final 30 ms. Metrics, clock, budget, overlays, and Svelte UI always use latest state; only vehicle cursor presentation interpolates.
 
 ## Shared board and path geometry
 
-Move Canvas-neutral board behavior from `render/canvas.ts` into `render/boardTransform.ts`:
+Create `src/render/boardTransform.ts` from Canvas-neutral code currently in `canvas.ts`:
 
 - `tileSize`;
 - `BoardTransform`;
 - `getBoardTransform`;
 - DPR-aware backing-store sizing;
-- client-coordinate to tile mapping.
+- existing `canvasToTile`.
 
-Move Canvas-neutral path sampling from `render/pathRenderer.ts` into `render/pathGeometry.ts`:
+Keep the `canvasToTile` name: the WebGPU surface is still an `HTMLCanvasElement`, so renaming it adds churn without new semantics.
+
+Create `src/render/pathGeometry.ts` from Canvas-neutral code currently in `pathRenderer.ts`:
 
 ```ts
 export interface GeometrySample {
@@ -183,157 +264,111 @@ export function pointAt(
 ): TripPosition;
 ```
 
-`routeGeometry.ts`, transitional Canvas drawing, WebGPU tessellation, broken-route midpoint calculation, and vehicle sampling all consume these helpers. `primitives.ts` may choose tessellation sample density, but it does not implement independent line/bezier/arc equations.
+`routeGeometry.ts`, transitional Canvas drawing, WebGPU tessellation, broken-route midpoint calculation, and vehicle sampling all consume these helpers. `primitives.ts` selects tessellation sample density but does not reimplement line/bezier/arc equations.
 
-`boardTransform.ts` remains the single world-to-board rule for GPU rendering, pointer picking, and DOM label placement. HPA-640 does not introduce a camera object because there is no player camera feature to model yet.
+## GPU renderer and painter order
 
-## GPU rendering
+### Minimal primitive builder
 
-### Primitive builder and blending
+`render/webgpu/primitives.ts` appends colored triangles for:
 
-`render/webgpu/primitives.ts` is a CPU geometry helper, not a scene graph. It appends colored triangles for current visual needs:
-
-- rectangles/tile fills;
+- tile/rectangle fills;
 - thick line/polyline strokes;
-- quadratic/arc tessellation by sampling `pathGeometry.ts`;
+- curves sampled through `pathGeometry.ts`;
 - circles/rings;
 - arrowheads/crosses;
-- dashed draft/broken-route strokes.
+- dashed strokes.
 
-World coordinates remain in today's 32-pixel tile space. One small WGSL uniform maps world coordinates through `BoardTransform` to clip space.
+No display object/material/node model exists.
 
-The solid-color triangle pipeline enables ordinary source-alpha blending from Task 1 because current presentation uses both RGBA colors and `globalAlpha`-style opacity. This is part of the base pipeline descriptor, not a later renderer feature.
+### Pipelines and buffers
 
-The renderer owns only a few reusable buffers:
+Use:
 
-- structural map/building buffer, cached by `sceneRevision`;
-- route buffer, cached by `sceneRevision` + selected/edited route emphasis IDs;
-- one grow-only dynamic triangle buffer, rebuilt for under-route overlays, route-draft strokes, and post-vehicle handle markers, with explicit ranges;
+- one solid-color triangle pipeline with source-alpha blending;
+- one instanced vehicle-quad pipeline;
+- one grow-only structural triangle buffer;
+- one grow-only route triangle buffer;
+- one grow-only dynamic triangle buffer with explicit ordered ranges;
 - one grow-only vehicle instance buffer.
 
-No per-feature GPU object tree is introduced.
+Cache keys are strings:
 
-### Painter-order batches
+```ts
+const sceneKey = `scene:${sceneRevision}`;
+const routeStyleKey =
+  `routes:${sceneRevision}:${selectedRouteId ?? "-"}:${editedRouteId ?? "-"}`;
+```
 
-`webgpu/mapBatch.ts` replaces tile/building/road/track/roundabout Canvas drawing and contains no transit lines. It is the structural scene buffer.
+No generic cache-key type/framework is introduced.
 
-`webgpu/overlayBatch.ts` emits dynamic geometry in named ranges so the renderer can place it correctly:
+### Painter order
 
-- `underRoutes`: coverage/demand/traffic/crowding, hover/inspect selection, building/area previews, road/track/remove previews, road-mutation markers, broken-route markers;
-- `routeDraft`: current draft path stroke;
-- `overVehicles`: numbered-handle circle/cross marker geometry without text.
+`webgpu/mapBatch.ts` contains only map/building/road/track/roundabout geometry.
 
-`webgpu/transitBatch.ts` emits committed route lines, stops/stations, access indicators, route-node cues, and direction arrows. Its visual result depends on selected/edited route emphasis, so its cache key is not `sceneRevision` alone.
+`webgpu/overlayBatch.ts` emits named dynamic ranges:
 
-The render pass is always:
+- `underRoutes`: data overlays, hover/selection, building/area/road/track/remove previews, road-mutation markers, broken-route markers;
+- `routeDraft`: draft path stroke;
+- `overVehicles`: route-handle circle/cross geometry without text.
+
+`webgpu/transitBatch.ts` emits committed routes, stops/stations, access indicators, route-node cues, and direction arrows with current selected/edited route dimming/emphasis.
+
+Render order is always:
 
 ```text
 map/buildings
 underRoutes overlays
 committed routes/stops/arrows
-route draft stroke
+routeDraft
 instanced vehicles
 overVehicles handle markers
 DOM text
 ```
 
-This preserves current Canvas layering: translucent data overlays remain under transit lines, and unrelated route/vehicle dimming remains visible when inspecting/editing a route.
+This preserves the current visual contract: translucent overlays remain beneath route lines and route selection/editing can dim unrelated lines and vehicles.
 
-### Vehicle cursor sampling and interpolation
+## Vehicle interpolation and culling
 
-`webgpu/vehicleInstances.ts` owns the high-cardinality dynamic path, but it reuses the existing route/corridor/path sampler rather than inventing a second motion model.
+`webgpu/vehicleInstances.ts` owns cursor interpolation, pose sampling, viewport culling, and instance encoding.
 
-Extract a Canvas-independent cursor sampler that resolves a vehicle against a `TransitRenderCache` for a `GameState` and returns enough information to resample the route:
+For each latest vehicle:
 
-```ts
-export interface VehicleCursorSample {
-  id: string;
-  mode: "bus" | "metro";
-  lineId: string;
-  itineraryIndex: number;
-  pathStepIndex: number;
-  stepProgress: number;
-  geometry: PathGeometry | null;
-  parkedPoint: TripPosition | null;
-}
-
-export interface VehiclePose {
-  id: string;
-  mode: "bus" | "metro";
-  lineId: string;
-  point: TripPosition;
-  angleRadians: number | null;
-}
-```
-
-The existing `TransitRenderCache` concept remains useful and may be moved into the Canvas-neutral transit batch module. Cache each `GameState` in a `WeakMap`; previous/latest states can each resolve against their own route/corridor cache.
-
-Interpolation rules are explicit:
-
-1. Resolve the latest cursor. If it cannot produce a pose, omit the vehicle.
-2. Snap to latest when paused, speed is 0, vehicle ID is new/missing previously, scene revision changed, `lineId` changed, itinerary index changed, parked/path state changed, or cursor movement is backward/non-adjacent.
-3. If previous/latest are on the same `lineId`, itinerary, and `pathStepIndex`, interpolate **`stepProgress`**, then call `pointAndTangentAt()` once on that step's presentation geometry. Heading comes from the sampled tangent; do not lerp world heading independently.
-4. If latest `pathStepIndex === previous.pathStepIndex + 1` on the same itinerary and both adjacent presentation geometries exist, walk through the end of the previous step and beginning of the latest step. Parameterize the bridge by the remaining previous-step time plus elapsed latest-step time, then sample whichever step contains the interpolated cursor with `pointAndTangentAt()`.
-5. If a publication skipped more than one path step, crosses an itinerary/terminal boundary, or otherwise cannot prove continuity cheaply, snap to latest rather than draw a chord through the map.
+1. Resolve the matching previous vehicle by stable ID.
+2. Snap to latest for pause/speed 0, scene change, new/missing previous vehicle, `lineId` change, parked/path transition, backward cursor, non-adjacent cursor jump, or any continuity case we cannot prove cheaply.
+3. Same line + same itinerary + same path step: lerp `stepProgress`, then sample the presented `PathGeometry` once with `pointAndTangentAt()`.
+4. One adjacent step on the same itinerary: interpolate through the remaining previous-step time plus elapsed latest-step time, then sample the selected step with `pointAndTangentAt()`.
+5. Larger jumps or itinerary/terminal boundaries snap to latest. Do not build a general timeline.
+6. Derive angle from the sampled tangent; do not independently interpolate heading.
+7. Apply route emphasis opacity.
+8. Cull against `WorldViewport` plus a one-tile margin.
+9. Encode one fixed-size instance for each remaining vehicle.
 
 For adjacent steps:
 
 ```text
-remainingPrev = (1 - previous.stepProgress) * previousStep.travelSeconds
-elapsedLatest = latest.stepProgress * latestStep.travelSeconds
-span = remainingPrev + elapsedLatest
+remainingPrevious =
+  (1 - previous.stepProgress) * previousStep.travelSeconds
+elapsedLatest =
+  latest.stepProgress * latestStep.travelSeconds
+span = remainingPrevious + elapsedLatest
 target = alpha * span
 ```
 
-If `target <= remainingPrev`, sample the previous step between its previous progress and 1. Otherwise sample the latest step between 0 and its latest progress. Zero-duration/invalid spans snap to latest.
+Zero/invalid span snaps to latest.
 
-This deliberately renders only provably continuous cursor motion. It does not extrapolate, does not mutate simulation state, and does not build a general spline timeline.
+Tests include quadratic and arc geometry so a world-space chord implementation cannot pass.
 
-After sampling/interpolation:
+The GPU owns one unit quad and draws all visible vehicles in one instanced draw. No per-vehicle GPU buffer/object/bind group/draw call.
 
-1. apply route-emphasis opacity to the instance;
-2. cull against `WorldViewport` plus a one-tile margin;
-3. encode one fixed-size instance only for a visible pose.
-
-The GPU owns one unit quad. One grow-only reusable instance buffer contains visible bus/metro poses, and one instanced draw renders them. Do not allocate one object/buffer/bind group/draw call per vehicle.
-
-Private cars remain Caelum's aggregate traffic model; this ticket does not create private-car actors for visual load.
-
-## Cadence and render history
-
-### 10 Hz publication, rAF display
-
-The host keeps requestAnimationFrame as display clock. While runtime is running, unpaused, and speed is non-zero:
-
-- every rAF renders;
-- wall time accumulates for simulation publication;
-- after at least 100 ms and only when no tick is pending, call the existing runtime `tick(accumulatedDelta)`;
-- cap one submitted delta to 250 ms;
-- retain excess accumulated wall time for the next eligible submission;
-- while the returned tick promise is pending, keep drawing and do not request another tick.
-
-The runtime `tick()` still enters the existing serialized gameplay queue. The host-level one-in-flight gate prevents rAF from flooding that queue; it does not replace the queue or introduce a second gameplay serializer.
-
-Stopping/pausing clears timestamp/accumulator history so resume does not catch up an old background gap.
-
-### Render history
-
-The host retains only:
-
-- previous compact `GameState` + its scene revision;
-- latest compact `GameState` + its scene revision;
-- wall-clock time when latest was observed.
-
-When current state changes with the same scene revision, shift latest -> previous and start alpha at 0. If the scene revision changes, clear previous and render latest immediately.
-
-During the next 100 ms display interval, vehicle alpha advances to 1. Metrics, budget, clock, overlays, and Svelte UI always use latest state; only moving vehicle cursors interpolate.
+Private-car traffic remains aggregate; HPA-640 does not create private-car actors to manufacture the 5k benchmark.
 
 ## Viewport culling
 
-Define a small Canvas/GPU-independent rectangle:
+Use one plain rectangle:
 
 ```ts
-interface WorldViewport {
+export interface WorldViewport {
   minX: number;
   minY: number;
   maxX: number;
@@ -341,99 +376,116 @@ interface WorldViewport {
 }
 ```
 
-Culling occurs **after path sampling/interpolation and before instance encoding**. Current board-fit behavior produces a viewport covering the whole map, so no new camera UX is required. Unit tests feed a narrowed viewport and prove that, for example, 20,000 presented vehicles with only 400 near the viewport create only 400 GPU instance records.
+Current production whole-map fit yields a viewport covering the map. Unit tests feed a narrower viewport and prove presented vehicles are removed before instance encoding/upload. No camera or LOD subsystem is added.
 
-This seam is enough for a future camera; no LOD/camera framework is introduced now.
+## Map-local DOM text
 
-## Map-local text
+GPU text remains out of scope.
 
-GPU text is deliberately out of scope. Add pure `render/mapTextOverlay.ts` view derivation plus `MapTextOverlay.svelte` for:
+Create pure `render/mapTextOverlay.ts` derivation plus `MapTextOverlay.svelte` for:
 
 - cursor/tool badge;
-- road-preview feedback text;
-- route-draft waypoint numbers;
-- broken-route guidance text.
+- road-preview feedback;
+- route waypoint numbers;
+- broken-route guidance.
 
-Geometric circles/crosses/markers remain WebGPU.
+Geometric handle circles/crosses stay WebGPU.
 
-`GameCanvas.svelte` becomes a Svelte-owned board container containing a dedicated runtime-owned `.board-surface` and a pointer-events-none text overlay. The runtime mounts its canvas only inside `.board-surface`, so its normal child cleanup cannot erase Svelte-owned overlay DOM.
+`GameCanvas.svelte` owns:
 
-The GPU surface and overlay occupy the same CSS box. Both use `getBoardTransform` from that box's width/height so pointer mapping, GPU geometry, and DOM labels cannot drift because they measured different containers.
+```text
+.board
+  .board-surface        <-- runtime mounts only its canvas here
+  MapTextOverlay        <-- pointer-events: none
+```
 
-## WebGPU lifecycle and early browser gate
+Both `.board-surface` and the overlay are `position:absolute; inset:0`, so they share the same CSS box. Both use `getBoardTransform` with that box size. The runtime never calls `innerHTML = ""` on the Svelte-owned `.board`.
 
-Make `createWebGpuHost(...)` asynchronous and await it inside already-async `createGameRuntime(...)`.
+## WebGPU lifecycle and fatal loss
 
-The host factory requests one adapter/device before returning. `mountCanvas(host)` therefore keeps its current synchronous teardown signature. On mount, the host creates/configures one canvas context, wires input/resize listeners, and creates size-dependent resources. On teardown it cancels rAF, clears pointer/hover state, disconnects observers/listeners, destroys renderer-owned buffers, and removes its canvas.
+`createWebGpuHost()` is async. It creates the renderer/device before runtime construction returns, preserving synchronous `mountCanvas(host): () => void`.
 
-If WebGPU or an adapter is unavailable, throw a clear bootstrap error. `main.ts` already converts runtime bootstrap rejection into the shell error surface. Do not add a Canvas fallback.
+`WebGpuRenderer` exposes the device-loss promise in a narrow form:
 
-Unit tests inject one narrow renderer factory into `createWebGpuHost`; they do not mock the entire WebGPU object graph. Pure batch/extraction tests never touch GPU APIs.
+```ts
+export interface WebGpuDeviceLoss {
+  reason?: string;
+  message: string;
+}
 
-Before production switches from `createCanvasHost` to `createWebGpuHost`, add a real Playwright Chromium probe that:
+export interface WebGpuRenderer {
+  readonly lost: Promise<WebGpuDeviceLoss>;
+  configure(canvas: HTMLCanvasElement): void;
+  resize(width: number, height: number): void;
+  render(frame: WebGpuRenderFrame): WebGpuRenderStats;
+  destroy(): void;
+}
+```
 
-1. asserts `navigator.gpu` exists;
-2. requests an adapter and device;
-3. configures a tiny `webgpu` canvas context with the preferred format;
-4. submits a clear-only render pass;
-5. waits for `device.queue.onSubmittedWorkDone()`.
+The host forwards a loss whose reason is not `"destroyed"` to `WebGpuHostContext.onFatalError`. Runtime routes that through the same terminal `backendError`/shell-error transition used for fatal backend failure. Teardown calls `destroy()`; the resulting deliberate `"destroyed"` loss is ignored.
 
-Run it in normal Chromium and once headed locally. If the default Playwright worker returns no adapter, pin the minimum explicit Chromium software-adapter configuration needed for **functional** E2E and document that distinction. Do not use software-adapter timings as HPA-640 performance evidence.
+HPA-640 does **not** add automatic device recreation or a Canvas fallback; one loud terminal error is the KISS behavior.
 
-After the Task 4 production host cutover, run the entire existing Playwright suite before deleting Canvas2D. Tauri/WebView remains a separate Task 5 smoke gate.
+## Browser and Tauri gates
+
+### Early Chromium capability probe
+
+Before production cutover, Playwright runs a focused page that:
+
+1. asserts `navigator.gpu`;
+2. requests an adapter/device;
+3. gets/configures `getContext("webgpu")`;
+4. submits one clear render pass;
+5. awaits `device.queue.onSubmittedWorkDone()`.
+
+Run one headed Chromium probe on the reference machine. If CI/headless requires an explicit functional software adapter/configuration, pin only the minimum required settings. Never compare software-adapter timings to real-GPU performance evidence.
+
+### Production cutover gate
+
+After `createGameRuntime` switches to `createWebGpuHost`, but while all Canvas modules/tests still exist:
+
+1. run focused runtime/host/unit tests;
+2. run the full existing Playwright suite through the WebGPU production path;
+3. run `tauri:dev` on the intended desktop path and verify rendering, resize/input, and smooth vehicle motion.
+
+A failure in either Chromium or Tauri blocks Canvas deletion. The old Canvas implementation remains in the branch as a debugging oracle until both gates pass, but it is not a runtime fallback.
 
 ## Performance evidence
 
-Add one renderer-only browser stress harness under `tests/e2e` so the same deterministic scene can measure Canvas2D before deletion and WebGPU after cutover without creating 5,000 simulation actors.
+Use one renderer-only fixture composed from existing `tests/helpers/gameState.ts` and `tests/helpers/mapFixtures.ts`; do not create a second city/route fixture framework.
 
-Build it by composing existing `tests/helpers/gameState.ts` and `tests/helpers/mapFixtures.ts`; do not create an independent city/sandbox factory.
+Record two cardinalities with the same representative geometry:
 
-Reference fixture:
+- `vehicles-200`;
+- `vehicles-5000`.
 
-- 1280 x 800 board;
-- representative road/building/transit/overlay geometry;
-- valid bus and metro paths;
-- 5,000 synthetic presentation vehicles distributed along valid path steps;
-- 30 warm-up frames;
-- 120 measured frames.
+Before cutover, record Canvas median/p95 CPU render time for both. After cutover, record WebGPU median/p95 CPU encode+submit time plus structural counts for both. The 5k row is the HPA-336 scale ceiling; the 200 row makes the current-scale cost visible.
 
-Record in `docs/performance/hpa-640-webgpu.md`:
+The synthetic repeated transit rows are a renderer stress proxy for the committed visible-vehicle capacity target; they are not meant to model 5,000 manually purchased buses in today's economy.
 
-- Canvas2D baseline median/p95 CPU render time;
-- WebGPU median/p95 CPU encode/submit time;
-- WebGPU 120-frame queue-completion average using `device.queue.onSubmittedWorkDone()` after the run;
-- presented vehicle count, encoded visible count, instance-upload bytes, and draw counts;
-- real Tauri/M1 Pro smoke observation.
+Also record cadence separately:
 
-Numbers are reference evidence, not CI thresholds. Automated tests pin structural properties instead: painter order/draw ranges, source-alpha blend configuration, path-following interpolation, viewport culling before encoding, one 5k instance batch/draw, structural/route-buffer reuse under their explicit keys, and no overlapping backend tick requests.
+- old contract: up to one backend publication request per rAF;
+- new contract: at most 10 host tick requests/sec, still serialized by `createSerializedQueue`;
+- HPA-544 projection/serialization evidence remains the wire-cost baseline.
 
-Run real-GPU performance measurements on normal Chromium. If CI uses a software WebGPU adapter for functional coverage, do not mix those timings into the reference result.
+Final evidence must not attribute all improvement to WebGPU if the cadence change is the larger contributor.
+
+Wall-clock values are documentation evidence, not CI thresholds. CI pins deterministic properties: painter order/ranges, blending config, one-in-flight tick admission, observed-interval alpha, culling before encode, one vehicle instance upload/draw, cache reuse, and no Canvas production path after deletion.
 
 ## Risks and gates
 
-### Path interpolation
-
-Risk: world-space lerp can cut across curved routes or slide through discontinuous cursor transitions.
-
-Gate: unit tests include a quadratic/arc sample where a chord interpolation cannot satisfy the expected midpoint/tangent, an adjacent-step rollover, and snap cases for parked/path, itinerary, scene, and non-adjacent jumps.
-
-### Painter order and alpha
-
-Risk: caching transit together with the map would put translucent data overlays above routes and would freeze selected-route dimming at the wrong opacity.
-
-Gate: batch/renderer tests assert draw-stage order and route-emphasis invalidation. The solid pipeline has source-alpha blending from its first implementation.
-
-### Playwright WebGPU availability
-
-Risk: production cutover can be correct while the automated Chromium worker has no functional adapter.
-
-Gate: real adapter/device/context/submit probe lands in Task 1, before host cutover. Minimal functional software-adapter configuration is permitted only if required and is explicitly separated from performance evidence.
-
-### Tauri WebView WebGPU availability
-
-Risk: Chromium works while the release-target WebView renders a blank board or behaves differently.
-
-Gate: Task 5 requires `tauri:dev` map/input/motion smoke before Canvas deletion is considered complete. There is no fallback renderer.
+| Risk | Required gate |
+| --- | --- |
+| Curve/step interpolation draws chords or jumps | Same-step quadratic/arc + adjacent-step tests; discontinuities snap |
+| Dynamic overlays cover routes / route dimming is lost | Ordered range tests + current Canvas oracle retained until cutover |
+| Headless Chromium lacks WebGPU | Early real probe; minimal functional adapter config only if required |
+| Tauri/WKWebView differs from Chromium | `tauri:dev` smoke after cutover and before Canvas deletion |
+| Runtime tests construct WebGPU in Node/jsdom | `CreateGameRuntimeOptions.createHost` fake-host injection |
+| Device lost mid-session freezes silently | fake lost-promise test -> terminal shell error; no automatic recovery |
+| Running tick publication causes duplicate draws | host render-coalescing test; paused repaint test |
+| Variable tick latency causes alpha freeze | observed-interval alpha test (e.g. 130 ms gap) |
+| 5k benchmark is mistaken for current gameplay reachability | docs report 200 current-scale context and 5k roadmap ceiling separately |
 
 ## Target files
 
@@ -441,9 +493,9 @@ Gate: Task 5 requires `tauri:dev` map/input/motion smoke before Canvas deletion 
 src/render/
   boardTransform.ts
   pathGeometry.ts
-  colors.ts                      retained
-  placementValidation.ts         retained
-  routeGeometry.ts               retained
+  colors.ts                         retained
+  placementValidation.ts            retained
+  routeGeometry.ts                  retained
   mapTextOverlay.ts
   webgpu/
     primitives.ts
@@ -452,56 +504,59 @@ src/render/
     overlayBatch.ts
     vehicleInstances.ts
     renderer.ts
+
 src/runtime/
   createWebGpuHost.ts
+
 src/components/
   GameCanvas.svelte
   MapTextOverlay.svelte
 ```
 
-Delete after parity:
+Canvas production modules remain until the post-cutover Chromium and Tauri gates pass. Then delete them together with their Canvas-specific tests:
 
 - `src/runtime/createCanvasHost.ts`;
 - `src/render/canvas.ts`;
 - `src/render/mapRenderer.ts`;
 - `src/render/buildingRenderer.ts`;
 - `src/render/roundaboutRenderer.ts`;
-- `src/render/pathRenderer.ts` after `pathGeometry.ts` owns its retained sampling math;
+- `src/render/pathRenderer.ts` after Canvas-only drawing has moved and `pathGeometry.ts` owns sampling;
 - `src/render/transitRenderer.ts`;
 - `src/render/overlayRenderer.ts`;
 - `src/render/cursorBadge.ts`.
 
-Retarget behavioral tests instead of simply dropping coverage.
-
 ## Explicit non-goals
 
 - no camera/pan/zoom product feature;
+- no PixiJS/scene graph/material/plugin framework;
 - no Godot/Bevy renderer or Rust `wgpu`;
-- no generic scene graph/material/plugin system;
-- no texture atlas/GPU text/image-art pipeline;
-- no lighting/3D/physics/compute-shader simulation work;
-- no 1:1 rendering of 200k citizens;
+- no GPU text/texture-art pipeline;
+- no lighting/3D/physics/compute simulation;
+- no rendered 200k citizens;
 - no private-car actor simulation;
-- no durable snapshot/schema migration;
-- no new backend presentation method;
+- no snapshot/schema/backend API change;
 - no second gameplay queue;
-- no Canvas2D fallback after cutover.
+- no automatic GPU-device recovery;
+- no Canvas fallback after cutover;
+- no second HPA-640 PR without an explicit product decision.
 
 ## Acceptance
 
-HPA-640 is complete in this one PR when:
+HPA-640 is complete on this one PR when:
 
-1. gameplay uses one WebGPU canvas and no Canvas2D gameplay context remains under production `src`;
-2. build/track/demolish gestures, tile picking, hover/selection, route create/edit, overlays, responsive resize, save/restore, and simulation controls preserve current player behavior;
-3. Svelte still owns HUD/panels/forms/map text; WebGPU owns gameplay geometry and moving vehicles;
-4. backend publication runs at 10 Hz while display remains rAF-driven with at most one host tick request in flight and the existing serialized gameplay queue retained;
-5. vehicle interpolation follows `PathGeometry` by interpolating continuous cursor progress and resampling `pointAndTangentAt`, with discontinuities snapping instead of world-space lerping;
-6. painter order remains map/buildings -> overlays -> routes -> draft -> vehicles -> handles -> DOM text, with alpha blending enabled;
-7. 5,000 visible transit vehicles encode into one reused instance buffer and one instanced vehicle draw;
-8. a narrowed-viewport test proves offscreen presented vehicles are removed before instance encoding/upload;
-9. unchanged `sceneRevision` reuses structural map geometry; route geometry reuses only while both scene revision and route-emphasis inputs are unchanged;
-10. every accepted `PresentationUpdate` uses one scene-revision helper, including initial presentation, dispatch, restore, and reset;
-11. a real Chromium WebGPU functional probe passes before production host cutover, the full Playwright suite passes after cutover, and the Tauri WebView smoke passes before final Canvas deletion/closeout;
-12. the HPA-544 presentation wire remains unchanged;
-13. stress evidence records Canvas baseline and final real-GPU WebGPU results without turning wall-clock values into brittle CI thresholds;
-14. Canvas-specific production modules/obsolete mocks are deleted or retargeted in the same PR, leaving no second renderer.
+1. gameplay uses one WebGPU canvas and production `src` has no Canvas2D gameplay context;
+2. HPA-544 `PresentationUpdate`, `GameBackend`, and durable snapshot/schema contracts are unchanged;
+3. initial/dispatch/restore/reset state installation shares one `sceneRevision` helper;
+4. backend publication admission is 10 Hz / one host tick in flight while display remains rAF-driven and the existing serialized queue remains authoritative;
+5. runtime-triggered render requests do not double-render while rAF is active, while paused/stopped commits still repaint immediately;
+6. vehicle smoothing uses observed-interval alpha and path-space cursor interpolation, with quadratic/arc and adjacent-step tests and snap-on-discontinuity;
+7. source-alpha blending and explicit painter order preserve overlays/routes/dimming;
+8. structural and route-style caches use string keys and do not depend on live array identity;
+9. 5,000 visible vehicles cull/encode into one grow-only instance upload and one instanced draw; narrowed viewport tests prove offscreen rows are removed before encoding;
+10. Svelte owns HUD/panels/map text; WebGPU owns geometric gameplay presentation;
+11. Canvas tests remain until their Canvas modules are deleted;
+12. early Chromium WebGPU probe passes before cutover;
+13. after cutover, full Playwright and Tauri/WKWebView smoke pass before Canvas deletion;
+14. unexpected device loss reaches the terminal shell error instead of silently freezing;
+15. performance evidence reports both 200-vehicle current-scale context and 5k future-scale ceiling, and separates cadence/wire benefit from renderer benefit;
+16. final unit/type/lint/build/E2E gates pass and Canvas-specific production modules/tests are removed together.
