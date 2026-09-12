@@ -263,8 +263,8 @@ export type PathGeometry =
       control: TripPosition;
       to: TripPosition;
     }
-  // Render-only: roundabout circulation curves. Constructed by
-  // roundaboutRenderer's visual template and offset by routeGeometry;
+  // Render-only: roundabout circulation curves. Constructed by the WebGPU
+  // map batch's visual template and offset by routeGeometry;
   // Rust road/track path geometry never emits arcs (it uses line and
   // quadraticBezier for movement steps).
   | {

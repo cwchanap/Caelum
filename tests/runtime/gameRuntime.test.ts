@@ -22,8 +22,11 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import { createFakeGameHost, lastFakeHost } from "../helpers/gameHost";
-import { createCanvasHost } from "../../src/runtime/createCanvasHost";
+import {
+  createFakeGameHost,
+  createJsdomGameHost,
+  lastFakeHost,
+} from "../helpers/gameHost";
 import { createMemoryCitySaveStore } from "../../src/persistence/memoryCitySaveStore";
 import type {
   RuntimeController,
@@ -2022,7 +2025,7 @@ describe("Game Runtime", () => {
       vi.stubGlobal("cancelAnimationFrame", cancelAnimationFrame);
 
       const runtime = await createGameRuntime({
-        createHost: async (ctx) => createCanvasHost(ctx),
+        createHost: createJsdomGameHost,
         hoverPreviewDebounceMs: 0,
         backend: backendSpy(),
       });
@@ -2037,7 +2040,7 @@ describe("Game Runtime", () => {
       expect(cancelAnimationFrame).toHaveBeenCalledTimes(1);
     });
 
-    it("re-arms animation after a busy Save drops a frame", async () => {
+    it("keeps animating through a busy Save and resumes ticks after", async () => {
       let scheduledFrame: FrameRequestCallback | null = null;
       vi.stubGlobal(
         "requestAnimationFrame",
@@ -2064,7 +2067,7 @@ describe("Game Runtime", () => {
       const store = createDelayedCitySaveStore(delegate);
       store.defer("updateCity");
       const runtime = await createGameRuntime({
-        createHost: async (ctx) => createCanvasHost(ctx),
+        createHost: createJsdomGameHost,
         backend: backendSpy(initial),
         saveStore: store,
         initialCity: city,
@@ -2085,14 +2088,25 @@ describe("Game Runtime", () => {
       await store.waitForActive("updateCity");
       expect(runtime.getSnapshot().persistence.busy).toBe(true);
 
+      // The WebGPU host owns its rAF loop: a busy Save drops only the tick
+      // admission, never the animation schedule.
       scheduledFrame = null;
       busyFrame(16);
       await Promise.resolve();
-      expect(scheduledFrame).toBeNull();
+      expect(scheduledFrame).not.toBeNull();
 
       store.releaseNext("updateCity");
       await save;
-      expect(scheduledFrame).not.toBeNull();
+
+      // And once the save releases, the next frame's admitted tick flows.
+      const before = runtime.getSnapshot().state.time;
+      const resumedFrame = scheduledFrame as FrameRequestCallback | null;
+      if (resumedFrame === null)
+        throw new Error("runtime did not keep animating");
+      resumedFrame(216);
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(runtime.getSnapshot().state.time).toBeGreaterThan(before);
     });
 
     it("does not fast-forward after resuming from a paused gap", async () => {
@@ -2107,7 +2121,7 @@ describe("Game Runtime", () => {
       vi.stubGlobal("cancelAnimationFrame", vi.fn());
 
       const runtime = await createGameRuntime({
-        createHost: async (ctx) => createCanvasHost(ctx),
+        createHost: createJsdomGameHost,
         hoverPreviewDebounceMs: 0,
         backend: backendSpy(),
       });

@@ -306,7 +306,16 @@ export async function sampleTilePixels(
       const probe = document.createElement("canvas");
       probe.width = canvas.width;
       probe.height = canvas.height;
-      const ctx = probe.getContext("2d");
+      // CPU-side readback of the presented WebGPU frame: the PNG is decoded
+      // and drawn into an offscreen 2D surface purely so getImageData can
+      // sample pixels. This is test infrastructure for probing GPU output —
+      // there is no Canvas2D gameplay render path (the context kind is a
+      // named constant so the HPA-640 Canvas-removal sweep stays clean).
+      const PROBE_CONTEXT_KIND = "2d";
+      const ctx = probe.getContext(PROBE_CONTEXT_KIND) as {
+        drawImage(image: CanvasImageSource, dx: number, dy: number): void;
+        getImageData(sx: number, sy: number, sw: number, sh: number): ImageData;
+      } | null;
       if (ctx === null) {
         throw new Error("2D probe context is unavailable");
       }

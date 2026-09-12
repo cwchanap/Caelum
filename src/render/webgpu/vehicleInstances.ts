@@ -11,7 +11,7 @@ import { colors } from "../colors";
 import { pointAndTangentAt } from "../pathGeometry";
 import { VEHICLE_INSTANCE_FLOATS } from "./renderer";
 import { parseColor, withAlpha, type Rgba } from "./primitives";
-import { UNRELATED_ROUTE_OPACITY } from "../transitRenderer";
+import { UNRELATED_ROUTE_OPACITY } from "./transitBatch";
 
 export interface WorldViewport {
   minX: number;

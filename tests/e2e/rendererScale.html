@@ -5,7 +5,12 @@
     <title>Caelum renderer scale benchmark</title>
   </head>
   <body>
-    <canvas id="bench-canvas" width="1280" height="800"></canvas>
+    <!-- Fixed 1280x800 board host; the production WebGPU host creates and
+         configures its own canvas inside this box. -->
+    <div
+      id="bench-host"
+      style="width: 1280px; height: 800px; position: fixed"
+    ></div>
     <script type="module" src="./rendererScale.ts"></script>
   </body>
 </html>

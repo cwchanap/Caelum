@@ -4,6 +4,8 @@ import type {
   GameHost,
   WebGpuHostContext,
 } from "../../src/runtime/createWebGpuHost";
+import { createWebGpuHostWithRenderer } from "../../src/runtime/createWebGpuHost";
+import type { WebGpuRenderer } from "../../src/render/webgpu/renderer";
 
 /**
  * Async fake host injected through `CreateGameRuntimeOptions.createHost` so
@@ -45,3 +47,21 @@ export const createFakeGameHost: CreateGameHost = async (context) => {
 export function lastFakeHost(): FakeGameHost | undefined {
   return created.at(-1);
 }
+
+/** No-op renderer so the real WebGPU host logic runs in Node/jsdom without
+ *  navigator.gpu: `configure` never touches the canvas, nothing reaches GPU. */
+export function createNoopWebGpuRenderer(): WebGpuRenderer {
+  return {
+    lost: new Promise(() => {}),
+    configure: () => {},
+    resize: () => {},
+    render: () => ({ solidBatches: 0, solidVertices: 0, vehicleInstances: 0 }),
+    destroy: () => {},
+  };
+}
+
+/** Real host factory (rAF cadence, 10 Hz tick admission, pointer wiring) over
+ *  a no-op renderer. The `createHost` seam for tests that exercise the
+ *  production host behavior in Node/jsdom; never touches navigator.gpu. */
+export const createJsdomGameHost: CreateGameHost = async (context) =>
+  createWebGpuHostWithRenderer(context, createNoopWebGpuRenderer());

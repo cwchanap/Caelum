@@ -8,7 +8,6 @@ import type {
 import type { UiState } from "../../ui/uiState";
 import { tileSize } from "../boardTransform";
 import { colors } from "../colors";
-import { UNRELATED_ROUTE_OPACITY } from "../transitRenderer";
 import {
   canonicalCorridorPrimitive,
   corridorOffsets,
@@ -23,6 +22,9 @@ import {
   withAlpha,
   type Rgba,
 } from "./primitives";
+
+/** Alpha applied to route geometry when a different route is emphasized. */
+export const UNRELATED_ROUTE_OPACITY = 0.42;
 
 const SHARED_CORRIDOR_GAP_PX = 4;
 const DIRECTION_ARROW_SPACING_TILES = 1.5;

@@ -94,7 +94,8 @@ fn vsMain(
   // as clip units would draw it fullscreen.
   let cos = cos(angle);
   let sin = sin(angle);
-  // Canvas parity (transitRenderer fillRect(-7, -14, 14, 8)): the body spans
+  // Canvas-era parity: the old 2D renderer drew fillRect(-7, -14, 14, 8).
+  // The body spans
   // double the half-extents and its center sits one width + 2px perpendicular
   // off the path centerline (local y = -(2*hw + 2) = -10 for hw = 4).
   let local = vec2f(
