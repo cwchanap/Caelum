@@ -18,9 +18,10 @@ import {
   createWebGpuHostWithRenderer,
   type WebGpuHostContext,
 } from "../../src/runtime/createWebGpuHost";
-import type {
-  WebGpuRenderFrame,
-  WebGpuRenderer,
+import {
+  VEHICLE_INSTANCE_FLOATS,
+  type WebGpuRenderFrame,
+  type WebGpuRenderer,
 } from "../../src/render/webgpu/renderer";
 import { tileSize } from "../../src/render/boardTransform";
 import { createUiState, type UiState } from "../../src/ui/uiState";
@@ -757,8 +758,14 @@ describe("createWebGpuHost observed vehicle history", () => {
     const frame = fx.renderer.frames.at(-1)!;
     const instances = frame.vehicles[0]!.instances;
     const rows: number[][] = [];
-    for (let offset = 0; offset < instances.length; offset += 9) {
-      rows.push(Array.from(instances.slice(offset, offset + 9)));
+    for (
+      let offset = 0;
+      offset < instances.length;
+      offset += VEHICLE_INSTANCE_FLOATS
+    ) {
+      rows.push(
+        Array.from(instances.slice(offset, offset + VEHICLE_INSTANCE_FLOATS)),
+      );
     }
     return rows;
   }
@@ -893,7 +900,7 @@ describe("createWebGpuHost frame contents", () => {
     expect(frame.solids[3]!.key).toBe("route-draft");
     expect(frame.vehicles.length).toBe(1);
     expect(frame.vehicles[0]!.key).toBe("vehicles");
-    expect(frame.vehicles[0]!.instances.length).toBe(9);
+    expect(frame.vehicles[0]!.instances.length).toBe(VEHICLE_INSTANCE_FLOATS);
     // No route editor open: the over-vehicles range emits an empty batch.
     expect(frame.overVehicles![0]!.key).toBe("route-handles");
     expect(frame.overVehicles![0]!.vertices.length).toBe(0);
@@ -901,19 +908,22 @@ describe("createWebGpuHost frame contents", () => {
     fx.host.stop();
   });
 
-  it("flips vehicle rotation into clip space and scales body extents", () => {
-    // Southbound bus: world tangent (0, 1) -> world angle +π/2. Clip space is
-    // y-up, so the host must negate the encoded angle; body extents scale by
-    // the world->device-pixel scale (1 here: identity board, DPR 1).
+  it("keeps raw world angle and extents and appends clip factors to instances", () => {
+    // Southbound bus: world tangent (0, 1) -> world angle +π/2, passed
+    // through raw (the y-flip lives in the clip factors). Body extents stay
+    // world px. The trailing clip factors come from the identity board at
+    // DPR 1 (28x18 tiles -> 896x576 px): sx = 2/896, sy = -2/576.
     const fx = createFixture({
       state: unpaused(stateWithVehicleForFrame({ x: 2, y: 5 })),
     });
     fx.host.start();
 
     const instances = fx.renderer.frames.at(-1)!.vehicles[0]!.instances;
-    expect(instances[2]).toBeCloseTo(-Math.PI / 2, 5);
+    expect(instances[2]).toBeCloseTo(Math.PI / 2, 5);
     expect(instances[3]).toBeCloseTo(7, 5);
     expect(instances[4]).toBeCloseTo(4, 5);
+    expect(instances[5]).toBeCloseTo(2 / 896, 9);
+    expect(instances[6]).toBeCloseTo(-2 / 576, 9);
 
     fx.host.stop();
   });

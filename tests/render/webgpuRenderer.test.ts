@@ -34,6 +34,11 @@ function vehicleInstances(count: number): Float32Array<ArrayBuffer> {
   return new Float32Array(count * VEHICLE_INSTANCE_FLOATS);
 }
 
+/** One arbitrary-but-distinct 11-float instance row for gameplay fixtures. */
+function vehicleRow(seed: number): number[] {
+  return Array.from({ length: VEHICLE_INSTANCE_FLOATS }, (_, i) => seed + i);
+}
+
 function draws(
   pass: FakePass,
 ): { vertexCount: number; instanceCount: number }[] {
@@ -84,6 +89,75 @@ describe("WebGpuRenderer", () => {
     );
     expect(pipelines).toHaveLength(2);
     expect(instanced).toHaveLength(1);
+  });
+
+  it("pins the vehicle instance layout consumed by the WGSL vertex shader", () => {
+    const { device, pipelines } = createFakeDevice();
+    createWebGpuRenderer(device, "bgra8unorm");
+
+    const instanceBuffer = pipelines
+      .flatMap((pipeline) =>
+        Array.from(pipeline.descriptor.vertex.buffers ?? []),
+      )
+      .find((buffer) => buffer?.stepMode === "instance");
+    expect(instanceBuffer).toBeDefined();
+    // 11 floats: origin(x,y) angle extents(l,w) clipScale(x,y) rgba. A
+    // regression back to the 9-float layout breaks this pin.
+    expect(instanceBuffer!.arrayStride).toBe(44);
+    expect(instanceBuffer!.arrayStride).toBe(VEHICLE_INSTANCE_FLOATS * 4);
+    expect(Array.from(instanceBuffer!.attributes!)).toEqual([
+      { shaderLocation: 1, offset: 0, format: "float32x2" }, // clip origin
+      { shaderLocation: 2, offset: 8, format: "float32" }, // world angle
+      { shaderLocation: 3, offset: 12, format: "float32x2" }, // world half-extents
+      { shaderLocation: 4, offset: 20, format: "float32x2" }, // clip factors
+      { shaderLocation: 5, offset: 28, format: "float32x4" }, // color
+    ]);
+  });
+
+  it("uploads vehicle instances whose clip factors keep quads tiny, not fullscreen", () => {
+    // Regression guard for the WKWebView orange-canvas bug: instances must
+    // carry world-px half-extents plus small world→clip factors. Feeding
+    // device-px extents as clip units drew ~7x-fullscreen quads.
+    const { device, writes } = createFakeDevice();
+    const renderer = createWebGpuRenderer(device, "bgra8unorm");
+    renderer.configure(createFakeCanvas().canvas);
+
+    // One instance as the host emits it: clip origin, raw world angle, world
+    // half-extents (7x4 px), and clip factors for a 2560x1224 backing store
+    // (world→device scale ~2.125).
+    const scale = 2.125;
+    const clipScaleX = (2 * scale) / 2560;
+    const clipScaleY = -(2 * scale) / 1224;
+    const instances = new Float32Array([
+      0.1,
+      -0.2,
+      Math.PI / 2,
+      7,
+      4,
+      clipScaleX,
+      clipScaleY,
+      0.88,
+      0.31,
+      0.22,
+      1,
+    ]);
+    renderer.render({ solids: [], vehicles: [{ key: "fleet", instances }] });
+
+    const uploaded = writes.find(
+      (write) => write.data.length === VEHICLE_INSTANCE_FLOATS,
+    );
+    expect(uploaded).toBeDefined();
+    const row = Array.from(uploaded!.data);
+    // Half-extents stay world px — NOT scaled to ~15 device px.
+    expect(row[3]).toBe(7);
+    expect(row[4]).toBe(4);
+    // Clip factors are ~0.0017 magnitude — NOT the ~2.1 device-px scale.
+    expect(row[5]).toBeCloseTo(clipScaleX, 9);
+    expect(row[6]).toBeCloseTo(clipScaleY, 9);
+    // Implied clip-space quad half-extent: tiny (well under the ±1 viewport).
+    const clipHalfExtent = row[3]! * Math.abs(row[5]!);
+    expect(clipHalfExtent).toBeCloseTo((7 * scale * 2) / 2560, 9);
+    expect(clipHalfExtent).toBeLessThan(0.02);
   });
 
   it("caches solid buffers by string scene key and reuses them grow-only", () => {
@@ -348,7 +422,7 @@ describe("WebGpuRenderer", () => {
         state,
         ui,
         3,
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        vehicleRow(1),
       );
 
       renderer.render(frame);
@@ -385,8 +459,8 @@ describe("WebGpuRenderer", () => {
 
       const state = gameplayState();
       const ui = gameplayUi(state);
-      const first = gameplayFrame(state, ui, 3, [1, 2, 3, 4, 5, 6, 7, 8, 9]);
-      const second = gameplayFrame(state, ui, 3, [9, 8, 7, 6, 5, 4, 3, 2, 1]);
+      const first = gameplayFrame(state, ui, 3, vehicleRow(1));
+      const second = gameplayFrame(state, ui, 3, vehicleRow(9));
 
       renderer.render(first.frame);
       const bufferCount = buffers.length;
@@ -416,13 +490,13 @@ describe("WebGpuRenderer", () => {
         state,
         gameplayUi(state),
         2,
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        vehicleRow(1),
       );
       const selected = gameplayFrame(
         state,
         gameplayUi(state, { selectedRouteId: "route-001" }),
         2,
-        [1, 2, 3, 4, 5, 6, 7, 8, 9],
+        vehicleRow(1),
       );
 
       renderer.render(unselected.frame);

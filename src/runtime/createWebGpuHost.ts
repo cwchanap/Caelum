@@ -83,8 +83,6 @@ interface ClipTransform {
   ox: number;
   sy: number;
   oy: number;
-  /** Uniform world→device-pixel scale for lengths (vehicle body extents). */
-  scale: number;
 }
 
 /**
@@ -229,7 +227,6 @@ export function createWebGpuHostWithRenderer(
       ox: (2 * board.offsetX * dpr) / pixelWidth - 1,
       sy: -(2 * board.scale * dpr) / pixelHeight,
       oy: 1 - (2 * board.offsetY * dpr) / pixelHeight,
-      scale: board.scale * dpr,
     };
     renderer.resize(pixelWidth, pixelHeight);
   };
@@ -262,16 +259,20 @@ export function createWebGpuHostWithRenderer(
     }
     const out = new Float32Array(instances.length) as Float32Array<ArrayBuffer>;
     for (let i = 0; i < instances.length; i += VEHICLE_INSTANCE_FLOATS) {
+      // Project only the origin; the shader rotates the world-px body and
+      // scales it by the per-instance clip factors (sy carries the y-flip,
+      // so angle and extents are passed through raw).
       out[i] = instances[i] * t.sx + t.ox;
       out[i + 1] = instances[i + 1] * t.sy + t.oy;
-      // World space is y-down, clip space y-up, so rotation flips sign.
-      out[i + 2] = -instances[i + 2];
-      out[i + 3] = instances[i + 3] * t.scale;
-      out[i + 4] = instances[i + 4] * t.scale;
-      out[i + 5] = instances[i + 5];
-      out[i + 6] = instances[i + 6];
-      out[i + 7] = instances[i + 7];
-      out[i + 8] = instances[i + 8];
+      out[i + 2] = instances[i + 2];
+      out[i + 3] = instances[i + 3];
+      out[i + 4] = instances[i + 4];
+      out[i + 5] = t.sx;
+      out[i + 6] = t.sy;
+      out[i + 7] = instances[i + 5];
+      out[i + 8] = instances[i + 6];
+      out[i + 9] = instances[i + 7];
+      out[i + 10] = instances[i + 8];
     }
     return out;
   };

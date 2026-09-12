@@ -32,7 +32,9 @@ export function interpolationAlpha(
   return Math.max(0, Math.min(1, (rafNowMs - latestObservedAtMs) / interval));
 }
 
-/** Instance layout: x, y, angle, halfLength, halfWidth, r, g, b, a (pixels). */
+/** World-space instance layout: x, y, angle, halfLength, halfWidth, r, g, b,
+ *  a (pixels). The stride is the shader's 11 floats; transformInstances fills
+ *  the two trailing slots with the world→clip factors. */
 const INSTANCE_FLOATS = VEHICLE_INSTANCE_FLOATS;
 const VEHICLE_HALF_LENGTH = 7;
 const VEHICLE_HALF_WIDTH = 4;

@@ -12,7 +12,8 @@ export interface WebGpuSolidBatch {
   vertices: Float32Array<ArrayBuffer>;
 }
 
-/** Instanced vehicle batch. Instance layout: x, y, angle, halfLength, halfWidth, r, g, b, a. */
+/** Instanced vehicle batch. Instance layout: clip origin (x, y), world angle,
+ *  world half-extents (length, width), world→clip factors, RGBA color. */
 export interface WebGpuVehicleBatch {
   /** Route cache key; batches are concatenated into one instance upload in frame order. */
   key: string;
@@ -43,7 +44,7 @@ export interface WebGpuRenderer {
 }
 
 /** Interleaved vehicle instance layout (see WebGpuVehicleBatch). */
-export const VEHICLE_INSTANCE_FLOATS = 9;
+export const VEHICLE_INSTANCE_FLOATS = 11;
 
 const CLEAR_COLOR: GPUColor = { r: 0.8431, g: 0.8863, b: 0.8745, a: 1 };
 
@@ -82,17 +83,27 @@ struct VertexOutput {
 fn vsMain(
   @location(0) corner: vec2f,
   @location(1) origin: vec2f,
-  @location(2) shape: vec3f,
-  @location(3) color: vec4f,
+  @location(2) angle: f32,
+  @location(3) extents: vec2f,
+  @location(4) clipScale: vec2f,
+  @location(5) color: vec4f,
 ) -> VertexOutput {
-  let cos = cos(shape.x);
-  let sin = sin(shape.x);
+  // Rotate the body in y-down world space, then project with separate clip
+  // factors (clipScale.y is negative for the y-flip). Rotating in clip space
+  // would shear the quad on anisotropic viewports, and device-px extents fed
+  // as clip units would draw it fullscreen.
+  let cos = cos(angle);
+  let sin = sin(angle);
   let local = vec2f(
-    corner.x * shape.y * cos - corner.y * shape.z * sin,
-    corner.x * shape.y * sin + corner.y * shape.z * cos,
+    corner.x * extents.x * cos - corner.y * extents.y * sin,
+    corner.x * extents.x * sin + corner.y * extents.y * cos,
   );
   var output: VertexOutput;
-  output.position = vec4f(origin + local, 0.0, 1.0);
+  output.position = vec4f(
+    origin + vec2f(local.x * clipScale.x, local.y * clipScale.y),
+    0.0,
+    1.0,
+  );
   output.color = color;
   return output;
 }
@@ -170,8 +181,10 @@ export function createWebGpuRenderer(
           stepMode: "instance",
           attributes: [
             { shaderLocation: 1, offset: 0, format: "float32x2" },
-            { shaderLocation: 2, offset: 8, format: "float32x3" },
-            { shaderLocation: 3, offset: 20, format: "float32x4" },
+            { shaderLocation: 2, offset: 8, format: "float32" },
+            { shaderLocation: 3, offset: 12, format: "float32x2" },
+            { shaderLocation: 4, offset: 20, format: "float32x2" },
+            { shaderLocation: 5, offset: 28, format: "float32x4" },
           ],
         },
       ],

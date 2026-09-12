@@ -157,8 +157,12 @@ function encode(options?: {
 
 function instancesOf(data: Float32Array): number[][] {
   const rows: number[][] = [];
-  for (let offset = 0; offset < data.length; offset += 9) {
-    rows.push(Array.from(data.slice(offset, offset + 9)));
+  for (
+    let offset = 0;
+    offset < data.length;
+    offset += VEHICLE_INSTANCE_FLOATS
+  ) {
+    rows.push(Array.from(data.slice(offset, offset + VEHICLE_INSTANCE_FLOATS)));
   }
   return rows;
 }
@@ -764,7 +768,7 @@ describe("emphasis, culling, and instance encoding", () => {
     });
 
     // The static quad upload is 12 floats; only the one instance upload is a
-    // multiple of the 9-float instance stride.
+    // multiple of the 11-float instance stride.
     const instanceWrites = writes.filter(
       (write) => write.data.length % VEHICLE_INSTANCE_FLOATS === 0,
     );
