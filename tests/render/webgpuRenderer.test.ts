@@ -160,6 +160,45 @@ describe("WebGpuRenderer", () => {
     expect(clipHalfExtent).toBeLessThan(0.02);
   });
 
+  it("offsets the vehicle body 10px perpendicular with 14x8 extents like the Canvas fillRect", () => {
+    // Canvas oracle (transitRenderer): fillRect(-7, -14, 14, 8) after
+    // translate+rotate — a 14x8 body whose center sits 10px perpendicular off
+    // the path centerline. A path-centered half-size quad is invisible inside
+    // the same-colored route line (WKWebView parity bug). Evaluate the real
+    // WGSL local transform (captured from createShaderModule) at the quad
+    // corners; rotation is rigid, so the pre-rotation frame pins the shape.
+    const { device, shaders } = createFakeDevice();
+    createWebGpuRenderer(device, "bgra8unorm");
+    const components = /let local = vec2f\(\s*([^;]+?)\s*\);/
+      .exec(shaders[1]!)![1]
+      .replace(/,\s*$/, "")
+      .split(",")
+      .map((expr) => expr.trim());
+    expect(components).toHaveLength(2);
+    const localAt = new Function(
+      "corner",
+      "extents",
+      `return [${components[0]}, ${components[1]}];`,
+    ) as (
+      corner: { x: number; y: number },
+      extents: { x: number; y: number },
+    ) => [number, number];
+
+    const extents = { x: 7, y: 4 };
+    const corners = [
+      { x: -0.5, y: -0.5 },
+      { x: 0.5, y: -0.5 },
+      { x: -0.5, y: 0.5 },
+      { x: 0.5, y: 0.5 },
+    ].map((corner) => localAt(corner, extents));
+    // Local frame spans exactly the Canvas rect [-7, 7] x [-14, -6]:
+    // 14x8 body, center (0, -10) — 10px perpendicular off the path.
+    expect(Math.min(...corners.map(([x]) => x))).toBe(-7);
+    expect(Math.max(...corners.map(([x]) => x))).toBe(7);
+    expect(Math.min(...corners.map(([, y]) => y))).toBe(-14);
+    expect(Math.max(...corners.map(([, y]) => y))).toBe(-6);
+  });
+
   it("caches solid buffers by string scene key and reuses them grow-only", () => {
     const { device, buffers, writes } = createFakeDevice();
     const renderer = createWebGpuRenderer(device, "bgra8unorm");
