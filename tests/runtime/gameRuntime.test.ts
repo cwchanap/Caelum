@@ -22,6 +22,11 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import type {
+  CreateGameHost,
+  GameHost,
+  WebGpuHostContext,
+} from "../../src/runtime/createWebGpuHost";
 import {
   createFakeGameHost,
   createJsdomGameHost,
@@ -2178,6 +2183,99 @@ describe("Game Runtime", () => {
       const before = lastFakeHost()!.context.getSceneRevision();
       await runtime.reset();
       expect(lastFakeHost()!.context.getSceneRevision()).toBe(before + 1);
+    });
+  });
+
+  describe("paused transition repaint", () => {
+    /** Behavior-faithful display-host double: render() coalesces while an rAF
+     *  is pending (the loop owns display), and syncAnimationLoop() cancels
+     *  that rAF on paused/speed-0/stopped states. Pins the publish() ordering
+     *  contract: sync before render. */
+    function createCoalescingHost() {
+      let running = false;
+      let rafPending = false;
+      let draws = 0;
+      const createHost: CreateGameHost = async (context) => {
+        const host: GameHost = {
+          mount: () => () => {},
+          render: () => {
+            if (rafPending) return;
+            draws += 1;
+          },
+          start: () => {
+            running = true;
+          },
+          stop: () => {
+            running = false;
+          },
+          syncAnimationLoop: () => {
+            const state = context.getState();
+            const animate =
+              running &&
+              !state.paused &&
+              state.speed !== 0 &&
+              state.metrics.state === "running";
+            if (!animate) rafPending = false;
+          },
+          isRunning: () => running,
+        };
+        return Object.assign(host, {
+          setRafPending: () => {
+            rafPending = true;
+          },
+          draws: () => draws,
+        });
+      };
+      let current:
+        | (GameHost & {
+            setRafPending(): void;
+            draws(): number;
+          })
+        | null = null;
+      return {
+        createHost: async (context: WebGpuHostContext) => {
+          current = (await createHost(context)) as NonNullable<typeof current>;
+          return current;
+        },
+        host: () => {
+          if (current === null) throw new Error("host not created");
+          return current;
+        },
+      };
+    }
+
+    it("draws the final frame immediately on a running-to-paused publish", async () => {
+      const coalescing = createCoalescingHost();
+      const runtime = await createGameRuntime({
+        createHost: coalescing.createHost,
+        backend: backendSpy(fullRustSnapshot({ paused: false })),
+      });
+      runtime.start();
+      // A running frame owns display: the next render must coalesce.
+      coalescing.host().setRafPending();
+      expect(coalescing.host().draws()).toBe(0);
+
+      // Pausing cancels the rAF and must repaint the final paused frame
+      // synchronously — render-before-sync would coalesce into the rAF the
+      // sync then cancels, leaving the display one frame stale.
+      await runtime.togglePause();
+      expect(coalescing.host().draws()).toBe(1);
+    });
+
+    it("does not double-render publishes while running with the loop active", async () => {
+      const coalescing = createCoalescingHost();
+      const backend = backendSpy(fullRustSnapshot({ paused: true }));
+      const runtime = await createGameRuntime({
+        createHost: coalescing.createHost,
+        backend,
+      });
+      runtime.start();
+      coalescing.host().setRafPending();
+
+      // Unpausing while the loop is active: the publish coalesces into the
+      // owned rAF instead of drawing twice.
+      await runtime.togglePause();
+      expect(coalescing.host().draws()).toBe(0);
     });
   });
 

@@ -5,18 +5,22 @@ export interface WebGpuDeviceLoss {
   message: string;
 }
 
+/** GPU buffer identity by painter role, not per-batch key: the spec pins
+ *  exactly four grow-only buffers — structural, route-style, one dynamic
+ *  shared by the ordered dynamic ranges, and the vehicle instance buffer.
+ *  Geometry rebuild decisions stay on the host's string cache keys. */
+export type WebGpuBatchRole = "structural" | "route" | "dynamic";
+type BufferRole = WebGpuBatchRole | "vehicle";
+
 /** Solid (non-instanced) triangle batch: interleaved x,y,r,g,b,a vertices. */
 export interface WebGpuSolidBatch {
-  /** Scene cache key; each key owns one grow-only vertex buffer. */
-  key: string;
+  role: WebGpuBatchRole;
   vertices: Float32Array<ArrayBuffer>;
 }
 
 /** Instanced vehicle batch. Instance layout: clip origin (x, y), world angle,
  *  world half-extents (length, width), world→clip factors, RGBA color. */
 export interface WebGpuVehicleBatch {
-  /** Route cache key; batches are concatenated into one instance upload in frame order. */
-  key: string;
   instances: Float32Array<ArrayBuffer>;
 }
 
@@ -205,25 +209,32 @@ export function createWebGpuRenderer(
   });
 
   // Unit quad (two triangles) covering [-0.5, 0.5]^2; vehicles transform it per instance.
+  // Recreated on configure() so a host remount reuses the renderer after a
+  // teardown destroy (role buffers re-acquire lazily in acquireBuffer).
   const quadCorners = [
     -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5,
   ];
-  const quadBuffer = device.createBuffer({
-    size: quadCorners.length * 4,
-    usage: VERTEX_COPY_DST_USAGE,
-  });
-  device.queue.writeBuffer(quadBuffer, 0, new Float32Array(quadCorners));
+  let quadBuffer: GPUBuffer | null = null;
 
-  const buffers = new Map<string, BufferEntry>();
+  const buffers = new Map<BufferRole, BufferEntry>();
   let context: GPUCanvasContext | null = null;
   // Pixel size of the configured canvas, owned via resize(); consumed by later
   // cutover tasks for viewport scaling of CPU-tessellated geometry.
   let _width = 0;
   let _height = 0;
 
-  function acquireBuffer(key: string, floatCount: number): GPUBuffer {
+  function ensureQuadBuffer(): void {
+    quadBuffer?.destroy();
+    quadBuffer = device.createBuffer({
+      size: quadCorners.length * 4,
+      usage: VERTEX_COPY_DST_USAGE,
+    });
+    device.queue.writeBuffer(quadBuffer, 0, new Float32Array(quadCorners));
+  }
+
+  function acquireBuffer(role: BufferRole, floatCount: number): GPUBuffer {
     const bytes = floatCount * 4;
-    const entry = buffers.get(key);
+    const entry = buffers.get(role);
     if (entry && bytes <= entry.capacityBytes) {
       return entry.buffer;
     }
@@ -233,7 +244,7 @@ export function createWebGpuRenderer(
       size: capacityBytes,
       usage: VERTEX_COPY_DST_USAGE,
     });
-    buffers.set(key, { buffer, capacityBytes });
+    buffers.set(role, { buffer, capacityBytes });
     return buffer;
   }
 
@@ -246,15 +257,17 @@ export function createWebGpuRenderer(
       }
       canvasContext.configure({ device, format, alphaMode: "opaque" });
       context = canvasContext;
+      ensureQuadBuffer();
     },
     resize(nextWidth: number, nextHeight: number): void {
       _width = nextWidth;
       _height = nextHeight;
     },
     render(frame: WebGpuRenderFrame): WebGpuRenderStats {
-      if (!context) {
+      if (!context || quadBuffer === null) {
         throw new Error("WebGPU renderer is not configured");
       }
+      const quad = quadBuffer;
       const encoder = device.createCommandEncoder();
       const pass = encoder.beginRenderPass({
         colorAttachments: [
@@ -267,24 +280,47 @@ export function createWebGpuRenderer(
         ],
       });
 
+      // Grow each role buffer once per frame, before any writes, to the
+      // frame's total role size — never shrinks across frames.
+      const roleTotals = new Map<BufferRole, number>();
+      const totalize = (batches: readonly WebGpuSolidBatch[]): void => {
+        for (const batch of batches) {
+          if (batch.vertices.length === 0) continue;
+          roleTotals.set(
+            batch.role,
+            (roleTotals.get(batch.role) ?? 0) + batch.vertices.length,
+          );
+        }
+      };
+      totalize(frame.solids);
+      totalize(frame.overVehicles ?? []);
+      for (const [role, floats] of roleTotals) {
+        acquireBuffer(role, floats);
+      }
+
       let solidBatches = 0;
       let solidVertices = 0;
+      const roleOffsets = new Map<BufferRole, number>();
       const drawSolids = (batches: readonly WebGpuSolidBatch[]): void => {
         pass.setPipeline(solidPipeline);
         for (const batch of batches) {
           if (batch.vertices.length === 0) {
             continue;
           }
-          const buffer = acquireBuffer(batch.key, batch.vertices.length);
+          // Ordered ranges of one role share its buffer at byte offsets
+          // (float counts are always 4-byte aligned).
+          const start = roleOffsets.get(batch.role) ?? 0;
+          const buffer = buffers.get(batch.role)!.buffer;
           device.queue.writeBuffer(
             buffer,
-            0,
+            start * 4,
             batch.vertices,
             0,
             batch.vertices.length,
           );
-          pass.setVertexBuffer(0, buffer);
+          pass.setVertexBuffer(0, buffer, start * 4);
           pass.draw(batch.vertices.length / SOLID_VERTEX_FLOATS);
+          roleOffsets.set(batch.role, start + batch.vertices.length);
           solidBatches += 1;
           solidVertices += batch.vertices.length;
         }
@@ -304,12 +340,12 @@ export function createWebGpuRenderer(
           combined.set(batch.instances, offset);
           offset += batch.instances.length;
         }
-        const buffer = acquireBuffer("vehicles", instanceFloats);
+        const buffer = acquireBuffer("vehicle", instanceFloats);
         device.queue.writeBuffer(buffer, 0, combined, 0, combined.length);
         vehicleInstances = instanceFloats / VEHICLE_INSTANCE_FLOATS;
         pass.setPipeline(vehiclePipeline);
-        pass.setVertexBuffer(0, quadBuffer);
-        pass.setVertexBuffer(1, buffer);
+        pass.setVertexBuffer(0, quad, 0);
+        pass.setVertexBuffer(1, buffer, 0);
         pass.draw(6, vehicleInstances);
       }
 
@@ -324,7 +360,8 @@ export function createWebGpuRenderer(
         entry.buffer.destroy();
       }
       buffers.clear();
-      quadBuffer.destroy();
+      quadBuffer?.destroy();
+      quadBuffer = null;
       context?.unconfigure();
       context = null;
     },

@@ -92,6 +92,9 @@ interface ClipTransform {
 export function createWebGpuHostWithRenderer(
   ctx: WebGpuHostContext,
   renderer: WebGpuRenderer,
+  /** The GPU device the caller created for `renderer`. Teardown destroys it
+   *  after the renderer; tests injecting a fake renderer omit it. */
+  device?: GPUDevice,
 ): GameHost {
   let surfaceHost: HTMLElement | null = null;
   let canvas: HTMLCanvasElement | null = null;
@@ -103,7 +106,7 @@ export function createWebGpuHostWithRenderer(
   let observedCssHeight = 0;
   let hasObservedSize = false;
   let resizeObserver: ResizeObserver | null = null;
-  let activeTeardown: (() => void) | null = null;
+  let activeDetach: (() => void) | null = null;
 
   // 10 Hz one-in-flight tick admission.
   let accumulatedMs = 0;
@@ -307,26 +310,26 @@ export function createWebGpuHostWithRenderer(
     renderer.render({
       solids: [
         {
-          key: `scene:${revision}`,
+          role: "structural",
           vertices: transformVertices(sceneVertices(latest, revision)),
         },
         {
-          key: "overlay-under-routes",
+          role: "dynamic",
           vertices: transformVertices(overlays.underRoutes),
         },
         {
-          key: routeStyleKeyFor(ui, revision),
+          role: "route",
           vertices: transformVertices(routeVertices(latest, ui, revision)),
         },
         {
-          key: "route-draft",
+          role: "dynamic",
           vertices: transformVertices(overlays.routeDraft),
         },
       ],
-      vehicles: [{ key: "vehicles", instances: transformInstances(instances) }],
+      vehicles: [{ instances: transformInstances(instances) }],
       overVehicles: [
         {
-          key: "route-handles",
+          role: "dynamic",
           vertices: transformVertices(overlays.overVehicles),
         },
       ],
@@ -446,13 +449,14 @@ export function createWebGpuHostWithRenderer(
     // Same host with an existing canvas: just refresh, reuse the teardown.
     if (surfaceHost === host && canvas !== null) {
       render();
-      return activeTeardown ?? (() => {});
+      return teardown;
     }
 
-    // Different host (or first mount): tear down any prior mount so its
-    // event listeners, ResizeObserver, and window listener don't leak.
-    activeTeardown?.();
-    activeTeardown = null;
+    // Different host (or first mount): detach any prior mount so its event
+    // listeners, ResizeObserver, and window listener don't leak. GPU
+    // resources survive the internal re-mount; only unmount destroys them.
+    activeDetach?.();
+    activeDetach = null;
 
     const nextCanvas = document.createElement("canvas");
     nextCanvas.dataset.runtimeCanvas = "true";
@@ -652,11 +656,11 @@ export function createWebGpuHostWithRenderer(
     canvas.addEventListener("pointerleave", handlePointerLeave);
     canvas.addEventListener("pointercancel", handlePointerCancel);
     render();
-    // Prior teardown cancels any pending rAF while leaving `running` true.
+    // Prior detach cancels any pending rAF while leaving `running` true.
     // Reschedule so a remount of an already-started host keeps ticking.
     syncAnimationLoop();
 
-    const teardown = (): void => {
+    function detach(): void {
       if (surfaceHost !== host || canvas === null) {
         return;
       }
@@ -690,10 +694,19 @@ export function createWebGpuHostWithRenderer(
       host.innerHTML = "";
       canvas = null;
       surfaceHost = null;
-      activeTeardown = null;
-    };
+      activeDetach = null;
+    }
 
-    activeTeardown = teardown;
+    function teardown(): void {
+      detach();
+      // Unmount is terminal: destroy the renderer's GPU resources and, when
+      // the host owns the device, the device too. The resulting deliberate
+      // "destroyed" loss is ignored by the lost handler.
+      renderer.destroy();
+      device?.destroy();
+    }
+
+    activeDetach = detach;
     return teardown;
   };
 
@@ -726,5 +739,6 @@ export async function createWebGpuHost(
   return createWebGpuHostWithRenderer(
     ctx,
     createWebGpuRenderer(device, format),
+    device,
   );
 }

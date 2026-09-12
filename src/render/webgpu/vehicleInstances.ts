@@ -11,7 +11,14 @@ import { colors } from "../colors";
 import { pointAndTangentAt } from "../pathGeometry";
 import { VEHICLE_INSTANCE_FLOATS } from "./renderer";
 import { parseColor, withAlpha, type Rgba } from "./primitives";
-import { UNRELATED_ROUTE_OPACITY } from "./transitBatch";
+import {
+  buildCorridorGroups,
+  presentationForRoute,
+  presentationPath,
+  renderableLines,
+  type CorridorGroups,
+  UNRELATED_ROUTE_OPACITY,
+} from "./transitBatch";
 
 export interface WorldViewport {
   minX: number;
@@ -83,15 +90,55 @@ interface CursorSample {
   angle: number | null;
 }
 
-/** Snap target: the latest cursor sampled on its own. */
-function latestSample(state: GameState, vehicle: Vehicle): CursorSample | null {
-  const step = stepAt(state, vehicle);
-  if (step === undefined) {
+/** Snap target: the latest cursor sampled on its own. Vehicles ride the
+ *  same corridor-offset lane the committed route lines draw. */
+function latestSample(
+  state: GameState,
+  vehicle: Vehicle,
+  corridors: CorridorGroups,
+): CursorSample | null {
+  const itinerary = itineraryFor(state, vehicle);
+  if (itinerary === null || itinerary.length === 0) {
     return vehicle.parkedPosition === null
       ? null
       : { point: center(vehicle.parkedPosition), angle: null };
   }
-  const sample = pointAndTangentAt(step.geometry, vehicle.stepProgress);
+  const leg = itinerary[vehicle.itineraryIndex % itinerary.length];
+  const step = leg?.currentPath?.steps[vehicle.pathStepIndex];
+  if (step === undefined) {
+    // Zero-step terminal reversals have a connected empty path and no step;
+    // park at the terminal waypoint so paused/exact-boundary vehicles remain
+    // visible instead of disappearing.
+    if (
+      vehicle.parkedPosition === null &&
+      leg !== undefined &&
+      leg.currentPath !== null &&
+      leg.currentPath.steps.length === 0
+    ) {
+      const terminal = terminalWaypointPosition(state, vehicle, leg);
+      if (terminal !== null) {
+        return { point: center(terminal), angle: null };
+      }
+    }
+    if (vehicle.parkedPosition === null) return null;
+    const geometry =
+      leg === undefined ? undefined : presentationPath(leg)?.steps[0]?.geometry;
+    const point =
+      geometry === undefined
+        ? vehicle.parkedPosition
+        : presentationForRoute(
+            geometry,
+            vehicle.lineId,
+            corridors,
+          ).translatePoint(vehicle.parkedPosition);
+    return { point: center(point), angle: null };
+  }
+  const presented = presentationForRoute(
+    step.geometry,
+    vehicle.lineId,
+    corridors,
+  ).geometry;
+  const sample = pointAndTangentAt(presented, vehicle.stepProgress);
   return {
     point: center(sample.point),
     angle:
@@ -99,6 +146,28 @@ function latestSample(state: GameState, vehicle: Vehicle): CursorSample | null {
         ? Math.atan2(sample.tangent.y, sample.tangent.x)
         : null,
   };
+}
+
+/** Terminal/road-access anchor for a zero-step terminal reversal: the bus
+ *  stop's road access point (passenger anchor fallback), or the station
+ *  position. */
+function terminalWaypointPosition(
+  state: GameState,
+  vehicle: Vehicle,
+  leg: RouteLegPath,
+): TripPosition | null {
+  if (vehicle.mode === "bus") {
+    const stop = state.transit.stops.find(
+      (candidate) =>
+        candidate.id === leg.fromWaypointId && candidate.status === "present",
+    );
+    return stop?.roadAccess?.roadPoint ?? stop?.position ?? null;
+  }
+  const station = state.transit.stations.find(
+    (candidate) =>
+      candidate.id === leg.fromWaypointId && candidate.status === "present",
+  );
+  return station?.position ?? null;
 }
 
 function sameGeometry(a: PathGeometry, b: PathGeometry): boolean {
@@ -133,6 +202,20 @@ function sameGeometry(a: PathGeometry, b: PathGeometry): boolean {
   return false;
 }
 
+/** Corridor offsets are state-derived presentation, and GameState is
+ *  immutable with reference-equality dispatch, so they cache on state
+ *  identity like the canvas renderer's transit cache did. */
+const corridorsCache = new WeakMap<GameState, CorridorGroups>();
+
+function corridorsFor(state: GameState): CorridorGroups {
+  let corridors = corridorsCache.get(state);
+  if (corridors === undefined) {
+    corridors = buildCorridorGroups(renderableLines(state));
+    corridorsCache.set(state, corridors);
+  }
+  return corridors;
+}
+
 export interface EncodeVehicleInstancesInput {
   /** Previous accepted state, or null after a scene change. */
   previous: GameState | null;
@@ -152,6 +235,7 @@ export function encodeVehicleInstances(
   input: EncodeVehicleInstancesInput,
 ): Float32Array<ArrayBuffer> {
   const { previous, latest, alpha, paused } = input;
+  const corridors = corridorsFor(latest);
   const previousById = new Map<string, Vehicle>();
   if (previous !== null) {
     for (const vehicle of previous.transit.vehicles) {
@@ -167,8 +251,15 @@ export function encodeVehicleInstances(
     const previousVehicle = previousById.get(vehicle.id);
     const sample =
       paused || previousVehicle === undefined
-        ? latestSample(latest, vehicle)
-        : interpolateSample(previousVehicle, previous, vehicle, latest, alpha);
+        ? latestSample(latest, vehicle, corridors)
+        : interpolateSample(
+            previousVehicle,
+            previous,
+            vehicle,
+            latest,
+            alpha,
+            corridors,
+          );
     if (sample === null) continue;
     // 1. Route-emphasis opacity, 2. cull after sampling with a one-tile
     // margin, 3. encode — in that order per the design's pipeline.
@@ -234,16 +325,20 @@ function isContinuous(
 }
 
 /** Same-line, same-itinerary, same-step interpolation; any discontinuity
- *  snaps to the latest cursor. */
+ *  snaps to the latest cursor. The adjacent-step path deliberately has no
+ *  backward-progress guard: a rollover legitimately resets progress while
+ *  time moves forward (pinned by the rollover tests with latest progress
+ *  numerically below previous). */
 function interpolateSample(
   previousVehicle: Vehicle,
   previousState: GameState | null,
   latestVehicle: Vehicle,
   latestState: GameState,
   alpha: number,
+  corridors: CorridorGroups,
 ): CursorSample | null {
   if (!isContinuous(previousVehicle, latestVehicle)) {
-    return latestSample(latestState, latestVehicle);
+    return latestSample(latestState, latestVehicle, corridors);
   }
   if (latestVehicle.pathStepIndex === previousVehicle.pathStepIndex) {
     return sameStepSample(
@@ -252,9 +347,16 @@ function interpolateSample(
       latestVehicle,
       latestState,
       alpha,
+      corridors,
     );
   }
-  return adjacentStepSample(previousVehicle, latestVehicle, latestState, alpha);
+  return adjacentStepSample(
+    previousVehicle,
+    latestVehicle,
+    latestState,
+    alpha,
+    corridors,
+  );
 }
 
 function sameStepSample(
@@ -263,21 +365,27 @@ function sameStepSample(
   latestVehicle: Vehicle,
   latestState: GameState,
   alpha: number,
+  corridors: CorridorGroups,
 ): CursorSample | null {
   const previousStep =
     previousState === null ? undefined : stepAt(previousState, previousVehicle);
   const latestStep = stepAt(latestState, latestVehicle);
   if (previousStep === undefined || latestStep === undefined) {
-    return latestSample(latestState, latestVehicle);
+    return latestSample(latestState, latestVehicle, corridors);
   }
   if (!sameGeometry(previousStep.geometry, latestStep.geometry)) {
     // The path under this cursor changed (route edit): snap to latest.
-    return latestSample(latestState, latestVehicle);
+    return latestSample(latestState, latestVehicle, corridors);
+  }
+  if (latestVehicle.stepProgress < previousVehicle.stepProgress) {
+    // Backward cursor jump within the same step (spec snap list): snap to
+    // latest instead of interpolating the vehicle backwards along its lane.
+    return latestSample(latestState, latestVehicle, corridors);
   }
   const progress =
     previousVehicle.stepProgress +
     (latestVehicle.stepProgress - previousVehicle.stepProgress) * alpha;
-  return sampleStep(latestVehicle, latestStep.geometry, progress);
+  return sampleStep(latestVehicle, latestStep.geometry, progress, corridors);
 }
 
 /** One adjacent step forward on the same itinerary path: interpolate through
@@ -289,6 +397,7 @@ function adjacentStepSample(
   latestVehicle: Vehicle,
   latestState: GameState,
   alpha: number,
+  corridors: CorridorGroups,
 ): CursorSample | null {
   const previousStep = stepAt(latestState, {
     ...latestVehicle,
@@ -301,7 +410,7 @@ function adjacentStepSample(
     !validSeconds(previousStep.travelSeconds) ||
     !validSeconds(latestStep.travelSeconds)
   ) {
-    return latestSample(latestState, latestVehicle);
+    return latestSample(latestState, latestVehicle, corridors);
   }
   const remainingPrevious =
     (1 - previousVehicle.stepProgress) * previousStep.travelSeconds;
@@ -309,16 +418,21 @@ function adjacentStepSample(
   const span = remainingPrevious + elapsedLatest;
   if (!(span > 0)) {
     // Zero or invalid span cannot prove traversal; snap to latest.
-    return latestSample(latestState, latestVehicle);
+    return latestSample(latestState, latestVehicle, corridors);
   }
   const target = alpha * span;
   if (target <= remainingPrevious) {
     const progress =
       1 - (remainingPrevious - target) / previousStep.travelSeconds;
-    return sampleStep(latestVehicle, previousStep.geometry, progress);
+    return sampleStep(
+      latestVehicle,
+      previousStep.geometry,
+      progress,
+      corridors,
+    );
   }
   const progress = (target - remainingPrevious) / latestStep.travelSeconds;
-  return sampleStep(latestVehicle, latestStep.geometry, progress);
+  return sampleStep(latestVehicle, latestStep.geometry, progress, corridors);
 }
 
 function validSeconds(travelSeconds: number): boolean {
@@ -329,9 +443,15 @@ function sampleStep(
   vehicle: Vehicle,
   geometry: PathGeometry,
   progress: number,
+  corridors: CorridorGroups,
 ): CursorSample {
   const clamped = Math.max(0, Math.min(1, progress));
-  const sample = pointAndTangentAt(geometry, clamped);
+  const presented = presentationForRoute(
+    geometry,
+    vehicle.lineId,
+    corridors,
+  ).geometry;
+  const sample = pointAndTangentAt(presented, clamped);
   return {
     point: center(sample.point),
     angle:

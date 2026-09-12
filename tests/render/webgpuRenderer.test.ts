@@ -141,7 +141,7 @@ describe("WebGpuRenderer", () => {
       0.22,
       1,
     ]);
-    renderer.render({ solids: [], vehicles: [{ key: "fleet", instances }] });
+    renderer.render({ solids: [], vehicles: [{ instances }] });
 
     const uploaded = writes.find(
       (write) => write.data.length === VEHICLE_INSTANCE_FLOATS,
@@ -200,31 +200,31 @@ describe("WebGpuRenderer", () => {
     expect(Math.max(...corners.map(([, y]) => y))).toBe(-6);
   });
 
-  it("caches solid buffers by string scene key and reuses them grow-only", () => {
+  it("reuses one grow-only buffer per role across frames", () => {
     const { device, buffers, writes } = createFakeDevice();
     const renderer = createWebGpuRenderer(device, "bgra8unorm");
     const { canvas } = createFakeCanvas();
     renderer.configure(canvas);
 
     const frame = (vertices: Float32Array<ArrayBuffer>): WebGpuRenderFrame => ({
-      solids: [{ key: "scene-a", vertices }],
+      solids: [{ role: "structural", vertices }],
       vehicles: [],
     });
 
     renderer.render(frame(solidVertices(2)));
-    expect(buffers).toHaveLength(2); // static vehicle quad buffer + scene buffer
-    const sceneBuffer = buffers[1];
-    expect(sceneBuffer.size).toBe(2 * SOLID_VERTEX_FLOATS * 4);
+    expect(buffers).toHaveLength(2); // static vehicle quad buffer + structural buffer
+    const structuralBuffer = buffers[1];
+    expect(structuralBuffer.size).toBe(2 * SOLID_VERTEX_FLOATS * 4);
 
     // Smaller frame: same buffer reused, no growth, no destroy.
     renderer.render(frame(solidVertices(1)));
     expect(buffers).toHaveLength(2);
-    expect(sceneBuffer.destroyed).toBe(false);
+    expect(structuralBuffer.destroyed).toBe(false);
 
     // Larger frame: grow-only means destroy old and create a bigger buffer.
     renderer.render(frame(solidVertices(4)));
     expect(buffers).toHaveLength(3);
-    expect(sceneBuffer.destroyed).toBe(true);
+    expect(structuralBuffer.destroyed).toBe(true);
     expect(buffers[2].size).toBe(4 * SOLID_VERTEX_FLOATS * 4);
 
     const sceneWrites = writes.filter((write) => write.buffer !== buffers[0]);
@@ -232,25 +232,80 @@ describe("WebGpuRenderer", () => {
     expect(sceneWrites[1].data).toHaveLength(SOLID_VERTEX_FLOATS);
   });
 
-  it("gives distinct string keys distinct buffers", () => {
-    const { device, buffers } = createFakeDevice();
+  it("keeps exactly one buffer per role across scene revisions and emphasis changes", () => {
+    // Spec pin: GPU buffer identity is role-based, so a new scene revision
+    // does NOT create a second structural buffer and an emphasis change does
+    // NOT create a second route buffer — geometry is re-uploaded in place.
+    const { device, buffers, writes } = createFakeDevice();
     const renderer = createWebGpuRenderer(device, "bgra8unorm");
     const { canvas } = createFakeCanvas();
     renderer.configure(canvas);
 
-    const frame: WebGpuRenderFrame = {
-      solids: [
-        { key: "roads", vertices: solidVertices(1) },
-        { key: "buildings", vertices: solidVertices(1) },
-      ],
+    const solid = (role: "structural" | "route", n: number) => ({
+      role,
+      vertices: solidVertices(n),
+    });
+    const revisionA: WebGpuRenderFrame = {
+      solids: [solid("structural", 2), solid("route", 3)],
       vehicles: [],
     };
-    renderer.render(frame);
-    renderer.render(frame);
+    const revisionB: WebGpuRenderFrame = {
+      // "New scene revision": different geometry content, same sizes/roles.
+      solids: [solid("structural", 2), solid("route", 3)],
+      vehicles: [],
+    };
 
-    // Two scene buffers + one quad buffer, stable across frames.
-    expect(buffers).toHaveLength(3);
-    expect(buffers[0]).not.toBe(buffers[1]);
+    renderer.render(revisionA);
+    const bufferCount = buffers.length;
+    renderer.render(revisionB);
+
+    expect(buffers).toHaveLength(bufferCount);
+    expect(buffers.every((buffer) => !buffer.destroyed)).toBe(true);
+
+    // Each role's writes land in one stable buffer across revisions.
+    const roleBuffers = (frame: WebGpuRenderFrame) =>
+      frame.solids.map(
+        (batch) =>
+          writes.find((write) => write.data === batch.vertices)!.buffer,
+      );
+    const [structuralA, routeA] = roleBuffers(revisionA);
+    const [structuralB, routeB] = roleBuffers(revisionB);
+    expect(structuralA).not.toBe(routeA);
+    expect(structuralB).toBe(structuralA);
+    expect(routeB).toBe(routeA);
+  });
+
+  it("shares one dynamic buffer across the ordered dynamic ranges at distinct offsets", () => {
+    const { device, buffers, writes, passes } = createFakeDevice();
+    const renderer = createWebGpuRenderer(device, "bgra8unorm");
+    const { canvas } = createFakeCanvas();
+    renderer.configure(canvas);
+
+    const under = solidVertices(2);
+    const draft = solidVertices(3);
+    renderer.render({
+      solids: [
+        { role: "dynamic", vertices: under },
+        { role: "dynamic", vertices: draft },
+      ],
+      vehicles: [],
+    });
+
+    // One dynamic buffer (plus the quad), both ranges uploaded into it at
+    // consecutive byte offsets, and each draw binds its own offset.
+    expect(buffers).toHaveLength(2);
+    const underWrite = writes.find((write) => write.data === under)!;
+    const draftWrite = writes.find((write) => write.data === draft)!;
+    expect(underWrite.buffer).toBe(draftWrite.buffer);
+    expect(underWrite.offset).toBe(0);
+    expect(draftWrite.offset).toBe(2 * SOLID_VERTEX_FLOATS * 4);
+    const bindings = passes[0].ops.filter(
+      (op) => op.kind === "setVertexBuffer",
+    ) as Extract<FakePassOp, { kind: "setVertexBuffer" }>[];
+    expect(bindings.map((binding) => binding.offset)).toEqual([
+      0,
+      2 * SOLID_VERTEX_FLOATS * 4,
+    ]);
   });
 
   it("records solid draws in frame order as ordered vertex ranges", () => {
@@ -261,8 +316,8 @@ describe("WebGpuRenderer", () => {
 
     const stats = renderer.render({
       solids: [
-        { key: "roads", vertices: solidVertices(12) },
-        { key: "buildings", vertices: solidVertices(6) },
+        { role: "structural", vertices: solidVertices(12) },
+        { role: "structural", vertices: solidVertices(6) },
       ],
       vehicles: [],
     });
@@ -289,10 +344,7 @@ describe("WebGpuRenderer", () => {
     const routeB = vehicleInstances(1);
     const stats = renderer.render({
       solids: [],
-      vehicles: [
-        { key: "route-a", instances: routeA },
-        { key: "route-b", instances: routeB },
-      ],
+      vehicles: [{ instances: routeA }, { instances: routeB }],
     });
 
     const vehicleDraws = draws(passes[0]).filter(
@@ -329,8 +381,8 @@ describe("WebGpuRenderer", () => {
     const { canvas, unconfigured } = createFakeCanvas();
     renderer.configure(canvas);
     renderer.render({
-      solids: [{ key: "scene-a", vertices: solidVertices(1) }],
-      vehicles: [{ key: "route-a", instances: vehicleInstances(1) }],
+      solids: [{ role: "structural", vertices: solidVertices(1) }],
+      vehicles: [{ instances: vehicleInstances(1) }],
     });
 
     renderer.destroy();
@@ -401,15 +453,13 @@ describe("WebGpuRenderer", () => {
         route,
         frame: {
           solids: [
-            { key: `scene:${sceneRevision}`, vertices: structural },
-            { key: "dynamic:underRoutes", vertices: overlay.underRoutes },
-            { key: route.routeStyleKey, vertices: route.vertices },
-            { key: "dynamic:routeDraft", vertices: overlay.routeDraft },
+            { role: "structural", vertices: structural },
+            { role: "dynamic", vertices: overlay.underRoutes },
+            { role: "route", vertices: route.vertices },
+            { role: "dynamic", vertices: overlay.routeDraft },
           ],
-          vehicles: [{ key: "route-001", instances }],
-          overVehicles: [
-            { key: "dynamic:overVehicles", vertices: overlay.overVehicles },
-          ],
+          vehicles: [{ instances }],
+          overVehicles: [{ role: "dynamic", vertices: overlay.overVehicles }],
         },
       };
     }
@@ -420,25 +470,33 @@ describe("WebGpuRenderer", () => {
       labeled: Array<[Float32Array, string]>,
       quadBuffer: FakeBuffer,
     ): string[] {
-      const bufferLabel = new Map<FakeBuffer, string>();
+      // Ordered ranges of one role share a buffer, so stages are labeled by
+      // (buffer, byte offset) write pairs, not by buffer identity.
+      const labelByWrite = new Map<FakeWrite, string>();
       for (const [data, label] of labeled) {
         const write = writes.find((candidate) => candidate.data === data);
         if (write !== undefined) {
-          bufferLabel.set(write.buffer, label);
+          labelByWrite.set(write, label);
         }
       }
-      const slots = new Map<number, FakeBuffer>();
+      const slots = new Map<number, { buffer: FakeBuffer; offset: number }>();
       const stages: string[] = [];
       for (const op of pass.ops) {
         if (op.kind === "setVertexBuffer") {
-          slots.set(op.slot, op.buffer);
+          slots.set(op.slot, { buffer: op.buffer, offset: op.offset });
         }
         if (op.kind === "draw") {
-          stages.push(
-            slots.get(0) === quadBuffer && op.vertexCount === 6
-              ? "vehicles"
-              : (bufferLabel.get(slots.get(0)!) ?? "unknown"),
+          if (slots.get(0)?.buffer === quadBuffer && op.vertexCount === 6) {
+            stages.push("vehicles");
+            continue;
+          }
+          const binding = slots.get(0)!;
+          const stage = [...labelByWrite.entries()].find(
+            ([write]) =>
+              write.buffer === binding.buffer &&
+              write.offset === binding.offset,
           );
+          stages.push(stage?.[1] ?? "unknown");
         }
       }
       return stages;
@@ -519,7 +577,7 @@ describe("WebGpuRenderer", () => {
       expect(first.route.routeStyleKey).toBe(second.route.routeStyleKey);
     });
 
-    it("selection emphasis invalidates only the route geometry buffer", () => {
+    it("selection emphasis re-uploads route geometry into the same role buffer", () => {
       const { device, buffers, writes } = createFakeDevice();
       const renderer = createWebGpuRenderer(device, "bgra8unorm");
       const { canvas } = createFakeCanvas();
@@ -545,16 +603,16 @@ describe("WebGpuRenderer", () => {
 
       expect(unselected.route.routeStyleKey).toBe("routes:2:-:-");
       expect(selected.route.routeStyleKey).toBe("routes:2:route-001:-");
-      // New emphasis key: exactly one new buffer for the route stage.
+      // Buffer identity is role-based: the emphasis change re-tessellates the
+      // route range (halo geometry is bigger, so the route buffer grows once,
+      // grow-only) instead of retaining a second per-key route buffer.
       expect(buffers).toHaveLength(bufferCount + 1);
-      // Structural geometry keeps its scene-key buffer.
-      expect(bufferFor(writes, selected.structural)).toBe(
-        bufferFor(writes, unselected.structural),
-      );
-      // Route geometry moved to a fresh buffer for the new key.
-      expect(bufferFor(writes, selected.route.vertices)).not.toBe(
-        bufferFor(writes, unselected.route.vertices),
-      );
+      const destroyed = buffers.filter((buffer) => buffer.destroyed);
+      expect(destroyed).toHaveLength(1);
+      // Structural geometry keeps its buffer across the emphasis change.
+      const structuralBuffer = bufferFor(writes, unselected.structural);
+      expect(bufferFor(writes, selected.structural)).toBe(structuralBuffer);
+      expect(destroyed[0]).not.toBe(structuralBuffer);
     });
   });
 });
