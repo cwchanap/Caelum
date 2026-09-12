@@ -48,15 +48,29 @@ bus-colored marker renders at each passenger stop and never at the road-access
 tile. No build/track/demolish, route-edit, overlay, save/restore, pointer,
 resize, or simulation-control assertion was weakened.
 
-### Tauri / WKWebView smoke (non-interactive session)
+### Tauri / WKWebView smoke (completed)
 
 `bun run tauri:dev` on macOS 26.6.2 (arm64): the native shell (caelum-core +
 tauri/wry/tao, 392 crates) compiled clean in the dev profile and launched
-`target/debug/caelum`; the app process stayed alive with the Vite dev server
-serving the frontend (HTTP 200) and zero error/panic lines in the captured
-stdout/stderr. The session was locked (login window, no on-screen window, no
-assistive access), so the following remain **unverified non-interactively** and
-need a human smoke pass before Canvas deletion: visible map render in
-WKWebView, WKWebView WebGPU adapter availability, resize/pointer alignment,
-build/select/drag input, overlay/route layering, and visibly continuous moving
-vehicles.
+`target/debug/caelum`. An unlocked interactive session then completed the
+full smoke through the production WebGPU path:
+
+- WebGPU adapter/device/`bgra8unorm` context/queue submission all work in
+  WKWebView.
+- City create/load through the native city-store IPC; road drags land on
+  exactly the intended tiles (pointer/board-transform alignment); bus stops,
+  route save, headway set, and fleet deploy all behave as on Chromium.
+- Simulation runs at full rAF cadence in the visible window; vehicle path
+  state advances while running and is stable while paused.
+- Canvas backing store tracks board resize (2560x1224 <-> 1800x1200) with
+  DPR 2 via the ResizeObserver path.
+- Captured-frame pixel verification: full map (board/roads/route/stops)
+  renders; the bus is a distinct 30x17 device-px rectangle offset ~21 device
+  px perpendicular above the route line (Canvas parity); the bus moved
+  between consecutive captured frames (pixel diff confined to the vehicle).
+
+The smoke caught two WebGPU vehicle-instance defects that Chromium e2e could
+not see (its pixel probes run in the fleet-free window before `Deploy fleet`):
+clip-space projection of instance extents (fullscreen-orange vehicle quads)
+and half-size on-center bodies invisible inside the same-colored route line.
+Both were fixed before Canvas deletion (`d154c60`, `7124c86`).
