@@ -94,13 +94,20 @@ fn vsMain(
   // as clip units would draw it fullscreen.
   let cos = cos(angle);
   let sin = sin(angle);
+  // Canvas parity (transitRenderer fillRect(-7, -14, 14, 8)): the body spans
+  // double the half-extents and its center sits one width + 2px perpendicular
+  // off the path centerline (local y = -(2*hw + 2) = -10 for hw = 4).
   let local = vec2f(
-    corner.x * extents.x * cos - corner.y * extents.y * sin,
-    corner.x * extents.x * sin + corner.y * extents.y * cos,
+    corner.x * (extents.x * 2.0),
+    corner.y * (extents.y * 2.0) - (extents.y * 2.0 + 2.0),
+  );
+  let rotated = vec2f(
+    local.x * cos - local.y * sin,
+    local.x * sin + local.y * cos,
   );
   var output: VertexOutput;
   output.position = vec4f(
-    origin + vec2f(local.x * clipScale.x, local.y * clipScale.y),
+    origin + vec2f(rotated.x * clipScale.x, rotated.y * clipScale.y),
     0.0,
     1.0,
   );

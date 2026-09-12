@@ -28,6 +28,8 @@ export interface FakeWrite {
 export interface FakeHarness {
   buffers: FakeBuffer[];
   pipelines: FakePipeline[];
+  /** WGSL source passed to createShaderModule, in creation order. */
+  shaders: string[];
   writes: FakeWrite[];
   passes: FakePass[];
   device: GPUDevice;
@@ -38,6 +40,7 @@ export function createFakeDevice(): FakeHarness {
   const harness: FakeHarness = {
     buffers: [],
     pipelines: [],
+    shaders: [],
     writes: [],
     passes: [],
     device: null as unknown as GPUDevice,
@@ -69,7 +72,8 @@ export function createFakeDevice(): FakeHarness {
       harness.pipelines.push(pipeline);
       return pipeline;
     },
-    createShaderModule() {
+    createShaderModule(descriptor: { code: string }) {
+      harness.shaders.push(descriptor.code);
       return {};
     },
     createCommandEncoder() {
