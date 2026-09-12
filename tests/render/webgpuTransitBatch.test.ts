@@ -13,7 +13,7 @@ import {
   SOLID_VERTEX_FLOATS,
   parseColor,
 } from "../../src/render/webgpu/primitives";
-import { UNRELATED_ROUTE_OPACITY } from "../../src/render/transitRenderer";
+import { UNRELATED_ROUTE_OPACITY } from "../../src/render/webgpu/transitBatch";
 import { colors } from "../../src/render/colors";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";

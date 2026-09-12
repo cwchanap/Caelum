@@ -2,13 +2,13 @@ import type {
   BuildingType,
   GameState,
   Heading,
+  PathGeometry,
   Point,
   Tile,
 } from "../../domain/types";
 import { ROAD_DIRECTION_OFFSET } from "../../domain/types";
 import { tileSize } from "../boardTransform";
 import { areaColors, colors } from "../colors";
-import { roundaboutVisualTemplate } from "../roundaboutRenderer";
 import { SolidGeometry, parseColor, toPixelGeometry } from "./primitives";
 
 // Stroke weights mirror the Canvas renderers this batch replaces.
@@ -197,6 +197,37 @@ function drawOrdinaryRoad(g: SolidGeometry, tile: Tile): void {
       CENTERLINE,
     );
   }
+}
+
+/** Counterclockwise circulation arcs and the protected-island dot derived
+ *  only from the serialized size/origin; never invents gameplay edges. */
+function roundaboutVisualTemplate(
+  structure: Extract<
+    GameState["map"]["roadStructures"][number],
+    { kind: "roundabout" }
+  >,
+): {
+  circulationCurves: PathGeometry[];
+  protectedIslands: Point[];
+} {
+  const dimension = structure.size === "compact2x2" ? 2 : 3;
+  const segmentCount = structure.size === "compact2x2" ? 4 : 8;
+  const center = {
+    x: structure.origin.x + (dimension - 1) / 2,
+    y: structure.origin.y + (dimension - 1) / 2,
+  };
+  const radius = structure.size === "compact2x2" ? 0.58 : 1.08;
+  const sweepRadians = -(Math.PI * 2) / segmentCount;
+  return {
+    circulationCurves: Array.from({ length: segmentCount }, (_, index) => ({
+      kind: "arc" as const,
+      center,
+      radius,
+      startRadians: -index * ((Math.PI * 2) / segmentCount),
+      sweepRadians,
+    })),
+    protectedIslands: structure.size === "standard3x3" ? [{ ...center }] : [],
+  };
 }
 
 function drawRoundabout(

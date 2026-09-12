@@ -1,6 +1,6 @@
 # HPA-640 WebGPU Gameplay Renderer Baselines
 
-Canvas2D rows recorded before the WebGPU cutover. `vehicles-200` is the
+Renderer rows for the HPA-640 WebGPU cutover. `vehicles-200` is the
 current/near-term context; `vehicles-5000` is the HPA-336/HPA-640 roadmap
 presentation ceiling. Wall-clock values are documentation evidence only — no
 timing threshold and no decision gate.
@@ -10,30 +10,66 @@ timing threshold and no decision gate.
 `CAELUM_RENDER_BENCH=1 playwright test tests/e2e/rendererScale.spec.ts --project=chromium`
 (alias `bun run bench:render`)
 
-The benchmark page (`tests/e2e/rendererScale.html`) draws today's
-`renderGame()` on a fixed 1280×800 Canvas over the renderer-only scale fixture
-(`buildRenderScaleState`, a renderer stress proxy composed from the shared test
-helpers — no Rust simulation actors), warms up 30 frames, and measures 120
-frames of CPU draw time. The spec skips in normal E2E.
+The benchmark page (`tests/e2e/rendererScale.html`) mounts the production
+WebGPU host (`createWebGpuHostWithRenderer` over the real `createWebGpuRenderer`)
+in a fixed 1280×800 board host and drives one synchronous host render per
+frame over the renderer-only scale fixture (`buildRenderScaleState`, a
+renderer stress proxy composed from the shared test helpers — no Rust
+simulation actors), warming up 30 frames and measuring 120 frames of CPU
+encode+submit time. The spec skips in normal E2E.
 
 ## Reference environment
 
 - Machine: Apple M1 Pro, macOS 26.6.2 (arm64)
 - Browser: headless Chromium via Playwright 1.59.1 (software GL, not a performance run in a controlled GPU lab)
 
-## Canvas rows (Task 0)
+## Evidence shapes (cadence ≠ wire ≠ renderer)
+
+The three effects that changed display behavior are independent and must not
+be credited to one another:
+
+1. **Publication cadence.** The deleted Canvas host admitted one simulation
+   tick per animation frame (~60/s at display refresh). The WebGPU host admits
+   ticks at ≤10 host ticks/sec with at most one tick in flight, clamped to a
+   250 ms wall-delta ceiling (design contract pinned by
+   `tests/render/webGpuHost.test.ts`). This is a scheduling change, not a
+   renderer property, and applies regardless of which renderer draws.
+2. **Presentation wire.** Frame bytes, projection cost, and serialization are
+   the HPA-544 baseline (`hpa-544-presentation-baseline.md`) and are unchanged
+   by HPA-640: vehicles-5000 scene+frame is 804,523 bytes (0.834× snapshot)
+   with 496 µs projection / 1,203 µs serialize. WebGPU consumes the same
+   `PresentationUpdate` rows.
+3. **Renderer.** The rows below compare the two renderers at identical
+   scenes/sizes and are the only rows that measure WebGPU vs Canvas2D work.
+
+## Canvas rows (Task 0, deleted renderer)
 
 | Fixture       | Vehicles | Frames | Median CPU ms | p95 CPU ms |
 | ------------- | -------: | -----: | ------------: | ---------: |
 | vehicles-200  |      200 |    120 |         0.500 |      0.600 |
 | vehicles-5000 |    5,000 |    120 |         6.000 |      6.500 |
 
+## WebGPU rows (Task 5, production path)
+
+Whole-board viewport, so every presented vehicle is visible: encoded
+instances equal presented vehicles (no viewport culling at this board size).
+One instanced vehicle draw per frame; solid draws are the non-empty painter
+batches (scene + routes; overlay ranges are empty with no active overlay).
+
+| Fixture       | Vehicles | Frames | Median CPU ms | p95 CPU ms | Encoded instances | Vehicle upload bytes | Solid draws | Vehicle draws | Queue completed |
+| ------------- | -------: | -----: | ------------: | ---------: | ----------------: | -------------------: | ----------: | ------------: | --------------: |
+| vehicles-200  |      200 |    120 |         0.200 |      1.200 |               200 |                8,800 |           2 |             1 |             yes |
+| vehicles-5000 |    5,000 |    120 |         0.500 |      1.400 |             5,000 |              220,000 |           2 |             1 |             yes |
+
 ## Contract interpretation
 
 - The 200-vehicle row reflects the current gameplay scale; the 5,000-vehicle row
   is the ceiling the batched renderer must hold without changing the
   `PresentationUpdate`/`GameSnapshot` contracts.
-- Later HPA-640 tasks append their rows to this file as the WebGPU path lands.
+- At the 5,000-vehicle ceiling the WebGPU path holds 0.500 ms median CPU
+  encode+submit (Canvas: 6.000 ms) with a single instanced draw and one
+  220,000-byte vehicle upload per frame; p95 includes batch-cache-rebuild and
+  compiler jitter on the software-GL headless run.
 
 ## Production cutover gates (Task 4)
 

@@ -6,7 +6,7 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
-import { createCanvasHost } from "../../src/runtime/createCanvasHost";
+import { createJsdomGameHost } from "../helpers/gameHost";
 import type { RuntimeController } from "../../src/runtime/types";
 import { tileSize } from "../../src/render/boardTransform";
 import { createTestGameState } from "../helpers/gameState";
@@ -16,10 +16,9 @@ import {
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
 
-// jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
-// returns null. The runtime guards all of those, but to exercise the real
-// pointer -> commit wiring we stub them here so a genuine PointerEvent flows
-// through mountCanvas's listeners.
+// jsdom ships no PointerEvent and no Pointer Capture API. The runtime guards
+// those, but to exercise the real pointer -> commit wiring we stub them here
+// so a genuine PointerEvent flows through mountCanvas's listeners.
 
 class FakePointerEvent extends Event {
   button: number;
@@ -45,7 +44,6 @@ class FakePointerEvent extends Event {
 }
 
 interface Stubbed {
-  getContext: typeof HTMLCanvasElement.prototype.getContext;
   getBoundingClientRect: typeof Element.prototype.getBoundingClientRect;
   setPointerCapture: typeof Element.prototype.setPointerCapture;
   releasePointerCapture: typeof Element.prototype.releasePointerCapture;
@@ -62,7 +60,6 @@ let currentDetach: (() => void) | null = null;
 
 beforeEach(() => {
   stubs = {
-    getContext: HTMLCanvasElement.prototype.getContext,
     getBoundingClientRect: Element.prototype.getBoundingClientRect,
     setPointerCapture: Element.prototype.setPointerCapture,
     releasePointerCapture: Element.prototype.releasePointerCapture,
@@ -70,39 +67,6 @@ beforeEach(() => {
     pointerEvent: globalThis.PointerEvent,
     devicePixelRatio: globalThis.devicePixelRatio,
   };
-
-  const fakeCtx = {
-    canvas: null as unknown as HTMLCanvasElement,
-    clearRect: vi.fn(),
-    save: vi.fn(),
-    restore: vi.fn(),
-    translate: vi.fn(),
-    scale: vi.fn(),
-    fillRect: vi.fn(),
-    strokeRect: vi.fn(),
-    beginPath: vi.fn(),
-    moveTo: vi.fn(),
-    lineTo: vi.fn(),
-    arc: vi.fn(),
-    stroke: vi.fn(),
-    fill: vi.fn(),
-    fillText: vi.fn(),
-    measureText: vi.fn(() => ({ width: 10 })),
-    fillStyle: "",
-    strokeStyle: "",
-    lineWidth: 0,
-    lineCap: "",
-    lineJoin: "",
-    globalAlpha: 1,
-    font: "",
-    textAlign: "",
-    textBaseline: "",
-  };
-
-  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
-    fakeCtx.canvas = this;
-    return fakeCtx as unknown as CanvasRenderingContext2D;
-  } as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
   vi.stubGlobal("PointerEvent", FakePointerEvent);
   vi.stubGlobal("devicePixelRatio", 1);
@@ -114,7 +78,6 @@ beforeEach(() => {
   Element.prototype.hasPointerCapture = vi.fn(() => true) as never;
 
   restore = () => {
-    HTMLCanvasElement.prototype.getContext = stubs.getContext;
     Element.prototype.getBoundingClientRect = stubs.getBoundingClientRect;
     Element.prototype.setPointerCapture = stubs.setPointerCapture as never;
     Element.prototype.releasePointerCapture =
@@ -212,8 +175,8 @@ async function mount() {
     hoverPreviewDebounceMs: 0,
     backend: backendSpy(),
     // This test's subject is the real host pointer lifecycle, so it injects
-    // the Canvas host through the seam (until Task 5 deletes it).
-    createHost: async (ctx) => createCanvasHost(ctx),
+    // the real WebGPU host logic over a no-op renderer (jsdom-safe).
+    createHost: createJsdomGameHost,
   });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;

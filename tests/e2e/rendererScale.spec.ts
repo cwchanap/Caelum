@@ -7,10 +7,10 @@ declare const process: { env: { CAELUM_RENDER_BENCH?: string } };
 
 test.skip(
   process.env.CAELUM_RENDER_BENCH !== "1",
-  "Canvas benchmark rows run via `bun run bench:render` (CAELUM_RENDER_BENCH=1), not in normal E2E.",
+  "WebGPU benchmark rows run via `bun run bench:render` (CAELUM_RENDER_BENCH=1), not in normal E2E.",
 );
 
-test("records Canvas renderer scale rows at 200 and 5,000 vehicles", async ({
+test("records WebGPU renderer scale rows at 200 and 5,000 vehicles", async ({
   page,
 }) => {
   test.setTimeout(600_000);
@@ -26,14 +26,21 @@ test("records Canvas renderer scale rows at 200 and 5,000 vehicles", async ({
     // Documentation evidence only: the row is recorded in
     // docs/performance/hpa-640-webgpu.md; there is no timing threshold.
     console.log(
-      `vehicles-${result.vehicleCount}: median ${result.medianCpuMs.toFixed(3)}ms p95 ${result.p95CpuMs.toFixed(3)}ms over ${result.frames} frames`,
+      `vehicles-${result.vehicleCount}: median ${result.medianCpuMs.toFixed(3)}ms p95 ${result.p95CpuMs.toFixed(3)}ms over ${result.frames} frames ` +
+        `(presented ${result.presentedVehicles}, encoded ${result.encodedInstances}, upload ${result.vehicleUploadBytes}B, ` +
+        `solid draws ${result.solidDraws}, vehicle draws ${result.vehicleDraws}, queue completed ${result.queueCompleted})`,
     );
   }
 
   expect(results.map((result) => result.vehicleCount)).toEqual([200, 5000]);
   for (const result of results) {
     expect(result.frames).toBe(120);
+    expect(result.presentedVehicles).toBe(result.vehicleCount);
+    expect(result.encodedInstances).toBe(result.vehicleCount);
+    expect(result.vehicleUploadBytes).toBe(result.encodedInstances * 11 * 4);
+    expect(result.vehicleDraws).toBe(1);
     expect(result.medianCpuMs).toBeGreaterThan(0);
     expect(result.p95CpuMs).toBeGreaterThanOrEqual(result.medianCpuMs);
+    expect(result.queueCompleted).toBe(true);
   }
 });

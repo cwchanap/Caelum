@@ -161,9 +161,10 @@ describe("WebGpuRenderer", () => {
   });
 
   it("offsets the vehicle body 10px perpendicular with 14x8 extents like the Canvas fillRect", () => {
-    // Canvas oracle (transitRenderer): fillRect(-7, -14, 14, 8) after
-    // translate+rotate — a 14x8 body whose center sits 10px perpendicular off
-    // the path centerline. A path-centered half-size quad is invisible inside
+    // Canvas-era parity: the old 2D renderer drew fillRect(-7, -14, 14, 8)
+    // after translate+rotate — a 14x8 body whose center sits 10px
+    // perpendicular off the path centerline. A path-centered half-size quad is
+    // invisible inside
     // the same-colored route line (WKWebView parity bug). Evaluate the real
     // WGSL local transform (captured from createShaderModule) at the quad
     // corners; rotation is rigid, so the pre-rotation frame pins the shape.

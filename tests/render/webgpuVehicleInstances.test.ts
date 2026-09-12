@@ -21,7 +21,7 @@ import { pointAndTangentAt } from "../../src/render/pathGeometry";
 import { tileSize } from "../../src/render/boardTransform";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
-import { UNRELATED_ROUTE_OPACITY } from "../../src/render/transitRenderer";
+import { UNRELATED_ROUTE_OPACITY } from "../../src/render/webgpu/transitBatch";
 import { parseColor } from "../../src/render/webgpu/primitives";
 import { buildRenderScaleState } from "../helpers/renderScaleState";
 import { createTestGameState } from "../helpers/gameState";

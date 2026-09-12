@@ -1,6 +1,6 @@
 # Architecture
 
-Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a canvas renderer. The authoritative simulation core is the Rust crate `crates/caelum-core`; browser and Tauri gameplay both go through the Rust `GameEngine` facade.
+Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a WebGPU renderer. The authoritative simulation core is the Rust crate `crates/caelum-core`; browser and Tauri gameplay both go through the Rust `GameEngine` facade.
 
 ## Simulation core (Rust)
 
@@ -45,7 +45,7 @@ cost behavior remains the read-only building-hover helper.
 
 ## Runtime boundary (TypeScript host)
 
-Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, animation scheduling, host backend calls, canvas mounting, and snapshot publication.
+Rust owns gameplay state. `createGameRuntime()` owns UI state, subscriptions, host backend calls, display-host mounting, and snapshot publication.
 
 Three models, three jobs. The Rust `GameSnapshot` is the durable/core authority — the only thing persistence saves and restores. `PresentationUpdate` is the ordinary Rust host wire for view/tick/dispatch/reset/restore success. The TypeScript `GameState` is the flat presentation view that `applyPresentationUpdate` folds every update into — not a save model and never persisted. Rust owns the occupancy/crowding/traffic/aggregate-demand/service projection into that wire (`caelum_core::presentation`); individual citizen rendering and the lateness/growth shipped overlays are removed, so the UI draws frame rows (building occupancy, platform crowding, traffic and demand flow, vehicle cursors) plus aggregate late/unserved counts.
 
@@ -53,7 +53,7 @@ Three models, three jobs. The Rust `GameSnapshot` is the durable/core authority 
 - It applies local-only UI intents such as tool changes, overlays, selection, and UI reset.
 - It dispatches gameplay intents and ticks to the selected host backend.
 - It publishes runtime snapshots for the Svelte shell.
-- It mounts the imperative canvas host and keeps rendering tied to runtime-owned state.
+- It mounts the GPU display host (`createWebGpuHost`) and keeps rendering tied to runtime-owned state through an internal `sceneRevision` that bumps once per structural (scene-carrying) update.
 
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
@@ -308,7 +308,7 @@ fractional `step_progress`.
 Stored route paths remain structural/free-flow. TypeScript derives only the
 current-road Traffic overlay from snapshot trip state.
 
-**Plan deviation — arc vs. bezier geometry.** The route-direction-editing plan called for a `PathGeometry::Arc` variant in the Rust wire format for roundabout curves. The implementation replaced it with `PathGeometry::QuadraticBezier` in the Rust model (`crates/caelum-core/src/model.rs`) to avoid transcendental functions in the deterministic step-progress pipeline. The TypeScript `PathGeometry` type (`src/domain/types.ts`) retains an `arc` variant that is **render-only** — `roundaboutRenderer.ts` generates arc geometry locally for circulation-curve drawing, and `routeGeometry.ts` handles it for offset/projection/keying. The Rust wire format never produces `arc`; route and road path steps from Rust only use `line` and `quadraticBezier`.
+**Plan deviation — arc vs. bezier geometry.** The route-direction-editing plan called for a `PathGeometry::Arc` variant in the Rust wire format for roundabout curves. The implementation replaced it with `PathGeometry::QuadraticBezier` in the Rust model (`crates/caelum-core/src/model.rs`) to avoid transcendental functions in the deterministic step-progress pipeline. The TypeScript `PathGeometry` type (`src/domain/types.ts`) retains an `arc` variant that is **render-only** — the WebGPU map batch generates arc geometry locally for roundabout circulation curves, and `routeGeometry.ts` handles it for offset/projection/keying. The Rust wire format never produces `arc`; route and road path steps from Rust only use `line` and `quadraticBezier`.
 
 ### Route lifecycle and editing
 
@@ -360,19 +360,22 @@ The shell is fully Svelte-owned:
 - `CommandPanel.svelte` hosts one non-modal Build, Lines, Data, or City workspace; a route draft pins Lines until Save or Cancel.
 - `BuildPanel.svelte` uses four checked-in presentation-only command plates and existing runtime arming paths.
 - Contextual Inspect and `ActionFeedback.svelte` are independent of destination navigation.
-- `GameCanvas.svelte` provides the imperative canvas host and DOM focus handoff while rendering stays in `src/render`.
+- `GameCanvas.svelte` provides the board host element and DOM focus handoff while GPU rendering stays in `src/render/webgpu`.
 - Opening a destination moves focus into its panel. Escape closes a closable panel and returns focus to its shelf trigger; saving or canceling a route draft returns focus to the Lines list, while Escape in a route-name input only cancels that input edit.
 
 Svelte consumes derived runtime snapshots and never becomes a second source of truth for gameplay state.
 
-## Canvas rendering
+## WebGPU presentation
 
-Canvas rendering remains imperative for parity and performance.
+Rust remains the gameplay authority; the HPA-544 `PresentationUpdate` wire is unchanged by rendering. Ownership:
 
-- `GameCanvas.svelte` provides the board host element.
-- `createGameRuntime()` attaches the real `<canvas>` to that host.
-- `src/render/canvas.ts` owns board sizing, coordinate mapping, and render-pass composition.
-- Map, building, overlay, transit, citizen, roundabout, and route-geometry renderers consume committed runtime state and local selection/draft presentation state without becoming gameplay authorities.
+- `createGameRuntime()` owns orchestration plus the internal `sceneRevision` (bumped once per scene-carrying update) that keys the host's world-space batch caches.
+- `createWebGpuHost` (`src/runtime/createWebGpuHost.ts`) owns the GPU surface, pointer/keyboard input wiring, resize handling, the `requestAnimationFrame` loop with ≤10 Hz one-in-flight tick admission (250 ms wall-delta clamp), and fatal device-loss forwarding to the shell error path.
+- `src/render/webgpu/` modules own geometric presentation: painter-order solid batches, the single instanced vehicle draw, vehicle interpolation between observed snapshots, and viewport culling before encode/upload. `boardTransform.ts` keeps the shared tile↔pixel mapping (`tileSize = 32`).
+- Svelte owns HUD, panels, and the DOM map-text overlay (`mapTextOverlay.ts`), which render from runtime snapshots.
+- Canvas2D gameplay rendering is gone: `render/canvas.ts` and the per-concern Canvas renderers were deleted with their tests after both the Chromium and Tauri/WKWebView gates passed.
+
+- `GameCanvas.svelte` provides the board host element; `createGameRuntime()` attaches the real WebGPU `<canvas>` to it.
 
 ## Hosts
 
@@ -388,11 +391,10 @@ Host bootstrap failures stay in the shell layer, while gameplay validation remai
 1. Svelte components emit user intents to the runtime.
 2. The runtime applies local UI intents directly and sends gameplay intents to the host backend.
 3. The Rust `GameEngine` advances suburb growth, transit movement, and objectives, projecting each result into a `PresentationUpdate`.
-4. The imperative canvas renderer draws from runtime-owned state.
+4. The WebGPU host renders the committed presentation state from runtime-owned batches.
 5. Svelte rerenders from the latest runtime snapshot.
 
-The canvas `requestAnimationFrame` loop remains the tick owner until HPA-640
-revisits cadence/interpolation; the load-bearing standalone Bevy ECS population
+The host-owned `requestAnimationFrame` loop admits simulation ticks to the backend at ≤10 per second while unpaused (one tick in flight, wall-delta clamped) and interpolates vehicle presentation between observed snapshots; the load-bearing standalone Bevy ECS population
 introduced by HPA-347 is live in `caelum-core` (see Population ownership above).
 
 The Growing Suburb scenario remains deterministic for tests: initial state, growth thresholds, generated citizens, identifiers, and objective evaluation stay stable across repeated runs.
