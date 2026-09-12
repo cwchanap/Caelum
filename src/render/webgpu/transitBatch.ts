@@ -49,7 +49,7 @@ function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
 }
 
-interface RenderableLine {
+export interface RenderableLine {
   id: string;
   mode: "bus" | "metro";
   color: string;
@@ -58,18 +58,18 @@ interface RenderableLine {
   legs: RouteLegPath[];
 }
 
-interface CorridorGroup {
+export interface CorridorGroup {
   canonicalTangent: TripPosition;
   offsets: ReadonlyMap<string, number>;
 }
 
-type CorridorGroups = ReadonlyMap<string, CorridorGroup>;
+export type CorridorGroups = ReadonlyMap<string, CorridorGroup>;
 
-function presentationPath(leg: RouteLegPath): TransitPath | null {
+export function presentationPath(leg: RouteLegPath): TransitPath | null {
   return leg.status === "connected" ? leg.currentPath : leg.lastValidPath;
 }
 
-function renderableLines(state: GameState): RenderableLine[] {
+export function renderableLines(state: GameState): RenderableLine[] {
   return [
     ...state.transit.routes.map((route) => ({
       id: route.id,
@@ -92,7 +92,9 @@ function renderableLines(state: GameState): RenderableLine[] {
   );
 }
 
-function buildCorridorGroups(lines: readonly RenderableLine[]): CorridorGroups {
+export function buildCorridorGroups(
+  lines: readonly RenderableLine[],
+): CorridorGroups {
   const grouped = new Map<
     string,
     { canonicalTangent: TripPosition; routeIds: Set<string> }
@@ -137,7 +139,7 @@ function nodePositionMap(state: GameState): Map<string, TripPosition> {
   return positions;
 }
 
-function presentationForRoute(
+export function presentationForRoute(
   geometry: PathGeometry,
   routeId: string,
   corridors: CorridorGroups,

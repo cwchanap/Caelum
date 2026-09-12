@@ -333,8 +333,13 @@ export async function createGameRuntime(
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
     if (!dead) {
-      gameHost.render();
+      // Sync the animation loop BEFORE rendering: on a running→paused (or
+      // speed-0) transition the loop must cancel its pending rAF first, or
+      // render() coalesces into that rAF and the sync then cancels it — the
+      // final paused frame would never draw. While running, the sync is a
+      // no-op and render() still coalesces (no double-draw).
       gameHost.syncAnimationLoop();
+      gameHost.render();
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -373,8 +378,10 @@ export async function createGameRuntime(
 
     if (!changed) {
       if (!dead) {
-        gameHost.render();
+        // Same sync-before-render order as publish(): a paused/stopped commit
+        // must draw immediately, a running commit must only coalesce.
         gameHost.syncAnimationLoop();
+        gameHost.render();
       }
       return getSnapshot();
     }

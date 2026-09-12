@@ -21,7 +21,12 @@ import { pointAndTangentAt } from "../../src/render/pathGeometry";
 import { tileSize } from "../../src/render/boardTransform";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
-import { UNRELATED_ROUTE_OPACITY } from "../../src/render/webgpu/transitBatch";
+import {
+  buildCorridorGroups,
+  presentationForRoute,
+  renderableLines,
+  UNRELATED_ROUTE_OPACITY,
+} from "../../src/render/webgpu/transitBatch";
 import { parseColor } from "../../src/render/webgpu/primitives";
 import { buildRenderScaleState } from "../helpers/renderScaleState";
 import { createTestGameState } from "../helpers/gameState";
@@ -76,6 +81,10 @@ function stateWithVehicles(
   legs: RouteLegPath[],
   vehicles: Vehicle[],
 ): GameState {
+  // Disjoint metro geometry: the metro corridor then holds a single line
+  // (zero offset), so the route-leg assertions below pin interpolation at the
+  // centerline while dedicated corridor tests pin lane offsets.
+  const metroLegs = legWithSteps([lineStep({ x: 0, y: 6 }, { x: 1, y: 6 })]);
   const base = createTestGameState();
   return {
     ...base,
@@ -120,7 +129,7 @@ function stateWithVehicles(
           active: true,
           pattern: "loop" as const,
           revision: 1,
-          legs,
+          legs: metroLegs,
           pathBroken: false,
           targetHeadwaySeconds: null,
           serviceMetrics: null,
@@ -489,6 +498,25 @@ describe("adjacent-step rollover and snap rules", () => {
     expectNear(instances[0][1], expected.y);
   });
 
+  it("snaps to latest on backward progress within the same step", () => {
+    // A same-step cursor that moves backwards cannot interpolate (the spec's
+    // snap list includes backward progress); the vehicle must not slide back
+    // along its lane.
+    const { previous, latest } = rolloverState(
+      { pathStepIndex: 0, stepProgress: 0.75 },
+      { pathStepIndex: 0, stepProgress: 0.25 },
+    );
+    const instances = instancesOf(encode({ previous, latest, alpha: 0.5 }));
+    const expected = latestPixel({ pathStepIndex: 0, stepProgress: 0.25 });
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+    // Not the interpolated midpoint (0.5).
+    const midpoint = latestPixel({ pathStepIndex: 0, stepProgress: 0.5 });
+    expect(
+      Math.hypot(instances[0][0] - midpoint.x, instances[0][1] - midpoint.y),
+    ).toBeGreaterThan(1);
+  });
+
   it("snaps to latest on a non-adjacent cursor jump", () => {
     const stepC = lineStep({ x: 5, y: 5 }, { x: 1, y: 5 });
     const threeSteps = legWithSteps([STEP_A, STEP_B, stepC]);
@@ -764,7 +792,7 @@ describe("emphasis, culling, and instance encoding", () => {
     renderer.configure(createFakeCanvas().canvas);
     const stats = renderer.render({
       solids: [],
-      vehicles: [{ key: "fleet", instances }],
+      vehicles: [{ instances }],
     });
 
     // The static quad upload is 12 floats; only the one instance upload is a
@@ -786,5 +814,189 @@ describe("emphasis, culling, and instance encoding", () => {
         draw.kind === "draw" ? draw.instanceCount : 0,
       ),
     ).toEqual([5000]);
+  });
+});
+
+describe("corridor-offset lane sampling", () => {
+  const SHARED_STEP = lineStep({ x: 1, y: 1 }, { x: 5, y: 1 });
+
+  function twoRouteState(vehicles: Vehicle[]): GameState {
+    const legs = legWithSteps([SHARED_STEP]);
+    const base = stateWithVehicles(legs, vehicles);
+    return {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: [
+          ...base.transit.routes,
+          {
+            id: "route-002",
+            name: "Route 2",
+            color: "#2f9e44",
+            stopIds: ["a", "b"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs,
+            pathBroken: false,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
+          },
+        ],
+      },
+    };
+  }
+
+  /** Expected position from the SAME offset presentation the committed route
+   *  lines draw (transitBatch's corridor functions) — no duplicated math. */
+  function expectedLanePixel(
+    state: GameState,
+    routeId: string,
+    progress: number,
+  ): { x: number; y: number } {
+    const corridors = buildCorridorGroups(renderableLines(state));
+    const presented = presentationForRoute(
+      SHARED_STEP.geometry as PathGeometry,
+      routeId,
+      corridors,
+    ).geometry;
+    return pixel(pointAndTangentAt(presented, progress).point);
+  }
+
+  it("samples vehicles on their corridor-offset lane, not the raw centerline", () => {
+    // Two routes share one corridor: sorted ids give route-001 -2px and
+    // route-002 +2px perpendicular offsets (SHARED_CORRIDOR_GAP_PX = 4).
+    const latest = twoRouteState([
+      busVehicle({ id: "vehicle-001", lineId: "route-001", stepProgress: 0.5 }),
+      busVehicle({ id: "vehicle-002", lineId: "route-002", stepProgress: 0.5 }),
+    ]);
+    const instances = instancesOf(
+      encodeVehicleInstances({
+        previous: null,
+        latest,
+        ui: createUiState(),
+        alpha: 1,
+        paused: false,
+        viewport: FULL_MAP,
+      }),
+    );
+
+    expect(instances).toHaveLength(2);
+    const laneA = expectedLanePixel(latest, "route-001", 0.5);
+    const laneB = expectedLanePixel(latest, "route-002", 0.5);
+    expectNear(instances[0][0], laneA.x);
+    expectNear(instances[0][1], laneA.y);
+    expectNear(instances[1][0], laneB.x);
+    expectNear(instances[1][1], laneB.y);
+    // The lanes are 4px apart and both off the raw centerline.
+    const centerline = pixel(
+      pointAndTangentAt(SHARED_STEP.geometry, 0.5).point,
+    );
+    expect(
+      Math.hypot(
+        instances[0][0] - centerline.x,
+        instances[0][1] - centerline.y,
+      ),
+    ).toBeGreaterThan(1);
+    expect(
+      Math.hypot(
+        instances[1][0] - centerline.x,
+        instances[1][1] - centerline.y,
+      ),
+    ).toBeGreaterThan(1);
+  });
+
+  it("interpolates along the offset lane for same-step motion", () => {
+    const previous = twoRouteState([
+      busVehicle({
+        id: "vehicle-002",
+        lineId: "route-002",
+        stepProgress: 0.25,
+      }),
+    ]);
+    const latest = twoRouteState([
+      busVehicle({
+        id: "vehicle-002",
+        lineId: "route-002",
+        stepProgress: 0.75,
+      }),
+    ]);
+    const instances = instancesOf(
+      encodeVehicleInstances({
+        previous,
+        latest,
+        ui: createUiState(),
+        alpha: 0.5,
+        paused: false,
+        viewport: FULL_MAP,
+      }),
+    );
+
+    expect(instances).toHaveLength(1);
+    const expected = expectedLanePixel(latest, "route-002", 0.5);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+});
+
+describe("terminal-reversal visibility", () => {
+  function terminalLeg(): RouteLegPath[] {
+    return [
+      {
+        fromWaypointId: "a",
+        toWaypointId: "b",
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: {
+          kind: "road",
+          steps: [],
+          totalTravelSeconds: 0,
+        } as TransitPath,
+        lastValidPath: null,
+        estimatedSeconds: 0,
+        failureReason: null,
+      },
+    ];
+  }
+
+  it("keeps an exact-boundary vehicle visible at the terminal road-access point", () => {
+    // Terminal reversal: connected empty path, no step, parkedPosition null.
+    // The vehicle parks at the terminal stop's road access point instead of
+    // disappearing.
+    const base = stateWithVehicles(terminalLeg(), [
+      busVehicle({ pathStepIndex: 0, stepProgress: 0, parkedPosition: null }),
+    ]);
+    const roadPoint = { x: 3, y: 1 };
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stops: base.transit.stops.map((stop) =>
+          stop.id === "a" ? { ...stop, roadAccess: { roadPoint } } : stop,
+        ),
+      },
+    };
+    const instances = instancesOf(encode({ latest: state, alpha: 1 }));
+
+    expect(instances).toHaveLength(1);
+    const expected = pixel(roadPoint);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+    // Parked placement has no tangent: unrotated.
+    expect(instances[0][2]).toBe(0);
+  });
+
+  it("falls back to the terminal stop position when road access is missing", () => {
+    const state = stateWithVehicles(terminalLeg(), [
+      busVehicle({ pathStepIndex: 0, stepProgress: 0, parkedPosition: null }),
+    ]);
+    const instances = instancesOf(encode({ latest: state, alpha: 1 }));
+
+    expect(instances).toHaveLength(1);
+    const expected = pixel({ x: 0, y: 0 }); // stop "a" position
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
   });
 });

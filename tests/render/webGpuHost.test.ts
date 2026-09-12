@@ -15,6 +15,7 @@ import type {
   Vehicle,
 } from "../../src/domain/types";
 import {
+  createWebGpuHost,
   createWebGpuHostWithRenderer,
   type WebGpuHostContext,
 } from "../../src/runtime/createWebGpuHost";
@@ -26,6 +27,7 @@ import {
 import { tileSize } from "../../src/render/boardTransform";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
+import { createFakeDevice } from "../helpers/fakeWebGpu";
 
 // jsdom ships no PointerEvent and no Pointer Capture API. The WebGPU host
 // guards those, but to exercise the real DOM event -> callback wiring we stub
@@ -894,15 +896,16 @@ describe("createWebGpuHost frame contents", () => {
     const frame = fx.renderer.frames.at(-1)!;
     // Painter order: scene, overlays, routes, draft | vehicles | handles.
     expect(frame.solids.length).toBe(4);
-    expect(frame.solids[0]!.key).toBe("scene:1");
-    expect(frame.solids[1]!.key).toBe("overlay-under-routes");
-    expect(frame.solids[2]!.key).toBe("routes:1:-:-");
-    expect(frame.solids[3]!.key).toBe("route-draft");
+    expect(frame.solids.map((batch) => batch.role)).toEqual([
+      "structural",
+      "dynamic",
+      "route",
+      "dynamic",
+    ]);
     expect(frame.vehicles.length).toBe(1);
-    expect(frame.vehicles[0]!.key).toBe("vehicles");
     expect(frame.vehicles[0]!.instances.length).toBe(VEHICLE_INSTANCE_FLOATS);
     // No route editor open: the over-vehicles range emits an empty batch.
-    expect(frame.overVehicles![0]!.key).toBe("route-handles");
+    expect(frame.overVehicles![0]!.role).toBe("dynamic");
     expect(frame.overVehicles![0]!.vertices.length).toBe(0);
 
     fx.host.stop();
@@ -928,7 +931,7 @@ describe("createWebGpuHost frame contents", () => {
     fx.host.stop();
   });
 
-  it("keeps scene/route cache keys stable per revision and re-keys on change", () => {
+  it("re-tessellates scene/route ranges only when revision or emphasis changes", () => {
     const fx = createFixture({
       state: unpaused(stateWithVehicleForFrame()),
     });
@@ -936,30 +939,127 @@ describe("createWebGpuHost frame contents", () => {
     fx.fireFrame(16);
     fx.fireFrame(33);
 
-    // Same revision and emphasis: the same string keys (and thus the same
-    // buffer identities inside the renderer) repeat every frame.
-    for (const frame of fx.renderer.frames) {
-      expect(frame.solids[0]!.key).toBe("scene:1");
-      expect(frame.solids[2]!.key).toBe("routes:1:-:-");
-    }
+    // Frame-only tick: scene and route tessellation are cache hits — the
+    // host caches per revision/emphasis, so content (and uploaded bytes)
+    // stays identical while only vehicles move.
+    const [first, second] = fx.renderer.frames.slice(-2);
+    expect(second!.solids[0]!.vertices).toEqual(first!.solids[0]!.vertices);
+    expect(second!.solids[2]!.vertices).toEqual(first!.solids[2]!.vertices);
 
-    // Emphasis change re-keys the committed-route range without a scene bump.
+    // Emphasis change re-tessellates the committed-route range only.
     fx.setUi({ selectedRouteId: "route-001" });
     fx.fireFrame(50);
-    expect(fx.renderer.frames.at(-1)!.solids[2]!.key).toBe(
-      "routes:1:route-001:-",
+    const emphasized = fx.renderer.frames.at(-1)!;
+    expect(emphasized.solids[2]!.vertices).not.toEqual(
+      second!.solids[2]!.vertices,
     );
-    expect(fx.renderer.frames.at(-1)!.solids[0]!.key).toBe("scene:1");
+    expect(emphasized.solids[0]!.vertices).toEqual(second!.solids[0]!.vertices);
 
-    // A structural update re-keys the scene range.
+    // A structural update (map change + revision bump) re-tessellates the
+    // scene range.
     fx.setSceneRevision(2);
-    fx.setState({ ...fx.getState(), budget: 1 });
+    const previousState = fx.getState();
+    fx.setState({
+      ...previousState,
+      map: {
+        ...previousState.map,
+        tiles: previousState.map.tiles.map((tile) =>
+          tile.x === 0 && tile.y === 0
+            ? { ...tile, kind: "road" as const }
+            : tile,
+        ),
+      },
+    });
     fx.fireFrame(66);
     const last = fx.renderer.frames.at(-1)!;
-    expect(last.solids[0]!.key).toBe("scene:2");
-    expect(last.solids[2]!.key).toBe("routes:2:route-001:-");
+    expect(last.solids[0]!.vertices).not.toEqual(
+      emphasized.solids[0]!.vertices,
+    );
 
     fx.host.stop();
+  });
+});
+
+describe("createWebGpuHost teardown destruction", () => {
+  it("mount teardown destroys the renderer", () => {
+    const { cleanup, renderer, host } = createFixture();
+    host.start();
+    expect(renderer.destroy).not.toHaveBeenCalled();
+
+    cleanup();
+
+    expect(renderer.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("internal remount to a different host detaches without destroying; unmount destroys", () => {
+    const { host, renderer, container } = createFixture();
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    host.mount(secondHost);
+    // Internal re-mount only detaches: the renderer keeps its GPU resources.
+    expect(renderer.destroy).not.toHaveBeenCalled();
+
+    // Mounting back is another internal re-mount, and the cleanup it returns
+    // is the terminal teardown.
+    const cleanup = host.mount(container);
+    expect(renderer.destroy).not.toHaveBeenCalled();
+    cleanup();
+    expect(renderer.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("production host teardown destroys the renderer and the device it created", async () => {
+    // Narrow fake at the navigator.gpu seam: createWebGpuHost requests the
+    // device itself, so teardown must destroy the renderer's buffers, unconfigure
+    // the context, and then destroy the device that host created.
+    const harness = createFakeDevice();
+    vi.stubGlobal("navigator", {
+      gpu: {
+        requestAdapter: async () => ({
+          requestDevice: async () => harness.device,
+        }),
+        getPreferredCanvasFormat: () => "bgra8unorm",
+      },
+    });
+    const fakeContext = {
+      configure: () => {},
+      unconfigure: () => {},
+      getCurrentTexture: () => ({ createView: () => ({}) }),
+    };
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockImplementation(((type: string) =>
+        type === "webgpu" ? fakeContext : null) as never);
+    try {
+      const host = await createWebGpuHost({
+        getState: () => createTestGameState(),
+        getUi: () => createUiState(),
+        getSceneRevision: () => 1,
+        onTick: () => {},
+        onTileClick: () => {},
+        onHoverTile: () => {},
+        onRouteDraftContextMenu: () => false,
+        onDragStart: () => true,
+        onDragCurrent: () => {},
+        onDragCommit: () => {},
+        onDragCancel: () => {},
+        onFatalError: () => {},
+      });
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const cleanup = host.mount(container);
+      // configure() created the quad buffer through the owned device.
+      expect(harness.buffers.length).toBeGreaterThan(0);
+      expect(harness.deviceDestroyed).toBe(false);
+
+      cleanup();
+
+      expect(harness.deviceDestroyed).toBe(true);
+      expect(harness.buffers.every((buffer) => buffer.destroyed)).toBe(true);
+    } finally {
+      getContextSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });
 

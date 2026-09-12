@@ -13,7 +13,12 @@ export interface FakePipeline {
 
 export type FakePassOp =
   | { kind: "setPipeline"; pipeline: FakePipeline }
-  | { kind: "setVertexBuffer"; slot: number; buffer: FakeBuffer }
+  | {
+      kind: "setVertexBuffer";
+      slot: number;
+      buffer: FakeBuffer;
+      offset: number;
+    }
   | { kind: "draw"; vertexCount: number; instanceCount: number };
 
 export interface FakePass {
@@ -22,6 +27,8 @@ export interface FakePass {
 
 export interface FakeWrite {
   buffer: FakeBuffer;
+  /** Byte offset of the upload within the buffer. */
+  offset: number;
   data: Float32Array;
 }
 
@@ -33,6 +40,8 @@ export interface FakeHarness {
   writes: FakeWrite[];
   passes: FakePass[];
   device: GPUDevice;
+  /** True once the host teardown destroyed the device it created. */
+  deviceDestroyed: boolean;
   resolveLost(info: { reason?: string; message: string }): void;
 }
 
@@ -44,6 +53,7 @@ export function createFakeDevice(): FakeHarness {
     writes: [],
     passes: [],
     device: null as unknown as GPUDevice,
+    deviceDestroyed: false,
     resolveLost: () => {},
   };
   let resolveLost: (info: {
@@ -67,6 +77,9 @@ export function createFakeDevice(): FakeHarness {
   const device = {
     lost,
     createBuffer: makeBuffer,
+    destroy() {
+      harness.deviceDestroyed = true;
+    },
     createRenderPipeline(descriptor: GPURenderPipelineDescriptor) {
       const pipeline: FakePipeline = { descriptor };
       harness.pipelines.push(pipeline);
@@ -86,8 +99,8 @@ export function createFakeDevice(): FakeHarness {
             setPipeline(pipeline: FakePipeline) {
               pass.ops.push({ kind: "setPipeline", pipeline });
             },
-            setVertexBuffer(slot: number, buffer: FakeBuffer) {
-              pass.ops.push({ kind: "setVertexBuffer", slot, buffer });
+            setVertexBuffer(slot: number, buffer: FakeBuffer, offset = 0) {
+              pass.ops.push({ kind: "setVertexBuffer", slot, buffer, offset });
             },
             draw(vertexCount: number, instanceCount = 1) {
               pass.ops.push({ kind: "draw", vertexCount, instanceCount });
@@ -101,8 +114,8 @@ export function createFakeDevice(): FakeHarness {
       } as unknown as GPUCommandEncoder;
     },
     queue: {
-      writeBuffer(buffer: FakeBuffer, _offset: number, data: Float32Array) {
-        harness.writes.push({ buffer, data });
+      writeBuffer(buffer: FakeBuffer, offset: number, data: Float32Array) {
+        harness.writes.push({ buffer, offset, data });
       },
       submit(commandBuffers: { passes: FakePass[] }[]) {
         for (const commandBuffer of commandBuffers) {
