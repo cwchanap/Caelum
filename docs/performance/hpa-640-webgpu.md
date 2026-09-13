@@ -100,8 +100,9 @@ full smoke through the production WebGPU path:
 - City create/load through the native city-store IPC; road drags land on
   exactly the intended tiles (pointer/board-transform alignment); bus stops,
   route save, headway set, and fleet deploy all behave as on Chromium.
-- Simulation runs at full rAF cadence in the visible window; vehicle path
-  state advances while running and is stable while paused.
+- Rendering follows the visible window's requestAnimationFrame cadence; the
+  vehicle-path simulation advances at the documented ≤10 host ticks/sec while
+  running and is stable while paused.
 - Canvas backing store tracks board resize (2560x1224 <-> 1800x1200) with
   DPR 2 via the ResizeObserver path.
 - Captured-frame pixel verification: full map (board/roads/route/stops)

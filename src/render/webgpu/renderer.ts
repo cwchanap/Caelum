@@ -37,6 +37,7 @@ export interface WebGpuRenderStats {
   solidBatches: number;
   solidVertices: number;
   vehicleInstances: number;
+  vehicleDraws: number;
 }
 
 /** A rendered frame read back to CPU memory: row-tight RGBA8 in device
@@ -341,6 +342,7 @@ export function createWebGpuRenderer(
     drawSolids(frame.solids);
 
     let vehicleInstances = 0;
+    let vehicleDraws = 0;
     const instanceFloats = frame.vehicles.reduce(
       (sum, batch) => sum + batch.instances.length,
       0,
@@ -359,6 +361,7 @@ export function createWebGpuRenderer(
       pass.setVertexBuffer(0, quad, 0);
       pass.setVertexBuffer(1, buffer, 0);
       pass.draw(6, vehicleInstances);
+      vehicleDraws += 1;
     }
 
     drawSolids(frame.overVehicles ?? []);
@@ -366,7 +369,7 @@ export function createWebGpuRenderer(
     pass.end();
     return {
       encoder,
-      stats: { solidBatches, solidVertices, vehicleInstances },
+      stats: { solidBatches, solidVertices, vehicleInstances, vehicleDraws },
     };
   };
 

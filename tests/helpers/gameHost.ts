@@ -57,7 +57,12 @@ export function createNoopWebGpuRenderer(): WebGpuRenderer {
     lost: new Promise(() => {}),
     configure: () => {},
     resize: () => {},
-    render: () => ({ solidBatches: 0, solidVertices: 0, vehicleInstances: 0 }),
+    render: () => ({
+      solidBatches: 0,
+      solidVertices: 0,
+      vehicleInstances: 0,
+      vehicleDraws: 0,
+    }),
     captureFrame: async () => null,
     destroy: () => {},
   };
