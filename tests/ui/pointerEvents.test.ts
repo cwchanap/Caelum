@@ -6,8 +6,9 @@ import type {
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createJsdomGameHost } from "../helpers/gameHost";
 import type { RuntimeController } from "../../src/runtime/types";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { createTestGameState } from "../helpers/gameState";
 import {
   createPresentationUpdate,
@@ -15,16 +16,16 @@ import {
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
 
-// jsdom ships no PointerEvent and no Pointer Capture API, and canvas.getContext
-// returns null. The runtime guards all of those, but to exercise the real
-// pointer -> commit wiring we stub them here so a genuine PointerEvent flows
-// through mountCanvas's listeners.
+// jsdom ships no PointerEvent and no Pointer Capture API. The runtime guards
+// those, but to exercise the real pointer -> commit wiring we stub them here
+// so a genuine PointerEvent flows through mountCanvas's listeners.
 
 class FakePointerEvent extends Event {
   button: number;
   clientX: number;
   clientY: number;
   pointerId: number;
+  pointerType: string;
   constructor(
     type: string,
     init: {
@@ -32,6 +33,7 @@ class FakePointerEvent extends Event {
       clientX?: number;
       clientY?: number;
       pointerId?: number;
+      pointerType?: string;
       bubbles?: boolean;
     } = {},
   ) {
@@ -40,11 +42,11 @@ class FakePointerEvent extends Event {
     this.clientX = init.clientX ?? 0;
     this.clientY = init.clientY ?? 0;
     this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? "mouse";
   }
 }
 
 interface Stubbed {
-  getContext: typeof HTMLCanvasElement.prototype.getContext;
   getBoundingClientRect: typeof Element.prototype.getBoundingClientRect;
   setPointerCapture: typeof Element.prototype.setPointerCapture;
   releasePointerCapture: typeof Element.prototype.releasePointerCapture;
@@ -61,7 +63,6 @@ let currentDetach: (() => void) | null = null;
 
 beforeEach(() => {
   stubs = {
-    getContext: HTMLCanvasElement.prototype.getContext,
     getBoundingClientRect: Element.prototype.getBoundingClientRect,
     setPointerCapture: Element.prototype.setPointerCapture,
     releasePointerCapture: Element.prototype.releasePointerCapture,
@@ -69,39 +70,6 @@ beforeEach(() => {
     pointerEvent: globalThis.PointerEvent,
     devicePixelRatio: globalThis.devicePixelRatio,
   };
-
-  const fakeCtx = {
-    canvas: null as unknown as HTMLCanvasElement,
-    clearRect: vi.fn(),
-    save: vi.fn(),
-    restore: vi.fn(),
-    translate: vi.fn(),
-    scale: vi.fn(),
-    fillRect: vi.fn(),
-    strokeRect: vi.fn(),
-    beginPath: vi.fn(),
-    moveTo: vi.fn(),
-    lineTo: vi.fn(),
-    arc: vi.fn(),
-    stroke: vi.fn(),
-    fill: vi.fn(),
-    fillText: vi.fn(),
-    measureText: vi.fn(() => ({ width: 10 })),
-    fillStyle: "",
-    strokeStyle: "",
-    lineWidth: 0,
-    lineCap: "",
-    lineJoin: "",
-    globalAlpha: 1,
-    font: "",
-    textAlign: "",
-    textBaseline: "",
-  };
-
-  HTMLCanvasElement.prototype.getContext = function (this: HTMLCanvasElement) {
-    fakeCtx.canvas = this;
-    return fakeCtx as unknown as CanvasRenderingContext2D;
-  } as unknown as typeof HTMLCanvasElement.prototype.getContext;
 
   vi.stubGlobal("PointerEvent", FakePointerEvent);
   vi.stubGlobal("devicePixelRatio", 1);
@@ -113,7 +81,6 @@ beforeEach(() => {
   Element.prototype.hasPointerCapture = vi.fn(() => true) as never;
 
   restore = () => {
-    HTMLCanvasElement.prototype.getContext = stubs.getContext;
     Element.prototype.getBoundingClientRect = stubs.getBoundingClientRect;
     Element.prototype.setPointerCapture = stubs.setPointerCapture as never;
     Element.prototype.releasePointerCapture =
@@ -210,6 +177,9 @@ async function mount() {
   const runtime = await createGameRuntime({
     hoverPreviewDebounceMs: 0,
     backend: backendSpy(),
+    // This test's subject is the real host pointer lifecycle, so it injects
+    // the real WebGPU host logic over a no-op renderer (jsdom-safe).
+    createHost: createJsdomGameHost,
   });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;
@@ -350,7 +320,7 @@ describe("runtime canvas pointer wiring", () => {
     expect(tileKind(runtime, 1, 0)).toBe("road");
   });
 
-  it("tears the drag down on pointercancel and releases capture", async () => {
+  it("commits an in-flight mouse drag on pointercancel and releases capture", async () => {
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
     const { runtime, canvas } = await mount();
@@ -361,17 +331,45 @@ describe("runtime canvas pointer wiring", () => {
       pointerId: 5,
     });
     dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    // A mouse pointercancel is a browser-side interruption (window focus
+    // loss, OS steal), not a user abort — the previewed stroke commits.
     dispatch(canvas, "pointercancel", {
       ...center({ x: 3, y: 0 }),
       pointerId: 5,
+      pointerType: "mouse",
     });
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
-    expect(tileKind(runtime, 1, 0)).toBe("empty");
+    await flushRuntime();
+    expect(tileKind(runtime, 1, 0)).toBe("road");
     expect(releaseCapture.mock.calls).toContainEqual([5]);
   });
 
-  it("cancels an in-flight drag and clears hover on pointerleave", async () => {
+  it("tears a non-mouse drag down on pointercancel without committing", async () => {
+    const { runtime, canvas } = await mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 6,
+      pointerType: "touch",
+    });
+    dispatch(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerType: "touch",
+    });
+    dispatch(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 6,
+      pointerType: "touch",
+    });
+
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+    await flushRuntime();
+    expect(tileKind(runtime, 1, 0)).toBe("empty");
+  });
+
+  it("commits an in-flight drag and clears hover on pointerleave", async () => {
     const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
@@ -380,11 +378,14 @@ describe("runtime canvas pointer wiring", () => {
 
     expect(runtime.getSnapshot().ui.drag).not.toBeNull();
 
+    // Only reachable mid-drag when pointer capture is missing or lost; the
+    // previewed stroke still commits at its last tracked tile.
     dispatch(canvas, "pointerleave", center({ x: 5, y: 0 }));
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(runtime.getSnapshot().ui.hoverTile).toBeNull();
-    expect(tileKind(runtime, 1, 0)).toBe("empty");
+    await flushRuntime();
+    expect(tileKind(runtime, 1, 0)).toBe("road");
   });
 
   it("clears the hover tile on pointerleave when no drag is active", async () => {

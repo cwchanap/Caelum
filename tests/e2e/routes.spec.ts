@@ -1,7 +1,5 @@
 import { expect, test } from "@playwright/test";
 import type { MovementKind, RouteLegPath } from "../../src/domain/types";
-import { tileSize } from "../../src/render/canvas";
-import { colors } from "../../src/render/colors";
 import {
   selectBuildLeaf,
   clickMapTile,
@@ -13,7 +11,9 @@ import {
   rebuildRoadTile,
   removeMapTile,
   runtimeSnapshot,
+  sampleTilePixels,
   selectTool,
+  type PixelProbe,
 } from "./helpers";
 
 const TURN_ROUTE_STOPS = [
@@ -41,41 +41,9 @@ const OCCLUSION_ROUTE_STOPS = [
 ] as const;
 const OCCLUSION_COVERED_STOP = { x: 21, y: 5 } as const;
 const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
+// colors.bus parsed: the WebGPU stop-marker fill (10x10 world pixels).
+const busMarkerRgb = [224, 79, 57] as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
-
-interface CanvasFillRectRecord {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-  fillStyle: string;
-}
-
-test.beforeEach(async ({ page }) => {
-  await page.addInitScript(() => {
-    const fillRects: CanvasFillRectRecord[] = [];
-    const originalFillRect = CanvasRenderingContext2D.prototype.fillRect;
-    Object.defineProperty(window, "__caelumCanvasTrace", {
-      configurable: true,
-      value: { fillRects },
-    });
-    CanvasRenderingContext2D.prototype.fillRect = function (
-      x,
-      y,
-      width,
-      height,
-    ) {
-      fillRects.push({
-        x,
-        y,
-        width,
-        height,
-        fillStyle: String(this.fillStyle),
-      });
-      return originalFillRect.call(this, x, y, width, height);
-    };
-  });
-});
 
 function roadMovements(leg: RouteLegPath): MovementKind[] {
   return leg.currentPath?.kind === "road"
@@ -139,61 +107,45 @@ async function expectRoadsideStopAnchors(
     };
   });
 
-  await page.evaluate(() => {
-    const trace = (
-      window as unknown as {
-        __caelumCanvasTrace?: { fillRects: CanvasFillRectRecord[] };
-      }
-    ).__caelumCanvasTrace;
-    if (trace === undefined) {
-      throw new Error("Canvas render trace is unavailable");
-    }
-    trace.fillRects.length = 0;
-    const runtime = (
-      window as unknown as {
-        __caelumRuntime?: {
-          setHoverTile: (point: { x: number; y: number } | null) => void;
-        };
-      }
-    ).__caelumRuntime;
-    runtime?.setHoverTile({ x: 0, y: 0 });
-    runtime?.setHoverTile(null);
-  });
-
+  // The WebGPU canvas presents flat-colored geometry. Probe four world-pixel
+  // points a 10x10 stop marker covers around each tile center: all four must
+  // match the bus color at passenger stops, while a road-access tile can only
+  // carry the thinner (5px) route-line stroke, which never covers all four.
+  const inset = 3;
+  const offsets = [
+    { dx: -inset, dy: -inset },
+    { dx: inset, dy: -inset },
+    { dx: -inset, dy: inset },
+    { dx: inset, dy: inset },
+  ];
+  const probes: PixelProbe[] = anchors.flatMap(({ passenger, road }) =>
+    [passenger, road].flatMap((tile) =>
+      offsets.map((offset) => ({ tile, ...offset })),
+    ),
+  );
   await expect
-    .poll(async () =>
-      page.evaluate(
-        ({ anchors, busColor, size }) => {
-          const trace = (
-            window as unknown as {
-              __caelumCanvasTrace?: { fillRects: CanvasFillRectRecord[] };
-            }
-          ).__caelumCanvasTrace;
-          if (trace === undefined) {
-            throw new Error("Canvas render trace is unavailable");
-          }
-          const stopMarkers = trace.fillRects.filter(
-            (rect) =>
-              rect.fillStyle === busColor &&
-              rect.width === 10 &&
-              rect.height === 10,
+    .poll(async () => {
+      const samples = await sampleTilePixels(page, probes);
+      const bus = busMarkerRgb;
+      const markerBlobAt = (index: number) =>
+        samples
+          .slice(index, index + offsets.length)
+          .every(
+            (sample) =>
+              sample !== null &&
+              Math.abs(sample[0] - bus[0]) <= 8 &&
+              Math.abs(sample[1] - bus[1]) <= 8 &&
+              Math.abs(sample[2] - bus[2]) <= 8,
           );
-          const markerAt = (point: { x: number; y: number }) =>
-            stopMarkers.some(
-              (rect) =>
-                rect.x === point.x * size + 11 &&
-                rect.y === point.y * size + 11,
-            );
-          return {
-            passengerMarkers: anchors.every(({ passenger }) =>
-              markerAt(passenger),
-            ),
-            roadMarkers: anchors.some(({ road }) => markerAt(road)),
-          };
-        },
-        { anchors, busColor: colors.bus, size: tileSize },
-      ),
-    )
+      return {
+        passengerMarkers: anchors.every((_, anchorIndex) =>
+          markerBlobAt(anchorIndex * offsets.length * 2),
+        ),
+        roadMarkers: anchors.some((_, anchorIndex) =>
+          markerBlobAt(anchorIndex * offsets.length * 2 + offsets.length),
+        ),
+      };
+    })
     .toEqual({ passengerMarkers: true, roadMarkers: false });
 }
 

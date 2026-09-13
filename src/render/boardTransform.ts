@@ -1,16 +1,4 @@
-import type { GameMap, GameState, Point } from "../domain/types";
-import type { UiState } from "../ui/uiState";
-import { buildRoadMutationPreview } from "../runtime/runtimeSelectors";
-import type { RoadMutationPreviewView } from "../runtime/types";
-import { renderBuildings } from "./buildingRenderer";
-import { renderCursorBadge } from "./cursorBadge";
-import { renderMap } from "./mapRenderer";
-import {
-  renderOverlays,
-  renderRoadPreviewFeedbackBadge,
-  renderRouteDraftHandleOverlay,
-} from "./overlayRenderer";
-import { renderTransit } from "./transitRenderer";
+import type { GameMap, Point } from "../domain/types";
 
 export const tileSize = 32;
 
@@ -112,33 +100,4 @@ export function canvasToTile(
     point.y < map.height
     ? point
     : null;
-}
-
-export function renderGame(
-  ctx: CanvasRenderingContext2D,
-  state: GameState,
-  ui: UiState,
-): void {
-  ctx.clearRect(0, 0, ctx.canvas.width, ctx.canvas.height);
-  const transform = getBoardTransform(ctx.canvas, state.map);
-  // Compute the road-mutation preview once per frame and share it between
-  // the overlay renderer (changed/skipped tiles) and the feedback badge
-  // (cost / route impacts) to avoid redundant derivations.
-  const roadPreview: RoadMutationPreviewView | null = buildRoadMutationPreview(
-    state,
-    ui,
-  );
-
-  ctx.save();
-  ctx.translate(transform.offsetX, transform.offsetY);
-  ctx.scale(transform.scale, transform.scale);
-  renderMap(ctx, state);
-  renderBuildings(ctx, state);
-  renderOverlays(ctx, state, ui, roadPreview);
-  renderTransit(ctx, state, ui);
-  renderRouteDraftHandleOverlay(ctx, state, ui);
-  ctx.restore();
-
-  renderRoadPreviewFeedbackBadge(ctx, state, ui, transform, roadPreview);
-  renderCursorBadge(ctx, state, ui, transform);
 }

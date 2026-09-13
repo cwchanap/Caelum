@@ -4,7 +4,7 @@ import type {
   TransitPath,
   TripPosition,
 } from "../domain/types";
-import { pointAndTangentAt } from "./pathRenderer";
+import { pointAndTangentAt } from "./pathGeometry";
 
 const GEOMETRY_SAMPLE_SEGMENTS = 32;
 
@@ -314,12 +314,12 @@ interface GeometryDistanceSample {
   distance: number;
 }
 
-interface MeasuredGeometry {
+export interface MeasuredGeometry {
   length: number;
   samples: GeometryDistanceSample[];
 }
 
-function measureGeometry(geometry: PathGeometry): MeasuredGeometry {
+export function measureGeometry(geometry: PathGeometry): MeasuredGeometry {
   const segments =
     geometry.kind === "line"
       ? 1
@@ -345,7 +345,7 @@ function measureGeometry(geometry: PathGeometry): MeasuredGeometry {
   return { length: distance, samples };
 }
 
-function progressAtDistance(
+export function progressAtDistance(
   measured: MeasuredGeometry,
   distance: number,
 ): number {

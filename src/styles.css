@@ -365,6 +365,45 @@ body {
   padding: 0;
 }
 
+/* The runtime mounts/clears only the surface; Svelte siblings survive. */
+.board-surface {
+  position: absolute;
+  inset: 0;
+}
+
+/* Map-local text rides above the GPU canvas in its own shared board box. */
+.map-text-overlay {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+  z-index: 2;
+  font-family: var(--font-mono);
+}
+
+.map-text-item {
+  position: absolute;
+  transform: translate(-50%, calc(-100% - 8px));
+  padding: 2px 6px;
+  background: rgba(17, 24, 32, 0.88);
+  color: #e8eef0;
+  font-size: 12px;
+  line-height: 16px;
+  white-space: nowrap;
+  border-radius: 2px;
+}
+
+.map-text-item[data-kind="routeWaypoint"] {
+  padding: 0;
+  background: none;
+  color: #e8eef0;
+  transform: translate(-50%, -50%);
+}
+
+.map-text-below {
+  transform: translate(-50%, 8px);
+}
+
 /* Frame the canvas with corner crosshairs */
 .shell::before {
   content: "";

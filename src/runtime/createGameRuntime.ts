@@ -2,6 +2,7 @@ import {
   samePoint,
   type AreaKind,
   type BuildingType,
+  type GameState,
   type GameplayRejection,
   type Point,
   type RoundaboutSize,
@@ -45,7 +46,11 @@ import type {
   SandboxResetError,
 } from "./backend";
 import type { CitySaveStore, CitySummary } from "../persistence/citySaveStore";
-import { createCanvasHost } from "./createCanvasHost";
+import {
+  createWebGpuHost,
+  type CreateGameHost,
+  type WebGpuHostContext,
+} from "./createWebGpuHost";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
@@ -118,6 +123,9 @@ export interface CreateGameRuntimeOptions {
    *  milliseconds. Defaults to 50ms to coalesce rapid pointermove events on
    *  Tauri (IPC round-trip per event). Set to 0 to disable debouncing. */
   hoverPreviewDebounceMs?: number;
+  /** Async display-host factory. Production defaults to `createWebGpuHost`;
+   *  Node/jsdom tests inject a fake host so no WebGPU device is required. */
+  createHost?: CreateGameHost;
 }
 
 function nextToolUiState(activeTool: Tool, current = createUiState()): UiState {
@@ -215,7 +223,19 @@ export async function createGameRuntime(
   const now = options.now ?? (() => new Date().toISOString());
   const createCityId =
     options.createCityId ?? (() => globalThis.crypto.randomUUID());
-  let state = applyPresentationUpdate(null, await backend.presentation());
+  // Structural-scene revision: bumped only when an accepted update carries a
+  // scene. All acceptance (initial, dispatch, restore, reset) funnels through
+  // one helper so the display host sees exactly one increment per structural
+  // change; frame-only ticks leave it untouched.
+  let sceneRevision = 0;
+  const acceptPresentationUpdate = (
+    current: GameState | null,
+    update: PresentationUpdate,
+  ): GameState => {
+    if (update.scene !== null) sceneRevision += 1;
+    return applyPresentationUpdate(current, update);
+  };
+  let state = acceptPresentationUpdate(null, await backend.presentation());
   let ui = createUiState();
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
@@ -247,19 +267,19 @@ export async function createGameRuntime(
     sandboxResetError,
   });
 
-  // The canvas surface, 2D context, and requestAnimationFrame loop live in a
+  // The GPU display host, pointer input, and animation cadence live in a
   // dedicated host module. The host reads runtime state through these getters
   // and forwards DOM pointer events back into the controller via callbacks —
   // it never mutates game/UI state directly. `api` is referenced lazily inside
   // the callbacks (the host only invokes them after `mount`/`start`, by which
   // point `api` is initialized), mirroring the prior `frame` -> `api.tick`
-  // forward reference.
-  const canvasHost = createCanvasHost({
+  // forward reference. `onTick` returns the tick promise so the host can keep
+  // its one-in-flight 10 Hz admission gate.
+  const hostContext: WebGpuHostContext = {
     getState: () => state,
     getUi: () => ui,
-    onTick: (deltaSeconds) => {
-      void api.tick(deltaSeconds);
-    },
+    getSceneRevision: () => sceneRevision,
+    onTick: (deltaSeconds) => api.tick(deltaSeconds),
     onTileClick: (point) => {
       api.handleTileClick(point);
     },
@@ -283,7 +303,11 @@ export async function createGameRuntime(
     onDragCancel: () => {
       api.cancelDrag();
     },
-  });
+    onFatalError: (error) => {
+      void failBackend(error);
+    },
+  };
+  const gameHost = await (options.createHost ?? createWebGpuHost)(hostContext);
 
   // Whether the single terminal snapshot has already been delivered to
   // subscribers. `dead` gates all further backend/store mutations and
@@ -309,8 +333,13 @@ export async function createGameRuntime(
   const publish = (): RuntimeSnapshot => {
     const snapshot = getSnapshot();
     if (!dead) {
-      canvasHost.render();
-      canvasHost.syncAnimationLoop();
+      // Sync the animation loop BEFORE rendering: on a running→paused (or
+      // speed-0) transition the loop must cancel its pending rAF first, or
+      // render() coalesces into that rAF and the sync then cancels it — the
+      // final paused frame would never draw. While running, the sync is a
+      // no-op and render() still coalesces (no double-draw).
+      gameHost.syncAnimationLoop();
+      gameHost.render();
       for (const listener of listeners) {
         listener(snapshot);
       }
@@ -331,8 +360,10 @@ export async function createGameRuntime(
   const publishTerminalSnapshot = (): RuntimeSnapshot => {
     if (terminalPublished) return getSnapshot();
     const snapshot = getSnapshot();
-    canvasHost.render();
-    canvasHost.stop();
+    // Stop the loop first, then render once: the stopped host schedules a
+    // one-shot frame draw instead of coalescing into a dead rAF loop.
+    gameHost.stop();
+    gameHost.render();
     for (const listener of listeners) {
       listener(snapshot);
     }
@@ -347,8 +378,10 @@ export async function createGameRuntime(
 
     if (!changed) {
       if (!dead) {
-        canvasHost.render();
-        canvasHost.syncAnimationLoop();
+        // Same sync-before-render order as publish(): a paused/stopped commit
+        // must draw immediately, a running commit must only coalesce.
+        gameHost.syncAnimationLoop();
+        gameHost.render();
       }
       return getSnapshot();
     }
@@ -363,7 +396,7 @@ export async function createGameRuntime(
     if (result.applied) {
       workingSave.markDirty();
     }
-    return commit(applyPresentationUpdate(state, result.update), nextUi);
+    return commit(acceptPresentationUpdate(state, result.update), nextUi);
   };
 
   const clearHoverPreviewTimer = (): void => {
@@ -378,7 +411,7 @@ export async function createGameRuntime(
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
-    if (canvasHost.isRunning()) canvasHost.stop();
+    if (gameHost.isRunning()) gameHost.stop();
   };
 
   const stop = (): void => {
@@ -1076,7 +1109,7 @@ export async function createGameRuntime(
     invalidateRoadPreview();
     activeRouteSaveTokens.clear();
     nextRouteDraftInstanceId = 1;
-    state = applyPresentationUpdate(null, update);
+    state = acceptPresentationUpdate(null, update);
     ui = createUiState();
     backendError = null;
     rejection = null;
@@ -1213,11 +1246,11 @@ export async function createGameRuntime(
     },
     start() {
       if (dead) return;
-      canvasHost.start();
+      gameHost.start();
     },
     stop,
     dispose,
-    isRunning: () => (dead ? false : canvasHost.isRunning()),
+    isRunning: () => (dead ? false : gameHost.isRunning()),
     tick(deltaSeconds) {
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueTick(deltaSeconds);
@@ -1238,7 +1271,7 @@ export async function createGameRuntime(
         sandboxResetError = null;
         backendError = null;
         rejection = null;
-        state = applyPresentationUpdate(null, update);
+        state = acceptPresentationUpdate(null, update);
         ui = createUiState();
         workingSave.markDirty();
         return publish();
@@ -1820,7 +1853,10 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setBudget", budget });
     },
-    mountCanvas: canvasHost.mount,
+    debugCaptureFrame() {
+      return gameHost.captureFrame();
+    },
+    mountCanvas: (host: HTMLElement) => gameHost.mount(host),
   };
 
   return api;

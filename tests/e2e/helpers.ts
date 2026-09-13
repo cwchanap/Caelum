@@ -1,5 +1,5 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { tileSize } from "../../src/render/canvas";
+import { tileSize } from "../../src/render/boardTransform";
 import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import type { SandboxTemplateId } from "../../src/domain/types";
@@ -259,4 +259,86 @@ export async function debugSetBudget(
     }
     return runtime.debugSetBudget(amount);
   }, budget);
+}
+
+export interface PixelProbe {
+  tile: { x: number; y: number };
+  /** World-pixel offsets from the tile center. */
+  dx: number;
+  dy: number;
+}
+
+/**
+ * Samples RGB triples from the rendered gameplay frame at world-space points
+ * expressed as tile + world-pixel offsets. One capture covers every probe;
+ * off-board probes return null.
+ *
+ * The capture comes from `RuntimeTestSeam.debugCaptureFrame`: the host
+ * re-renders the current frame into an offscreen target and reads it back via
+ * copyTextureToBuffer. Canvas-side readbacks (toDataURL, drawImage,
+ * screenshots) cannot be used for this — under software-Vulkan CI Chromium a
+ * WebGPU canvas never reaches the compositor, so they only ever read blank.
+ */
+export async function sampleTilePixels(
+  page: Page,
+  probes: PixelProbe[],
+): Promise<Array<[number, number, number] | null>> {
+  // page.evaluate cannot capture Node-scope imports, so pass board constants
+  // in explicitly.
+  const boardWidth = MAP_WIDTH * tileSize;
+  const boardHeight = MAP_HEIGHT * tileSize;
+  return page.evaluate(
+    async ({ points, size, width, height }) => {
+      const canvas = document.querySelector(
+        "canvas[data-runtime-canvas='true']",
+      );
+      if (!(canvas instanceof HTMLCanvasElement)) {
+        throw new Error("Runtime canvas is unavailable");
+      }
+      const rect = canvas.getBoundingClientRect();
+      if (rect.width === 0 || rect.height === 0) {
+        return points.map(() => null);
+      }
+      const runtime = (
+        window as unknown as {
+          __caelumRuntime?: {
+            debugCaptureFrame?: () => Promise<{
+              width: number;
+              height: number;
+              pixels: Uint8ClampedArray;
+            } | null>;
+          };
+        }
+      ).__caelumRuntime;
+      if (runtime?.debugCaptureFrame === undefined) {
+        throw new Error(
+          "debugCaptureFrame is unavailable on window.__caelumRuntime",
+        );
+      }
+      const shot = await runtime.debugCaptureFrame();
+      if (shot === null || shot.width === 0 || shot.height === 0) {
+        return points.map(() => null);
+      }
+      const scale = Math.min(rect.width / width, rect.height / height);
+      const offsetX = (rect.width - width * scale) / 2;
+      const offsetY = (rect.height - height * scale) / 2;
+      const dpr = shot.width / rect.width;
+      return points.map(({ tile, dx, dy }) => {
+        const cssX = offsetX + ((tile.x + 0.5) * size + dx) * scale;
+        const cssY = offsetY + ((tile.y + 0.5) * size + dy) * scale;
+        const px = Math.round(cssX * dpr);
+        const py = Math.round(cssY * dpr);
+        if (px < 0 || py < 0 || px >= shot.width || py >= shot.height) {
+          return null;
+        }
+        const index = (py * shot.width + px) * 4;
+        return [
+          shot.pixels[index],
+          shot.pixels[index + 1],
+          shot.pixels[index + 2],
+        ] as [number, number, number];
+      });
+    },
+    { points: probes, size: tileSize, width: boardWidth, height: boardHeight },
+  );
 }

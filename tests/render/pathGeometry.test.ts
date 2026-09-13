@@ -1,10 +1,6 @@
 import { expect, it } from "vitest";
 import type { PathGeometry, TripPosition } from "../../src/domain/types";
-import {
-  drawPathGeometry,
-  pointAndTangentAt,
-  pointAt,
-} from "../../src/render/pathRenderer";
+import { pointAndTangentAt, pointAt } from "../../src/render/pathGeometry";
 
 function lineGeometry(): PathGeometry {
   return { kind: "line", from: { x: 1, y: 2 }, to: { x: 3, y: 4 } };
@@ -51,47 +47,19 @@ function geometryEnd(geometry: PathGeometry): TripPosition {
   };
 }
 
-function recordingContext(): CanvasRenderingContext2D & {
-  commandKinds(): string[];
-} {
-  const commands: string[] = [];
-  return {
-    beginPath: () => undefined,
-    moveTo: () => commands.push("moveTo"),
-    lineTo: () => commands.push("lineTo"),
-    quadraticCurveTo: () => commands.push("quadraticCurveTo"),
-    arc: () => commands.push("arc"),
-    stroke: () => commands.push("stroke"),
-    commandKinds: () => commands,
-  } as unknown as CanvasRenderingContext2D & { commandKinds(): string[] };
-}
-
-const identityTileToPixel = (point: TripPosition): TripPosition => point;
-
-it("draws every tagged geometry and samples its point", () => {
-  const ctx = recordingContext();
+it("samples every tagged geometry kind at its endpoints", () => {
   for (const geometry of [
     lineGeometry(),
     quadraticGeometry(),
     arcGeometry(),
   ] satisfies PathGeometry[]) {
-    ctx.beginPath();
-    drawPathGeometry(ctx, geometry, identityTileToPixel);
-    ctx.stroke();
     expect(pointAt(geometry, 0)).toEqual(geometryStart(geometry));
     expect(pointAt(geometry, 1)).toEqual(geometryEnd(geometry));
   }
-  expect(ctx.commandKinds()).toEqual([
-    "moveTo",
-    "lineTo",
-    "stroke",
-    "moveTo",
-    "quadraticCurveTo",
-    "stroke",
-    "moveTo",
-    "arc",
-    "stroke",
-  ]);
+});
+
+it("interpolates a line by its progress", () => {
+  expect(pointAt(lineGeometry(), 0.5)).toEqual({ x: 2, y: 3 });
 });
 
 it("returns position and tangent on a quadratic turn", () => {

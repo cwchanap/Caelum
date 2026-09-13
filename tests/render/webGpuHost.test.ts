@@ -1,0 +1,1427 @@
+import {
+  afterEach,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+  type Mock,
+} from "vitest";
+import type {
+  GameState,
+  RoadPathStep,
+  RouteLegPath,
+  TransitPath,
+  Vehicle,
+} from "../../src/domain/types";
+import {
+  createWebGpuHost,
+  createWebGpuHostWithRenderer,
+  type WebGpuHostContext,
+} from "../../src/runtime/createWebGpuHost";
+import {
+  VEHICLE_INSTANCE_FLOATS,
+  type WebGpuRenderFrame,
+  type WebGpuRenderer,
+} from "../../src/render/webgpu/renderer";
+import { tileSize } from "../../src/render/boardTransform";
+import { createUiState, type UiState } from "../../src/ui/uiState";
+import { createTestGameState } from "../helpers/gameState";
+import { createFakeDevice } from "../helpers/fakeWebGpu";
+
+// jsdom ships no PointerEvent and no Pointer Capture API. The WebGPU host
+// guards those, but to exercise the real DOM event -> callback wiring we stub
+// them so genuine events flow through mount's listeners.
+
+class FakePointerEvent extends Event {
+  button: number;
+  clientX: number;
+  clientY: number;
+  pointerId: number;
+  pointerType: string;
+  constructor(
+    type: string,
+    init: {
+      button?: number;
+      clientX?: number;
+      clientY?: number;
+      pointerId?: number;
+      pointerType?: string;
+      bubbles?: boolean;
+    } = {},
+  ) {
+    super(type, { bubbles: init.bubbles ?? true });
+    this.button = init.button ?? 0;
+    this.clientX = init.clientX ?? 0;
+    this.clientY = init.clientY ?? 0;
+    this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? "mouse";
+  }
+}
+
+interface Stubbed {
+  getBoundingClientRect: typeof Element.prototype.getBoundingClientRect;
+  setPointerCapture: typeof Element.prototype.setPointerCapture;
+  releasePointerCapture: typeof Element.prototype.releasePointerCapture;
+  hasPointerCapture: typeof Element.prototype.hasPointerCapture;
+  pointerEvent: typeof PointerEvent;
+  devicePixelRatio: number | undefined;
+}
+
+let stubs: Stubbed;
+let restore: (() => void) | null = null;
+let rafCallbacks: Array<(timestamp: number) => void>;
+
+beforeEach(() => {
+  stubs = {
+    getBoundingClientRect: Element.prototype.getBoundingClientRect,
+    setPointerCapture: Element.prototype.setPointerCapture,
+    releasePointerCapture: Element.prototype.releasePointerCapture,
+    hasPointerCapture: Element.prototype.hasPointerCapture,
+    pointerEvent: globalThis.PointerEvent,
+    devicePixelRatio: globalThis.devicePixelRatio,
+  };
+
+  rafCallbacks = [];
+  vi.stubGlobal(
+    "requestAnimationFrame",
+    vi.fn((callback: (timestamp: number) => void) => {
+      rafCallbacks.push(callback);
+      return rafCallbacks.length;
+    }),
+  );
+  vi.stubGlobal("cancelAnimationFrame", vi.fn());
+  vi.stubGlobal("PointerEvent", FakePointerEvent);
+  vi.stubGlobal("devicePixelRatio", 1);
+
+  Element.prototype.setPointerCapture = vi.fn() as never;
+  Element.prototype.releasePointerCapture = vi.fn() as never;
+  Element.prototype.hasPointerCapture = vi.fn(() => true) as never;
+
+  restore = () => {
+    Element.prototype.getBoundingClientRect = stubs.getBoundingClientRect;
+    Element.prototype.setPointerCapture = stubs.setPointerCapture as never;
+    Element.prototype.releasePointerCapture =
+      stubs.releasePointerCapture as never;
+    Element.prototype.hasPointerCapture = stubs.hasPointerCapture as never;
+    vi.unstubAllGlobals();
+  };
+});
+
+afterEach(() => {
+  restore?.();
+  restore = null;
+  document.body.innerHTML = "";
+});
+
+interface FakeRenderer {
+  lost: Promise<{ reason?: string; message: string }>;
+  resolveLost(info: { reason?: string; message: string }): void;
+  configure: Mock;
+  resize: Mock;
+  render: Mock;
+  captureFrame: Mock;
+  destroy: Mock;
+  frames: WebGpuRenderFrame[];
+}
+
+function createFakeRenderer(): FakeRenderer {
+  let resolveLost: (info: {
+    reason?: string;
+    message: string;
+  }) => void = () => {};
+  const lost = new Promise<{ reason?: string; message: string }>((resolve) => {
+    resolveLost = resolve;
+  });
+  const frames: WebGpuRenderFrame[] = [];
+  return {
+    lost,
+    resolveLost,
+    configure: vi.fn(),
+    resize: vi.fn(),
+    render: vi.fn((frame: WebGpuRenderFrame) => {
+      frames.push(frame);
+      return { solidBatches: 0, solidVertices: 0, vehicleInstances: 0 };
+    }),
+    captureFrame: vi.fn(async () => ({
+      width: 2,
+      height: 2,
+      pixels: new Uint8ClampedArray(16),
+    })),
+    destroy: vi.fn(),
+    frames,
+  };
+}
+
+interface Fixture {
+  host: ReturnType<typeof createWebGpuHostWithRenderer>;
+  renderer: FakeRenderer;
+  canvas: HTMLCanvasElement;
+  container: HTMLDivElement;
+  cleanup: () => void;
+  callbacks: {
+    onTick: Mock;
+    onTileClick: Mock;
+    onHoverTile: Mock;
+    onRouteDraftContextMenu: Mock;
+    onDragStart: Mock;
+    onDragCurrent: Mock;
+    onDragCommit: Mock;
+    onDragCancel: Mock;
+    onFatalError: Mock;
+  };
+  fireFrame: (timestamp: number) => void;
+  rafCount: () => number;
+  getState: () => GameState;
+  setState: (state: GameState) => void;
+  getUi: () => UiState;
+  setUi: (patch: Partial<UiState>) => void;
+  setSceneRevision: (revision: number) => void;
+}
+
+/** Mount a WebGPU host against a board whose client rect maps 1:1 onto tiles
+ *  (clientX = tileX * tileSize + half), so canvasToTile returns predictable
+ *  tile coordinates. DPR is pinned to 1, so the board transform is identity
+ *  and world pixels map to canvas pixels directly. */
+function createFixture(options?: {
+  state?: GameState;
+  ui?: Partial<UiState>;
+  onDragStartResult?: boolean;
+}): Fixture {
+  let state = options?.state ?? createTestGameState();
+  let ui = { ...createUiState(), ...options?.ui };
+  let sceneRevision = 1;
+
+  const callbacks = {
+    onTick: vi.fn(() => Promise.resolve()),
+    onTileClick: vi.fn(),
+    onHoverTile: vi.fn(),
+    onRouteDraftContextMenu: vi.fn(() => false),
+    onDragStart: vi.fn(() => options?.onDragStartResult ?? true),
+    onDragCurrent: vi.fn(),
+    onDragCommit: vi.fn(),
+    onDragCancel: vi.fn(),
+    onFatalError: vi.fn(),
+  };
+
+  const renderer = createFakeRenderer();
+
+  const ctx: WebGpuHostContext = {
+    getState: () => state,
+    getUi: () => ui,
+    getSceneRevision: () => sceneRevision,
+    ...callbacks,
+  };
+
+  const host = createWebGpuHostWithRenderer(
+    ctx,
+    renderer as unknown as WebGpuRenderer,
+  );
+
+  const boardWidth = state.map.width * tileSize;
+  const boardHeight = state.map.height * tileSize;
+  Element.prototype.getBoundingClientRect = vi.fn(
+    () =>
+      ({
+        width: boardWidth,
+        height: boardHeight,
+        left: 0,
+        top: 0,
+        right: boardWidth,
+        bottom: boardHeight,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect,
+  );
+
+  const container = document.createElement("div");
+  container.style.width = `${boardWidth}px`;
+  container.style.height = `${boardHeight}px`;
+  document.body.appendChild(container);
+
+  const cleanup = host.mount(container);
+  const canvas = container.querySelector("canvas") as HTMLCanvasElement;
+
+  return {
+    host,
+    renderer,
+    canvas,
+    container,
+    cleanup,
+    callbacks,
+    fireFrame: (timestamp: number) => {
+      const pending = [...rafCallbacks];
+      rafCallbacks.length = 0;
+      for (const callback of pending) callback(timestamp);
+    },
+    rafCount: () => rafCallbacks.length,
+    getState: () => state,
+    setState: (next) => {
+      state = next;
+    },
+    getUi: () => ui,
+    setUi: (patch) => {
+      ui = { ...ui, ...patch };
+    },
+    setSceneRevision: (revision) => {
+      sceneRevision = revision;
+    },
+  };
+}
+
+/** Client coordinates for the center of `tile`. */
+const center = (tile: {
+  x: number;
+  y: number;
+}): {
+  clientX: number;
+  clientY: number;
+} => ({
+  clientX: tile.x * tileSize + tileSize / 2,
+  clientY: tile.y * tileSize + tileSize / 2,
+});
+
+function dispatchPointer(
+  canvas: HTMLCanvasElement,
+  type: string,
+  init: {
+    button?: number;
+    clientX?: number;
+    clientY?: number;
+    pointerId?: number;
+    pointerType?: string;
+  } = {},
+) {
+  canvas.dispatchEvent(new FakePointerEvent(type, init));
+}
+
+/** Unpaused, speed-1 state so the host's rAF loop runs. */
+function runningState(overrides: Partial<GameState> = {}): GameState {
+  return { ...createTestGameState(), paused: false, ...overrides };
+}
+
+/** Same state with the simulation running (keeps object identity of the rest). */
+function unpaused(state: GameState): GameState {
+  return { ...state, paused: false };
+}
+
+/** Frame timestamp iterator at 60Hz. */
+function ticker() {
+  let now = 0;
+  return (stepMs = 1000 / 60) => (now += stepMs);
+}
+
+async function flushMicrotasks(): Promise<void> {
+  await Promise.resolve();
+  await Promise.resolve();
+}
+
+describe("createWebGpuHost lifecycle", () => {
+  it("mount creates a canvas, configures the renderer, and cleans up", () => {
+    const { canvas, container, cleanup, renderer, fireFrame } =
+      createFixture();
+
+    expect(canvas).toBeInstanceOf(HTMLCanvasElement);
+    expect(canvas.dataset.runtimeCanvas).toBe("true");
+    expect(container.querySelector("canvas")).toBe(canvas);
+    expect(renderer.configure).toHaveBeenCalledWith(canvas);
+    // The initial mount draw lands on the next frame and fills the backing
+    // store from the board box.
+    fireFrame(0);
+    expect(renderer.resize).toHaveBeenCalledWith(
+      createTestGameState().map.width * tileSize,
+      createTestGameState().map.height * tileSize,
+    );
+    expect(renderer.render).toHaveBeenCalled();
+
+    cleanup();
+
+    expect(container.querySelector("canvas")).toBeNull();
+    expect(container.innerHTML).toBe("");
+  });
+
+  it("click on non-drag tool calls onTileClick", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+    });
+
+    canvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+  });
+
+  it("click on drag tool does not call onTileClick", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    canvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+
+    expect(callbacks.onTileClick).not.toHaveBeenCalled();
+  });
+
+  it("suppresses the browser context menu when route draft undo handles it", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "busRoute" },
+    });
+    callbacks.onRouteDraftContextMenu.mockReturnValue(true);
+
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    canvas.dispatchEvent(event);
+
+    expect(callbacks.onRouteDraftContextMenu).toHaveBeenCalledTimes(1);
+    expect(event.defaultPrevented).toBe(true);
+  });
+
+  it("preserves the browser context menu when the draft declines", () => {
+    const { canvas, callbacks } = createFixture();
+    callbacks.onRouteDraftContextMenu.mockReturnValue(false);
+
+    const event = new MouseEvent("contextmenu", {
+      bubbles: true,
+      cancelable: true,
+    });
+    canvas.dispatchEvent(event);
+
+    expect(event.defaultPrevented).toBe(false);
+  });
+
+  it("pointermove during drag calls onDragCurrent; idle moves update hover", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: {
+        activeTool: "road",
+        drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+      },
+    });
+
+    dispatchPointer(canvas, "pointermove", center({ x: 3, y: 0 }));
+
+    expect(callbacks.onDragCurrent).toHaveBeenCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+
+    dispatchPointer(canvas, "pointerleave", center({ x: 5, y: 0 }));
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
+  });
+
+  it("pointercancel mid-drag commits a mouse stroke and aborts other pointers", () => {
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 7,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 7,
+      pointerType: "mouse",
+    });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDragCancel).not.toHaveBeenCalled();
+
+    callbacks.onDragCommit.mockClear();
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 8,
+      pointerType: "touch",
+    });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
+  });
+
+  it("pointerdown captures and pointerup commits a drag gesture", () => {
+    const setCapture = Element.prototype.setPointerCapture as unknown as {
+      mock: { calls: number[][] };
+    };
+    const releaseCapture = Element.prototype
+      .releasePointerCapture as unknown as { mock: { calls: number[][] } };
+    const { canvas, callbacks } = createFixture({
+      ui: {
+        activeTool: "road",
+        drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 2, y: 0 } },
+      },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 7,
+    });
+    expect(callbacks.onDragStart).toHaveBeenCalledWith({ x: 1, y: 0 });
+    expect(setCapture.mock.calls).toContainEqual([7]);
+
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 7,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(releaseCapture.mock.calls).toContainEqual([7]);
+  });
+
+  it("cleanup removes listeners and clears interaction state", () => {
+    const { canvas, callbacks, cleanup } = createFixture({
+      ui: {
+        activeTool: "road",
+        drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 2, y: 0 } },
+        hoverTile: { x: 2, y: 0 },
+      },
+    });
+
+    cleanup();
+
+    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
+    expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
+
+    callbacks.onTileClick.mockClear();
+    callbacks.onHoverTile.mockClear();
+    callbacks.onDragCancel.mockClear();
+    canvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    dispatchPointer(canvas, "pointermove", center({ x: 4, y: 5 }));
+
+    expect(callbacks.onTileClick).not.toHaveBeenCalled();
+    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+  });
+
+  it("remounting onto a different host tears down the prior mount", () => {
+    const {
+      host,
+      canvas: firstCanvas,
+      container: firstHost,
+      callbacks,
+    } = createFixture({ ui: { activeTool: "inspect" } });
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    host.mount(secondHost);
+
+    expect(firstHost.querySelector("canvas")).toBeNull();
+    const secondCanvas = secondHost.querySelector("canvas");
+    expect(secondCanvas).not.toBeNull();
+    expect(secondCanvas).not.toBe(firstCanvas);
+
+    callbacks.onTileClick.mockClear();
+    firstCanvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    expect(callbacks.onTileClick).not.toHaveBeenCalled();
+
+    secondCanvas!.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+
+    host.stop();
+  });
+
+  it("window resize updates the backing store when no ResizeObserver exists", () => {
+    const { container, canvas, renderer, fireFrame } = createFixture();
+    fireFrame(0);
+
+    // jsdom ships no ResizeObserver, so mount seeds the size from the board
+    // box and listens for window resize. The fallback must read the board
+    // host's content box (the canvas's box is pinned to pixels after the
+    // first paint), so stub the host's rect for the new size.
+    container.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 400,
+          height: 300,
+          left: 0,
+          top: 0,
+          right: 400,
+          bottom: 300,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    globalThis.window?.dispatchEvent(new Event("resize"));
+
+    fireFrame(16);
+    expect(canvas.width).toBe(400);
+    expect(canvas.height).toBe(300);
+    expect(renderer.resize).toHaveBeenCalledWith(400, 300);
+  });
+
+  it("falls back to the layout box until the ResizeObserver entry arrives", () => {
+    // With ResizeObserver present the mount render runs before the first
+    // entry: syncSize must still size the backing store via the layout read.
+    let roCallback: ((entries: unknown[]) => void) | null = null;
+    const observe = vi.fn();
+    class FakeResizeObserver {
+      constructor(callback: (entries: unknown[]) => void) {
+        roCallback = callback;
+      }
+      observe = observe;
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+    const { renderer, canvas, container, host, fireFrame } = createFixture();
+    const state = createTestGameState();
+    expect(observe).toHaveBeenCalledWith(container);
+    fireFrame(0);
+    expect(canvas.width).toBe(state.map.width * tileSize);
+    expect(renderer.resize).toHaveBeenCalledWith(
+      state.map.width * tileSize,
+      state.map.height * tileSize,
+    );
+
+    // An empty entry list is ignored without scheduling a repaint.
+    const drawsBefore = renderer.render.mock.calls.length;
+    roCallback!([]);
+    fireFrame(16);
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore);
+
+    // The first real entry seeds the observed size and repaints; afterwards
+    // syncSize uses the cached box (no per-frame layout read).
+    roCallback!([{ contentRect: { width: 400, height: 300 } }]);
+    fireFrame(33);
+    expect(renderer.resize).toHaveBeenLastCalledWith(400, 300);
+    renderer.resize.mockClear();
+    host.render();
+    fireFrame(50);
+    expect(renderer.resize).toHaveBeenCalledWith(400, 300);
+  });
+
+  it("remounting the same host element reuses the canvas and configuration", () => {
+    const { host, canvas, container, renderer, fireFrame } = createFixture();
+    const configureCalls = renderer.configure.mock.calls.length;
+    fireFrame(0);
+    const drawsBefore = renderer.render.mock.calls.length;
+
+    const teardown = host.mount(container);
+
+    expect(container.querySelector("canvas")).toBe(canvas);
+    expect(renderer.configure.mock.calls.length).toBe(configureCalls);
+    fireFrame(16);
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore + 1);
+    expect(typeof teardown).toBe("function");
+  });
+
+  it("ignores pointerdown outside the board", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", { clientX: -10, clientY: -10 });
+
+    expect(callbacks.onDragStart).not.toHaveBeenCalled();
+  });
+
+  it("ignores a throwing setPointerCapture", () => {
+    (Element.prototype.setPointerCapture as unknown as Mock).mockImplementation(
+      () => {
+        throw new Error("pointer already inactive");
+      },
+    );
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 9,
+    });
+
+    expect(callbacks.onDragStart).toHaveBeenCalledWith({ x: 1, y: 0 });
+  });
+
+  it("start is idempotent", () => {
+    const { host, renderer, rafCount } = createFixture({
+      state: runningState(),
+    });
+
+    host.start();
+    const draws = renderer.render.mock.calls.length;
+    const frames = rafCount();
+    host.start();
+
+    expect(renderer.render.mock.calls.length).toBe(draws);
+    expect(rafCount()).toBe(frames);
+    host.stop();
+  });
+
+  it("ignores a stale animation frame queued before stop", () => {
+    const { host, renderer, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    host.start();
+    // stop() cancels the pending rAF, but a callback already delivered to the
+    // browser's queue can still fire: the host must ignore it.
+    host.stop();
+    const drawsBefore = renderer.render.mock.calls.length;
+
+    fireFrame(1000);
+
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore);
+  });
+
+  it("a stale teardown from a prior mount cannot detach the current mount", () => {
+    const { host, cleanup: staleCleanup, container } = createFixture();
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    host.mount(secondHost);
+    const secondCanvas = secondHost.querySelector("canvas");
+    expect(secondCanvas).not.toBeNull();
+
+    // The first mount's returned cleanup is stale: its detach must bail on
+    // the surface-host mismatch instead of tearing down the live canvas.
+    staleCleanup();
+
+    expect(secondHost.querySelector("canvas")).toBe(secondCanvas);
+    expect(container.querySelector("canvas")).toBeNull();
+  });
+
+  it("captureFrame returns null unmounted and delegates to the renderer mounted", async () => {
+    const { host, renderer, cleanup } = createFixture();
+
+    const shot = await host.captureFrame();
+    expect(renderer.captureFrame).toHaveBeenCalledTimes(1);
+    expect(shot).toEqual({
+      width: 2,
+      height: 2,
+      pixels: expect.any(Uint8ClampedArray),
+    });
+    // Capture prep syncs size/transform exactly like drawFrame.
+    expect(renderer.resize).toHaveBeenCalled();
+
+    cleanup();
+    renderer.captureFrame.mockClear();
+    await expect(host.captureFrame()).resolves.toBeNull();
+    expect(renderer.captureFrame).not.toHaveBeenCalled();
+  });
+});
+
+describe("createWebGpuHost 10 Hz tick admission", () => {
+  it("submits at most 10 host ticks across 1 second of 60Hz rAF", async () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 60; frame += 1) {
+      fireFrame(nextTimestamp());
+      await flushMicrotasks();
+    }
+
+    const deltas = callbacks.onTick.mock.calls.map((call) => call[0] as number);
+    // The pin: never more than one admission per ~100ms window. Float dust at
+    // exact 60Hz can push the tenth window one frame past the second.
+    expect(deltas.length).toBeLessThanOrEqual(10);
+    expect(deltas.length).toBeGreaterThanOrEqual(9);
+    const total = deltas.reduce((sum, delta) => sum + delta, 0);
+    expect(total).toBeGreaterThan(0.85);
+    expect(total).toBeLessThanOrEqual(1.001);
+    for (const delta of deltas) {
+      expect(delta).toBeLessThanOrEqual(0.25);
+    }
+
+    host.stop();
+  });
+
+  it("does not admit a second tick while one is pending", async () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    let release: () => void = () => {};
+    callbacks.onTick.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 12; frame += 1) {
+      fireFrame(nextTimestamp());
+    }
+    // The first admission fired around frame 6; every later frame only
+    // accumulates while the tick is in flight.
+    expect(callbacks.onTick).toHaveBeenCalledTimes(1);
+
+    release();
+    await flushMicrotasks(); // let the admission gate observe completion
+    // The retained ~83ms plus the next frame crosses the 100ms gate (one
+    // more frame absorbs float dust at exact 60Hz).
+    fireFrame(nextTimestamp());
+    fireFrame(nextTimestamp());
+    expect(callbacks.onTick).toHaveBeenCalledTimes(2);
+    const secondDelta = callbacks.onTick.mock.calls[1]![0] as number;
+    expect(secondDelta).toBeLessThanOrEqual(0.25);
+
+    host.stop();
+  });
+
+  it("clamps the submitted delta to 0.25s and retains the overflow", async () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    let release: () => void = () => {};
+    callbacks.onTick.mockImplementation(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    host.start();
+
+    fireFrame(0); // first frame: zero delta, no tick
+    fireFrame(100); // 100ms accumulated -> one 0.1s tick, now pending
+    fireFrame(400); // +250ms (clamped from 300ms), retained while pending
+    fireFrame(416); // +16ms retained
+    expect(callbacks.onTick).toHaveBeenCalledTimes(1);
+    expect(callbacks.onTick).toHaveBeenCalledWith(0.1);
+
+    release();
+    await flushMicrotasks();
+    fireFrame(433); // +17ms -> accumulated ~283ms -> submit one 0.25s tick
+    expect(callbacks.onTick).toHaveBeenCalledTimes(2);
+    expect(callbacks.onTick).toHaveBeenLastCalledWith(0.25);
+
+    host.stop();
+  });
+
+  it("does not catch up stale time across pause/stop", () => {
+    const { host, callbacks, fireFrame, setState, getState } = createFixture({
+      state: runningState(),
+    });
+    host.start();
+
+    fireFrame(0);
+    fireFrame(90); // 90ms accumulated, below the 100ms gate
+    expect(callbacks.onTick).not.toHaveBeenCalled();
+
+    // Pausing stops the loop; resuming must not dump the stale 90ms.
+    setState({ ...getState(), paused: true });
+    host.stop();
+    setState({ ...getState(), paused: false });
+    host.start();
+
+    fireFrame(106);
+    fireFrame(122);
+    expect(callbacks.onTick).not.toHaveBeenCalled();
+
+    host.stop();
+  });
+
+  it("treats a synchronous onTick return as immediately resolved", () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    callbacks.onTick.mockReturnValue(undefined);
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 20; frame += 1) {
+      fireFrame(nextTimestamp());
+    }
+
+    // No promise gate: each ~100ms window admits the next tick. A stuck
+    // in-flight flag would have admitted only the first.
+    expect(callbacks.onTick.mock.calls.length).toBeGreaterThanOrEqual(2);
+    host.stop();
+  });
+
+  it("clears the admission gate when onTick throws", () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    callbacks.onTick.mockImplementation(() => {
+      throw new Error("tick blew up");
+    });
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 20; frame += 1) {
+      fireFrame(nextTimestamp());
+    }
+
+    // The throw must not wedge tickInFlight: later windows still admit.
+    expect(callbacks.onTick.mock.calls.length).toBeGreaterThanOrEqual(2);
+    host.stop();
+  });
+
+  it("clears the admission gate when the tick promise rejects", async () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    callbacks.onTick.mockImplementation(() =>
+      Promise.reject(new Error("tick failed")),
+    );
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 20; frame += 1) {
+      fireFrame(nextTimestamp());
+      await flushMicrotasks();
+    }
+
+    expect(callbacks.onTick.mock.calls.length).toBeGreaterThanOrEqual(2);
+    host.stop();
+  });
+});
+
+describe("createWebGpuHost render coalescing", () => {
+  it("does not draw twice around an accepted running tick", () => {
+    const { host, renderer, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    // mount and start() only schedule repaints; nothing draws until a frame.
+    host.start();
+    expect(renderer.render).not.toHaveBeenCalled();
+
+    fireFrame(16);
+    fireFrame(33);
+    expect(callbacks.onTick).not.toHaveBeenCalled(); // below the gate
+    // Exactly one draw per fired frame; the mount/start repaints coalesce.
+    expect(renderer.render).toHaveBeenCalledTimes(2);
+
+    const drawsBefore = renderer.render.mock.calls.length;
+    host.render(); // rAF owns display: record only, no extra draw
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore);
+
+    fireFrame(50); // next rAF draws the latest state exactly once
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore + 1);
+
+    host.stop();
+  });
+
+  it("repaints on the next frame while paused with no loop scheduled", () => {
+    const { host, renderer, fireFrame } = createFixture();
+
+    host.start(); // paused: no tick loop, but a repaint is queued
+    expect(renderer.render).not.toHaveBeenCalled();
+
+    fireFrame(16);
+    expect(renderer.render).toHaveBeenCalledTimes(1);
+
+    host.render(); // another explicit repaint schedules another frame draw
+    fireFrame(33);
+    expect(renderer.render.mock.calls.length).toBe(2);
+  });
+});
+
+describe("createWebGpuHost observed vehicle history", () => {
+  function straightLeg(
+    from: { x: number; y: number },
+    to: {
+      x: number;
+      y: number;
+    },
+  ): RouteLegPath[] {
+    const step: RoadPathStep = {
+      position: from,
+      enteringHeading: "east",
+      leavingHeading: "east",
+      movement: "straight",
+      geometry: { kind: "line", from, to },
+      travelSeconds: 10,
+    };
+    const path = {
+      kind: "road",
+      steps: [step],
+      totalTravelSeconds: 10,
+    } as TransitPath;
+    return [
+      {
+        fromWaypointId: "a",
+        toWaypointId: "b",
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: path,
+        lastValidPath: null,
+        estimatedSeconds: 10,
+        failureReason: null,
+      },
+    ];
+  }
+
+  function busVehicle(stepProgress: number): Vehicle {
+    return {
+      id: "vehicle-001",
+      mode: "bus",
+      lineId: "route-001",
+      itineraryIndex: 0,
+      pathStepIndex: 0,
+      stepProgress,
+      parkedPosition: null,
+    };
+  }
+
+  function stateWithVehicle(
+    stepProgress: number,
+    overrides: Partial<GameState> = {},
+  ): GameState {
+    const base = createTestGameState();
+    return {
+      ...base,
+      ...overrides,
+      transit: {
+        ...base.transit,
+        stops: ["a", "b"].map((id, index) => ({
+          id,
+          kind: "busStop" as const,
+          status: "present" as const,
+          position: { x: index, y: 0 },
+          platforms: [],
+        })),
+        stations: [],
+        routes: [
+          {
+            id: "route-001",
+            name: "Route 1",
+            color: "#e04f39",
+            stopIds: ["a", "b"],
+            vehicleIds: ["vehicle-001"],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: straightLeg({ x: 2, y: 2 }, { x: 5, y: 2 }),
+            pathBroken: false,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
+          },
+        ],
+        metroLines: [],
+        vehicles: [busVehicle(stepProgress)],
+      },
+    };
+  }
+
+  /** Vehicle instances of the latest frame in world pixels. */
+  function lastVehicleInstances(fx: Fixture): number[][] {
+    const frame = fx.renderer.frames.at(-1)!;
+    const instances = frame.vehicles[0]!.instances;
+    const rows: number[][] = [];
+    for (
+      let offset = 0;
+      offset < instances.length;
+      offset += VEHICLE_INSTANCE_FLOATS
+    ) {
+      rows.push(
+        Array.from(instances.slice(offset, offset + VEHICLE_INSTANCE_FLOATS)),
+      );
+    }
+    return rows;
+  }
+
+  /** Inverse of the identity-DPR board transform: clip -> world pixels. */
+  function clipToWorld(value: number, extent: number): number {
+    return ((value + 1) / 2) * extent;
+  }
+
+  it("interpolates across a 130ms observed interval with rAF alpha", () => {
+    const previous = 0.2;
+    const latest = 0.5;
+    // Observation timestamps come from the host's immediate-draw clock;
+    // pin it before the fixture mounts so the first observation lands at 0.
+    let fakeNow = 0;
+    vi.stubGlobal("performance", { now: () => fakeNow });
+    const fx = createFixture({
+      state: unpaused(stateWithVehicle(previous)),
+    });
+
+    fx.host.start();
+    fx.fireFrame(0); // observes the previous state at rAF-time 0
+
+    fakeNow = 130;
+    fx.setState(unpaused(stateWithVehicle(latest)));
+    fx.fireFrame(130); // observes the latest state; interval = 130ms
+
+    fakeNow = 230;
+    fx.fireFrame(230); // alpha = (230 - 130) / 130 = 100/130
+
+    const rows = lastVehicleInstances(fx);
+    expect(rows.length).toBe(1);
+    const worldX = clipToWorld(rows[0]![0]!, 28 * tileSize);
+    const expectedProgress = previous + (latest - previous) * (100 / 130);
+    const expectedX =
+      (2 + (5 - 2) * expectedProgress) * tileSize + tileSize / 2;
+    expect(worldX).toBeCloseTo(expectedX, 3);
+    // Strictly between the observed cursors: interpolation, not snapping.
+    expect(worldX).toBeGreaterThan(80 + 96 * previous + 0.5);
+    expect(worldX).toBeLessThan(80 + 96 * latest - 0.5);
+
+    fx.host.stop();
+    vi.unstubAllGlobals();
+  });
+
+  it("snaps vehicles to the latest cursor after a scene change", () => {
+    let fakeNow = 0;
+    vi.stubGlobal("performance", { now: () => fakeNow });
+    const fx = createFixture({ state: unpaused(stateWithVehicle(0.2)) });
+    fx.host.start();
+
+    // Scene change: new revision plus new state -> no interpolation base.
+    fx.setSceneRevision(2);
+    fx.setState(unpaused(stateWithVehicle(0.8)));
+    fakeNow = 100;
+    fx.fireFrame(100);
+    // A second frame with no new state: previous stays cleared, so the
+    // vehicle renders at its latest cursor instead of interpolating.
+    fakeNow = 200;
+    fx.fireFrame(200);
+
+    const rows = lastVehicleInstances(fx);
+    expect(rows.length).toBe(1);
+    const worldX = clipToWorld(rows[0]![0]!, 28 * tileSize);
+    const latestX = (2 + 3 * 0.8) * tileSize + tileSize / 2;
+    expect(worldX).toBeCloseTo(latestX, 3);
+
+    fx.host.stop();
+    vi.unstubAllGlobals();
+  });
+
+  it("snaps vehicles while paused or at speed 0", () => {
+    const fx = createFixture({ state: stateWithVehicle(0.5) });
+    const fakeNow = 0;
+    vi.stubGlobal("performance", { now: () => fakeNow });
+    fx.host.start();
+    fx.fireFrame(0); // paused: no loop — the queued repaint draws once
+
+    const rows = lastVehicleInstances(fx);
+    expect(rows.length).toBe(1);
+    const worldX = clipToWorld(rows[0]![0]!, 28 * tileSize);
+    const latestX = (2 + 3 * 0.5) * tileSize + tileSize / 2;
+    expect(worldX).toBeCloseTo(latestX, 3);
+    vi.unstubAllGlobals();
+  });
+});
+
+describe("createWebGpuHost device loss", () => {
+  it("reports unexpected device loss to onFatalError exactly once", async () => {
+    const { renderer, callbacks } = createFixture();
+
+    renderer.resolveLost({ reason: "internal", message: "driver reset" });
+    await flushMicrotasks();
+
+    expect(callbacks.onFatalError).toHaveBeenCalledTimes(1);
+    const error = callbacks.onFatalError.mock.calls[0]![0] as Error;
+    expect(error).toBeInstanceOf(Error);
+    expect(error.message).toBe("WebGPU device lost: driver reset");
+  });
+
+  it("reports device loss without a message", async () => {
+    const { renderer, callbacks } = createFixture();
+
+    renderer.resolveLost({ reason: "unknown", message: "" });
+    await flushMicrotasks();
+
+    expect(callbacks.onFatalError).toHaveBeenCalledTimes(1);
+    const error = callbacks.onFatalError.mock.calls[0]![0] as Error;
+    expect(error.message).toBe("WebGPU device lost");
+  });
+
+  it("ignores the deliberate destroy() loss", async () => {
+    const { renderer, callbacks } = createFixture();
+
+    renderer.resolveLost({ reason: "destroyed", message: "destroyed" });
+    await flushMicrotasks();
+
+    expect(callbacks.onFatalError).not.toHaveBeenCalled();
+  });
+});
+
+describe("createWebGpuHost frame contents", () => {
+  it("draws solid ranges and vehicle instances in painter order", () => {
+    const fx = createFixture({ state: stateWithVehicleForFrame() });
+    fx.host.start();
+    fx.fireFrame(16);
+
+    const frame = fx.renderer.frames.at(-1)!;
+    // Painter order: scene, overlays, routes, draft | vehicles | handles.
+    expect(frame.solids.length).toBe(4);
+    expect(frame.solids.map((batch) => batch.role)).toEqual([
+      "structural",
+      "dynamic",
+      "route",
+      "dynamic",
+    ]);
+    expect(frame.vehicles.length).toBe(1);
+    expect(frame.vehicles[0]!.instances.length).toBe(VEHICLE_INSTANCE_FLOATS);
+    // No route editor open: the over-vehicles range emits an empty batch.
+    expect(frame.overVehicles![0]!.role).toBe("dynamic");
+    expect(frame.overVehicles![0]!.vertices.length).toBe(0);
+
+    fx.host.stop();
+  });
+
+  it("keeps raw world angle and extents and appends clip factors to instances", () => {
+    // Southbound bus: world tangent (0, 1) -> world angle +π/2, passed
+    // through raw (the y-flip lives in the clip factors). Body extents stay
+    // world px. The trailing clip factors come from the identity board at
+    // DPR 1 (28x18 tiles -> 896x576 px): sx = 2/896, sy = -2/576.
+    const fx = createFixture({
+      state: unpaused(stateWithVehicleForFrame({ x: 2, y: 5 })),
+    });
+    fx.host.start();
+    fx.fireFrame(16);
+
+    const instances = fx.renderer.frames.at(-1)!.vehicles[0]!.instances;
+    expect(instances[2]).toBeCloseTo(Math.PI / 2, 5);
+    expect(instances[3]).toBeCloseTo(7, 5);
+    expect(instances[4]).toBeCloseTo(4, 5);
+    expect(instances[5]).toBeCloseTo(2 / 896, 9);
+    expect(instances[6]).toBeCloseTo(-2 / 576, 9);
+
+    fx.host.stop();
+  });
+
+  it("re-tessellates scene/route ranges only when revision or emphasis changes", () => {
+    const fx = createFixture({
+      state: unpaused(stateWithVehicleForFrame()),
+    });
+    fx.host.start();
+    fx.fireFrame(16);
+    fx.fireFrame(33);
+
+    // Frame-only tick: scene and route tessellation are cache hits — the
+    // host caches per revision/emphasis, so content (and uploaded bytes)
+    // stays identical while only vehicles move.
+    const [first, second] = fx.renderer.frames.slice(-2);
+    expect(second!.solids[0]!.vertices).toEqual(first!.solids[0]!.vertices);
+    expect(second!.solids[2]!.vertices).toEqual(first!.solids[2]!.vertices);
+
+    // Emphasis change re-tessellates the committed-route range only.
+    fx.setUi({ selectedRouteId: "route-001" });
+    fx.fireFrame(50);
+    const emphasized = fx.renderer.frames.at(-1)!;
+    expect(emphasized.solids[2]!.vertices).not.toEqual(
+      second!.solids[2]!.vertices,
+    );
+    expect(emphasized.solids[0]!.vertices).toEqual(second!.solids[0]!.vertices);
+
+    // A structural update (map change + revision bump) re-tessellates the
+    // scene range.
+    fx.setSceneRevision(2);
+    const previousState = fx.getState();
+    fx.setState({
+      ...previousState,
+      map: {
+        ...previousState.map,
+        tiles: previousState.map.tiles.map((tile) =>
+          tile.x === 0 && tile.y === 0
+            ? { ...tile, kind: "road" as const }
+            : tile,
+        ),
+      },
+    });
+    fx.fireFrame(66);
+    const last = fx.renderer.frames.at(-1)!;
+    expect(last.solids[0]!.vertices).not.toEqual(
+      emphasized.solids[0]!.vertices,
+    );
+
+    fx.host.stop();
+  });
+});
+
+describe("createWebGpuHost teardown destruction", () => {
+  it("mount teardown destroys the renderer", () => {
+    const { cleanup, renderer, host } = createFixture();
+    host.start();
+    expect(renderer.destroy).not.toHaveBeenCalled();
+
+    cleanup();
+
+    expect(renderer.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("internal remount to a different host detaches without destroying; unmount destroys", () => {
+    const { host, renderer, container } = createFixture();
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    host.mount(secondHost);
+    // Internal re-mount only detaches: the renderer keeps its GPU resources.
+    expect(renderer.destroy).not.toHaveBeenCalled();
+
+    // Mounting back is another internal re-mount, and the cleanup it returns
+    // is the terminal teardown.
+    const cleanup = host.mount(container);
+    expect(renderer.destroy).not.toHaveBeenCalled();
+    cleanup();
+    expect(renderer.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("production host teardown destroys the renderer and the device it created", async () => {
+    // Narrow fake at the navigator.gpu seam: createWebGpuHost requests the
+    // device itself, so teardown must destroy the renderer's buffers, unconfigure
+    // the context, and then destroy the device that host created.
+    const harness = createFakeDevice();
+    vi.stubGlobal("navigator", {
+      gpu: {
+        requestAdapter: async () => ({
+          requestDevice: async () => harness.device,
+        }),
+        getPreferredCanvasFormat: () => "bgra8unorm",
+      },
+    });
+    const fakeContext = {
+      configure: () => {},
+      unconfigure: () => {},
+      getCurrentTexture: () => ({ createView: () => ({}) }),
+    };
+    const getContextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockImplementation(((type: string) =>
+        type === "webgpu" ? fakeContext : null) as never);
+    try {
+      const host = await createWebGpuHost({
+        getState: () => createTestGameState(),
+        getUi: () => createUiState(),
+        getSceneRevision: () => 1,
+        onTick: () => {},
+        onTileClick: () => {},
+        onHoverTile: () => {},
+        onRouteDraftContextMenu: () => false,
+        onDragStart: () => true,
+        onDragCurrent: () => {},
+        onDragCommit: () => {},
+        onDragCancel: () => {},
+        onFatalError: () => {},
+      });
+      const container = document.createElement("div");
+      document.body.appendChild(container);
+      const cleanup = host.mount(container);
+      // configure() created the quad buffer through the owned device.
+      expect(harness.buffers.length).toBeGreaterThan(0);
+      expect(harness.deviceDestroyed).toBe(false);
+
+      cleanup();
+
+      expect(harness.deviceDestroyed).toBe(true);
+      expect(harness.buffers.every((buffer) => buffer.destroyed)).toBe(true);
+    } finally {
+      getContextSpy.mockRestore();
+      vi.unstubAllGlobals();
+    }
+  });
+});
+
+describe("createWebGpuHost gpu bootstrap", () => {
+  const noopContext: WebGpuHostContext = {
+    getState: () => createTestGameState(),
+    getUi: () => createUiState(),
+    getSceneRevision: () => 1,
+    onTick: () => {},
+    onTileClick: () => {},
+    onHoverTile: () => {},
+    onRouteDraftContextMenu: () => false,
+    onDragStart: () => true,
+    onDragCurrent: () => {},
+    onDragCommit: () => {},
+    onDragCancel: () => {},
+    onFatalError: () => {},
+  };
+
+  it("rejects when navigator.gpu is unavailable", async () => {
+    vi.stubGlobal("navigator", {});
+    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+      "WebGPU is unavailable in this browser",
+    );
+  });
+
+  it("rejects when the adapter request returns null", async () => {
+    vi.stubGlobal("navigator", {
+      gpu: { requestAdapter: async () => null },
+    });
+    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+      "WebGPU adapter unavailable",
+    );
+  });
+});
+
+function stateWithVehicleForFrame(
+  to: { x: number; y: number } = { x: 5, y: 2 },
+): GameState {
+  const base = createTestGameState();
+  const vehicle: Vehicle = {
+    id: "vehicle-001",
+    mode: "bus",
+    lineId: "route-001",
+    itineraryIndex: 0,
+    pathStepIndex: 0,
+    stepProgress: 0,
+    parkedPosition: null,
+  };
+  const step: RoadPathStep = {
+    position: { x: 2, y: 2 },
+    enteringHeading: "east",
+    leavingHeading: "east",
+    movement: "straight",
+    geometry: { kind: "line", from: { x: 2, y: 2 }, to },
+    travelSeconds: 10,
+  };
+  return {
+    ...base,
+    transit: {
+      ...base.transit,
+      stops: ["a", "b"].map((id, index) => ({
+        id,
+        kind: "busStop" as const,
+        status: "present" as const,
+        position: { x: index, y: 0 },
+        platforms: [],
+      })),
+      stations: [],
+      routes: [
+        {
+          id: "route-001",
+          name: "Route 1",
+          color: "#e04f39",
+          stopIds: ["a", "b"],
+          vehicleIds: [vehicle.id],
+          active: true,
+          pattern: "loop" as const,
+          revision: 1,
+          legs: [
+            {
+              fromWaypointId: "a",
+              toWaypointId: "b",
+              direction: "loop",
+              kind: "service",
+              status: "connected",
+              currentPath: {
+                kind: "road",
+                steps: [step],
+                totalTravelSeconds: 10,
+              } as TransitPath,
+              lastValidPath: null,
+              estimatedSeconds: 10,
+              failureReason: null,
+            },
+          ],
+          pathBroken: false,
+          targetHeadwaySeconds: null,
+          serviceMetrics: null,
+        },
+      ],
+      metroLines: [],
+      vehicles: [vehicle],
+    },
+  };
+}
