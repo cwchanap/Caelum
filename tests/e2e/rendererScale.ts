@@ -64,7 +64,7 @@ function median(samples: number[]): number {
 
 // Production render path: the real WebGPU host (rAF frame drawing, batch
 // caches, vehicle interpolation/encode) over the real renderer, driven one
-// synchronous render() per frame. No runtime/backend orchestration — the
+// render() per delivered frame. No runtime/backend orchestration — the
 // benchmark measures render cost, not app boot. The renderer is wrapped only
 // to record the last frame's encode stats.
 let state: GameState | null = null;
@@ -114,6 +114,25 @@ const benchContext: WebGpuHostContext = {
   },
 };
 const gameHost = createWebGpuHostWithRenderer(benchContext, recordingRenderer);
+
+// GameHost.render() coalesces by design — it schedules one rAF and returns,
+// so back-to-back calls in one task time only the coalescing guard, never a
+// frame. Wrap rAF to stamp each delivered host callback's CPU cost
+// (drawFrame: batch build + encode + submit) and drive every sample through
+// one real frame: render() then await the next delivered frame.
+const realRequestAnimationFrame = window.requestAnimationFrame.bind(window);
+let lastFrameCpuMs = 0;
+window.requestAnimationFrame = (callback: FrameRequestCallback): number =>
+  realRequestAnimationFrame((timestamp) => {
+    const start = performance.now();
+    callback(timestamp);
+    lastFrameCpuMs = performance.now() - start;
+  });
+const nextDeliveredFrame = (): Promise<void> =>
+  new Promise((resolve) => {
+    realRequestAnimationFrame(() => resolve());
+  });
+
 state = buildRenderScaleState(200);
 sceneRevision = 1;
 gameHost.mount(host);
@@ -129,12 +148,13 @@ window.__caelumRendererScale = {
     }
     for (let index = 0; index < WARMUP_FRAMES; index += 1) {
       gameHost.render();
+      await nextDeliveredFrame();
     }
     const samples: number[] = [];
     for (let index = 0; index < frames; index += 1) {
-      const start = performance.now();
       gameHost.render();
-      samples.push(performance.now() - start);
+      await nextDeliveredFrame();
+      samples.push(lastFrameCpuMs);
     }
     await device.queue.onSubmittedWorkDone();
     return {

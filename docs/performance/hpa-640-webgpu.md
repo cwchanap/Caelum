@@ -12,11 +12,14 @@ timing threshold and no decision gate.
 
 The benchmark page (`tests/e2e/rendererScale.html`) mounts the production
 WebGPU host (`createWebGpuHostWithRenderer` over the real `createWebGpuRenderer`)
-in a fixed 1280×800 board host and drives one synchronous host render per
+in a fixed 1280×800 board host and drives one host `render()` per delivered
 frame over the renderer-only scale fixture (`buildRenderScaleState`, a
 renderer stress proxy composed from the shared test helpers — no Rust
-simulation actors), warming up 30 frames and measuring 120 frames of CPU
-encode+submit time. The spec skips in normal E2E.
+simulation actors). `GameHost.render()` coalesces into one frame-scheduled
+draw, so each sample awaits the next delivered frame and the CPU timing wraps
+the host's frame callback itself (batch build + encode + submit), never the
+scheduling call — warming up 30 frames and measuring 120 frames. The spec
+skips in normal E2E.
 
 ## Reference environment
 
@@ -58,18 +61,20 @@ batches (scene + routes; overlay ranges are empty with no active overlay).
 
 | Fixture       | Vehicles | Frames | Median CPU ms | p95 CPU ms | Encoded instances | Vehicle upload bytes | Solid draws | Vehicle draws | Queue completed |
 | ------------- | -------: | -----: | ------------: | ---------: | ----------------: | -------------------: | ----------: | ------------: | --------------: |
-| vehicles-200  |      200 |    120 |         0.200 |      1.200 |               200 |                8,800 |           2 |             1 |             yes |
-| vehicles-5000 |    5,000 |    120 |         0.500 |      1.400 |             5,000 |              220,000 |           2 |             1 |             yes |
+| vehicles-200  |      200 |    120 |         0.500 |      0.600 |               200 |                8,800 |           2 |             1 |             yes |
+| vehicles-5000 |    5,000 |    120 |        83.150 |    142.100 |             5,000 |              220,000 |           2 |             1 |             yes |
 
 ## Contract interpretation
 
 - The 200-vehicle row reflects the current gameplay scale; the 5,000-vehicle row
   is the ceiling the batched renderer must hold without changing the
   `PresentationUpdate`/`GameSnapshot` contracts.
-- At the 5,000-vehicle ceiling the WebGPU path holds 0.500 ms median CPU
-  encode+submit (Canvas: 6.000 ms) with a single instanced draw and one
-  220,000-byte vehicle upload per frame; p95 includes batch-cache-rebuild and
-  compiler jitter on the software-GL headless run.
+- At the 5,000-vehicle ceiling the WebGPU path holds a single instanced draw
+  and one 220,000-byte vehicle upload per frame. The measured frame callback
+  is ~83 ms median CPU on this software-GL headless stack (Canvas: 6.000 ms,
+  also software-rasterized) — absolute values reflect the software reference
+  environment, not a hardware GPU run; p95 includes batch-cache-rebuild and
+  compiler jitter.
 
 ## Production cutover gates (Task 4)
 
