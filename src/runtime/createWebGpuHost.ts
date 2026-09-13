@@ -594,20 +594,27 @@ export function createWebGpuHostWithRenderer(
 
     const handlePointerLeave = (): void => {
       // With pointer capture active the browser suppresses leave mid-drag, so
-      // reaching here means the cursor left the board outside a drag — or the
-      // host engine lacks pointer capture, in which case an abandoned drag
-      // should still be cancelled rather than left dangling.
+      // reaching here mid-drag means the engine lacks or lost capture. The
+      // stroke was already previewed, so commit it at its last tracked tile
+      // rather than discarding the gesture.
       if (ctx.getUi().drag !== null) {
-        ctx.onDragCancel();
+        ctx.onDragCommit();
       }
       ctx.onHoverTile(null);
     };
 
     const handlePointerCancel = (event: PointerEvent): void => {
-      // pointercancel is a genuine interruption (OS stealing the pointer, etc.)
-      // and still fires under pointer capture: tear the drag down explicitly.
+      // pointercancel means the browser interrupted the stream (window focus
+      // loss, OS-level steal) — it still fires under pointer capture and is
+      // not a deliberate abort. A mouse stroke was fully previewed, so commit
+      // it; touch/pen cancels can be a genuine UA gesture takeover, so those
+      // still abort the drag.
       if (ctx.getUi().drag !== null) {
-        ctx.onDragCancel();
+        if (event.pointerType === "mouse") {
+          ctx.onDragCommit();
+        } else {
+          ctx.onDragCancel();
+        }
       }
       ctx.onHoverTile(null);
       releasePointer(event.pointerId);
