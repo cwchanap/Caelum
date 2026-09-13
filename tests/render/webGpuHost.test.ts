@@ -807,6 +807,52 @@ describe("createWebGpuHost 10 Hz tick admission", () => {
     host.stop();
   });
 
+  it("drains retained backlog at no more than one admission per 100ms", async () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    let release: () => void = () => {};
+    callbacks.onTick.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          release = resolve;
+        }),
+    );
+    host.start();
+
+    fireFrame(0);
+    fireFrame(100); // admits the held tick: 100ms accumulated, now in flight
+    expect(callbacks.onTick).toHaveBeenCalledTimes(1);
+
+    // The tick stays in flight while ~500ms of wall time accumulates.
+    fireFrame(300);
+    fireFrame(500);
+    fireFrame(600);
+    expect(callbacks.onTick).toHaveBeenCalledTimes(1);
+
+    release();
+    await flushMicrotasks(); // let the admission gate observe completion
+    // Later ticks resolve immediately: only the wall-clock admission paces
+    // the drain, never the in-flight gate.
+    fireFrame(616); // backlog crosses both gates -> one 0.25s tick, ~266ms kept
+    expect(callbacks.onTick).toHaveBeenCalledTimes(2);
+    expect(callbacks.onTick).toHaveBeenLastCalledWith(0.25);
+    await flushMicrotasks();
+
+    // The retained backlog still exceeds 100ms on the very next frame, but
+    // admissions may not run at rAF rate while draining.
+    fireFrame(633);
+    fireFrame(650);
+    fireFrame(666);
+    fireFrame(683);
+    fireFrame(700);
+    expect(callbacks.onTick).toHaveBeenCalledTimes(2);
+    fireFrame(716); // 100ms since the second admission -> the third tick
+    expect(callbacks.onTick).toHaveBeenCalledTimes(3);
+
+    host.stop();
+  });
+
   it("does not catch up stale time across pause/stop", () => {
     const { host, callbacks, fireFrame, setState, getState } = createFixture({
       state: runningState(),
