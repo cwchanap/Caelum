@@ -38,6 +38,7 @@ class FakePointerEvent extends Event {
   clientX: number;
   clientY: number;
   pointerId: number;
+  pointerType: string;
   constructor(
     type: string,
     init: {
@@ -45,6 +46,7 @@ class FakePointerEvent extends Event {
       clientX?: number;
       clientY?: number;
       pointerId?: number;
+      pointerType?: string;
       bubbles?: boolean;
     } = {},
   ) {
@@ -53,6 +55,7 @@ class FakePointerEvent extends Event {
     this.clientX = init.clientX ?? 0;
     this.clientY = init.clientY ?? 0;
     this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? "mouse";
   }
 }
 
@@ -287,6 +290,7 @@ function dispatchPointer(
     clientX?: number;
     clientY?: number;
     pointerId?: number;
+    pointerType?: string;
   } = {},
 ) {
   canvas.dispatchEvent(new FakePointerEvent(type, init));
@@ -401,8 +405,41 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onHoverTile).not.toHaveBeenCalled();
 
     dispatchPointer(canvas, "pointerleave", center({ x: 5, y: 0 }));
-    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
     expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
+  });
+
+  it("pointercancel mid-drag commits a mouse stroke and aborts other pointers", () => {
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 7,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 7,
+      pointerType: "mouse",
+    });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDragCancel).not.toHaveBeenCalled();
+
+    callbacks.onDragCommit.mockClear();
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 8,
+      pointerType: "touch",
+    });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
   });
 
   it("pointerdown captures and pointerup commits a drag gesture", () => {

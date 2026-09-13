@@ -25,6 +25,7 @@ class FakePointerEvent extends Event {
   clientX: number;
   clientY: number;
   pointerId: number;
+  pointerType: string;
   constructor(
     type: string,
     init: {
@@ -32,6 +33,7 @@ class FakePointerEvent extends Event {
       clientX?: number;
       clientY?: number;
       pointerId?: number;
+      pointerType?: string;
       bubbles?: boolean;
     } = {},
   ) {
@@ -40,6 +42,7 @@ class FakePointerEvent extends Event {
     this.clientX = init.clientX ?? 0;
     this.clientY = init.clientY ?? 0;
     this.pointerId = init.pointerId ?? 1;
+    this.pointerType = init.pointerType ?? "mouse";
   }
 }
 
@@ -317,7 +320,7 @@ describe("runtime canvas pointer wiring", () => {
     expect(tileKind(runtime, 1, 0)).toBe("road");
   });
 
-  it("tears the drag down on pointercancel and releases capture", async () => {
+  it("commits an in-flight mouse drag on pointercancel and releases capture", async () => {
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
     const { runtime, canvas } = await mount();
@@ -328,17 +331,45 @@ describe("runtime canvas pointer wiring", () => {
       pointerId: 5,
     });
     dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    // A mouse pointercancel is a browser-side interruption (window focus
+    // loss, OS steal), not a user abort — the previewed stroke commits.
     dispatch(canvas, "pointercancel", {
       ...center({ x: 3, y: 0 }),
       pointerId: 5,
+      pointerType: "mouse",
     });
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
-    expect(tileKind(runtime, 1, 0)).toBe("empty");
+    await flushRuntime();
+    expect(tileKind(runtime, 1, 0)).toBe("road");
     expect(releaseCapture.mock.calls).toContainEqual([5]);
   });
 
-  it("cancels an in-flight drag and clears hover on pointerleave", async () => {
+  it("tears a non-mouse drag down on pointercancel without committing", async () => {
+    const { runtime, canvas } = await mount();
+    runtime.setTool("road");
+
+    dispatch(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 6,
+      pointerType: "touch",
+    });
+    dispatch(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerType: "touch",
+    });
+    dispatch(canvas, "pointercancel", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 6,
+      pointerType: "touch",
+    });
+
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+    await flushRuntime();
+    expect(tileKind(runtime, 1, 0)).toBe("empty");
+  });
+
+  it("commits an in-flight drag and clears hover on pointerleave", async () => {
     const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
@@ -347,11 +378,14 @@ describe("runtime canvas pointer wiring", () => {
 
     expect(runtime.getSnapshot().ui.drag).not.toBeNull();
 
+    // Only reachable mid-drag when pointer capture is missing or lost; the
+    // previewed stroke still commits at its last tracked tile.
     dispatch(canvas, "pointerleave", center({ x: 5, y: 0 }));
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(runtime.getSnapshot().ui.hoverTile).toBeNull();
-    expect(tileKind(runtime, 1, 0)).toBe("empty");
+    await flushRuntime();
+    expect(tileKind(runtime, 1, 0)).toBe("road");
   });
 
   it("clears the hover tile on pointerleave when no drag is active", async () => {
