@@ -360,8 +360,8 @@ export async function createGameRuntime(
   const publishTerminalSnapshot = (): RuntimeSnapshot => {
     if (terminalPublished) return getSnapshot();
     const snapshot = getSnapshot();
-    // Stop the loop first, then render once: the stopped host draws
-    // synchronously instead of coalescing into a dead rAF loop.
+    // Stop the loop first, then render once: the stopped host schedules a
+    // one-shot frame draw instead of coalescing into a dead rAF loop.
     gameHost.stop();
     gameHost.render();
     for (const listener of listeners) {

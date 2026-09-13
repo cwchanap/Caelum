@@ -319,13 +319,16 @@ async function flushMicrotasks(): Promise<void> {
 
 describe("createWebGpuHost lifecycle", () => {
   it("mount creates a canvas, configures the renderer, and cleans up", () => {
-    const { canvas, container, cleanup, renderer } = createFixture();
+    const { canvas, container, cleanup, renderer, fireFrame } =
+      createFixture();
 
     expect(canvas).toBeInstanceOf(HTMLCanvasElement);
     expect(canvas.dataset.runtimeCanvas).toBe("true");
     expect(container.querySelector("canvas")).toBe(canvas);
     expect(renderer.configure).toHaveBeenCalledWith(canvas);
-    // The initial mount draw fills the backing store from the board box.
+    // The initial mount draw lands on the next frame and fills the backing
+    // store from the board box.
+    fireFrame(0);
     expect(renderer.resize).toHaveBeenCalledWith(
       createTestGameState().map.width * tileSize,
       createTestGameState().map.height * tileSize,
@@ -529,7 +532,8 @@ describe("createWebGpuHost lifecycle", () => {
   });
 
   it("window resize updates the backing store when no ResizeObserver exists", () => {
-    const { container, canvas, renderer } = createFixture();
+    const { container, canvas, renderer, fireFrame } = createFixture();
+    fireFrame(0);
 
     // jsdom ships no ResizeObserver, so mount seeds the size from the board
     // box and listens for window resize. The fallback must read the board
@@ -551,6 +555,7 @@ describe("createWebGpuHost lifecycle", () => {
     );
     globalThis.window?.dispatchEvent(new Event("resize"));
 
+    fireFrame(16);
     expect(canvas.width).toBe(400);
     expect(canvas.height).toBe(300);
     expect(renderer.resize).toHaveBeenCalledWith(400, 300);
@@ -570,38 +575,44 @@ describe("createWebGpuHost lifecycle", () => {
     }
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
 
-    const { renderer, canvas, container, host } = createFixture();
+    const { renderer, canvas, container, host, fireFrame } = createFixture();
     const state = createTestGameState();
     expect(observe).toHaveBeenCalledWith(container);
+    fireFrame(0);
     expect(canvas.width).toBe(state.map.width * tileSize);
     expect(renderer.resize).toHaveBeenCalledWith(
       state.map.width * tileSize,
       state.map.height * tileSize,
     );
 
-    // An empty entry list is ignored without a redraw.
+    // An empty entry list is ignored without scheduling a repaint.
     const drawsBefore = renderer.render.mock.calls.length;
     roCallback!([]);
+    fireFrame(16);
     expect(renderer.render.mock.calls.length).toBe(drawsBefore);
 
     // The first real entry seeds the observed size and repaints; afterwards
     // syncSize uses the cached box (no per-frame layout read).
     roCallback!([{ contentRect: { width: 400, height: 300 } }]);
+    fireFrame(33);
     expect(renderer.resize).toHaveBeenLastCalledWith(400, 300);
     renderer.resize.mockClear();
     host.render();
+    fireFrame(50);
     expect(renderer.resize).toHaveBeenCalledWith(400, 300);
   });
 
   it("remounting the same host element reuses the canvas and configuration", () => {
-    const { host, canvas, container, renderer } = createFixture();
+    const { host, canvas, container, renderer, fireFrame } = createFixture();
     const configureCalls = renderer.configure.mock.calls.length;
+    fireFrame(0);
     const drawsBefore = renderer.render.mock.calls.length;
 
     const teardown = host.mount(container);
 
     expect(container.querySelector("canvas")).toBe(canvas);
     expect(renderer.configure.mock.calls.length).toBe(configureCalls);
+    fireFrame(16);
     expect(renderer.render.mock.calls.length).toBe(drawsBefore + 1);
     expect(typeof teardown).toBe("function");
   });
@@ -635,13 +646,17 @@ describe("createWebGpuHost lifecycle", () => {
   });
 
   it("start is idempotent", () => {
-    const { host, renderer } = createFixture({ state: runningState() });
+    const { host, renderer, rafCount } = createFixture({
+      state: runningState(),
+    });
 
     host.start();
     const draws = renderer.render.mock.calls.length;
+    const frames = rafCount();
     host.start();
 
     expect(renderer.render.mock.calls.length).toBe(draws);
+    expect(rafCount()).toBe(frames);
     host.stop();
   });
 
@@ -873,18 +888,18 @@ describe("createWebGpuHost render coalescing", () => {
     const { host, renderer, callbacks, fireFrame } = createFixture({
       state: runningState(),
     });
-    // mount draws once; start() draws once more (no rAF scheduled yet).
+    // mount and start() only schedule repaints; nothing draws until a frame.
     host.start();
-    expect(renderer.render).toHaveBeenCalledTimes(2);
+    expect(renderer.render).not.toHaveBeenCalled();
 
     fireFrame(16);
     fireFrame(33);
     expect(callbacks.onTick).not.toHaveBeenCalled(); // below the gate
-    // mount + start + one draw per frame.
-    expect(renderer.render).toHaveBeenCalledTimes(4);
+    // Exactly one draw per fired frame; the mount/start repaints coalesce.
+    expect(renderer.render).toHaveBeenCalledTimes(2);
 
     const drawsBefore = renderer.render.mock.calls.length;
-    host.render(); // rAF owns display: record only, no synchronous draw
+    host.render(); // rAF owns display: record only, no extra draw
     expect(renderer.render.mock.calls.length).toBe(drawsBefore);
 
     fireFrame(50); // next rAF draws the latest state exactly once
@@ -893,16 +908,18 @@ describe("createWebGpuHost render coalescing", () => {
     host.stop();
   });
 
-  it("repaints immediately while paused with no rAF scheduled", () => {
-    const { host, renderer, rafCount } = createFixture();
+  it("repaints on the next frame while paused with no loop scheduled", () => {
+    const { host, renderer, fireFrame } = createFixture();
 
-    host.start(); // paused by default: no rAF, no ticks
-    expect(rafCount()).toBe(0);
-    expect(renderer.render).toHaveBeenCalled();
+    host.start(); // paused: no tick loop, but a repaint is queued
+    expect(renderer.render).not.toHaveBeenCalled();
 
-    const drawsBefore = renderer.render.mock.calls.length;
-    host.render();
-    expect(renderer.render.mock.calls.length).toBe(drawsBefore + 1);
+    fireFrame(16);
+    expect(renderer.render).toHaveBeenCalledTimes(1);
+
+    host.render(); // another explicit repaint schedules another frame draw
+    fireFrame(33);
+    expect(renderer.render.mock.calls.length).toBe(2);
   });
 });
 
@@ -1027,7 +1044,8 @@ describe("createWebGpuHost observed vehicle history", () => {
       state: unpaused(stateWithVehicle(previous)),
     });
 
-    fx.host.start(); // observes the previous state at fake-now 0
+    fx.host.start();
+    fx.fireFrame(0); // observes the previous state at rAF-time 0
 
     fakeNow = 130;
     fx.setState(unpaused(stateWithVehicle(latest)));
@@ -1082,7 +1100,7 @@ describe("createWebGpuHost observed vehicle history", () => {
     const fakeNow = 0;
     vi.stubGlobal("performance", { now: () => fakeNow });
     fx.host.start();
-    expect(fx.rafCount()).toBe(0); // paused: no loop
+    fx.fireFrame(0); // paused: no loop — the queued repaint draws once
 
     const rows = lastVehicleInstances(fx);
     expect(rows.length).toBe(1);
@@ -1131,6 +1149,7 @@ describe("createWebGpuHost frame contents", () => {
   it("draws solid ranges and vehicle instances in painter order", () => {
     const fx = createFixture({ state: stateWithVehicleForFrame() });
     fx.host.start();
+    fx.fireFrame(16);
 
     const frame = fx.renderer.frames.at(-1)!;
     // Painter order: scene, overlays, routes, draft | vehicles | handles.
@@ -1159,6 +1178,7 @@ describe("createWebGpuHost frame contents", () => {
       state: unpaused(stateWithVehicleForFrame({ x: 2, y: 5 })),
     });
     fx.host.start();
+    fx.fireFrame(16);
 
     const instances = fx.renderer.frames.at(-1)!.vehicles[0]!.instances;
     expect(instances[2]).toBeCloseTo(Math.PI / 2, 5);

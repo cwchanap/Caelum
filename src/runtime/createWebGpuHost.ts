@@ -108,6 +108,10 @@ export function createWebGpuHostWithRenderer(
   let canvas: HTMLCanvasElement | null = null;
   let running = false;
   let animationFrameId: number | null = null;
+  // A one-shot repaint scheduled outside the animation loop; drawEpoch
+  // invalidates a callback that outlived its cancellation.
+  let pendingDrawId: number | null = null;
+  let drawEpoch = 0;
   let lastFrameTime: number | null = null;
   /** CSS box size from ResizeObserver (avoids getBoundingClientRect every frame). */
   let observedCssWidth = 0;
@@ -362,6 +366,16 @@ export function createWebGpuHostWithRenderer(
       cancelAnimationFrame(animationFrameId);
       animationFrameId = null;
     }
+    if (
+      pendingDrawId !== null &&
+      typeof cancelAnimationFrame === "function"
+    ) {
+      cancelAnimationFrame(pendingDrawId);
+      pendingDrawId = null;
+    }
+    // A callback already delivered to the frame queue can still fire after
+    // cancellation; the epoch check makes it a no-op.
+    drawEpoch += 1;
     lastFrameTime = null;
     // No stale catch-up across pause/stop/remount boundaries.
     accumulatedMs = 0;
@@ -415,11 +429,29 @@ export function createWebGpuHostWithRenderer(
       return;
     }
     // While an active rAF owns display it draws the latest state next frame;
-    // drawing here too would double-render around every accepted tick.
-    if (animationFrameId !== null) {
+    // drawing here too would double-render around every accepted tick. The
+    // same applies to explicit repaints: callers can fire many per frame
+    // (a pointermove commit each), so they coalesce into one frame-scheduled
+    // draw instead of blocking input handling on a full frame build+submit.
+    if (animationFrameId !== null || pendingDrawId !== null) {
       return;
     }
-    drawFrame(performance.now());
+    if (typeof requestAnimationFrame !== "function") {
+      drawFrame(performance.now());
+      return;
+    }
+    const epoch = drawEpoch;
+    pendingDrawId = requestAnimationFrame((timestamp) => {
+      pendingDrawId = null;
+      if (
+        epoch !== drawEpoch ||
+        canvas === null ||
+        animationFrameId !== null
+      ) {
+        return;
+      }
+      drawFrame(timestamp);
+    });
   };
 
   const frame = (timestamp: number): void => {
@@ -453,8 +485,11 @@ export function createWebGpuHostWithRenderer(
 
     running = true;
     lastFrameTime = null;
-    render();
+    // Sync before render: on a paused start the sync pass must not cancel
+    // the repaint render() schedules; while running, render() coalesces
+    // into the loop's rAF.
     syncAnimationLoop();
+    render();
   };
 
   const stop = (): void => {
@@ -489,6 +524,10 @@ export function createWebGpuHostWithRenderer(
     host.innerHTML = "";
     canvas = nextCanvas;
     host.appendChild(canvas);
+    // Draws are frame-scheduled, but canvasToTile scales client coordinates
+    // by the backing store: size it now so a pointer event landing before
+    // the first frame still maps to the right tile.
+    syncSize(nextCanvas);
 
     const handleClick = (event: MouseEvent): void => {
       if (DRAG_TOOLS.has(ctx.getUi().activeTool)) {
@@ -668,10 +707,11 @@ export function createWebGpuHostWithRenderer(
     canvas.addEventListener("pointerup", handlePointerUp);
     canvas.addEventListener("pointerleave", handlePointerLeave);
     canvas.addEventListener("pointercancel", handlePointerCancel);
-    render();
     // Prior detach cancels any pending rAF while leaving `running` true.
     // Reschedule so a remount of an already-started host keeps ticking.
+    // Sync before render so the repaint coalesces into a live loop's rAF.
     syncAnimationLoop();
+    render();
 
     function detach(): void {
       if (surfaceHost !== host || canvas === null) {
