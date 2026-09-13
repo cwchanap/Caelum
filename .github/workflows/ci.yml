@@ -129,10 +129,21 @@ jobs:
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
 
+      # The e2e suite asserts on presented WebGPU canvas pixels. On GPU-less
+      # Linux runners that needs a real software Vulkan ICD for Chromium's
+      # Vulkan init (mesa-vulkan-drivers / lavapipe — the libvulkan1 loader
+      # alone gives Dawn nothing to bind) and an X display: headless Linux
+      # never presents WebGPU canvas frames, so playwright.config.ts runs
+      # headed on Linux and this job provides the display via xvfb-run.
+      - name: Install Vulkan drivers and Xvfb
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+
       - name: Run Playwright tests
         id: playwright
         continue-on-error: true
-        run: bun run test:e2e
+        run: xvfb-run -a -s "-screen 0 1600x1200x24" bun run test:e2e
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}
