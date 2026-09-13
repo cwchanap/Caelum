@@ -39,11 +39,25 @@ export interface WebGpuRenderStats {
   vehicleInstances: number;
 }
 
+/** A rendered frame read back to CPU memory: row-tight RGBA8 in device
+ *  pixels, top-left origin — the same layout ImageData exposes. */
+export interface WebGpuCapturedFrame {
+  width: number;
+  height: number;
+  pixels: Uint8ClampedArray;
+}
+
 export interface WebGpuRenderer {
   readonly lost: Promise<WebGpuDeviceLoss>;
   configure(canvas: HTMLCanvasElement): void;
   resize(width: number, height: number): void;
   render(frame: WebGpuRenderFrame): WebGpuRenderStats;
+  /** Renders `frame` into an offscreen target at the resize() pixel size and
+   *  reads it back via copyTextureToBuffer + mapAsync. Unlike canvas-side
+   *  readbacks (toDataURL, drawImage, screenshots), this does not depend on
+   *  canvas presentation reaching the compositor, which headless/software-
+   *  Vulkan Chromium never completes. Returns null while unconfigured. */
+  captureFrame(frame: WebGpuRenderFrame): Promise<WebGpuCapturedFrame | null>;
   destroy(): void;
 }
 
@@ -56,6 +70,14 @@ const CLEAR_COLOR: GPUColor = { r: 0.8431, g: 0.8863, b: 0.8745, a: 1 };
 // types only, so the numeric flags are used directly (no runtime globals in
 // node/jsdom tests).
 const VERTEX_COPY_DST_USAGE = 0x20 | 0x08;
+// GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.COPY_SRC — capture target.
+const CAPTURE_TEXTURE_USAGE = 0x10 | 0x01;
+// GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST — readback staging buffer.
+const READBACK_BUFFER_USAGE = 0x01 | 0x08;
+// GPUMapMode.READ for mapAsync.
+const MAP_READ_MODE = 0x0001;
+// copyTextureToBuffer requires each row padded to a 256-byte multiple.
+const COPY_BYTES_PER_ROW_ALIGNMENT = 256;
 
 const SOLID_SHADER = /* wgsl */ `
 struct VertexOutput {
@@ -218,10 +240,10 @@ export function createWebGpuRenderer(
 
   const buffers = new Map<BufferRole, BufferEntry>();
   let context: GPUCanvasContext | null = null;
-  // Pixel size of the configured canvas, owned via resize(); consumed by later
-  // cutover tasks for viewport scaling of CPU-tessellated geometry.
-  let _width = 0;
-  let _height = 0;
+  // Pixel size of the configured canvas, owned via resize(); also the size of
+  // the offscreen captureFrame target.
+  let pixelWidth = 0;
+  let pixelHeight = 0;
 
   function ensureQuadBuffer(): void {
     quadBuffer?.destroy();
@@ -248,6 +270,107 @@ export function createWebGpuRenderer(
     return buffer;
   }
 
+  /** Encodes one frame's clear pass + all draws against `view`. Both the
+   *  presented-canvas path and the offscreen capture path run through this so
+   *  a captured frame is byte-identical to what the canvas pass encodes. */
+  const encodeFrame = (
+    frame: WebGpuRenderFrame,
+    view: GPUTextureView,
+  ): { encoder: GPUCommandEncoder; stats: WebGpuRenderStats } => {
+    if (quadBuffer === null) {
+      throw new Error("WebGPU renderer is not configured");
+    }
+    const quad = quadBuffer;
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view,
+          clearValue: CLEAR_COLOR,
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    });
+
+    // Grow each role buffer once per frame, before any writes, to the
+    // frame's total role size — never shrinks across frames.
+    const roleTotals = new Map<BufferRole, number>();
+    const totalize = (batches: readonly WebGpuSolidBatch[]): void => {
+      for (const batch of batches) {
+        if (batch.vertices.length === 0) continue;
+        roleTotals.set(
+          batch.role,
+          (roleTotals.get(batch.role) ?? 0) + batch.vertices.length,
+        );
+      }
+    };
+    totalize(frame.solids);
+    totalize(frame.overVehicles ?? []);
+    for (const [role, floats] of roleTotals) {
+      acquireBuffer(role, floats);
+    }
+
+    let solidBatches = 0;
+    let solidVertices = 0;
+    const roleOffsets = new Map<BufferRole, number>();
+    const drawSolids = (batches: readonly WebGpuSolidBatch[]): void => {
+      pass.setPipeline(solidPipeline);
+      for (const batch of batches) {
+        if (batch.vertices.length === 0) {
+          continue;
+        }
+        // Ordered ranges of one role share its buffer at byte offsets
+        // (float counts are always 4-byte aligned).
+        const start = roleOffsets.get(batch.role) ?? 0;
+        const buffer = buffers.get(batch.role)!.buffer;
+        device.queue.writeBuffer(
+          buffer,
+          start * 4,
+          batch.vertices,
+          0,
+          batch.vertices.length,
+        );
+        pass.setVertexBuffer(0, buffer, start * 4);
+        pass.draw(batch.vertices.length / SOLID_VERTEX_FLOATS);
+        roleOffsets.set(batch.role, start + batch.vertices.length);
+        solidBatches += 1;
+        solidVertices += batch.vertices.length;
+      }
+    };
+
+    drawSolids(frame.solids);
+
+    let vehicleInstances = 0;
+    const instanceFloats = frame.vehicles.reduce(
+      (sum, batch) => sum + batch.instances.length,
+      0,
+    );
+    if (instanceFloats > 0) {
+      const combined = new Float32Array(instanceFloats);
+      let offset = 0;
+      for (const batch of frame.vehicles) {
+        combined.set(batch.instances, offset);
+        offset += batch.instances.length;
+      }
+      const buffer = acquireBuffer("vehicle", instanceFloats);
+      device.queue.writeBuffer(buffer, 0, combined, 0, combined.length);
+      vehicleInstances = instanceFloats / VEHICLE_INSTANCE_FLOATS;
+      pass.setPipeline(vehiclePipeline);
+      pass.setVertexBuffer(0, quad, 0);
+      pass.setVertexBuffer(1, buffer, 0);
+      pass.draw(6, vehicleInstances);
+    }
+
+    drawSolids(frame.overVehicles ?? []);
+
+    pass.end();
+    return {
+      encoder,
+      stats: { solidBatches, solidVertices, vehicleInstances },
+    };
+  };
+
   return {
     lost,
     configure(canvas: HTMLCanvasElement): void {
@@ -260,100 +383,70 @@ export function createWebGpuRenderer(
       ensureQuadBuffer();
     },
     resize(nextWidth: number, nextHeight: number): void {
-      _width = nextWidth;
-      _height = nextHeight;
+      pixelWidth = nextWidth;
+      pixelHeight = nextHeight;
     },
     render(frame: WebGpuRenderFrame): WebGpuRenderStats {
-      if (!context || quadBuffer === null) {
+      if (!context) {
         throw new Error("WebGPU renderer is not configured");
       }
-      const quad = quadBuffer;
-      const encoder = device.createCommandEncoder();
-      const pass = encoder.beginRenderPass({
-        colorAttachments: [
-          {
-            view: context.getCurrentTexture().createView(),
-            clearValue: CLEAR_COLOR,
-            loadOp: "clear",
-            storeOp: "store",
-          },
-        ],
-      });
-
-      // Grow each role buffer once per frame, before any writes, to the
-      // frame's total role size — never shrinks across frames.
-      const roleTotals = new Map<BufferRole, number>();
-      const totalize = (batches: readonly WebGpuSolidBatch[]): void => {
-        for (const batch of batches) {
-          if (batch.vertices.length === 0) continue;
-          roleTotals.set(
-            batch.role,
-            (roleTotals.get(batch.role) ?? 0) + batch.vertices.length,
-          );
-        }
-      };
-      totalize(frame.solids);
-      totalize(frame.overVehicles ?? []);
-      for (const [role, floats] of roleTotals) {
-        acquireBuffer(role, floats);
-      }
-
-      let solidBatches = 0;
-      let solidVertices = 0;
-      const roleOffsets = new Map<BufferRole, number>();
-      const drawSolids = (batches: readonly WebGpuSolidBatch[]): void => {
-        pass.setPipeline(solidPipeline);
-        for (const batch of batches) {
-          if (batch.vertices.length === 0) {
-            continue;
-          }
-          // Ordered ranges of one role share its buffer at byte offsets
-          // (float counts are always 4-byte aligned).
-          const start = roleOffsets.get(batch.role) ?? 0;
-          const buffer = buffers.get(batch.role)!.buffer;
-          device.queue.writeBuffer(
-            buffer,
-            start * 4,
-            batch.vertices,
-            0,
-            batch.vertices.length,
-          );
-          pass.setVertexBuffer(0, buffer, start * 4);
-          pass.draw(batch.vertices.length / SOLID_VERTEX_FLOATS);
-          roleOffsets.set(batch.role, start + batch.vertices.length);
-          solidBatches += 1;
-          solidVertices += batch.vertices.length;
-        }
-      };
-
-      drawSolids(frame.solids);
-
-      let vehicleInstances = 0;
-      const instanceFloats = frame.vehicles.reduce(
-        (sum, batch) => sum + batch.instances.length,
-        0,
+      const { encoder, stats } = encodeFrame(
+        frame,
+        context.getCurrentTexture().createView(),
       );
-      if (instanceFloats > 0) {
-        const combined = new Float32Array(instanceFloats);
-        let offset = 0;
-        for (const batch of frame.vehicles) {
-          combined.set(batch.instances, offset);
-          offset += batch.instances.length;
-        }
-        const buffer = acquireBuffer("vehicle", instanceFloats);
-        device.queue.writeBuffer(buffer, 0, combined, 0, combined.length);
-        vehicleInstances = instanceFloats / VEHICLE_INSTANCE_FLOATS;
-        pass.setPipeline(vehiclePipeline);
-        pass.setVertexBuffer(0, quad, 0);
-        pass.setVertexBuffer(1, buffer, 0);
-        pass.draw(6, vehicleInstances);
-      }
-
-      drawSolids(frame.overVehicles ?? []);
-
-      pass.end();
       device.queue.submit([encoder.finish()]);
-      return { solidBatches, solidVertices, vehicleInstances };
+      return stats;
+    },
+    async captureFrame(
+      frame: WebGpuRenderFrame,
+    ): Promise<WebGpuCapturedFrame | null> {
+      if (quadBuffer === null || pixelWidth === 0 || pixelHeight === 0) {
+        return null;
+      }
+      const width = pixelWidth;
+      const height = pixelHeight;
+      const target = device.createTexture({
+        size: { width, height },
+        format,
+        usage: CAPTURE_TEXTURE_USAGE,
+      });
+      const { encoder } = encodeFrame(frame, target.createView());
+      const bytesPerRow =
+        Math.ceil((width * 4) / COPY_BYTES_PER_ROW_ALIGNMENT) *
+        COPY_BYTES_PER_ROW_ALIGNMENT;
+      const readback = device.createBuffer({
+        size: bytesPerRow * height,
+        usage: READBACK_BUFFER_USAGE,
+      });
+      encoder.copyTextureToBuffer(
+        { texture: target },
+        { buffer: readback, bytesPerRow },
+        { width, height },
+      );
+      device.queue.submit([encoder.finish()]);
+      await readback.mapAsync(MAP_READ_MODE);
+      const mapped = new Uint8Array(readback.getMappedRange());
+      const pixels = new Uint8ClampedArray(width * height * 4);
+      for (let row = 0; row < height; row += 1) {
+        pixels.set(
+          mapped.subarray(row * bytesPerRow, row * bytesPerRow + width * 4),
+          row * width * 4,
+        );
+      }
+      readback.unmap();
+      readback.destroy();
+      target.destroy();
+      // bgra8unorm is the preferred canvas format on most platforms; the
+      // readback arrives BGRA-ordered, so normalize to RGBA8 (ImageData
+      // layout) for callers.
+      if (format.startsWith("bgra")) {
+        for (let i = 0; i < pixels.length; i += 4) {
+          const red = pixels[i];
+          pixels[i] = pixels[i + 2];
+          pixels[i + 2] = red;
+        }
+      }
+      return { width, height, pixels };
     },
     destroy(): void {
       for (const entry of buffers.values()) {

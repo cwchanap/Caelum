@@ -3,8 +3,28 @@
 
 export interface FakeBuffer {
   size: number;
+  usage: number;
   destroyed: boolean;
+  /** Backing store surfaced by getMappedRange(); tests fill it via onMapRead. */
+  backing: Uint8Array;
   destroy(): void;
+  mapAsync(mode: number): Promise<void>;
+  getMappedRange(): ArrayBuffer;
+  unmap(): void;
+}
+
+export interface FakeTexture {
+  descriptor: GPUTextureDescriptor;
+  destroyed: boolean;
+  createView(): object;
+  destroy(): void;
+}
+
+export interface FakeTextureCopy {
+  bytesPerRow: number | undefined;
+  buffer: FakeBuffer;
+  width: number | undefined;
+  height: number | undefined;
 }
 
 export interface FakePipeline {
@@ -39,6 +59,11 @@ export interface FakeHarness {
   shaders: string[];
   writes: FakeWrite[];
   passes: FakePass[];
+  textures: FakeTexture[];
+  copies: FakeTextureCopy[];
+  /** Invoked inside mapAsync so a test can stage the buffer's mapped bytes
+   *  before the renderer reads them. */
+  onMapRead?: (buffer: FakeBuffer) => void;
   device: GPUDevice;
   /** True once the host teardown destroyed the device it created. */
   deviceDestroyed: boolean;
@@ -52,6 +77,8 @@ export function createFakeDevice(): FakeHarness {
     shaders: [],
     writes: [],
     passes: [],
+    textures: [],
+    copies: [],
     device: null as unknown as GPUDevice,
     deviceDestroyed: false,
     resolveLost: () => {},
@@ -66,10 +93,19 @@ export function createFakeDevice(): FakeHarness {
   const makeBuffer = (descriptor: GPUBufferDescriptor): FakeBuffer => {
     const buffer: FakeBuffer = {
       size: descriptor.size,
+      usage: descriptor.usage ?? 0,
       destroyed: false,
+      backing: new Uint8Array(descriptor.size),
       destroy() {
         buffer.destroyed = true;
       },
+      async mapAsync() {
+        harness.onMapRead?.(buffer);
+      },
+      getMappedRange(): ArrayBuffer {
+        return buffer.backing.buffer as ArrayBuffer;
+      },
+      unmap() {},
     };
     harness.buffers.push(buffer);
     return buffer;
@@ -89,6 +125,18 @@ export function createFakeDevice(): FakeHarness {
       harness.shaders.push(descriptor.code);
       return {};
     },
+    createTexture(descriptor: GPUTextureDescriptor) {
+      const texture: FakeTexture = {
+        descriptor,
+        destroyed: false,
+        createView: () => ({}),
+        destroy() {
+          texture.destroyed = true;
+        },
+      };
+      harness.textures.push(texture);
+      return texture;
+    },
     createCommandEncoder() {
       const encoderPasses: FakePass[] = [];
       return {
@@ -107,6 +155,18 @@ export function createFakeDevice(): FakeHarness {
             },
             end() {},
           } as unknown as GPURenderPassEncoder;
+        },
+        copyTextureToBuffer(
+          _source: { texture: FakeTexture },
+          destination: { buffer: FakeBuffer; bytesPerRow?: number },
+          size: { width?: number; height?: number },
+        ) {
+          harness.copies.push({
+            buffer: destination.buffer,
+            bytesPerRow: destination.bytesPerRow,
+            width: size.width,
+            height: size.height,
+          });
         },
         finish() {
           return { passes: encoderPasses };

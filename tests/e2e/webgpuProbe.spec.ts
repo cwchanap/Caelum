@@ -59,106 +59,87 @@ test("Chromium exposes a working WebGPU device", async ({ page }) => {
   );
 });
 
-interface PresentedProbeResult {
+interface ReadbackProbeResult {
   ok: boolean;
   reason?: string;
+  format?: string;
   center?: [number, number, number];
-  rafGapMs?: number;
-  visibility?: string;
-  pngBytes?: number;
 }
 
-// The routes.spec.ts pixel oracles read presented frames through
-// canvas.toDataURL; this probes that exact path (present → PNG encode →
-// decode → getImageData) plus rAF liveness, which the software-Vulkan CI
-// stack can break independently of adapter/device setup.
-test("presented WebGPU canvas frames are readable via toDataURL", async ({
+// The routes.spec.ts pixel oracles read frames through
+// RuntimeTestSeam.debugCaptureFrame (offscreen render → copyTextureToBuffer →
+// mapAsync), because canvas-side readbacks stay blank under software-Vulkan
+// CI Chromium. This probes that exact path end to end: a clear pass into a
+// COPY_SRC texture must read back the clear color.
+test("offscreen WebGPU frames are readable via copyTextureToBuffer", async ({
   page,
 }) => {
   await page.goto("/");
 
-  const result = await page.evaluate(
-    async (): Promise<PresentedProbeResult> => {
-      const gpu = navigator.gpu;
-      if (!gpu) return { ok: false, reason: "navigator.gpu is unavailable" };
-      const adapter = await gpu.requestAdapter();
-      if (!adapter)
-        return { ok: false, reason: "requestAdapter returned null" };
-      const device = await adapter.requestDevice();
+  const result = await page.evaluate(async (): Promise<ReadbackProbeResult> => {
+    const gpu = navigator.gpu;
+    if (!gpu) return { ok: false, reason: "navigator.gpu is unavailable" };
+    const adapter = await gpu.requestAdapter();
+    if (!adapter) return { ok: false, reason: "requestAdapter returned null" };
+    const device = await adapter.requestDevice();
 
-      const canvas = document.createElement("canvas");
-      canvas.width = 64;
-      canvas.height = 64;
-      document.body.appendChild(canvas);
-      const context = canvas.getContext("webgpu");
-      if (!context) {
-        return { ok: false, reason: 'getContext("webgpu") returned null' };
-      }
-      context.configure({
-        device,
-        format: gpu.getPreferredCanvasFormat(),
-        alphaMode: "opaque",
-      });
+    const format = gpu.getPreferredCanvasFormat();
+    const width = 64;
+    const height = 64;
+    const target = device.createTexture({
+      size: { width, height },
+      format,
+      usage: 0x10 | 0x01, // RENDER_ATTACHMENT | COPY_SRC
+    });
+    const bytesPerRow = Math.ceil((width * 4) / 256) * 256;
+    const readback = device.createBuffer({
+      size: bytesPerRow * height,
+      usage: 0x01 | 0x08, // MAP_READ | COPY_DST
+    });
 
-      const encoder = device.createCommandEncoder();
-      encoder
-        .beginRenderPass({
-          colorAttachments: [
-            {
-              view: context.getCurrentTexture().createView(),
-              clearValue: { r: 0.84, g: 0.35, b: 0.22, a: 1 },
-              loadOp: "clear",
-              storeOp: "store",
-            },
-          ],
-        })
-        .end();
-      device.queue.submit([encoder.finish()]);
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: target.createView(),
+          clearValue: { r: 0.84, g: 0.35, b: 0.22, a: 1 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    });
+    pass.end();
+    encoder.copyTextureToBuffer(
+      { texture: target },
+      { buffer: readback, bytesPerRow },
+      { width, height },
+    );
+    device.queue.submit([encoder.finish()]);
 
-      // Present lands at the next frame boundary; two rAFs also detect a
-      // stalled frame loop under the software rasterizer.
-      const raf = () =>
-        new Promise<number>((resolve) => requestAnimationFrame(resolve));
-      const t0 = performance.now();
-      await raf();
-      await raf();
-      const rafGapMs = performance.now() - t0;
+    await readback.mapAsync(0x0001); // GPUMapMode.READ
+    const mapped = new Uint8Array(readback.getMappedRange());
+    const mid = (Math.floor(height / 2) * bytesPerRow +
+      Math.floor(width / 2) * 4) as number;
+    const b0 = mapped[mid];
+    const b1 = mapped[mid + 1];
+    const b2 = mapped[mid + 2];
+    readback.unmap();
+    readback.destroy();
+    target.destroy();
+    device.destroy();
 
-      const png = canvas.toDataURL();
-      const image = new Image();
-      const decoded = new Promise<void>((resolve, reject) => {
-        image.onload = () => resolve();
-        image.onerror = () => reject(new Error("canvas PNG decode failed"));
-      });
-      image.src = png;
-      await decoded;
-      const probe = document.createElement("canvas");
-      probe.width = image.width;
-      probe.height = image.height;
-      const ctx = probe.getContext("2d");
-      if (!ctx) return { ok: false, reason: "2D probe context is unavailable" };
-      ctx.drawImage(image, 0, 0);
-      const mid =
-        (Math.floor(probe.height / 2) * probe.width +
-          Math.floor(probe.width / 2)) *
-        4;
-      const data = ctx.getImageData(0, 0, probe.width, probe.height).data;
-      device.destroy();
-      return {
-        ok: true,
-        center: [data[mid], data[mid + 1], data[mid + 2]],
-        rafGapMs,
-        visibility: document.visibilityState,
-        pngBytes: png.length,
-      };
-    },
-  );
+    // bgra8unorm readbacks arrive B,G,R,A — normalize to R,G,B.
+    const center: [number, number, number] = format.startsWith("bgra")
+      ? [b2, b1, b0]
+      : [b0, b1, b2];
+    return { ok: true, format, center };
+  });
 
   // Diagnostics land in the job log so a CI-only failure names the broken
-  // link (blank snapshot vs. stalled rAF vs. hidden page).
-  console.log(`presented-probe ${JSON.stringify(result)}`);
+  // link.
+  console.log(`readback-probe ${JSON.stringify(result)}`);
   if (!result.ok) {
-    throw new Error(`Presented-frame probe failed: ${result.reason}`);
+    throw new Error(`Readback probe failed: ${result.reason}`);
   }
   // clear color (0.84, 0.35, 0.22) → ~(214, 89, 56)
   expect(result.center?.[0]).toBeGreaterThan(190);

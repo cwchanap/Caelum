@@ -129,12 +129,13 @@ jobs:
       - name: Install Chromium
         run: bunx playwright install --with-deps chromium
 
-      # The e2e suite asserts on presented WebGPU canvas pixels. On GPU-less
-      # Linux runners that needs a real software Vulkan ICD for Chromium's
-      # Vulkan init (mesa-vulkan-drivers / lavapipe — the libvulkan1 loader
-      # alone gives Dawn nothing to bind) and an X display: headless Linux
-      # never presents WebGPU canvas frames, so playwright.config.ts runs
-      # headed on Linux and this job provides the display via xvfb-run.
+      # The e2e suite drives a real WebGPU device: scene/route batches, the
+      # instanced vehicle draw, and the offscreen copyTextureToBuffer frame
+      # readback the pixel oracles use (canvas-side readbacks never resolve
+      # under software Vulkan). GPU-less Linux runners need a software Vulkan
+      # ICD for Chromium's Vulkan init (mesa-vulkan-drivers / lavapipe — the
+      # libvulkan1 loader alone gives Dawn nothing to bind) and an X display:
+      # playwright.config.ts runs headed on Linux, displayed via xvfb-run.
       - name: Install Vulkan drivers and Xvfb
         run: |
           sudo apt-get update

@@ -2208,6 +2208,7 @@ describe("Game Runtime", () => {
           stop: () => {
             running = false;
           },
+          captureFrame: async () => null,
           syncAnimationLoop: () => {
             const state = context.getState();
             const animate =

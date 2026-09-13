@@ -392,6 +392,58 @@ describe("WebGpuRenderer", () => {
     expect(unconfigured()).toBe(true);
   });
 
+  it("captureFrame returns row-tight RGBA8 pixels from the padded readback", async () => {
+    const harness = createFakeDevice();
+    const renderer = createWebGpuRenderer(harness.device, "bgra8unorm");
+
+    // Unconfigured (no quad buffer) and configured-but-unsized both return
+    // null rather than capturing an empty target.
+    expect(
+      await renderer.captureFrame({ solids: [], vehicles: [] }),
+    ).toBeNull();
+    renderer.configure(createFakeCanvas().canvas);
+    expect(
+      await renderer.captureFrame({ solids: [], vehicles: [] }),
+    ).toBeNull();
+
+    renderer.resize(2, 2);
+    // Stage a 2x2 BGRA image at the 256-byte-aligned copy stride.
+    harness.onMapRead = (buffer) => {
+      buffer.backing.set([10, 20, 30, 255, 40, 50, 60, 255], 0);
+      buffer.backing.set([70, 80, 90, 255, 100, 110, 120, 255], 256);
+    };
+    const shot = await renderer.captureFrame({ solids: [], vehicles: [] });
+
+    expect(shot).not.toBeNull();
+    expect(shot!.width).toBe(2);
+    expect(shot!.height).toBe(2);
+    // Padding stripped and BGRA normalized to RGBA (ImageData order).
+    expect(Array.from(shot!.pixels)).toEqual([
+      30, 20, 10, 255, 60, 50, 40, 255, 90, 80, 70, 255, 120, 110, 100, 255,
+    ]);
+
+    // The capture target is a RENDER_ATTACHMENT|COPY_SRC texture whose rows
+    // copy out at the 256-aligned stride; both it and the readback buffer are
+    // released afterwards.
+    const texture = harness.textures[0]!;
+    expect(texture.descriptor.usage).toBe(0x10 | 0x01);
+    expect(harness.copies[0]!.bytesPerRow).toBe(256);
+    expect(texture.destroyed).toBe(true);
+    expect(harness.buffers.at(-1)!.destroyed).toBe(true);
+  });
+
+  it("captureFrame keeps rgba8unorm pixels in channel order", async () => {
+    const harness = createFakeDevice();
+    const renderer = createWebGpuRenderer(harness.device, "rgba8unorm");
+    renderer.configure(createFakeCanvas().canvas);
+    renderer.resize(1, 1);
+    harness.onMapRead = (buffer) => {
+      buffer.backing.set([30, 20, 10, 255], 0);
+    };
+    const shot = await renderer.captureFrame({ solids: [], vehicles: [] });
+    expect(Array.from(shot!.pixels)).toEqual([30, 20, 10, 255]);
+  });
+
   describe("gameplay painter order and caching", () => {
     function gameplayState(): GameState {
       let state = createTestGameState();

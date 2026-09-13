@@ -20,6 +20,7 @@ export interface FakeGameHost extends GameHost {
   stop: Mock;
   syncAnimationLoop: Mock;
   isRunning: Mock;
+  captureFrame: Mock;
 }
 
 const created: FakeGameHost[] = [];
@@ -38,6 +39,7 @@ export const createFakeGameHost: CreateGameHost = async (context) => {
     }),
     syncAnimationLoop: vi.fn(),
     isRunning: vi.fn(() => running),
+    captureFrame: vi.fn(async () => null),
   };
   created.push(host);
   return host;
@@ -56,6 +58,7 @@ export function createNoopWebGpuRenderer(): WebGpuRenderer {
     configure: () => {},
     resize: () => {},
     render: () => ({ solidBatches: 0, solidVertices: 0, vehicleInstances: 0 }),
+    captureFrame: async () => null,
     destroy: () => {},
   };
 }

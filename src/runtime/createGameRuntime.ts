@@ -1853,6 +1853,9 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setBudget", budget });
     },
+    debugCaptureFrame() {
+      return gameHost.captureFrame();
+    },
     mountCanvas: (host: HTMLElement) => gameHost.mount(host),
   };
 
