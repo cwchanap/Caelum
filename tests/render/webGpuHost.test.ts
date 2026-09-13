@@ -117,6 +117,7 @@ interface FakeRenderer {
   configure: Mock;
   resize: Mock;
   render: Mock;
+  captureFrame: Mock;
   destroy: Mock;
   frames: WebGpuRenderFrame[];
 }
@@ -139,6 +140,11 @@ function createFakeRenderer(): FakeRenderer {
       frames.push(frame);
       return { solidBatches: 0, solidVertices: 0, vehicleInstances: 0 };
     }),
+    captureFrame: vi.fn(async () => ({
+      width: 2,
+      height: 2,
+      pixels: new Uint8ClampedArray(16),
+    })),
     destroy: vi.fn(),
     frames,
   };
@@ -512,6 +518,146 @@ describe("createWebGpuHost lifecycle", () => {
     expect(canvas.height).toBe(300);
     expect(renderer.resize).toHaveBeenCalledWith(400, 300);
   });
+
+  it("falls back to the layout box until the ResizeObserver entry arrives", () => {
+    // With ResizeObserver present the mount render runs before the first
+    // entry: syncSize must still size the backing store via the layout read.
+    let roCallback: ((entries: unknown[]) => void) | null = null;
+    const observe = vi.fn();
+    class FakeResizeObserver {
+      constructor(callback: (entries: unknown[]) => void) {
+        roCallback = callback;
+      }
+      observe = observe;
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+    const { renderer, canvas, container, host } = createFixture();
+    const state = createTestGameState();
+    expect(observe).toHaveBeenCalledWith(container);
+    expect(canvas.width).toBe(state.map.width * tileSize);
+    expect(renderer.resize).toHaveBeenCalledWith(
+      state.map.width * tileSize,
+      state.map.height * tileSize,
+    );
+
+    // An empty entry list is ignored without a redraw.
+    const drawsBefore = renderer.render.mock.calls.length;
+    roCallback!([]);
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore);
+
+    // The first real entry seeds the observed size and repaints; afterwards
+    // syncSize uses the cached box (no per-frame layout read).
+    roCallback!([{ contentRect: { width: 400, height: 300 } }]);
+    expect(renderer.resize).toHaveBeenLastCalledWith(400, 300);
+    renderer.resize.mockClear();
+    host.render();
+    expect(renderer.resize).toHaveBeenCalledWith(400, 300);
+  });
+
+  it("remounting the same host element reuses the canvas and configuration", () => {
+    const { host, canvas, container, renderer } = createFixture();
+    const configureCalls = renderer.configure.mock.calls.length;
+    const drawsBefore = renderer.render.mock.calls.length;
+
+    const teardown = host.mount(container);
+
+    expect(container.querySelector("canvas")).toBe(canvas);
+    expect(renderer.configure.mock.calls.length).toBe(configureCalls);
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore + 1);
+    expect(typeof teardown).toBe("function");
+  });
+
+  it("ignores pointerdown outside the board", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", { clientX: -10, clientY: -10 });
+
+    expect(callbacks.onDragStart).not.toHaveBeenCalled();
+  });
+
+  it("ignores a throwing setPointerCapture", () => {
+    (Element.prototype.setPointerCapture as unknown as Mock).mockImplementation(
+      () => {
+        throw new Error("pointer already inactive");
+      },
+    );
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 9,
+    });
+
+    expect(callbacks.onDragStart).toHaveBeenCalledWith({ x: 1, y: 0 });
+  });
+
+  it("start is idempotent", () => {
+    const { host, renderer } = createFixture({ state: runningState() });
+
+    host.start();
+    const draws = renderer.render.mock.calls.length;
+    host.start();
+
+    expect(renderer.render.mock.calls.length).toBe(draws);
+    host.stop();
+  });
+
+  it("ignores a stale animation frame queued before stop", () => {
+    const { host, renderer, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    host.start();
+    // stop() cancels the pending rAF, but a callback already delivered to the
+    // browser's queue can still fire: the host must ignore it.
+    host.stop();
+    const drawsBefore = renderer.render.mock.calls.length;
+
+    fireFrame(1000);
+
+    expect(renderer.render.mock.calls.length).toBe(drawsBefore);
+  });
+
+  it("a stale teardown from a prior mount cannot detach the current mount", () => {
+    const { host, cleanup: staleCleanup, container } = createFixture();
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    host.mount(secondHost);
+    const secondCanvas = secondHost.querySelector("canvas");
+    expect(secondCanvas).not.toBeNull();
+
+    // The first mount's returned cleanup is stale: its detach must bail on
+    // the surface-host mismatch instead of tearing down the live canvas.
+    staleCleanup();
+
+    expect(secondHost.querySelector("canvas")).toBe(secondCanvas);
+    expect(container.querySelector("canvas")).toBeNull();
+  });
+
+  it("captureFrame returns null unmounted and delegates to the renderer mounted", async () => {
+    const { host, renderer, cleanup } = createFixture();
+
+    const shot = await host.captureFrame();
+    expect(renderer.captureFrame).toHaveBeenCalledTimes(1);
+    expect(shot).toEqual({
+      width: 2,
+      height: 2,
+      pixels: expect.any(Uint8ClampedArray),
+    });
+    // Capture prep syncs size/transform exactly like drawFrame.
+    expect(renderer.resize).toHaveBeenCalled();
+
+    cleanup();
+    renderer.captureFrame.mockClear();
+    await expect(host.captureFrame()).resolves.toBeNull();
+    expect(renderer.captureFrame).not.toHaveBeenCalled();
+  });
 });
 
 describe("createWebGpuHost 10 Hz tick admission", () => {
@@ -625,6 +771,62 @@ describe("createWebGpuHost 10 Hz tick admission", () => {
     fireFrame(122);
     expect(callbacks.onTick).not.toHaveBeenCalled();
 
+    host.stop();
+  });
+
+  it("treats a synchronous onTick return as immediately resolved", () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    callbacks.onTick.mockReturnValue(undefined);
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 20; frame += 1) {
+      fireFrame(nextTimestamp());
+    }
+
+    // No promise gate: each ~100ms window admits the next tick. A stuck
+    // in-flight flag would have admitted only the first.
+    expect(callbacks.onTick.mock.calls.length).toBeGreaterThanOrEqual(2);
+    host.stop();
+  });
+
+  it("clears the admission gate when onTick throws", () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    callbacks.onTick.mockImplementation(() => {
+      throw new Error("tick blew up");
+    });
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 20; frame += 1) {
+      fireFrame(nextTimestamp());
+    }
+
+    // The throw must not wedge tickInFlight: later windows still admit.
+    expect(callbacks.onTick.mock.calls.length).toBeGreaterThanOrEqual(2);
+    host.stop();
+  });
+
+  it("clears the admission gate when the tick promise rejects", async () => {
+    const { host, callbacks, fireFrame } = createFixture({
+      state: runningState(),
+    });
+    callbacks.onTick.mockImplementation(() =>
+      Promise.reject(new Error("tick failed")),
+    );
+    host.start();
+
+    const nextTimestamp = ticker();
+    for (let frame = 0; frame < 20; frame += 1) {
+      fireFrame(nextTimestamp());
+      await flushMicrotasks();
+    }
+
+    expect(callbacks.onTick.mock.calls.length).toBeGreaterThanOrEqual(2);
     host.stop();
   });
 });
@@ -1060,6 +1262,39 @@ describe("createWebGpuHost teardown destruction", () => {
       getContextSpy.mockRestore();
       vi.unstubAllGlobals();
     }
+  });
+});
+
+describe("createWebGpuHost gpu bootstrap", () => {
+  const noopContext: WebGpuHostContext = {
+    getState: () => createTestGameState(),
+    getUi: () => createUiState(),
+    getSceneRevision: () => 1,
+    onTick: () => {},
+    onTileClick: () => {},
+    onHoverTile: () => {},
+    onRouteDraftContextMenu: () => false,
+    onDragStart: () => true,
+    onDragCurrent: () => {},
+    onDragCommit: () => {},
+    onDragCancel: () => {},
+    onFatalError: () => {},
+  };
+
+  it("rejects when navigator.gpu is unavailable", async () => {
+    vi.stubGlobal("navigator", {});
+    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+      "WebGPU is unavailable in this browser",
+    );
+  });
+
+  it("rejects when the adapter request returns null", async () => {
+    vi.stubGlobal("navigator", {
+      gpu: { requestAdapter: async () => null },
+    });
+    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+      "WebGPU adapter unavailable",
+    );
   });
 });
 

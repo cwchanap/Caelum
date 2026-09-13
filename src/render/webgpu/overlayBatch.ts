@@ -1,4 +1,9 @@
-import type { GameState, Point, RoadStructure } from "../../domain/types";
+import type {
+  BuildingType,
+  GameState,
+  Point,
+  RoadStructure,
+} from "../../domain/types";
 import { ROAD_DIRECTION_OFFSET } from "../../domain/types";
 import type { AuthoredRoadTilePreview } from "../../runtime/backend/types";
 import {
@@ -14,7 +19,7 @@ import {
   canPlaceBuilding,
 } from "../placementValidation";
 import { axisLockedLine, rectanglePoints } from "../../ui/roadDrag";
-import type { UiState } from "../../ui/uiState";
+import type { DragGesture, UiState } from "../../ui/uiState";
 import { tileSize } from "../boardTransform";
 import { colors } from "../colors";
 import { failedLegMarkerPoint } from "../mapTextOverlay";
@@ -387,10 +392,8 @@ function drawDragPreview(
   g: SolidGeometry,
   state: GameState,
   ui: UiState,
+  gesture: DragGesture,
 ): void {
-  const gesture = ui.drag;
-  if (gesture === null) return;
-
   if (gesture.tool === "area") {
     for (const point of rectanglePoints(gesture.start, gesture.current)) {
       const paintable = isAreaPaintable(state, point);
@@ -420,21 +423,17 @@ function drawBuildingPreview(
   g: SolidGeometry,
   state: GameState,
   ui: UiState,
+  building: BuildingType,
+  hoverTile: Point,
 ): void {
-  if (ui.hoverTile === null || ui.selectedBuilding === null) return;
   const validPlacement =
-    isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
-    canPlaceBuilding(
-      state,
-      ui.selectedBuilding,
-      ui.hoverTile,
-      ui.buildingRotation,
-    );
+    isBuildingAffordableForPresentation(state, building) &&
+    canPlaceBuilding(state, building, hoverTile, ui.buildingRotation);
   const fill = validPlacement ? PREVIEW_VALID : PREVIEW_INVALID;
   const stroke = validPlacement ? PREVIEW_VALID_STROKE : PREVIEW_INVALID_STROKE;
   for (const point of getBuildingFootprint(
-    ui.selectedBuilding,
-    ui.hoverTile,
+    building,
+    hoverTile,
     ui.buildingRotation,
   )) {
     fillTile(g, point, fill);
@@ -445,14 +444,13 @@ function drawBuildingPreview(
 function drawBusStopPreview(
   g: SolidGeometry,
   state: GameState,
-  ui: UiState,
+  hoverTile: Point,
 ): void {
-  if (ui.hoverTile === null) return;
-  const validPlacement = canPlaceBusStop(state, ui.hoverTile);
+  const validPlacement = canPlaceBusStop(state, hoverTile);
   const fill = validPlacement ? PREVIEW_VALID : PREVIEW_INVALID;
   const stroke = validPlacement ? PREVIEW_VALID_STROKE : PREVIEW_INVALID_STROKE;
-  fillTile(g, ui.hoverTile, fill);
-  strokeTile(g, ui.hoverTile, stroke);
+  fillTile(g, hoverTile, fill);
+  strokeTile(g, hoverTile, stroke);
 }
 
 function drawHoverHighlight(g: SolidGeometry, hoverTile: Point): void {
@@ -567,7 +565,7 @@ export function buildOverlayRanges(
 
   let previewsRendered = false;
   if (ui.drag !== null) {
-    drawDragPreview(g, state, ui);
+    drawDragPreview(g, state, ui, ui.drag);
     previewsRendered = true;
   } else if (
     ui.activeTool === "road" ||
@@ -580,9 +578,9 @@ export function buildOverlayRanges(
 
   if (!previewsRendered) {
     if (ui.hoverTile !== null && ui.selectedBuilding !== null) {
-      drawBuildingPreview(g, state, ui);
+      drawBuildingPreview(g, state, ui, ui.selectedBuilding, ui.hoverTile);
     } else if (ui.hoverTile !== null && ui.activeTool === "busStop") {
-      drawBusStopPreview(g, state, ui);
+      drawBusStopPreview(g, state, ui.hoverTile);
     } else if (ui.hoverTile !== null && isInMap(state, ui.hoverTile)) {
       drawHoverHighlight(g, ui.hoverTile);
     }

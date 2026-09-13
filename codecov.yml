@@ -36,6 +36,7 @@ ignore:
   - "**/*.spec.ts"
   - "tests/**"
   - "vite.config.ts"
+  - "playwright.config.ts"
   - "svelte.config.js"
   - "eslint.config.js"
   # Build/entry side-effect modules: not unit-testable without contorting mocks

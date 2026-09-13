@@ -87,9 +87,7 @@ export function renderableLines(state: GameState): RenderableLine[] {
       waypointIds: line.stationIds,
       legs: line.legs,
     })),
-  ].sort((left, right) =>
-    left.id < right.id ? -1 : left.id > right.id ? 1 : 0,
-  );
+  ].sort((left, right) => left.id.localeCompare(right.id));
 }
 
 export function buildCorridorGroups(
@@ -499,12 +497,14 @@ export function draftLegVertices(
 ): Float32Array<ArrayBuffer> {
   const draft = ui.routeDraft;
   const editedId = editedRouteId(ui);
-  const draftLegs =
-    draft !== null &&
-    draft.preview !== null &&
-    draft.preview.generation === draft.generation
-      ? draft.preview.legs
-      : [];
+  if (
+    draft === null ||
+    draft.preview === null ||
+    draft.preview.generation !== draft.generation
+  ) {
+    return new Float32Array(0);
+  }
+  const draftLegs = draft.preview.legs;
   if (draftLegs.length < 1) {
     return new Float32Array(0);
   }
@@ -512,7 +512,7 @@ export function draftLegVertices(
   const g = new SolidGeometry();
   const corridors = buildCorridorGroups(renderableLines(state));
   const nodes = nodePositionMap(state);
-  const draftRouteId = editedId ?? `draft-${draft?.instanceId ?? 0}`;
+  const draftRouteId = editedId ?? `draft-${draft.instanceId}`;
 
   for (const leg of draftLegs) {
     const path = presentationPath(leg);

@@ -999,4 +999,424 @@ describe("terminal-reversal visibility", () => {
     expectNear(instances[0][0], expected.x);
     expectNear(instances[0][1], expected.y);
   });
+
+  it("drops a terminal-reversal vehicle when the terminal stop is gone", () => {
+    // The leg's from-waypoint resolves to nothing: no road access, no stop
+    // position, no anchor — the vehicle stays invisible rather than parking
+    // at a bogus point.
+    const orphanLegs: RouteLegPath[] = [
+      { ...terminalLeg()[0], fromWaypointId: "ghost" },
+    ];
+    const state = stateWithVehicles(orphanLegs, [
+      busVehicle({ pathStepIndex: 0, stepProgress: 0, parkedPosition: null }),
+    ]);
+    const instances = instancesOf(encode({ latest: state, alpha: 1 }));
+
+    expect(instances).toHaveLength(0);
+  });
+});
+
+describe("unrouted and parked vehicles", () => {
+  it("renders parked vehicles without an itinerary and drops unparked ones", () => {
+    const latest = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [
+        // No route matches these lineIds -> itinerary null.
+        busVehicle({
+          id: "vehicle-bus",
+          lineId: "route-999",
+          parkedPosition: { x: 3, y: 3 },
+        }),
+        busVehicle({
+          id: "vehicle-metro",
+          mode: "metro",
+          lineId: "metro-999",
+          parkedPosition: { x: 4, y: 4 },
+        }),
+        busVehicle({ id: "vehicle-ghost", lineId: "route-999" }),
+      ],
+    );
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    expect(instances).toHaveLength(2);
+    const busPixel = pixel({ x: 3, y: 3 });
+    expectNear(instances[0][0], busPixel.x);
+    expectNear(instances[0][1], busPixel.y);
+    expect(instances[0][2]).toBe(0); // parked: no tangent
+    const metroPixel = pixel({ x: 4, y: 4 });
+    expectNear(instances[1][0], metroPixel.x);
+    expectNear(instances[1][1], metroPixel.y);
+  });
+
+  it("anchors a parked vehicle on its route lane when the leg path is broken", () => {
+    // Broken leg: no current step, but lastValidPath still presents the lane.
+    const brokenLegs: RouteLegPath[] = [
+      {
+        ...legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })])[0],
+        status: "networkDisconnected",
+        currentPath: null,
+      },
+    ];
+    const latest = stateWithVehicles(brokenLegs, [
+      busVehicle({ parkedPosition: { x: 2, y: 1 } }),
+    ]);
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    // Single route -> zero corridor offset: parked position translates
+    // through the presentation unchanged.
+    const expected = pixel({ x: 2, y: 1 });
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+
+  it("anchors a parked vehicle at its position when the leg has no path at all", () => {
+    const pathlessLegs: RouteLegPath[] = [
+      {
+        ...legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })])[0],
+        status: "networkDisconnected",
+        currentPath: null,
+        lastValidPath: null,
+      },
+    ];
+    const latest = stateWithVehicles(pathlessLegs, [
+      busVehicle({ parkedPosition: { x: 2, y: 2 } }),
+    ]);
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    const expected = pixel({ x: 2, y: 2 });
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+
+  it("drops an unparked vehicle whose leg lost its step", () => {
+    // Leg exists with a connected path, but the cursor's step index is past
+    // the end and there is no parked position -> no visible sample.
+    const latest = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [busVehicle({ pathStepIndex: 5 })],
+    );
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+    expect(instances).toHaveLength(0);
+  });
+
+  it("parks at the raw position when the leg's presentation path is empty", () => {
+    // Connected leg with a zero-step path: parkedPosition is set, so the
+    // terminal-reversal branch does not apply, and there is no lane geometry
+    // to translate onto — the raw parked position anchors the vehicle.
+    const emptyPathLegs = legWithSteps([]);
+    const latest = stateWithVehicles(emptyPathLegs, [
+      busVehicle({ parkedPosition: { x: 2, y: 2 } }),
+    ]);
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    const expected = pixel({ x: 2, y: 2 });
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+
+  it("slides a parked stale-cursor vehicle onto its shared-corridor lane", () => {
+    // Connected leg with steps, but the cursor's step index is stale and the
+    // vehicle is parked: the anchor translates onto the route's corridor
+    // lane. The metro leg below shares the bus corridor's geometry, so
+    // route-001 (second sorted line) carries a +2px normal offset.
+    const legs = legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]);
+    const base = stateWithVehicles(legs, [
+      busVehicle({ pathStepIndex: 9, parkedPosition: { x: 2, y: 1 } }),
+    ]);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        metroLines: [
+          { ...base.transit.metroLines[0], legs: structuredClone(legs) },
+        ],
+      },
+    };
+    const instances = instancesOf(encode({ latest: state, alpha: 1 }));
+
+    expect(instances).toHaveLength(1);
+    const expected = pixel({ x: 2, y: 1 });
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y + 2);
+  });
+
+  it("parks at the raw position when the itinerary index lands on a hole", () => {
+    // A corrupt cursor (NaN itinerary index) resolves no leg at all: the
+    // parked anchor falls back to the raw position instead of crashing.
+    const latest = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [
+        busVehicle({
+          itineraryIndex: Number.NaN,
+          parkedPosition: { x: 2, y: 2 },
+        }),
+      ],
+    );
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    const expected = pixel({ x: 2, y: 2 });
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+
+  it("drops an unparked vehicle on an empty itinerary and keeps a parked one", () => {
+    // A route with zero legs yields a non-null but empty itinerary: parked
+    // vehicles still render at their position while routed cursors drop.
+    const latest = stateWithVehicles(
+      [],
+      [
+        busVehicle({ id: "vehicle-parked", parkedPosition: { x: 3, y: 3 } }),
+        busVehicle({ id: "vehicle-routed" }),
+      ],
+    );
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    expect(instances).toHaveLength(1);
+    const expected = pixel({ x: 3, y: 3 });
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+
+  it("drops an interpolated vehicle whose line no longer exists", () => {
+    // Previous and latest both carry a vehicle bound to a route the network
+    // dropped: continuous cursors still find no itinerary and fall through
+    // the interpolation sampler to the drop path.
+    const state = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [busVehicle({ lineId: "route-999" })],
+    );
+    const instances = instancesOf(
+      encode({ previous: state, latest: state, alpha: 0.5 }),
+    );
+
+    expect(instances).toHaveLength(0);
+  });
+});
+
+describe("same-step fallback and metro sampling", () => {
+  const STEP_A = lineStep({ x: 1, y: 1 }, { x: 5, y: 1 });
+  const STEP_B = lineStep({ x: 5, y: 1 }, { x: 5, y: 5 });
+
+  it("snaps to latest when the previous observation has no step at the cursor", () => {
+    // Previous commit observed the vehicle mid-leg; the leg was broken then,
+    // so previousState cannot resolve the step -> snap, don't interpolate.
+    const previous = stateWithVehicles(
+      [
+        {
+          ...legWithSteps([STEP_A])[0],
+          status: "networkDisconnected",
+          currentPath: null,
+        },
+      ],
+      [busVehicle({ pathStepIndex: 0, stepProgress: 0.5 })],
+    );
+    const latest = stateWithVehicles(legWithSteps([STEP_A]), [
+      busVehicle({ pathStepIndex: 0, stepProgress: 0.75 }),
+    ]);
+    const instances = instancesOf(encode({ previous, latest, alpha: 0.4 }));
+
+    const expected = pixel(pointAndTangentAt(STEP_A.geometry, 0.75).point);
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+
+  it("snaps to latest when the latest path no longer reaches the cursor step", () => {
+    // Same pathStepIndex on both sides (continuous), but the latest leg's
+    // path shrank to a single step -> latestStep undefined -> snap.
+    const previous = stateWithVehicles(legWithSteps([STEP_A, STEP_B]), [
+      busVehicle({ pathStepIndex: 1, stepProgress: 0.2 }),
+    ]);
+    const latest = stateWithVehicles(legWithSteps([STEP_A]), [
+      busVehicle({ pathStepIndex: 1, stepProgress: 0.6 }),
+    ]);
+    const instances = instancesOf(encode({ previous, latest, alpha: 0.5 }));
+
+    // latestSample finds no step and no parkedPosition -> dropped.
+    expect(instances).toHaveLength(0);
+  });
+
+  it("encodes a metro vehicle unrotated through interpolation", () => {
+    const metroLegs: RouteLegPath[] = [
+      {
+        fromWaypointId: "s1",
+        toWaypointId: "s2",
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: {
+          kind: "track",
+          steps: [
+            {
+              position: { x: 0, y: 6 },
+              heading: "east" as const,
+              geometry: {
+                kind: "line" as const,
+                from: { x: 0, y: 6 },
+                to: { x: 1, y: 6 },
+              },
+              travelSeconds: 4,
+            },
+          ],
+          totalTravelSeconds: 4,
+        },
+        lastValidPath: null,
+        estimatedSeconds: 4,
+        failureReason: null,
+      },
+    ];
+    const metroVehicle = (stepProgress: number): Vehicle =>
+      busVehicle({
+        mode: "metro",
+        lineId: "metro-001",
+        stepProgress,
+      });
+    // Bus legs on a different row keep the metro corridor single-line
+    // (zero offset), pinning the interpolation to the raw centerline.
+    const base = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [],
+    );
+    const previous = {
+      ...base,
+      transit: {
+        ...base.transit,
+        metroLines: [{ ...base.transit.metroLines[0], legs: metroLegs }],
+        vehicles: [metroVehicle(0.2)],
+      },
+    };
+    const latest = {
+      ...base,
+      transit: {
+        ...base.transit,
+        metroLines: [{ ...base.transit.metroLines[0], legs: metroLegs }],
+        vehicles: [metroVehicle(0.8)],
+      },
+    };
+    const instances = instancesOf(encode({ previous, latest, alpha: 0.5 }));
+
+    expect(instances).toHaveLength(1);
+    const expected = pixel(
+      pointAndTangentAt(metroLegs[0].currentPath!.steps[0].geometry, 0.5).point,
+    );
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+    // Metro vehicles never rotate to the tangent.
+    expect(instances[0][2]).toBe(0);
+  });
+
+  it("snaps to latest when the step geometry kind changed under the cursor", () => {
+    // Same step index, but the committed path changed from a line to a
+    // bezier: no same-geometry interpolation is possible.
+    const previous = stateWithVehicles(legWithSteps([quadraticStep()]), [
+      busVehicle({ pathStepIndex: 0, stepProgress: 0.5 }),
+    ]);
+    const latest = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [busVehicle({ pathStepIndex: 0, stepProgress: 0.25 })],
+    );
+    const instances = instancesOf(encode({ previous, latest, alpha: 0.5 }));
+
+    const expected = pixel(
+      pointAndTangentAt(
+        { kind: "line", from: { x: 1, y: 1 }, to: { x: 5, y: 1 } },
+        0.25,
+      ).point,
+    );
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+  });
+});
+
+describe("metro terminal reversal", () => {
+  it("parks a metro vehicle at the terminal station", () => {
+    const terminalLegs: RouteLegPath[] = [
+      {
+        fromWaypointId: "s1",
+        toWaypointId: "s2",
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: {
+          kind: "track",
+          steps: [],
+          totalTravelSeconds: 0,
+        },
+        lastValidPath: null,
+        estimatedSeconds: 0,
+        failureReason: null,
+      },
+    ];
+    const base = stateWithVehicles(terminalLegs, []);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        metroLines: [{ ...base.transit.metroLines[0], legs: terminalLegs }],
+        vehicles: [
+          busVehicle({
+            mode: "metro",
+            lineId: "metro-001",
+            pathStepIndex: 0,
+            stepProgress: 0,
+            parkedPosition: null,
+          }),
+        ],
+      },
+    };
+    const instances = instancesOf(encode({ latest: state, alpha: 1 }));
+
+    // Station s1 sits at (0,6) -> pixel (16,208).
+    const expected = pixel({ x: 0, y: 6 });
+    expect(instances).toHaveLength(1);
+    expectNear(instances[0][0], expected.x);
+    expectNear(instances[0][1], expected.y);
+    expect(instances[0][2]).toBe(0);
+  });
+
+  it("drops a terminal-reversal vehicle when the station is gone", () => {
+    const orphanLegs: RouteLegPath[] = [
+      {
+        fromWaypointId: "ghost-station",
+        toWaypointId: "s2",
+        direction: "loop",
+        kind: "service",
+        status: "connected",
+        currentPath: {
+          kind: "track",
+          steps: [],
+          totalTravelSeconds: 0,
+        },
+        lastValidPath: null,
+        estimatedSeconds: 0,
+        failureReason: null,
+      },
+    ];
+    const base = stateWithVehicles(orphanLegs, []);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        metroLines: [{ ...base.transit.metroLines[0], legs: orphanLegs }],
+        vehicles: [
+          busVehicle({
+            mode: "metro",
+            lineId: "metro-001",
+            pathStepIndex: 0,
+            stepProgress: 0,
+            parkedPosition: null,
+          }),
+        ],
+      },
+    };
+    const instances = instancesOf(encode({ latest: state, alpha: 1 }));
+
+    // No terminal station to anchor on -> the vehicle stays invisible.
+    expect(instances).toHaveLength(0);
+  });
 });

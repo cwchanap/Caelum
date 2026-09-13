@@ -227,6 +227,50 @@ describe("buildMapBatch roundabout layer", () => {
       ),
     ).toBe(true);
   });
+
+  it("draws a compact roundabout with ports on all four edges and no island", () => {
+    const structure: RoadStructure = {
+      kind: "roundabout",
+      id: "roundabout-1",
+      origin: { x: 6, y: 6 },
+      size: "compact2x2",
+      footprint: [
+        { x: 6, y: 6 },
+        { x: 7, y: 6 },
+        { x: 6, y: 7 },
+        { x: 7, y: 7 },
+      ],
+      ports: [
+        { id: "port-north", point: { x: 6, y: 6 }, edge: "north" },
+        { id: "port-east", point: { x: 7, y: 6 }, edge: "east" },
+        { id: "port-south", point: { x: 7, y: 7 }, edge: "south" },
+        { id: "port-west", point: { x: 6, y: 7 }, edge: "west" },
+      ],
+    };
+    const state = withJunction(createTestGameState(), structure);
+    const batch = buildMapBatch(state);
+
+    // Compact circulation orbits the 2x2 center (224,224) at radius
+    // 0.58 tiles = 18.56px with four arcs.
+    const circulation = verticesOfColor(batch, colors.roadCenterline).filter(
+      ([x, y]) => Math.abs(Math.hypot(x - 224, y - 224) - 18.56) < 2.6,
+    );
+    expect(circulation.length).toBeGreaterThan(0);
+
+    // North/south ports draw a horizontal entry marking 70% along the stub.
+    // North port at (6,6): center (208,208), tip (208,192), mark at 196.8.
+    expect(hasVertexNear(batch, colors.roadCenterline, 204, 195.8)).toBe(true);
+    // South port at (7,7): center (240,240), tip (240,256), mark at 251.2.
+    expect(hasVertexNear(batch, colors.roadCenterline, 236, 250.2)).toBe(true);
+    // East/west ports draw a vertical marking. West port at (6,7): center
+    // (208,240), tip (192,240), mark at 196.8.
+    expect(hasVertexNear(batch, colors.roadCenterline, 197.8, 244)).toBe(true);
+    // East port stub reaches the east edge midpoint of tile (7,6).
+    expect(hasVertexNear(batch, colors.roadCenterline, 256, 205.5)).toBe(true);
+
+    // Compact roundabouts own no protected island.
+    expect(verticesOfColor(batch, colors.roundaboutIsland)).toHaveLength(0);
+  });
 });
 
 describe("buildMapBatch track layer", () => {

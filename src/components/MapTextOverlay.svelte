@@ -16,26 +16,22 @@
   // `$state` rune.
   let { state: game, ui }: Props = $props();
 
-  let overlayHost = $state<HTMLDivElement | null>(null);
   let box = $state<{ width: number; height: number } | null>(null);
 
   // The overlay shares the board's full CSS box; feed that same box into
   // getBoardTransform so DOM labels land on the GPU-drawn geometry.
-  $effect(() => {
-    const element = overlayHost;
-    if (element === null) {
-      return;
-    }
+  function measureHost(element: HTMLDivElement) {
     const measure = () => {
       box = { width: element.clientWidth, height: element.clientHeight };
     };
     measure();
-    if (typeof ResizeObserver === "function") {
-      const observer = new ResizeObserver(measure);
-      observer.observe(element);
-      return () => observer.disconnect();
+    if (typeof ResizeObserver !== "function") {
+      return;
     }
-  });
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return { destroy: () => observer.disconnect() };
+  }
 
   const items = $derived(selectMapTextOverlayItems(game, ui));
 
@@ -82,7 +78,7 @@
 <div
   class="map-text-overlay"
   data-testid="map-text-overlay"
-  bind:this={overlayHost}
+  use:measureHost
   aria-hidden="true"
 >
   {#each placed as item, index (index)}
@@ -90,8 +86,7 @@
       class="map-text-item"
       class:map-text-below={item.below}
       data-kind={item.kind}
-      style:left="{item.left}px"
-      style:top="{item.top}px">{item.text}</span
+      style="left: {item.left}px; top: {item.top}px">{item.text}</span
     >
   {/each}
 </div>

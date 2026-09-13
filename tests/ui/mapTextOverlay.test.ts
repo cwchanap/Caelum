@@ -146,4 +146,61 @@ describe("MapTextOverlay", () => {
     ) as HTMLElement;
     expect(badge.style.left).toBe(`${2 * tileSize + tileSize / 2}px`);
   });
+
+  it("re-measures through ResizeObserver when the board box changes", async () => {
+    // jsdom has no ResizeObserver; stub a minimal one and fire it after
+    // shrinking the measured box so the transform re-derives from the new
+    // CSS size.
+    const callbacks: ResizeObserverCallback[] = [];
+    class FakeResizeObserver implements ResizeObserver {
+      constructor(callback: ResizeObserverCallback) {
+        callbacks.push(callback);
+      }
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+
+    pinOverlayBox();
+    const { unmount } = render(MapTextOverlay, {
+      props: {
+        state: createTestGameState(),
+        ui: {
+          ...createUiState(),
+          activeTool: "road",
+          hoverTile: { x: 2, y: 3 },
+        },
+      },
+    });
+    await tick();
+
+    const badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.style.left).toBe(`${2 * tileSize + tileSize / 2}px`);
+
+    // Shrink the box to half the map: the transform letterboxes, so the same
+    // anchor lands at a smaller left offset.
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(
+      14 * tileSize,
+    );
+    for (const callback of callbacks) {
+      callback([], {} as ResizeObserver);
+    }
+    await tick();
+    // scale 0.5, no letterbox: left = (2 + 0.5) * 32 * 0.5.
+    expect(badge.style.left).toBe("40px");
+
+    unmount();
+    vi.unstubAllGlobals();
+  });
+
+  it("tears down cleanly on unmount", async () => {
+    const { unmount } = await renderOverlay(createTestGameState(), {
+      activeTool: "road",
+      hoverTile: { x: 2, y: 3 },
+    });
+    expect(() => unmount()).not.toThrow();
+  });
 });

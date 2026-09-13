@@ -59,6 +59,19 @@ describe("WebGpuRenderer", () => {
     expect(() => renderer.render({ solids: [], vehicles: [] })).toThrow();
   });
 
+  it("rejects a canvas that has no webgpu context", () => {
+    const { device } = createFakeDevice();
+    const renderer = createWebGpuRenderer(device, "bgra8unorm");
+    // getContext exists but WebGPU is unavailable (old browser / disabled).
+    const canvas = {
+      getContext: () => null,
+    } as unknown as HTMLCanvasElement;
+
+    expect(() => renderer.configure(canvas)).toThrow(
+      "canvas does not provide a webgpu context",
+    );
+  });
+
   it("pins source-alpha blending on the solid pipeline", () => {
     const { device, pipelines } = createFakeDevice();
     createWebGpuRenderer(device, "bgra8unorm");
@@ -373,6 +386,18 @@ describe("WebGpuRenderer", () => {
       reason: "destroyed",
       message: "device destroyed",
     });
+  });
+
+  it("reconfiguring releases the previous quad buffer", () => {
+    const { device, buffers } = createFakeDevice();
+    const renderer = createWebGpuRenderer(device, "bgra8unorm");
+    renderer.configure(createFakeCanvas().canvas);
+    const firstQuad = buffers.at(-1)!;
+
+    renderer.configure(createFakeCanvas().canvas);
+
+    expect(firstQuad.destroyed).toBe(true);
+    expect(buffers.at(-1)!.destroyed).toBe(false);
   });
 
   it("destroys cached buffers and unconfigures the canvas", () => {

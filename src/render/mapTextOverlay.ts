@@ -142,19 +142,22 @@ function pathMidpoint(path: TransitPath): TripPosition | null {
   }
   const target = path.totalTravelSeconds / 2;
   let elapsed = 0;
-  for (const step of path.steps) {
-    const next = elapsed + step.travelSeconds;
-    if (target <= next || step === path.steps.at(-1)) {
-      const progress =
-        step.travelSeconds <= 0 ? 0.5 : (target - elapsed) / step.travelSeconds;
-      return pointAndTangentAt(
-        step.geometry,
-        Math.max(0, Math.min(1, progress)),
-      ).point;
+  // The midpoint always lands on some step; an inconsistent total clamps to
+  // the last step's endpoint via the progress clamp below.
+  let step = path.steps[path.steps.length - 1];
+  let stepStart = 0;
+  for (const candidate of path.steps) {
+    step = candidate;
+    stepStart = elapsed;
+    elapsed += candidate.travelSeconds;
+    if (target <= elapsed) {
+      break;
     }
-    elapsed = next;
   }
-  return null;
+  const progress =
+    step.travelSeconds <= 0 ? 0.5 : (target - stepStart) / step.travelSeconds;
+  return pointAndTangentAt(step.geometry, Math.max(0, Math.min(1, progress)))
+    .point;
 }
 
 /** Marker anchor for a failed leg: the missing node when one side is missing,

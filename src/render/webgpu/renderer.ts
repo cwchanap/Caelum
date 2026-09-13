@@ -277,10 +277,9 @@ export function createWebGpuRenderer(
     frame: WebGpuRenderFrame,
     view: GPUTextureView,
   ): { encoder: GPUCommandEncoder; stats: WebGpuRenderStats } => {
-    if (quadBuffer === null) {
-      throw new Error("WebGPU renderer is not configured");
-    }
-    const quad = quadBuffer;
+    // Callers guard configuration (render checks context, captureFrame
+    // checks quadBuffer); configure() always establishes both together.
+    const quad = quadBuffer!;
     const encoder = device.createCommandEncoder();
     const pass = encoder.beginRenderPass({
       colorAttachments: [

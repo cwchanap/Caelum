@@ -379,6 +379,39 @@ describe("buildTransitBatch committed legs", () => {
     expect(covered).toBeLessThan(0.95);
   });
 
+  it("draws a connected curved leg solid, with no endpoint connectors", () => {
+    // Stops sit exactly on the curve endpoints, so both connector calls
+    // take the sameTripPosition early return.
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "connected", cornerPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 3, y: 3 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const covered = coveredStripFraction(vertices, "#e04f39", pixelCorner());
+    expect(covered).toBeGreaterThan(0.95);
+  });
+
+  it("emits no arrowheads for a pathless failed leg", () => {
+    const state = stateWithLegs([
+      routeLeg("a", "b", "networkDisconnected", null),
+    ]);
+    const { vertices } = buildTransitBatch(
+      state,
+      { ...createUiState(), selectedRouteId: "route-001" },
+      1,
+    );
+
+    // The emphasized leg still draws its dashed endpoint fallback…
+    expect(hasVertexNear(vertices, "#e04f39", 48, 48, 3)).toBe(true);
+    // …but with no path there is nothing to sample arrows along: the first
+    // arrow tip would have landed 6px past (96,48).
+    expect(hasVertexNear(vertices, "#e04f39", 102, 48, 1)).toBe(false);
+  });
+
   it("uses a direct dotted fallback when no last-valid geometry exists", () => {
     const state = stateWithLegs([
       routeLeg("a", "b", "networkDisconnected", null),
@@ -578,6 +611,66 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(hasVertexNear(vertices, colors.hover, 144, 176)).toBe(true);
   });
 
+  it("skips markers and access indicators for missing nodes", () => {
+    const base = createTestGameState();
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stops: [
+          {
+            id: "stop-gone",
+            kind: "busStop" as const,
+            status: "missing" as const,
+            position: { x: 6, y: 6 },
+            roadAccess: { roadPoint: { x: 6, y: 7 } },
+            platforms: [],
+          },
+        ],
+        stations: [
+          {
+            id: "station-gone",
+            status: "missing" as const,
+            position: { x: 8, y: 8 },
+            platforms: [],
+          },
+        ],
+      },
+    };
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(verticesOfColor(vertices, colors.bus)).toEqual([]);
+    expect(verticesOfColor(vertices, colors.metro)).toEqual([]);
+    // The missing stop's roadAccess must not emit an indicator either.
+    expect(verticesOfColor(vertices, colors.hover)).toEqual([]);
+  });
+
+  it("skips a zero-length stop access indicator", () => {
+    const base = createTestGameState();
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stops: [
+          {
+            id: "stop-on-road",
+            kind: "busStop" as const,
+            status: "present" as const,
+            position: { x: 4, y: 4 },
+            // The stop sits on its access point: no arrow can be drawn.
+            roadAccess: { roadPoint: { x: 4, y: 4 } },
+            platforms: [],
+          },
+        ],
+      },
+    };
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(verticesOfColor(vertices, colors.hover)).toEqual([]);
+    // The stop marker itself still renders.
+    expect(hasVertexNear(vertices, colors.bus, 139, 139)).toBe(true);
+  });
+
   it("draws route node cues on the presented path", () => {
     const state = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
@@ -624,6 +717,128 @@ describe("buildTransitBatch draft stroke", () => {
     const covered = coveredStripFraction(vertices, "#f4d35e", pixelCorner());
     expect(covered).toBeGreaterThan(0.3);
     expect(covered).toBeLessThan(0.95);
+  });
+
+  it("emits nothing when the matching preview carries no legs", () => {
+    const state = stateWithLegs([]);
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        generation: 1,
+        preview: {
+          generation: 1,
+          legs: [],
+          totalTravelSeconds: 0,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        },
+      },
+    };
+
+    expect(draftLegVertices(state, ui)).toHaveLength(0);
+  });
+
+  it("dashes a draft leg endpoint-to-endpoint when it has no path", () => {
+    const state = stateWithLegs([]);
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        waypointIds: ["a", "b"],
+        generation: 1,
+        preview: {
+          generation: 1,
+          legs: [routeLeg("a", "b", "networkDisconnected", null)],
+          totalTravelSeconds: 0,
+          turnSummary: {
+            straight: 0,
+            rightTurn: 0,
+            leftTurn: 0,
+            uTurn: 0,
+            roundaboutEntry: 0,
+          },
+          missingWaypointIds: [],
+          warnings: [],
+          rejection: null,
+        },
+      },
+    };
+    const vertices = draftLegVertices(state, ui);
+
+    // Direct dashed connector between stop centers (48,48) -> (80,48).
+    expect(hasVertexNear(vertices, "#f4d35e", 48, 48, 3)).toBe(true);
+    expect(hasVertexNear(vertices, "#f4d35e", 59, 48, 3)).toBe(true);
+  });
+
+  it("draws an edit-source draft in the edited route's corridor slot", () => {
+    // Two routes share the (1,1)->(5,1) corridor at -2/+2 px offsets.
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const route = { ...base.transit.routes[0] };
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: [
+          { ...route, id: "route-0002", color: "#222222" },
+          { ...route, id: "route-0001", color: "#111111" },
+        ],
+      },
+    };
+    const previewLegs = [routeLeg("a", "b", "connected", linePath())];
+    const draftPreview = {
+      generation: 1,
+      legs: previewLegs,
+      totalTravelSeconds: 4,
+      turnSummary: {
+        straight: 0,
+        rightTurn: 0,
+        leftTurn: 0,
+        uTurn: 0,
+        roundaboutEntry: 0,
+      },
+      missingWaypointIds: [],
+      warnings: [],
+      rejection: null,
+    };
+
+    // A new draft has no corridor slot: drawn centered on the corridor.
+    const fresh = draftLegVertices(state, {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        waypointIds: ["a", "b"],
+        generation: 1,
+        preview: draftPreview,
+      },
+    });
+    expect(hasVertexNear(fresh, "#f4d35e", 48, 46.5, 0.01)).toBe(true);
+
+    // Editing route-0002 inherits its +2px corridor offset -> centerline 50.
+    const editing = draftLegVertices(state, {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        source: {
+          kind: "edit" as const,
+          routeId: "route-0002",
+          expectedRevision: 1,
+        },
+        waypointIds: ["a", "b"],
+        generation: 1,
+        preview: draftPreview,
+      },
+    });
+    expect(hasVertexNear(editing, "#f4d35e", 48, 48.5, 0.01)).toBe(true);
+    expect(hasVertexNear(editing, "#f4d35e", 48, 46.5, 0.01)).toBe(false);
   });
 });
 
