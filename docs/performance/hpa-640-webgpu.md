@@ -78,10 +78,14 @@ batches (scene + routes; overlay ranges are empty with no active overlay).
 `bun run test:e2e` after switching the production default to `createWebGpuHost`:
 27 passed, 1 skipped (the renderer-scale benchmark spec skips by design). The
 road-marker oracle in `routes.spec.ts` was retargeted from the Canvas2D fillRect
-trace to probing the presented WebGPU canvas (PNG decode + pixel sampling of a
-10×10 world-pixel marker blob), preserving the original assertion: a filled
-bus-colored marker renders at each passenger stop and never at the road-access
-tile. No build/track/demolish, route-edit, overlay, save/restore, pointer,
+trace to probing the rendered WebGPU frame: `RuntimeTestSeam.debugCaptureFrame`
+re-renders the host's frame into an offscreen target and reads it back via
+`copyTextureToBuffer` + `mapAsync`, sampling a 10×10 world-pixel marker blob.
+Canvas-side readbacks (`toDataURL`/drawImage/screenshots) cannot serve as the
+oracle — under software-Vulkan CI Chromium the canvas never reaches the
+compositor and they read back blank. The original assertion is preserved: a
+filled bus-colored marker renders at each passenger stop and never at the
+road-access tile. No build/track/demolish, route-edit, overlay, save/restore, pointer,
 resize, or simulation-control assertion was weakened.
 
 ### Tauri / WKWebView smoke (completed)

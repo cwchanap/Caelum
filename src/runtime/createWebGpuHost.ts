@@ -21,6 +21,8 @@ import {
 import {
   createWebGpuRenderer,
   VEHICLE_INSTANCE_FLOATS,
+  type WebGpuCapturedFrame,
+  type WebGpuRenderFrame,
   type WebGpuRenderer,
 } from "../render/webgpu/renderer";
 
@@ -66,6 +68,12 @@ export interface GameHost {
   stop(): void;
   syncAnimationLoop(): void;
   isRunning(): boolean;
+  /** Rebuilds the current frame and reads its pixels back from an offscreen
+   *  render target. Deterministic under software Vulkan, where canvas
+   *  presentation never reaches the compositor; e2e pixel oracles use this
+   *  instead of canvas-side readbacks. Returns null while no canvas is
+   *  mounted. */
+  captureFrame(): Promise<WebGpuCapturedFrame | null>;
 }
 
 export type CreateGameHost = (context: WebGpuHostContext) => Promise<GameHost>;
@@ -280,14 +288,9 @@ export function createWebGpuHostWithRenderer(
     return out;
   };
 
-  const drawFrame = (nowMs: number): void => {
-    if (canvas === null) {
-      return;
-    }
-    syncSize();
-    if (transform === null) {
-      return;
-    }
+  /** Assembles the frame's batches from the observed state — the exact input
+   *  both drawFrame and captureFrame hand to the renderer. */
+  const buildFrame = (nowMs: number): WebGpuRenderFrame => {
     const { latest, previous, alpha } = observeState(nowMs);
     const ui = ctx.getUi();
     const revision = ctx.getSceneRevision();
@@ -307,7 +310,7 @@ export function createWebGpuHostWithRenderer(
         maxY: map.height * tileSize,
       },
     });
-    renderer.render({
+    return {
       solids: [
         {
           role: "structural",
@@ -333,7 +336,31 @@ export function createWebGpuHostWithRenderer(
           vertices: transformVertices(overlays.overVehicles),
         },
       ],
-    });
+    };
+  };
+
+  const drawFrame = (nowMs: number): void => {
+    if (canvas === null) {
+      return;
+    }
+    syncSize();
+    if (transform === null) {
+      return;
+    }
+    renderer.render(buildFrame(nowMs));
+  };
+
+  const captureFrame = (): Promise<WebGpuCapturedFrame | null> => {
+    if (canvas === null) {
+      return Promise.resolve(null);
+    }
+    // Same sizing/transform prep as drawFrame so the capture is in the same
+    // device-pixel space as the presented canvas.
+    syncSize();
+    if (transform === null) {
+      return Promise.resolve(null);
+    }
+    return renderer.captureFrame(buildFrame(performance.now()));
   };
 
   const cancelPendingFrame = (): void => {
@@ -717,6 +744,7 @@ export function createWebGpuHostWithRenderer(
     stop,
     syncAnimationLoop,
     isRunning: () => running,
+    captureFrame,
   };
 }
 

@@ -26,6 +26,7 @@ import type {
   RoadMutation,
   SandboxResetError,
 } from "./backend/types";
+import type { WebGpuCapturedFrame } from "../render/webgpu/renderer";
 import type {
   RuntimePersistenceController,
   RuntimePersistenceView,
@@ -333,4 +334,9 @@ export interface RuntimeController {
  */
 export interface RuntimeTestSeam {
   debugSetBudget: (budget: number) => RuntimeCommandResult;
+  /** Renders the current frame into an offscreen WebGPU target and reads the
+   *  pixels back (RGBA8, device pixels). e2e pixel oracles use this instead of
+   *  canvas-side readbacks, which never resolve under software-Vulkan CI
+   *  compositors. Returns null when no GPU canvas is mounted. */
+  debugCaptureFrame: () => Promise<WebGpuCapturedFrame | null>;
 }

@@ -269,9 +269,15 @@ export interface PixelProbe {
 }
 
 /**
- * Samples RGB triples from the presented gameplay canvas (WebGPU path) at
- * world-space points expressed as tile + world-pixel offsets. One drawImage
- * readback covers every probe; off-board probes return null.
+ * Samples RGB triples from the rendered gameplay frame at world-space points
+ * expressed as tile + world-pixel offsets. One capture covers every probe;
+ * off-board probes return null.
+ *
+ * The capture comes from `RuntimeTestSeam.debugCaptureFrame`: the host
+ * re-renders the current frame into an offscreen target and reads it back via
+ * copyTextureToBuffer. Canvas-side readbacks (toDataURL, drawImage,
+ * screenshots) cannot be used for this — under software-Vulkan CI Chromium a
+ * WebGPU canvas never reaches the compositor, so they only ever read blank.
  */
 export async function sampleTilePixels(
   page: Page,
@@ -293,51 +299,43 @@ export async function sampleTilePixels(
       if (rect.width === 0 || rect.height === 0) {
         return points.map(() => null);
       }
-      // The WebGPU drawing buffer is cleared after present, so drawImage from
-      // the canvas itself reads blank; its PNG encoding still carries the
-      // presented frame.
-      const framePng = new Image();
-      const decoded = new Promise<void>((resolve, reject) => {
-        framePng.onload = () => resolve();
-        framePng.onerror = () => reject(new Error("canvas PNG decode failed"));
-      });
-      framePng.src = canvas.toDataURL();
-      await decoded;
-      const probe = document.createElement("canvas");
-      probe.width = canvas.width;
-      probe.height = canvas.height;
-      // CPU-side readback of the presented WebGPU frame: the PNG is decoded
-      // and drawn into an offscreen 2D surface purely so getImageData can
-      // sample pixels. This is test infrastructure for probing GPU output —
-      // there is no Canvas2D gameplay render path (the context kind is a
-      // named constant so the HPA-640 Canvas-removal sweep stays clean).
-      const PROBE_CONTEXT_KIND = "2d";
-      const ctx = probe.getContext(PROBE_CONTEXT_KIND) as {
-        drawImage(image: CanvasImageSource, dx: number, dy: number): void;
-        getImageData(sx: number, sy: number, sw: number, sh: number): ImageData;
-      } | null;
-      if (ctx === null) {
-        throw new Error("2D probe context is unavailable");
+      const runtime = (
+        window as unknown as {
+          __caelumRuntime?: {
+            debugCaptureFrame?: () => Promise<{
+              width: number;
+              height: number;
+              pixels: Uint8ClampedArray;
+            } | null>;
+          };
+        }
+      ).__caelumRuntime;
+      if (runtime?.debugCaptureFrame === undefined) {
+        throw new Error(
+          "debugCaptureFrame is unavailable on window.__caelumRuntime",
+        );
       }
-      ctx.drawImage(framePng, 0, 0);
-      const image = ctx.getImageData(0, 0, probe.width, probe.height);
+      const shot = await runtime.debugCaptureFrame();
+      if (shot === null || shot.width === 0 || shot.height === 0) {
+        return points.map(() => null);
+      }
       const scale = Math.min(rect.width / width, rect.height / height);
       const offsetX = (rect.width - width * scale) / 2;
       const offsetY = (rect.height - height * scale) / 2;
-      const dpr = canvas.width / rect.width;
+      const dpr = shot.width / rect.width;
       return points.map(({ tile, dx, dy }) => {
         const cssX = offsetX + ((tile.x + 0.5) * size + dx) * scale;
         const cssY = offsetY + ((tile.y + 0.5) * size + dy) * scale;
         const px = Math.round(cssX * dpr);
         const py = Math.round(cssY * dpr);
-        if (px < 0 || py < 0 || px >= probe.width || py >= probe.height) {
+        if (px < 0 || py < 0 || px >= shot.width || py >= shot.height) {
           return null;
         }
-        const index = (py * probe.width + px) * 4;
+        const index = (py * shot.width + px) * 4;
         return [
-          image.data[index],
-          image.data[index + 1],
-          image.data[index + 2],
+          shot.pixels[index],
+          shot.pixels[index + 1],
+          shot.pixels[index + 2],
         ] as [number, number, number];
       });
     },
