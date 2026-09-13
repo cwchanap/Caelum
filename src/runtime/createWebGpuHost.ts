@@ -123,6 +123,11 @@ export function createWebGpuHostWithRenderer(
   // 10 Hz one-in-flight tick admission.
   let accumulatedMs = 0;
   let tickInFlight = false;
+  // Wall-clock time of the last admission. While a tick is in flight the
+  // accumulator can build a multi-interval backlog; pacing admissions by the
+  // last-admission timestamp drains it at one tick per interval instead of
+  // one per rAF.
+  let lastTickAdmittedAtMs: number | null = null;
 
   // Observed presentation history for vehicle interpolation.
   let latestState: GameState | null = null;
@@ -366,10 +371,7 @@ export function createWebGpuHostWithRenderer(
       cancelAnimationFrame(animationFrameId);
       animationFrameId = null;
     }
-    if (
-      pendingDrawId !== null &&
-      typeof cancelAnimationFrame === "function"
-    ) {
+    if (pendingDrawId !== null && typeof cancelAnimationFrame === "function") {
       cancelAnimationFrame(pendingDrawId);
       pendingDrawId = null;
     }
@@ -379,6 +381,7 @@ export function createWebGpuHostWithRenderer(
     lastFrameTime = null;
     // No stale catch-up across pause/stop/remount boundaries.
     accumulatedMs = 0;
+    lastTickAdmittedAtMs = null;
   };
 
   const canAnimate = (): boolean => {
@@ -443,11 +446,7 @@ export function createWebGpuHostWithRenderer(
     const epoch = drawEpoch;
     pendingDrawId = requestAnimationFrame((timestamp) => {
       pendingDrawId = null;
-      if (
-        epoch !== drawEpoch ||
-        canvas === null ||
-        animationFrameId !== null
-      ) {
+      if (epoch !== drawEpoch || canvas === null || animationFrameId !== null) {
         return;
       }
       drawFrame(timestamp);
@@ -468,9 +467,15 @@ export function createWebGpuHostWithRenderer(
       MAX_FRAME_DELTA_MS,
     );
 
-    if (accumulatedMs >= TICK_INTERVAL_MS && !tickInFlight) {
+    if (
+      accumulatedMs >= TICK_INTERVAL_MS &&
+      !tickInFlight &&
+      (lastTickAdmittedAtMs === null ||
+        timestamp - lastTickAdmittedAtMs >= TICK_INTERVAL_MS)
+    ) {
       const submittedMs = Math.min(accumulatedMs, MAX_FRAME_DELTA_MS);
       accumulatedMs -= submittedMs;
+      lastTickAdmittedAtMs = timestamp;
       admitTick(submittedMs / 1000);
     }
 
