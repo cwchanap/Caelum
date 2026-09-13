@@ -5759,3 +5759,42 @@ describe("UI helper no-op coverage", () => {
     expect(runtime.getSnapshot()).toEqual(before);
   });
 });
+
+describe("debugCaptureFrame", () => {
+  it("forwards the capture to the game host and returns its frame", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    const frame = {
+      width: 2,
+      height: 1,
+      pixels: new Uint8ClampedArray(8),
+    };
+    lastFakeHost()!.captureFrame.mockResolvedValue(frame);
+
+    await expect(runtime.debugCaptureFrame()).resolves.toBe(frame);
+    expect(lastFakeHost()!.captureFrame).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces a null capture when the host has no canvas mounted", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+
+    await expect(runtime.debugCaptureFrame()).resolves.toBeNull();
+  });
+});
+
+describe("default game host", () => {
+  it("rejects construction when the production WebGPU host is unavailable", async () => {
+    // No createHost seam: the runtime falls back to the production
+    // createWebGpuHost, which rejects outside a WebGPU-capable browser.
+    await expect(createGameRuntime({ backend: backendSpy() })).rejects.toThrow(
+      "WebGPU",
+    );
+  });
+});

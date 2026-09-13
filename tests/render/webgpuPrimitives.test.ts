@@ -256,3 +256,22 @@ it("tessellates an arc by sampling pointAndTangentAt", () => {
     expect(match).toBeDefined();
   }
 });
+
+it("emits finite vertices for a degenerate curve with a zero tangent", () => {
+  // A collapsed bezier has a zero-length derivative; the normal fallback
+  // must not divide by zero and leak NaN into the vertex buffer.
+  const collapsed: PathGeometry = {
+    kind: "quadraticBezier",
+    from: { x: 2, y: 2 },
+    control: { x: 2, y: 2 },
+    to: { x: 2, y: 2 },
+  };
+  const geometry = new SolidGeometry().curve(collapsed, 1, red, 4);
+
+  const points = positions(geometry);
+  expect(points.length).toBeGreaterThan(0);
+  for (const [x, y] of points) {
+    expect(Number.isFinite(x)).toBe(true);
+    expect(Number.isFinite(y)).toBe(true);
+  }
+});

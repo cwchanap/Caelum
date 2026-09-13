@@ -171,7 +171,6 @@ function terminalWaypointPosition(
 }
 
 function sameGeometry(a: PathGeometry, b: PathGeometry): boolean {
-  if (a.kind !== b.kind) return false;
   if (a.kind === "line" && b.kind === "line") {
     return (
       a.from.x === b.from.x &&
@@ -250,7 +249,7 @@ export function encodeVehicleInstances(
   for (const vehicle of latest.transit.vehicles) {
     const previousVehicle = previousById.get(vehicle.id);
     const sample =
-      paused || previousVehicle === undefined
+      paused || previous === null || previousVehicle === undefined
         ? latestSample(latest, vehicle, corridors)
         : interpolateSample(
             previousVehicle,
@@ -331,7 +330,7 @@ function isContinuous(
  *  numerically below previous). */
 function interpolateSample(
   previousVehicle: Vehicle,
-  previousState: GameState | null,
+  previousState: GameState,
   latestVehicle: Vehicle,
   latestState: GameState,
   alpha: number,
@@ -361,14 +360,13 @@ function interpolateSample(
 
 function sameStepSample(
   previousVehicle: Vehicle,
-  previousState: GameState | null,
+  previousState: GameState,
   latestVehicle: Vehicle,
   latestState: GameState,
   alpha: number,
   corridors: CorridorGroups,
 ): CursorSample | null {
-  const previousStep =
-    previousState === null ? undefined : stepAt(previousState, previousVehicle);
+  const previousStep = stepAt(previousState, previousVehicle);
   const latestStep = stepAt(latestState, latestVehicle);
   if (previousStep === undefined || latestStep === undefined) {
     return latestSample(latestState, latestVehicle, corridors);

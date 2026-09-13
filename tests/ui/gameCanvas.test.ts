@@ -99,4 +99,19 @@ describe("GameCanvas", () => {
 
     expect(onShellError).toHaveBeenCalledWith("Canvas 2D context unavailable");
   });
+
+  it("falls back to a generic message when mount throws a non-Error", () => {
+    const runtime = {
+      mountCanvas: vi.fn(() => {
+        throw "raw-string failure";
+      }),
+    };
+    const onShellError = vi.fn();
+
+    render(GameCanvas, {
+      props: { runtime, snapshot: snapshotFixture(), onShellError },
+    });
+
+    expect(onShellError).toHaveBeenCalledWith("Failed to attach game canvas.");
+  });
 });

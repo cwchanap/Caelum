@@ -14,7 +14,7 @@ import { getBuildingFootprint } from "../../src/domain/catalog/buildings";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createTestGameState } from "../helpers/gameState";
-import { withAreas } from "../helpers/mapFixtures";
+import { withAreas, withRoads } from "../helpers/mapFixtures";
 import { coveredStripFraction } from "../helpers/vertexCoverage";
 
 const EPSILON = 1e-4;
@@ -224,9 +224,132 @@ describe("buildOverlayRanges data overlays", () => {
     const { underRoutes: half } = buildOverlayRanges(stateHalf, crowdingUi);
     expect(alphaAt(half, colors.crowding, 64, 64)).toBeCloseTo(0.2 * 0.3, 5);
   });
+
+  it("skips non-present stops and stations in the coverage overlay", () => {
+    const base = withStops(createTestGameState(), [
+      {
+        id: "stop-gone",
+        kind: "busStop" as const,
+        status: "missing" as const,
+        position: { x: 2, y: 2 },
+        platforms: [],
+      },
+    ]);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stations: [
+          {
+            id: "station-gone",
+            status: "missing" as const,
+            position: { x: 8, y: 2 },
+            platforms: [],
+          },
+        ],
+      },
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeOverlay: "coverage",
+    });
+
+    expect(underRoutes.length).toBe(0);
+  });
+
+  it("skips crowding fills below the threshold and for unmeasured platforms", () => {
+    const base = withStops(createTestGameState(), [
+      presentStop("stop-low", { x: 2, y: 2 }),
+      presentStop("stop-quiet", { x: 5, y: 2 }),
+      presentStop("stop-silent", { x: 8, y: 2 }),
+    ]);
+    const state = {
+      ...base,
+      platformOccupancy: [
+        // 40% occupancy: below the 0.5 cutoff -> no fill.
+        { platformId: "stop-low-p0", count: 20, capacity: 50 },
+        // Zero-capacity row contributes no ratio.
+        { platformId: "stop-quiet-p0", count: 0, capacity: 0 },
+        // stop-silent's platform has no occupancy row at all.
+      ],
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeOverlay: "crowding",
+    });
+
+    expect(underRoutes.length).toBe(0);
+  });
 });
 
 describe("buildOverlayRanges broken route markers", () => {
+  it("draws markers for a selected metro line and enlarges the focused leg", () => {
+    const base = withStops(createTestGameState(), []);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stations: [
+          {
+            id: "station-1",
+            status: "present" as const,
+            position: { x: 2, y: 2 },
+            platforms: [],
+          },
+          {
+            id: "station-gone",
+            status: "missing" as const,
+            position: { x: 6, y: 6 },
+            platforms: [],
+          },
+        ],
+        metroLines: [
+          {
+            id: "metro-001",
+            name: "Metro 1",
+            color: "#3355aa",
+            stationIds: ["station-1", "station-gone"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [
+              routeLeg("station-1", "station-gone", "missingNode", null),
+              routeLeg(
+                "station-gone",
+                "station-1",
+                "networkDisconnected",
+                straightPath(),
+              ),
+            ],
+            pathBroken: true,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
+          },
+        ],
+      },
+    };
+
+    const { underRoutes: plain } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedRouteId: "metro-001",
+    });
+    // Metro leg markers resolve through the same failed-leg anchors: the
+    // missing-station cross sits at (6,6) and the disconnected leg falls
+    // back to the last-valid path midpoint (3,1) -> (112,48).
+    expect(hasVertexNear(plain, colors.unserved, 200, 198.5)).toBe(true);
+    // Unfocused disconnected leg: radius-6 dot has no vertex at r=8 (120,48).
+    expect(hasVertexNear(plain, colors.late, 120, 48)).toBe(false);
+
+    const { underRoutes: focused } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedRouteId: "metro-001",
+      routeFailureFocus: { routeId: "metro-001", legIndex: 1 },
+    });
+    // Focused leg grows to radius 8: exact rim vertex at (112+8, 48).
+    expect(hasVertexNear(focused, colors.late, 120, 48)).toBe(true);
+  });
+
   it("draws missing-node crosses and disconnected-leg dots", () => {
     const base = createTestGameState();
     const stopped = withStops(base, [
@@ -282,6 +405,49 @@ describe("buildOverlayRanges broken route markers", () => {
     // Disconnected leg: last-valid midpoint (3,1) -> late dot at (112,48).
     expect(hasVertexNear(underRoutes, colors.late, 112, 48)).toBe(true);
   });
+
+  it("emits nothing when the selected id matches no route or metro line", () => {
+    const { underRoutes } = buildOverlayRanges(createTestGameState(), {
+      ...createUiState(),
+      selectedRouteId: "route-404",
+    });
+
+    expect(underRoutes.length).toBe(0);
+  });
+
+  it("skips a failed leg whose marker has no anchor", () => {
+    // Both waypoints left the network entirely: failedLegMarkerPoint has no
+    // position to anchor on, so no marker is emitted.
+    const base = withStops(createTestGameState(), []);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: [
+          {
+            id: "route-001",
+            name: "Route 1",
+            color: "#e04f39",
+            stopIds: ["ghost-a", "ghost-b"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [routeLeg("ghost-a", "ghost-b", "missingNode", null)],
+            pathBroken: true,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
+          },
+        ],
+      },
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    expect(underRoutes.length).toBe(0);
+  });
 });
 
 describe("buildOverlayRanges placement and mutation previews", () => {
@@ -324,6 +490,229 @@ describe("buildOverlayRanges placement and mutation previews", () => {
     expect(hasVertexNear(underRoutes, colors.oneWayArrow, 88, 81)).toBe(true);
   });
 
+  it("previews a generated roundabout: ring fill, island, and port ticks", () => {
+    const state = createTestGameState();
+    // 3x3 roundabout at origin (4,4): footprint is the eight carriageway
+    // tiles around the protected center; one port per edge.
+    const ring = [
+      { x: 4, y: 4 },
+      { x: 5, y: 4 },
+      { x: 6, y: 4 },
+      { x: 4, y: 5 },
+      { x: 6, y: 5 },
+      { x: 4, y: 6 },
+      { x: 5, y: 6 },
+      { x: 6, y: 6 },
+    ];
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        // (4,4) is both a changed tile and footprint tile: it is filled once
+        // via the changed pass and skipped in the structure fill.
+        changedTiles: [{ x: 4, y: 4 }],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [
+          {
+            kind: "roundabout" as const,
+            id: "rb-1",
+            origin: { x: 4, y: 4 },
+            size: "standard3x3" as const,
+            footprint: ring,
+            ports: [
+              { id: "p-n", point: { x: 5, y: 4 }, edge: "north" as const },
+              { id: "p-e", point: { x: 6, y: 5 }, edge: "east" as const },
+              { id: "p-s", point: { x: 5, y: 6 }, edge: "south" as const },
+              { id: "p-w", point: { x: 4, y: 5 }, edge: "west" as const },
+            ],
+          },
+        ],
+        cost: 800,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    const { underRoutes } = buildOverlayRanges(state, ui);
+
+    // Ring tiles filled valid — both the changed (4,4) and fill-only (5,4).
+    expect(hasVertexNear(underRoutes, colors.previewValid, 128, 128)).toBe(
+      true,
+    );
+    expect(hasVertexNear(underRoutes, colors.previewValid, 160, 128)).toBe(
+      true,
+    );
+    // Footprint tiles keep the structure bounding stroke instead of the
+    // per-tile preview stroke: the bounding box runs 128..224 px, so its
+    // left edge has quad corners at x=128±1.5.
+    expect(
+      hasVertexNear(underRoutes, colors.previewValidStroke, 126.5, 128),
+    ).toBe(true);
+    // Protected island: a badge-colored square at origin+1.25 tiles.
+    expect(hasVertexNear(underRoutes, colors.badgeBackground, 168, 168)).toBe(
+      true,
+    );
+    // Port ticks: north (5,4)->(176,128) down; west (4,5)->(128,176) right.
+    expect(
+      hasVertexNear(underRoutes, colors.previewValidStroke, 177.5, 128),
+    ).toBe(true);
+    expect(
+      hasVertexNear(underRoutes, colors.previewValidStroke, 128, 177.5),
+    ).toBe(true);
+  });
+
+  it("previews a compact roundabout without the protected island", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [
+          {
+            kind: "roundabout" as const,
+            id: "rb-1",
+            origin: { x: 4, y: 4 },
+            size: "compact2x2" as const,
+            footprint: [
+              { x: 4, y: 4 },
+              { x: 5, y: 4 },
+              { x: 4, y: 5 },
+              { x: 5, y: 5 },
+            ],
+            ports: [
+              { id: "p-n", point: { x: 4, y: 4 }, edge: "north" as const },
+            ],
+          },
+        ],
+        cost: 400,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    const { underRoutes } = buildOverlayRanges(state, ui);
+
+    expect(hasVertexNear(underRoutes, colors.previewValid, 128, 128)).toBe(
+      true,
+    );
+    // Compact roundabouts have no protected center tile: no badge-colored
+    // island anywhere in the range.
+    expect(
+      rowsOf(underRoutes).some(([, , r, g, b]) =>
+        Array.from(parseColor(colors.badgeBackground))
+          .slice(0, 3)
+          .every((v, i) => Math.abs([r, g, b][i] - v) < EPSILON),
+      ),
+    ).toBe(false);
+  });
+
+  it("tints generated structures invalid when the preview is rejected", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "roundabout" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [
+          {
+            kind: "roundabout" as const,
+            id: "rb-1",
+            origin: { x: 4, y: 4 },
+            size: "standard3x3" as const,
+            footprint: [
+              { x: 4, y: 4 },
+              { x: 5, y: 4 },
+              { x: 6, y: 4 },
+              { x: 4, y: 5 },
+              { x: 6, y: 5 },
+              { x: 4, y: 6 },
+              { x: 5, y: 6 },
+              { x: 6, y: 6 },
+            ],
+            ports: [
+              { id: "p-s", point: { x: 5, y: 6 }, edge: "south" as const },
+            ],
+          },
+          {
+            kind: "automaticJunction" as const,
+            id: "jx-1",
+            footprint: [{ x: 8, y: 8 }],
+            ports: [],
+          },
+        ],
+        cost: 800,
+        routeImpacts: [],
+        warnings: [],
+        rejection: { code: "insufficientBudget" as const, context: {} },
+      },
+    };
+    const { underRoutes } = buildOverlayRanges(state, ui);
+
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 128, 128)).toBe(
+      true,
+    );
+    // South port tick at (5,6): center (176,208) downward-then-up tick uses
+    // the invalid stroke color.
+    expect(
+      hasVertexNear(underRoutes, colors.previewInvalidStroke, 177.5, 224),
+    ).toBe(true);
+    // The rejected junction footprint also tints invalid: fill and stroke.
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 256, 256)).toBe(
+      true,
+    );
+    // strokeTile insets the rect by 2 and thickLine offsets corners ±1 along
+    // the normal: top-left quad corner at (258, 257).
+    expect(
+      hasVertexNear(underRoutes, colors.previewInvalidStroke, 258, 257),
+    ).toBe(true);
+  });
+
+  it("previews non-roundabout generated structures as filled tiles", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [
+          {
+            kind: "automaticJunction" as const,
+            id: "jx-1",
+            footprint: [{ x: 3, y: 3 }],
+            ports: [],
+          },
+        ],
+        cost: 0,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    const { underRoutes } = buildOverlayRanges(state, ui);
+
+    expect(hasVertexNear(underRoutes, colors.previewValid, 96, 96)).toBe(true);
+    // Junction tiles also get the per-tile stroke inset by 2px.
+    expect(hasVertexNear(underRoutes, colors.previewValidStroke, 98, 99)).toBe(
+      true,
+    );
+  });
+
   it("previews a building footprint over empty tiles", () => {
     // smallHouse requires a residential zone on every footprint tile.
     let state = createTestGameState();
@@ -349,6 +738,24 @@ describe("buildOverlayRanges placement and mutation previews", () => {
         ),
       ).toBe(true);
     }
+  });
+
+  it("tints the building footprint invalid on unplaceable tiles", () => {
+    // smallHouse needs residential zoning; bare tiles tint invalid.
+    const { underRoutes } = buildOverlayRanges(createTestGameState(), {
+      ...createUiState(),
+      selectedBuilding: "smallHouse",
+      buildingRotation: 0,
+      hoverTile: { x: 3, y: 3 },
+    });
+
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 96, 96)).toBe(
+      true,
+    );
+    // Inset stroke: top-left quad corner at (98, 97).
+    expect(
+      hasVertexNear(underRoutes, colors.previewInvalidStroke, 98, 97),
+    ).toBe(true);
   });
 
   it("previews a bus stop tint by roadside validity", () => {
@@ -403,6 +810,30 @@ describe("buildOverlayRanges drag gestures", () => {
 
     expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(true);
     expect(hasVertexNear(underRoutes, colors.previewValid, 96, 64)).toBe(true);
+  });
+
+  it("tints unpaintable tiles invalid in the area drag preview", () => {
+    // The drag rect spans an empty tile and a road tile; the road is not
+    // paintable and gets the invalid fill/stroke.
+    const state = withRoads(createTestGameState(), [{ x: 3, y: 2 }]);
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      drag: {
+        tool: "area",
+        area: "residential",
+        start: { x: 2, y: 2 },
+        current: { x: 3, y: 2 },
+      },
+    });
+
+    expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(true);
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 96, 64)).toBe(
+      true,
+    );
+    // Inset stroke: top-left quad corner at (98, 65).
+    expect(
+      hasVertexNear(underRoutes, colors.previewInvalidStroke, 98, 65),
+    ).toBe(true);
   });
 
   it("previews the axis-locked track gesture", () => {
@@ -575,5 +1006,49 @@ describe("buildOverlayRanges route handles", () => {
     });
     expect(covered).toBeGreaterThan(0.3);
     expect(covered).toBeLessThan(0.95);
+  });
+
+  it("enlarges the selected waypoint handle", () => {
+    const base = withStops(createTestGameState(), [
+      presentStop("stop-1", { x: 2, y: 2 }),
+    ]);
+    const ui = {
+      ...createUiState(),
+      routeDraft: {
+        ...createDraft("bus", 1),
+        waypointIds: ["stop-1"],
+        selectedIndex: 0,
+      },
+    };
+    const { overVehicles } = buildOverlayRanges(base, ui);
+
+    // Selected handle: radius 12 fill (rim vertex at 80+12) and a 4px ring
+    // band centered at radius 13 -> outer edge vertex at 80+14.
+    expect(hasVertexNear(overVehicles, colors.badgeBackground, 92, 80)).toBe(
+      true,
+    );
+    expect(hasVertexNear(overVehicles, colors.badgeText, 94, 80)).toBe(true);
+  });
+
+  it("skips draft waypoints whose node left the network", () => {
+    const base = withStops(createTestGameState(), [
+      presentStop("stop-1", { x: 2, y: 2 }),
+    ]);
+    const draftWith = (waypointIds: string[]) => ({
+      ...createUiState(),
+      routeDraft: { ...createDraft("bus", 1), waypointIds },
+    });
+    const withGhost = buildOverlayRanges(
+      base,
+      draftWith(["stop-1", "ghost-stop"]),
+    ).overVehicles;
+    const withoutGhost = buildOverlayRanges(
+      base,
+      draftWith(["stop-1"]),
+    ).overVehicles;
+
+    // The unresolvable waypoint emits no geometry — identical to omitting it.
+    expect(withGhost.length).toBe(withoutGhost.length);
+    expect(hasVertexNear(withGhost, colors.badgeBackground, 80, 80)).toBe(true);
   });
 });

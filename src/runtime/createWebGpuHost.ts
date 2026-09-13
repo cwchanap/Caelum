@@ -209,22 +209,19 @@ export function createWebGpuHostWithRenderer(
     return routeCache.vertices;
   };
 
-  const syncSize = (): void => {
-    if (canvas === null) {
-      return;
-    }
+  const syncSize = (target: HTMLCanvasElement): void => {
     let cssWidth: number;
     let cssHeight: number;
     if (hasObservedSize) {
       cssWidth = observedCssWidth;
       cssHeight = observedCssHeight;
-      applyCanvasPixelSize(canvas, cssWidth, cssHeight);
+      applyCanvasPixelSize(target, cssWidth, cssHeight);
     } else {
       // Fallback when ResizeObserver is unavailable: one layout read per paint.
-      const rect = canvas.getBoundingClientRect();
+      const rect = target.getBoundingClientRect();
       cssWidth = rect.width;
       cssHeight = rect.height;
-      syncCanvasSize(canvas);
+      syncCanvasSize(target);
     }
     const dpr = globalThis.devicePixelRatio ?? 1;
     const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
@@ -343,10 +340,7 @@ export function createWebGpuHostWithRenderer(
     if (canvas === null) {
       return;
     }
-    syncSize();
-    if (transform === null) {
-      return;
-    }
+    syncSize(canvas);
     renderer.render(buildFrame(nowMs));
   };
 
@@ -356,10 +350,7 @@ export function createWebGpuHostWithRenderer(
     }
     // Same sizing/transform prep as drawFrame so the capture is in the same
     // device-pixel space as the presented canvas.
-    syncSize();
-    if (transform === null) {
-      return Promise.resolve(null);
-    }
+    syncSize(canvas);
     return renderer.captureFrame(buildFrame(performance.now()));
   };
 
@@ -500,16 +491,12 @@ export function createWebGpuHostWithRenderer(
     host.appendChild(canvas);
 
     const handleClick = (event: MouseEvent): void => {
-      if (canvas === null) {
-        return;
-      }
-
       if (DRAG_TOOLS.has(ctx.getUi().activeTool)) {
         return; // drag tools are driven by pointerdown/up below.
       }
 
       const point = canvasToTile(
-        canvas,
+        nextCanvas,
         event.clientX,
         event.clientY,
         ctx.getState().map,
@@ -527,11 +514,8 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
-      if (canvas === null) {
-        return;
-      }
       const point = canvasToTile(
-        canvas,
+        nextCanvas,
         event.clientX,
         event.clientY,
         ctx.getState().map,
@@ -548,9 +532,9 @@ export function createWebGpuHostWithRenderer(
     const capturePointer = (pointerId: number): void => {
       // Capture so a release a pixel past the board edge still commits instead
       // of firing pointerleave -> cancelDrag (which would discard the road).
-      if (canvas !== null && typeof canvas.setPointerCapture === "function") {
+      if (typeof nextCanvas.setPointerCapture === "function") {
         try {
-          canvas.setPointerCapture(pointerId);
+          nextCanvas.setPointerCapture(pointerId);
         } catch {
           // Some engines throw if the pointer is already inactive; a missed
           // capture only falls back to the pre-capture behavior, so ignore.
@@ -560,27 +544,22 @@ export function createWebGpuHostWithRenderer(
 
     const releasePointer = (pointerId: number): void => {
       if (
-        canvas !== null &&
-        typeof canvas.hasPointerCapture === "function" &&
-        typeof canvas.releasePointerCapture === "function" &&
-        canvas.hasPointerCapture(pointerId)
+        typeof nextCanvas.hasPointerCapture === "function" &&
+        typeof nextCanvas.releasePointerCapture === "function" &&
+        nextCanvas.hasPointerCapture(pointerId)
       ) {
-        canvas.releasePointerCapture(pointerId);
+        nextCanvas.releasePointerCapture(pointerId);
       }
     };
 
     const handlePointerDown = (event: PointerEvent): void => {
       // Only the primary (left) button initiates a drag. Right/middle clicks
       // would otherwise start a stale drag gesture.
-      if (
-        canvas === null ||
-        event.button !== 0 ||
-        !DRAG_TOOLS.has(ctx.getUi().activeTool)
-      ) {
+      if (event.button !== 0 || !DRAG_TOOLS.has(ctx.getUi().activeTool)) {
         return;
       }
       const point = canvasToTile(
-        canvas,
+        nextCanvas,
         event.clientX,
         event.clientY,
         ctx.getState().map,
@@ -597,11 +576,11 @@ export function createWebGpuHostWithRenderer(
     const handlePointerUp = (event: PointerEvent): void => {
       // Only the primary button commits; a stray right/middle release mid-drag
       // must not place the road early.
-      if (canvas === null || ctx.getUi().drag === null || event.button !== 0) {
+      if (ctx.getUi().drag === null || event.button !== 0) {
         return;
       }
       const point = canvasToTile(
-        canvas,
+        nextCanvas,
         event.clientX,
         event.clientY,
         ctx.getState().map,
