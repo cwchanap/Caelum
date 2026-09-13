@@ -85,6 +85,7 @@ let lastStats: WebGpuRenderStats = {
   solidBatches: 0,
   solidVertices: 0,
   vehicleInstances: 0,
+  vehicleDraws: 0,
 };
 const recordingRenderer: WebGpuRenderer = {
   ...renderer,
@@ -144,7 +145,7 @@ window.__caelumRendererScale = {
       vehicleUploadBytes:
         lastStats.vehicleInstances * VEHICLE_INSTANCE_FLOATS * 4,
       solidDraws: lastStats.solidBatches,
-      vehicleDraws: lastStats.vehicleInstances > 0 ? 1 : 0,
+      vehicleDraws: lastStats.vehicleDraws,
       medianCpuMs: median(samples),
       p95CpuMs: percentile(samples, 0.95),
       queueCompleted: true,

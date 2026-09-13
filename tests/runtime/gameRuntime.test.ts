@@ -2158,10 +2158,15 @@ describe("Game Runtime", () => {
     it("frame-only ticks leave the revision unchanged", async () => {
       const runtime = await createGameRuntime({
         createHost: createFakeGameHost,
-        backend: backendSpy(),
+        backend: backendSpy(fullRustSnapshot({ paused: false })),
       });
       const before = lastFakeHost()!.context.getSceneRevision();
+      const beforeTime = runtime.getSnapshot().state.time;
       await runtime.tick(0.5);
+      // Unpaused so the tick applies a frame-only update (time advanced) —
+      // proving the revision assertion isn't vacuously satisfied by a
+      // paused no-op.
+      expect(runtime.getSnapshot().state.time).toBeGreaterThan(beforeTime);
       expect(lastFakeHost()!.context.getSceneRevision()).toBe(before);
     });
 

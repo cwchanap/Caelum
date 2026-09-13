@@ -344,6 +344,7 @@ describe("WebGpuRenderer", () => {
       solidBatches: 2,
       solidVertices: 18 * SOLID_VERTEX_FLOATS,
       vehicleInstances: 0,
+      vehicleDraws: 0,
     });
   });
 
@@ -365,6 +366,7 @@ describe("WebGpuRenderer", () => {
     );
     expect(vehicleDraws).toEqual([{ vertexCount: 6, instanceCount: 3 }]);
     expect(stats.vehicleInstances).toBe(3);
+    expect(stats.vehicleDraws).toBe(1);
 
     // Exactly one upload of the concatenated instance data.
     const instanceWrites = writes.filter(

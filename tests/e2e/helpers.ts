@@ -324,8 +324,13 @@ export async function sampleTilePixels(
       const offsetY = (rect.height - height * scale) / 2;
       const dpr = shot.width / rect.width;
       return points.map(({ tile, dx, dy }) => {
-        const cssX = offsetX + ((tile.x + 0.5) * size + dx) * scale;
-        const cssY = offsetY + ((tile.y + 0.5) * size + dy) * scale;
+        const worldX = (tile.x + 0.5) * size + dx;
+        const worldY = (tile.y + 0.5) * size + dy;
+        if (worldX < 0 || worldY < 0 || worldX >= width || worldY >= height) {
+          return null;
+        }
+        const cssX = offsetX + worldX * scale;
+        const cssY = offsetY + worldY * scale;
         const px = Math.round(cssX * dpr);
         const py = Math.round(cssY * dpr);
         if (px < 0 || py < 0 || px >= shot.width || py >= shot.height) {

@@ -141,7 +141,12 @@ function createFakeRenderer(): FakeRenderer {
     resize: vi.fn(),
     render: vi.fn((frame: WebGpuRenderFrame) => {
       frames.push(frame);
-      return { solidBatches: 0, solidVertices: 0, vehicleInstances: 0 };
+      return {
+        solidBatches: 0,
+        solidVertices: 0,
+        vehicleInstances: 0,
+        vehicleDraws: 0,
+      };
     }),
     captureFrame: vi.fn(async () => ({
       width: 2,
@@ -319,8 +324,7 @@ async function flushMicrotasks(): Promise<void> {
 
 describe("createWebGpuHost lifecycle", () => {
   it("mount creates a canvas, configures the renderer, and cleans up", () => {
-    const { canvas, container, cleanup, renderer, fireFrame } =
-      createFixture();
+    const { canvas, container, cleanup, renderer, fireFrame } = createFixture();
 
     expect(canvas).toBeInstanceOf(HTMLCanvasElement);
     expect(canvas.dataset.runtimeCanvas).toBe("true");
