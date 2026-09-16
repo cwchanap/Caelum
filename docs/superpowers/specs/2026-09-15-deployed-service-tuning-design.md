@@ -20,30 +20,27 @@ This is a gameplay-polish cut over existing service-control seams, not a new fle
 
 ## Verified baseline
 
-Current `main` already has almost every required primitive:
+Current `main` already has the required primitives:
 
-- `UiState.selectedRouteId` and `RuntimeController.selectRoute(...)` select/highlight a line without changing simulation state;
-- `selectRoute(...)` already toggles the same selected line off on a second click; keep that interaction rather than making selection sticky;
-- `startRouteEdit(...)` already refuses to replace an open route draft, and the Lines list is already hidden while drafting;
-- WebGPU route/vehicle emphasis and DOM map text already consume `selectedRouteId`;
-- `GameIntent::SetServiceTargetHeadway` and the matching runtime command already update a line target;
-- `service_control` owns round-trip timing, `requiredFleet`, nominal headway, daily cost, waiting-health metrics, and the 60-second minimum target;
-- HPA-628 already added `AddServiceVehicle`, Rust-derived `nextVehicleCost`, cost policy reuse, and deterministic largest-gap insertion for the newly added vehicle;
-- the Lines panel already renders Target, Nominal, Fleet, Daily cost, wait warnings, and the one-vehicle Add action;
+- `UiState.selectedRouteId` and `RuntimeController.selectRoute(...)` select/highlight a line without changing simulation state. Selecting the same route again already clears the selection.
+- `startRouteEdit(routeId)` already owns geometry-edit entry and no-ops while another route draft is open.
+- WebGPU route/vehicle emphasis and DOM map text already consume `selectedRouteId`.
+- `GameIntent::SetServiceTargetHeadway` and the matching runtime command already update the line target.
+- `service_control` already owns round-trip timing, `requiredFleet`, nominal headway, daily cost, waiting-health metrics, and the 60-second target floor.
+- HPA-628 already added `AddServiceVehicle`, Rust-derived `nextVehicleCost`, `CostPolicy` reuse, and deterministic largest-gap insertion for the newly added vehicle.
+- the Lines panel already has the target editor helpers and renders Target, Nominal, Fleet, Daily cost, wait warnings, and the one-vehicle Add action.
 - `longestWaitSeconds` and `waitingAtRiskCount` already exist separately in Rust metrics and the TypeScript route view model.
 
-The slice needs to remove or clarify four product restrictions:
+The slice removes or clarifies four product locks:
 
-1. the Lines row's primary action calls `onEditRoute`, so merely opening a line enters the route draft/editor;
-2. `service_control::set_service_target_headway` rejects any line with assigned vehicles using `FleetAlreadyAssigned`, and the headway input is only rendered before deployment;
-3. HPA-628 currently treats `requiredFleet` as a purchase ceiling, so `nextVehicleCost` disappears and `AddServiceVehicle` becomes a no-op once the recommendation is met;
-4. the wait warning currently couples `nextVehicleCost` to prescriptive copy (`Add ... to recover`), even though a long wait alone does not prove that another vehicle is the cause or cure.
+1. the Lines row primary action currently enters geometry editing instead of selecting the line;
+2. `set_service_target_headway` rejects any line with assigned vehicles;
+3. HPA-628 currently treats `requiredFleet` as a purchase ceiling and global simulation pause as an Add-vehicle blocker;
+4. the wait warning currently couples raw wait evidence to prescriptive `Add ... to recover` copy.
 
-No new durable state, transport model, or service-management screen is needed.
+No new durable state, transport model, renderer path, backend query, or service-management screen is needed.
 
-## Product flow
-
-### 1. Select is inspection; Edit is explicit
+## 1. Select is inspection; Edit is explicit
 
 Restore the existing UI-only selection path to the Lines panel:
 
@@ -51,105 +48,101 @@ Restore the existing UI-only selection path to the Lines panel:
 click line summary -> runtime.selectRoute(lineId) -> selectedRouteId
 ```
 
-The selected line remains highlighted by the existing WebGPU/render selectors. No backend intent is dispatched and no route draft is created.
+Preserve the existing runtime semantics:
 
-Preserve the existing `selectRoute(...)` toggle: clicking the already-selected row clears `selectedRouteId`. HPA-48 only restores this seam to the Lines panel; it does not redefine selection semantics or add another runtime API/state.
+- selecting a different route selects it;
+- selecting the same route again clears selection;
+- selection creates no route draft and dispatches no gameplay mutation.
 
-Add a separate `Edit route` button/action on the row. That action keeps calling the existing route-editor entry point and preserves the current draft Save/Cancel gating rather than silently replacing an open draft.
+Add a separate `Edit route` action that continues through the existing route-editor entry point. An open route draft keeps its current Save/Cancel gate; HPA-48 does not replace or silently discard it.
 
-This separates two player intents:
-
-- **operate/inspect service** — cheap, non-structural, safe while vehicles are running;
-- **edit geometry** — structural route editing with its existing route-draft lifecycle.
-
-Do not introduce a new service-details screen, modal, or route-selection state. `selectedRouteId` is already the correct state.
+Do not introduce another selection state, service-details modal, or navigation manager.
 
 ## 2. Target headway remains a planning input after deployment
 
-`targetHeadwaySeconds` remains the player's desired interval and Rust already derives:
+`targetHeadwaySeconds` remains the player's desired interval and Rust continues deriving:
 
 ```text
 requiredFleet = ceil(roundTripSeconds / targetHeadwaySeconds)
 ```
 
-Allow `SetServiceTargetHeadway` after deployment by removing the assigned-fleet rejection from `set_service_target_headway`.
+Allow `SetServiceTargetHeadway` after deployment by removing only the assigned-fleet rejection from `set_service_target_headway`.
 
-Keep the rest of the mutation deliberately narrow:
+Keep the mutation narrow:
 
-- line ID resolves Bus vs Metro in Rust;
-- target must be at least 60 seconds;
-- the mutation changes only `target_headway_seconds`;
-- no vehicle is added, removed, moved, re-spaced, parked, or reassigned;
-- no passenger/trip state is touched;
-- service metrics are re-derived from the accepted snapshot as they are today.
+- resolve Bus vs Metro in Rust;
+- keep the 60-second minimum and existing numeric validation;
+- change only `target_headway_seconds`;
+- do not add/remove/move/re-space/park/reassign vehicles;
+- do not mutate passengers, route geometry, cursor state, or active trips;
+- re-derive ordinary service metrics from the accepted snapshot.
 
-`FleetAlreadyAssigned` remains valid for a second `DeployInitialFleet` attempt, so do not remove that rejection code.
+`FleetAlreadyAssigned` remains valid for a second `DeployInitialFleet` attempt.
 
-Changing the target changes the recommendation, not the fleet. Tightening may raise `requiredFleet`; loosening may leave a surplus fleet running. No automatic purchase, retirement, refund, or operating-cost saving is implied.
+Changing the target changes the recommendation, not the fleet. Tightening may raise `requiredFleet`; loosening may leave `assignedFleet > requiredFleet`. No automatic purchase, retirement, refund, or operating-cost saving is implied.
 
 ## 3. Recommended fleet is guidance, not a purchase ceiling
 
-The player may explicitly buy one additional vehicle whenever all of these are true:
+The player may explicitly buy one additional vehicle when:
 
-- the line has an already-deployed fleet (`assignedFleet > 0`);
+- a deployed fleet exists (`assignedFleet > 0`);
 - a valid target exists;
 - the route itself is active;
 - the route is operational/connected;
 - the existing purchase policy permits the spend.
 
-`assignedFleet < requiredFleet` is **not** an eligibility rule anymore. `requiredFleet` remains useful planning guidance for the target interval, but the player may intentionally run extra capacity.
+`assignedFleet < requiredFleet` is no longer an eligibility rule. `requiredFleet` remains planning guidance for the target interval, but the player may intentionally run extra capacity.
 
-Keep the existing public seams:
+Keep the public seams:
 
 - `AddServiceVehicle` remains the gameplay intent;
-- `nextVehicleCost` remains the Rust-owned price/eligibility output;
-- current Bus/Metro vehicle prices and `CostPolicy` remain authoritative;
+- `nextVehicleCost` remains the Rust-owned published offer/price;
+- current Bus/Metro prices and `CostPolicy` remain authoritative;
 - one accepted dispatch adds exactly one correctly typed vehicle.
 
-The private helper should reflect the new semantics. Rename `top_up_offer(...)` to a name such as `add_vehicle_offer(...)` rather than retaining a shortfall-oriented name after shortfall stops being part of the rule. Both service metrics and `add_service_vehicle(...)` continue to use that one helper so UI offer state and dispatch eligibility cannot drift.
+Rename the private `top_up_offer(...)` helper to a neutral name such as `add_vehicle_offer(...)` and use it to publish `nextVehicleCost` from service metrics. The helper no longer needs `requiredFleet` or global-pause state.
 
-### Preserve the existing insertion behavior
+`AddServiceVehicle` itself keeps the existing typed validation for zero fleet/missing target, inactive service, disconnected service, invalid target, purchase authorization, and insertion. Once the shortfall/pause gates are removed, do not keep a redundant offer re-check that can only silently return a free no-op after those typed checks have already passed.
 
-HPA-628 already inserts the newly purchased vehicle at the midpoint of the largest current cycle gap. Keep that behavior.
+### Preserve existing insertion behavior
 
-The rule is:
+Keep HPA-628's deterministic largest-gap insertion for the newly purchased vehicle:
 
-- preserve every existing vehicle's cursor/passengers/placement;
-- place only the new vehicle using the existing deterministic largest-gap insertion;
-- do not re-space, rebalance, or otherwise move the existing fleet;
-- do not introduce a fleet optimizer.
-
-This retains the useful HPA-628 behavior without implying perfect headway equalization.
+- preserve all existing vehicle IDs, cursors, parked positions, and passengers;
+- place only the new vehicle at the midpoint of the current largest cycle gap;
+- do not move/re-space/rebalance existing vehicles;
+- do not add a fleet optimizer.
 
 ### Zero fleet and route failures
 
-A zero-fleet route still uses the existing initial-deployment flow. `AddServiceVehicle` does not become an alternate first-deployment path.
+A zero-fleet route still uses `DeployInitialFleet`; `AddServiceVehicle` is not an alternate first-deployment path.
 
-A route that is itself paused/inactive or broken/disconnected still cannot buy a vehicle through this action.
+A route that is itself inactive or broken/disconnected still cannot buy through Add.
 
 ### Global simulation pause
 
-A globally paused simulation should still expose and accept line-operating actions for an otherwise active, operational service. Pause is a natural time for the player to inspect and tune the network.
+Global simulation pause is a planning state, not a line-operating lock. An otherwise active, operational deployed service should continue to publish `nextVehicleCost` and accept one Add action while the simulation is globally paused.
 
-Therefore global pause must not suppress `nextVehicleCost` or force `AddServiceVehicle` to no-op. This is a Rust service-control contract: remove the global-pause gate from the shared offer/dispatch eligibility, while route-active and route-operational checks remain authoritative. `LinesPanel` does not need pause-specific state or logic; it continues to render the Add action solely from `nextVehicleCost`.
+This does not change route-level active/broken eligibility.
 
-## 4. Operating information must stay descriptive
+## 4. Operating information stays descriptive
 
-Keep one Lines-panel row model and use the existing Rust-owned metrics.
+Keep one Lines-panel row model and use existing Rust-owned values.
 
-For each deployed line show:
+For a deployed line show:
 
 - editable **Target**;
-- **Estimated interval** using the existing `nominalHeadwaySeconds` value;
-- current assigned fleet plus **Recommended** fleet using the existing `requiredFleet` value;
+- **Estimated interval** using existing `nominalHeadwaySeconds`;
+- current assigned **Fleet**;
+- **Recommended** fleet using existing `requiredFleet`;
 - current **Daily cost**;
-- nominal next-vehicle purchase price through the existing Add button when eligible;
 - **Longest wait** whenever `longestWaitSeconds !== null`;
-- the existing target/patience-relative warning when `waitingAtRiskCount > 0`.
+- the existing at-risk warning when its existing warning eligibility is met;
+- Add bus/train with Rust-owned `nextVehicleCost` when eligible.
 
-Keep internal field names such as `requiredFleet` and `nominalHeadwaySeconds`. They are stable domain/projection names and do not need a wire/schema rename merely because the player-facing copy becomes `Recommended` and `Estimated interval`.
+Keep internal/wire names such as `requiredFleet` and `nominalHeadwaySeconds`; only player-facing copy changes.
 
-A compact deployed presentation can read conceptually as:
+A compact deployed presentation can read:
 
 ```text
 Target                 4 min   [edit]
@@ -162,202 +155,126 @@ Longest wait           5.2 min
 [Add bus · $2,000]
 ```
 
-Do not render `4 / 3 required`; extra fleet is now a valid player choice.
+Do not render `4 / 3 required`; surplus fleet is a valid player choice.
+
+For a zero-fleet line, rename the existing player-facing `Required` recommendation to `Recommended` while retaining the existing deployment-cost, estimated-daily-cost, and Deploy fleet flow.
 
 ### Raw wait and warning are different signals
 
-`longestWaitSeconds` is current observed wait evidence. `waitingAtRiskCount` is a warning derived relative to the current target and patience threshold.
+`longestWaitSeconds` is descriptive current wait evidence. `waitingAtRiskCount` is warning state derived relative to target/patience rules.
 
-Keep them separate in the UI:
+Keep them separate:
 
-- show `Longest wait` whenever there is at least one relevant waiting passenger;
-- `null` means no current waiter and should render as unavailable/absent, not as a measured zero;
-- a real zero-second wait remains a valid value;
-- show the warning only when `waitingAtRiskCount > 0`;
-- removing the warning because the target changed must not hide/reset the raw longest wait;
-- a successful purchase refreshes ordinary simulation/service values but does not display `problem solved` or equivalent causal language.
+- show `Longest wait` whenever `longestWaitSeconds !== null`, including on paused/broken deployed rows where current wait evidence still exists;
+- `null` means no current waiter and is distinct from a measured zero-second wait;
+- a real zero-second value renders as zero rather than disappearing;
+- changing the target may clear the risk count but must not mutate/hide the same raw wait;
+- a successful purchase refreshes ordinary metrics but does not display `problem solved` or similar causal language.
 
-Remove the current warning suffix `Add bus/train to recover`. The Add button remains nearby as an independent player action. A long wait alone is not a diagnosis that capacity is the cause.
+Preserve the current at-risk warning eligibility: the warning remains gated to a line whose route status is `running` and whose `waitingAtRiskCount > 0`. HPA-48 changes the warning copy, not this eligibility rule. Paused/broken rows may still show raw `Longest wait`, but not the running-service risk warning.
 
-No new reliability score, historical series, capacity diagnosis, or extra wait metric is justified.
+Remove the current warning suffix `Add bus/train to recover`. The Add button is an independent player action; a long wait alone is not a diagnosis that capacity is the cause.
 
-## Lines-panel UX
-
-Keep one list and one row model.
-
-For each line:
-
-- primary line summary selects/highlights the line using the existing toggle behavior;
-- explicit `Edit route` enters geometry editing through the existing draft gate;
-- rename/color/pause/delete/repair controls keep their current behavior;
-- target-headway input is available both before and after deployment;
-- pre-deployment rows keep Recommended fleet, estimated deployment cost, estimated daily cost, and Deploy fleet;
-- deployed rows use Estimated interval, Fleet, Recommended, Daily cost, raw Longest wait, factual risk warning, and the Add bus/train action.
-
-The deployed target input should reuse the same validation and callback as pre-deployment target editing. Do not create a second form model or duplicate target rules in TypeScript.
-
-Svelte formats and displays values. Rust owns target validation, recommendation math, purchase eligibility, price, cost policy, and wait metrics.
+No new reliability score, historical series, causal diagnosis, or wait metric is justified.
 
 ## State and persistence
 
-No new authoritative state is needed.
-
-Existing fields remain sufficient:
+No new authoritative state is needed. Existing fields are sufficient:
 
 - `targetHeadwaySeconds` — desired/planning interval;
 - `vehicleIds` — assigned fleet;
-- `serviceMetrics.requiredFleet` — current recommendation;
-- `serviceMetrics.nominalHeadwaySeconds` — current estimated interval from round-trip/fleet math;
-- `serviceMetrics.nextVehicleCost` — one-vehicle purchase offer/price;
-- `serviceMetrics.longestWaitSeconds` — raw current longest wait;
-- `serviceMetrics.waitingAtRiskCount` — target/patience-relative warning count;
+- `serviceMetrics.requiredFleet` — recommendation;
+- `serviceMetrics.nominalHeadwaySeconds` — estimated interval;
+- `serviceMetrics.nextVehicleCost` — one-vehicle offer/price;
+- `serviceMetrics.longestWaitSeconds` — raw current wait;
+- `serviceMetrics.waitingAtRiskCount` — warning count;
 - `selectedRouteId` — UI-only inspection selection.
 
-Therefore:
-
-- no schema bump;
-- no migration;
-- no new save field;
-- no new gameplay intent;
-- no compatibility alias;
-- no new backend query;
-- no new renderer/presentation schema solely for this slice.
+Therefore there is no schema bump, migration, new save field, new gameplay intent, compatibility alias, backend query, or renderer/presentation schema change.
 
 ## Rejection and stale-action behavior
 
-Keep authoritative dispatch validation.
+`SetServiceTargetHeadway` keeps:
 
-`SetServiceTargetHeadway`:
+- missing line -> `RouteNotFound`;
+- target below 60 seconds -> `InvalidHeadway`;
+- assigned fleet -> no longer a rejection.
 
-- missing line -> existing `RouteNotFound`;
-- target below 60 seconds -> existing `InvalidHeadway`;
-- assigned fleet is no longer a rejection.
+`AddServiceVehicle` keeps:
 
-`AddServiceVehicle`:
+- zero fleet or missing target -> existing free no-op preserving initial deployment;
+- inactive route -> `InactiveRoute`;
+- disconnected route -> `DisconnectedLeg`;
+- invalid forged target -> `InvalidHeadway`;
+- global simulation pause alone -> still eligible;
+- fleet at/above recommendation -> still eligible;
+- insufficient Standard budget -> atomic `InsufficientBudget` with unchanged state;
+- Creative -> existing non-deducting purchase behavior;
+- accepted dispatch -> exactly one new vehicle using existing largest-gap placement.
 
-- zero fleet or missing target -> unchanged/free no-op, preserving the initial-deployment path;
-- inactive route -> existing `InactiveRoute` rejection;
-- disconnected route -> existing `DisconnectedLeg` rejection;
-- global simulation pause alone -> still eligible if the route itself is active and operational;
-- assigned fleet at/above recommendation -> still eligible;
-- Standard mode insufficient budget -> existing atomic `InsufficientBudget` rejection with unchanged fleet/budget;
-- Creative mode -> existing non-deducting purchase behavior;
-- accepted dispatch -> append exactly one vehicle with existing largest-gap placement.
+Do not add a new rejection family.
 
-Do not add a new rejection family for this slice.
+## Risks and deliberate trade-offs
+
+Removing the recommendation ceiling makes Add intentionally open-ended.
+
+- **Purchases are irreversible in this slice.** There is no vehicle sale/retirement/removal action, so an over-purchased active line cannot reduce assigned fleet through HPA-48.
+- **Standard mode is budget-limited, not recommendation-limited.** Extra vehicles consume the normal purchase price and increase the line's ordinary recurring operating liability while active.
+- **Creative mode has no monetary brake.** Repeated Add actions can grow a fleet indefinitely from a product-rule perspective.
+
+This is accepted for HPA-48 because adding removal now introduces new choices about which vehicle leaves service, passenger handling, refunds, and placement/rebalancing semantics. Do not hide those decisions inside this slice.
+
+If playtesting shows irreversible over-purchase is a real usability problem, the named follow-up is an explicit one-vehicle removal/retirement control (for example a future `RemoveServiceVehicle` intent) with its own passenger/refund semantics. It is not a prerequisite for deployed tuning.
 
 ## Test strategy
 
-### Rust service-control tests
+Replace/invert existing tests that encode the old product rather than adding contradictory cases beside them.
 
-Several current tests encode the old product and must be **replaced/inverted**, not kept beside new tests:
+Rust coverage must prove:
 
-- `target_headway_is_setup_only_and_enforces_the_minimum` currently expects assigned fleet -> `FleetAlreadyAssigned`; retain its minimum/no-op coverage but replace the post-assignment lock with deployed-retarget behavior;
-- `repeated_top_up_actions_stop_at_the_live_requirement` currently asserts the recommendation is a hard purchase ceiling; replace it with successive accepted one-vehicle purchases at/above recommendation;
-- `add_service_vehicle_is_a_free_no_op_while_paused` and the paused-offer assertion inside `add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet` currently encode global pause suppression; invert them so pause keeps an otherwise valid offer/action;
-- `active_shortfall_metric_publishes_one_vehicle_price_but_pause_hides_it` currently expects pause to clear `next_vehicle_cost`; retain broken-route coverage but invert the paused case;
-- `top_up_offer_requires_an_operational_deployed_shortfall` becomes the renamed `add_vehicle_offer` unit contract and must assert at/above-recommendation eligibility instead of shortfall-only eligibility.
+- deployed Bus and Metro targets can change while preserving live state;
+- target floor and second-initial-deploy protections remain;
+- recommendation changes do not resize the fleet;
+- Bus/Metro can buy at or above recommendation;
+- successive valid Add actions remain available;
+- global simulation pause does not suppress the offer/action;
+- inactive/disconnected/zero-fleet/missing-target behavior remains correct;
+- Standard insufficient budget is atomic and Creative remains non-deducting;
+- existing vehicles remain unchanged while the new vehicle uses largest-gap insertion.
 
-The resulting behavior coverage proves:
+Use the existing wait fixtures for one retarget characterization: a waiter at 90 seconds is at risk under target 60, then target 120 clears the target-relative warning while the same trip and `longest_wait_seconds == Some(90.0)` remain unchanged.
 
-- deployed Bus target can change;
-- deployed Metro target can change;
-- target below 60 seconds still rejects;
-- retargeting preserves existing vehicle IDs, itinerary/path cursors, parked positions, passenger IDs, route/trip state, and budget;
-- target changes recompute `required_fleet` without adding/removing vehicles;
-- a looser target can leave `assigned_fleet > required_fleet`;
-- an active operational Bus can buy exactly one vehicle while already at/above recommendation;
-- Metro has the same at/above-recommendation purchase rule;
-- successive valid purchases remain available and each accepted dispatch adds exactly one vehicle;
-- existing vehicles remain bit-for-bit stable across the purchase while the new vehicle uses the existing largest-gap placement path;
-- insufficient Standard budget is atomic;
-- Creative purchase keeps budget unchanged;
-- global simulation pause does not hide/reject an otherwise valid Add action;
-- route inactive/disconnected still blocks Add;
-- second initial deployment still rejects with `FleetAlreadyAssigned`.
-
-Keep largest-gap algorithm unit tests where they already live; HPA-48 only needs integration coverage proving the revised eligibility still goes through that insertion path.
-
-For raw wait vs warning, extend the existing wait-test seams rather than creating another waiter pipeline:
-
-- keep `waiting_health_counts_past_target_or_low_patience_platform_waiters` and `waiting_health_does_not_inherit_previous_line_wait_across_transfer` as the formula/unit authority;
-- add one dispatch characterization in `crates/caelum-core/tests/service_control.rs` using the existing `waiting_transit_trip(...)` helper;
-- use a waiter at 90 seconds with patience still above the independent 60-second floor: target 60 -> risk > 0, retarget 120 -> same trip and `longest_wait_seconds = Some(90.0)`, risk 0.
-
-This proves a target change changes the warning threshold, not observed wait history/state, without duplicating waiter construction logic.
-
-### Runtime/UI tests
-
-Prove:
-
-- clicking the primary line summary invokes `onSelectRoute(lineId)`, not `onEditRoute`;
-- the existing runtime toggle remains authoritative: selecting the same line again clears selection; do not add sticky-selection behavior;
-- selected styling still comes from `route.selected`;
-- explicit `Edit route` invokes `onEditRoute(lineId)` once and uses the existing draft gate;
-- deployed Bus and Metro rows expose the same target editor used before deployment;
-- valid deployed target edits invoke `onSetServiceTargetHeadway` with seconds;
-- deployed labels say `Estimated interval` and `Recommended`, without `required` wording that makes surplus fleet look invalid;
-- `Longest wait` renders independently from the at-risk warning;
-- a zero-second longest wait is not treated as missing;
-- the warning contains factual wait/risk copy only and never `Add ... to recover`;
-- Add bus/train is rendered from `nextVehicleCost` even when assigned fleet is at/above recommendation;
-- Daily cost and other existing service readouts remain intact.
-
-Global-pause eligibility belongs to Rust tests because `LinesPanel` has no pause input; the component only observes `nextVehicleCost`. `RuntimeController.selectRoute` already has toggle coverage, so add runtime tests only if wiring reveals a genuinely missing contract.
-
-### Existing browser-flow assertions that must change
-
-Before adding the new HPA-48 journey, update the current Bus/Metro route E2E expectations that encode the old deployed UI:
-
-- deployed headway editor is absent -> now present;
-- `Nominal` -> `Estimated interval`;
-- `N / M required` -> separate `Fleet N` and `Recommended M` presentation;
-- existing Add-vehicle flow may continue to observe a non-null `nextVehicleCost` after a purchase.
-
-These are replacements to existing assertions, not a second E2E feature.
-
-### Representative browser flow
-
-Use one new Bus E2E, not duplicate Bus + Metro browser flows:
-
-1. create a Bus line with a valid initial target and deploy its initial fleet;
-2. return to the normal Lines list;
-3. select the line and assert it is highlighted without opening a route draft;
-4. record original fleet and current operating information;
-5. edit the deployed target to another valid value and read the post-dispatch runtime snapshot rather than duplicating recommendation math in Playwright;
-6. choose the deterministic fixture/target so the line is at or above its Rust recommendation;
-7. assert `nextVehicleCost` is still available;
-8. click Add bus once;
-9. assert assigned fleet is exactly `before + 1`, original vehicles are preserved, and Standard budget falls by the pre-click Rust price;
-10. assert the row refreshes Fleet/Recommended/Estimated interval/Daily cost and retains honest wait presentation without entering geometry edit.
-
-Metro parity stays at Rust/component level.
+UI/browser coverage must update both old pre-deploy/deployed copy contracts and add one Bus operating journey. Metro parity stays at Rust/component level.
 
 ## Alternatives rejected
 
 ### Automatically resize fleet when target changes
 
-Rejected. It couples a cheap planning edit to purchases/removals and creates refund/retirement/re-spacing semantics. Explicit one-at-a-time purchase is clearer and keeps target editing side-effect free.
+Rejected. It couples a cheap planning edit to purchases/removals and creates refund/retirement/re-spacing semantics.
 
 ### Keep recommendation as a hard purchase cap
 
-Rejected. The recommendation describes the fleet implied by the target interval; it should not prevent the player from intentionally buying reserve/extra capacity. Using it as a cap makes a planning estimate behave like an arbitrary fleet rule.
+Rejected. The recommendation describes the fleet implied by the target interval; it should not prevent intentional reserve/extra capacity.
 
 ### Add a separate desired-fleet value
 
-Rejected. The player already has direct one-at-a-time purchase control plus a target-derived recommendation. A second durable desired-fleet concept is unnecessary.
+Rejected. One-at-a-time purchase plus target-derived recommendation is sufficient for this slice.
+
+### Add vehicle removal in the same PR
+
+Rejected. It is a real product capability, but requires passenger/refund/which-vehicle semantics that are not necessary to unlock deployed tuning.
 
 ### Add a dedicated service-management screen
 
-Rejected. The Lines panel already has the relevant service readouts/actions and `selectedRouteId` already gives map-linked inspection.
+Rejected. The Lines panel and existing selection state already cover the operating loop.
 
 ### Infer capacity problems from long waits
 
-Rejected. Current waiting evidence is descriptive. Congestion, bunching, demand spikes, route shape, or capacity could all contribute. This slice does not build causal attribution.
+Rejected. Wait evidence is descriptive; congestion, bunching, demand, route shape, or capacity may contribute.
 
-### Build timetables, peak bands, depots, or automatic balancing
+### Timetables, peak bands, depots, or automatic balancing
 
-Rejected. None are required to make the existing target/fleet model operable.
+Rejected. None are required for this loop.
 
 ## Explicit non-goals
 
@@ -366,7 +283,7 @@ Rejected. None are required to make the existing target/fleet model operable.
 - durable desired-fleet count;
 - timetables or peak/off-peak targets;
 - depots, maintenance, crew, or inventory;
-- bunching detection, holding, or re-spacing of existing vehicles;
+- bunching detection, holding, or re-spacing existing vehicles;
 - recommendation engine or causal service diagnosis;
 - historical wait/cost dashboards;
 - new service-plan/domain abstraction;
@@ -380,4 +297,4 @@ Rejected. None are required to make the existing target/fleet model operable.
 
 ## Delivery
 
-HPA-48 stays one ticket and one PR. Amend these planning docs first, then keep implementation, tests, and the representative E2E on this same branch/PR.
+HPA-48 stays one ticket and one PR. Planning amendments, implementation, focused tests, the representative E2E, and necessary integration cleanup remain on this branch/PR.
