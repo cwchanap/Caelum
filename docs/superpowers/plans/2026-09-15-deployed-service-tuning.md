@@ -10,6 +10,8 @@ Raw current wait remains visible independently from target-relative warnings, an
 
 Keep this on the existing HPA-628/HPA-643 service-control seams. No new fleet manager, durable desired-fleet value, schema, gameplay intent, renderer path, backend query, or asset work.
 
+Several current tests intentionally encode the old product contract. Replace/invert those assertions in place rather than adding contradictory coverage beside them.
+
 ## Task 1 — Unlock deployed target editing in Rust
 
 **Files**
@@ -17,11 +19,30 @@ Keep this on the existing HPA-628/HPA-643 service-control seams. No new fleet ma
 - Modify: `crates/caelum-core/src/service_control.rs`
 - Modify: `crates/caelum-core/tests/service_control.rs`
 
-### 1.1 Replace the old lifecycle-lock test first
+### 1.1 Replace the existing setup-only target contract
 
-Find the service-control coverage that currently expects `SetServiceTargetHeadway` to return `FleetAlreadyAssigned` after deployment.
+Update the existing integration test:
 
-Replace that expectation with focused Bus and Metro tests proving a deployed target can change.
+```text
+target_headway_is_setup_only_and_enforces_the_minimum
+```
+
+Do not add a new deployed-target test while leaving its current `FleetAlreadyAssigned` assertion intact.
+
+Retain the useful assertions already in that test:
+
+- minimum target 60 seconds applies;
+- setting the same target is a no-op;
+- target below `MIN_HEADWAY_SECONDS` rejects with `InvalidHeadway`;
+- target edits do not change the structural route revision.
+
+Replace only the old final contract:
+
+```text
+assigned vehicle -> SetServiceTargetHeadway -> FleetAlreadyAssigned
+```
+
+with deployed-retarget coverage for Bus, and add focused Metro parity coverage.
 
 For the preservation case, snapshot the service and its vehicles before dispatch and compare after dispatch:
 
@@ -34,14 +55,13 @@ For the preservation case, snapshot the service and its vehicles before dispatch
 
 The target and derived recommendation may change; those existing live-state values must not.
 
-Add focused assertions for:
+Also pin:
 
-- target `< MIN_HEADWAY_SECONDS` still -> `InvalidHeadway`;
 - tighter target can raise live `required_fleet` without changing assigned fleet;
 - looser target can leave `assigned_fleet > required_fleet` without removing vehicles;
 - a second `DeployInitialFleet` still -> `FleetAlreadyAssigned`.
 
-Run the focused test before implementation and confirm the new deployed-edit expectation fails for the current fleet lock.
+Run the focused test before implementation and confirm the deployed-retarget expectation fails for the current fleet lock.
 
 ```bash
 cargo test -p caelum-core --test service_control
@@ -59,21 +79,38 @@ In `service_control::set_service_target_headway`:
 
 Do not change `deploy_initial_fleet` or any wire type in this task.
 
-### 1.3 Characterize raw wait vs target-relative warning
+### 1.3 Extend the existing wait fixtures for retarget characterization
 
-Add a controlled waiting fixture whose current wait is:
+Do not create another waiter builder or wait pipeline.
 
-- above an initial 60-second target;
-- below a later relaxed target;
-- not independently at risk through the patience floor.
+Keep these existing service-control unit tests as the formula authority:
 
-Prove before/after retargeting:
+```text
+waiting_health_counts_past_target_or_low_patience_platform_waiters
+waiting_health_does_not_inherit_previous_line_wait_across_transfer
+```
 
-- the waiting passenger/trip is unchanged;
-- `longest_wait_seconds` remains the same `Some(wait)`;
-- `waiting_at_risk_count` may clear because the target threshold changed.
+Add one integration dispatch characterization in `crates/caelum-core/tests/service_control.rs` using the existing:
 
-This locks the distinction between observed wait and warning threshold without adding a new metric.
+```text
+waiting_transit_trip(...)
+```
+
+Construct one waiter with:
+
+- current-leg wait = 90 seconds;
+- initial target = 60 seconds;
+- patience remaining above the independent 60-second patience-risk floor.
+
+Prove:
+
+1. before retarget: `longest_wait_seconds == Some(90.0)` and `waiting_at_risk_count > 0`;
+2. dispatch `SetServiceTargetHeadway` to 120 seconds;
+3. the same passenger/trip object is unchanged;
+4. `longest_wait_seconds == Some(90.0)` remains;
+5. `waiting_at_risk_count == 0` because only the target-relative threshold moved.
+
+This characterizes mutation behavior while leaving the existing unit tests responsible for the wait formula itself.
 
 ### 1.4 Verify Rust retarget behavior
 
@@ -95,17 +132,35 @@ feat: allow deployed service headway retargeting
 - Modify: `crates/caelum-core/src/service_control.rs`
 - Modify: `crates/caelum-core/tests/service_control.rs`
 
-The public product seam remains `AddServiceVehicle` + `nextVehicleCost`. Change only the eligibility rule that currently treats `requiredFleet` as a hard cap.
+The public product seam remains `AddServiceVehicle` + `nextVehicleCost`. Change only the eligibility rule that currently treats `requiredFleet` as a hard cap and global simulation pause as a blocker.
 
-### 2.1 Replace the old no-overbuy assumption with tests
+### 2.1 Replace the tests that encode shortfall-only / pause-only behavior
 
-Add focused tests first for both Bus and Metro proving an active, operational deployed service can buy one vehicle when:
+Replace or invert these existing integration contracts rather than adding new tests beside them:
 
 ```text
-assignedFleet >= requiredFleet
+repeated_top_up_actions_stop_at_the_live_requirement
+add_service_vehicle_is_a_free_no_op_while_paused
 ```
 
-Cover at least these cases:
+Also update the paused-offer assertion inside:
+
+```text
+add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet
+```
+
+That test currently creates a paused engine over the same durable state and expects `next_vehicle_cost == None`; after HPA-48 the same otherwise-active/operational route should continue publishing the offer.
+
+Replace/invert these unit contracts in `src/service_control.rs`:
+
+```text
+active_shortfall_metric_publishes_one_vehicle_price_but_pause_hides_it
+top_up_offer_requires_an_operational_deployed_shortfall
+```
+
+The second test should follow the helper rename described below.
+
+The resulting focused cases must prove:
 
 - Bus at recommendation -> one accepted Add -> assigned fleet increases by exactly one;
 - Bus already above recommendation -> another accepted Add -> exactly one more vehicle;
@@ -114,37 +169,45 @@ Cover at least these cases:
 - insufficient Standard budget leaves fleet and budget unchanged;
 - Creative accepts the purchase without deducting budget;
 - inactive and disconnected routes retain their existing rejections;
-- zero-fleet/missing-target service still does not use Add as an initial-deployment bypass.
+- zero-fleet/missing-target service still does not use Add as an initial-deployment bypass;
+- route active + operational + simulation globally paused still publishes `next_vehicle_cost` and accepts exactly one Add.
 
-Also add a global-pause case:
+### 2.2 Rename one private offer helper and keep both consumers aligned
 
-- route itself active and operational;
-- simulation globally paused;
-- `next_vehicle_cost` remains available;
-- `AddServiceVehicle` still buys exactly one vehicle.
+Rename:
 
-Pause is a player planning state, not a reason to disable an otherwise valid operating action.
+```text
+top_up_offer(...)
+```
 
-### 2.2 Preserve insertion behavior while removing the recommendation cap
-
-Rename the private `top_up_offer(...)` helper to a semantically accurate name such as:
+to a semantically accurate private helper such as:
 
 ```text
 add_vehicle_offer(...)
 ```
 
+Both existing consumers must continue to use the same helper:
+
+- `metrics(...)` when publishing `next_vehicle_cost`;
+- `add_service_vehicle(...)` when validating the live action.
+
 Its eligibility should be based on:
 
 - deployed fleet exists;
-- target exists/is valid through the surrounding service contract;
 - route is active;
 - route is operational/connected.
 
-Do **not** test or gate eligibility with `assigned_fleet < required_fleet`.
+Target presence/minimum remains validated by the surrounding service contract before purchase proceeds.
 
-Remove global simulation pause from this offer gate. Keep route-level active/connected checks.
+Do **not** gate the helper with:
 
-`metrics(...)` should continue publishing the same `nextVehicleCost` field; only its meaning changes from `shortfall top-up price` to `price for one currently eligible additional vehicle`.
+```text
+assigned_fleet < required_fleet
+```
+
+and do **not** suppress it because the entire simulation is globally paused.
+
+`requiredFleet` remains derived/published guidance, but no longer participates in purchase eligibility.
 
 In `add_service_vehicle(...)`:
 
@@ -159,10 +222,10 @@ Do not add a new desired-fleet field, purchase intent, or public service-plan ab
 
 ### 2.3 Preserve existing vehicles and largest-gap insertion
 
-Add/retain integration assertions proving:
+Retain/increase integration assertions proving:
 
 - existing vehicles keep their IDs, cursors, parked positions, and passengers;
-- exactly one new vehicle is appended;
+- exactly one new vehicle is appended per accepted dispatch;
 - the new vehicle follows the existing deterministic largest-gap placement path;
 - no existing vehicle is re-spaced or rebalanced.
 
@@ -190,9 +253,17 @@ feat: allow explicit extra service capacity
 - Modify: `tests/ui/linesPanel.test.ts`
 - Modify only if needed: `tests/ui/appShell.test.ts`
 
-`RuntimeController.selectRoute(routeId | null)` already exists and is already covered in runtime tests. Reuse it; do not add another runtime/UI state concept.
+`RuntimeController.selectRoute(routeId | null)` and `startRouteEdit(routeId)` already contain the required lifecycle semantics. Reuse them; do not add another runtime/UI state concept.
 
-### 3.1 Pin the interaction contract in component tests
+Current runtime behavior to preserve:
+
+- `selectRoute("route-001")` selects it;
+- selecting the same route again clears `selectedRouteId`;
+- `selectRoute` creates no route draft;
+- `startRouteEdit` is a no-op while another draft is open;
+- entering route edit continues to use the existing selected-route/draft lifecycle.
+
+### 3.1 Pin the component interaction contract
 
 Update `linesPanel.test.ts` so the primary line summary is expected to:
 
@@ -212,7 +283,7 @@ exactly once.
 
 Keep the existing `route.selected` visual assertion so selection remains a view-model concern rather than component-local state.
 
-Include the current route-draft gate in the shell-level coverage if needed: selecting/trying to edit another line must not silently discard or replace an open draft.
+Do not add a component-local sticky selection rule. The primary row inherits the existing runtime toggle semantics.
 
 ### 3.2 Restore the selection callback to LinesPanel
 
@@ -230,21 +301,17 @@ Add one explicit `Edit route` control alongside the existing row actions. It sho
 
 Do not make selection pause service, change simulation state, or implicitly enter geometry editing.
 
-### 3.3 Wire App to the existing runtime seam
+### 3.3 Wire App to the existing runtime seams
 
-Add/restore the small App handler:
+Add/restore the small App handler around:
 
 ```ts
-function handleSelectRoute(routeId: string | null): void {
-  if (runtime !== null) {
-    setSnapshot(runtime.selectRoute(routeId));
-  }
-}
+runtime.selectRoute(routeId)
 ```
 
-Pass it to `LinesPanel`/the relevant HUD composition next to `onEditRoute`.
+and pass it to `LinesPanel` next to the existing edit handler, which continues to call `startRouteEdit`.
 
-Do not modify `createGameRuntime.ts` or `runtime/types.ts` unless current code proves the existing `selectRoute` contract is missing.
+Do not modify `createGameRuntime.ts` or `runtime/types.ts` unless current code proves a genuinely missing contract. The existing runtime test already covers same-route toggle behavior; do not rewrite that behavior in this slice.
 
 ### 3.4 Verify component/runtime shell tests
 
@@ -264,24 +331,34 @@ Suggested commit:
 feat: separate line selection from route editing
 ```
 
-## Task 4 — Make deployed service information honest and operable
+## Task 4 — Make deployed service information honest and update existing UI/E2E contracts
 
 **Files**
 
 - Modify: `src/components/hud/panels/LinesPanel.svelte`
 - Modify: `tests/ui/linesPanel.test.ts`
+- Modify: `tests/e2e/routes.spec.ts`
 - Modify only if projection changes are genuinely needed: `src/runtime/runtimeSelectors.ts`, corresponding selector tests
 
 The current route view model already exposes `targetHeadwaySeconds`, `assignedFleet`, `requiredFleet`, `dailyOperatingCost`, `nextVehicleCost`, `nominalHeadwaySeconds`, `waitingAtRiskCount`, and `longestWaitSeconds`. Prefer using those as-is.
 
-### 4.1 Add UI tests first
+### 4.1 Replace existing Lines-panel assertions that encode the old copy/controls
 
-For deployed Bus and Metro fixtures:
+Update the existing deployed-service tests rather than layering new contradictory cases beside them.
+
+Current assertions to invert include:
+
+- deployed target input absent -> target input present;
+- `Nominal` -> `Estimated interval`;
+- `2 / 3 required` style fleet copy -> separate assigned Fleet and `Recommended` value;
+- `Add bus to recover` warning suffix -> factual risk warning only.
+
+For deployed Bus and Metro fixtures, prove:
 
 - target input is visible;
 - entering a valid whole-minute value and clicking Set calls `onSetServiceTargetHeadway(route.id, minutes * 60)` once;
-- `Nominal` player-facing copy becomes `Estimated interval`;
-- recommendation is shown separately from assigned fleet, e.g. `Fleet 4` + `Recommended 3`, not `4 / 3 required`;
+- `Estimated interval` uses existing `nominalHeadwaySeconds`;
+- recommendation is shown separately from assigned fleet, e.g. `Fleet 4` + `Recommended 3`;
 - `Longest wait` renders whenever `longestWaitSeconds !== null`;
 - `longestWaitSeconds === 0` renders as a real zero value rather than disappearing;
 - `waitingAtRiskCount === 0` hides the warning but does not hide a non-null Longest wait;
@@ -289,7 +366,7 @@ For deployed Bus and Metro fixtures:
 - Add bus/train is present whenever Rust supplies non-null `nextVehicleCost`, including fixtures at/above recommendation;
 - current Daily cost remains visible and updates from the ordinary route view model after a purchase.
 
-Keep TypeScript/Svelte free of recommendation, price, or purchase-eligibility calculations.
+Do not add a Lines-panel global-pause test: the component has no pause input and should continue rendering Add purely from `nextVehicleCost`. Pause eligibility is fully covered in Task 2 Rust tests.
 
 ### 4.2 Reuse one target editor before and after deployment
 
@@ -336,10 +413,36 @@ The dedicated `Longest wait` row carries the raw wait measurement and the nearby
 
 No new reliability score, success toast, before/after comparison, or inferred cause is needed.
 
-### 4.4 Verify UI tests
+### 4.4 Update the existing Bus/Metro E2E assertions before adding a new journey
+
+`tests/e2e/routes.spec.ts` already asserts the old deployed UI in existing Bus and Metro flows. Replace those assertions in this task:
+
+Bus deployed flow currently expects:
+
+```text
+Target / Nominal / Fleet
+N / M required
+no route-headway input after deployment
+```
+
+Metro deployed flow encodes the same absence/copy contract.
+
+Change them to assert:
+
+- deployed target input remains present;
+- `Estimated interval` replaces `Nominal`;
+- assigned Fleet and Recommended are separate;
+- setup-only deploy controls remain absent after deployment.
+
+Keep the existing add-vehicle E2E tolerant of whatever Rust publishes for the next `nextVehicleCost`; under the revised rule it should normally remain non-null while the service stays eligible.
+
+This makes the existing suite reflect HPA-48 before Task 5 adds the new operating journey.
+
+### 4.5 Verify existing UI/browser contracts
 
 ```bash
 bunx vitest run tests/ui/linesPanel.test.ts
+bun run test:e2e -- tests/e2e/routes.spec.ts
 ```
 
 Suggested commit:
@@ -354,6 +457,8 @@ feat: polish deployed service controls
 
 - Modify: `tests/e2e/routes.spec.ts`
 - Reuse existing helpers; avoid adding a new E2E helper layer unless an exact helper is already missing from multiple tests.
+
+Task 4 has already updated the existing Bus/Metro deployed-service assertions. This task adds only the new connected HPA-48 operating flow.
 
 ### 5.1 Build a deterministic Bus case
 
@@ -373,7 +478,7 @@ Flow:
 10. record Rust-provided `nextVehicleCost`;
 11. click Add bus once;
 12. assert assigned fleet is exactly `before + 1`, original vehicles remain present, and Standard budget falls by the recorded Rust price;
-13. assert the row refreshes Fleet, Recommended, Estimated interval, Daily cost, and wait presentation from current state;
+13. assert the row refreshes Fleet, Recommended, Estimated interval, Daily cost, and honest wait presentation from current state;
 14. assert geometry edit was never entered during selection/retarget/purchase.
 
 Do not use elapsed browser time to prove a service improvement. The E2E is an operating-flow test, not a causal simulation benchmark.
