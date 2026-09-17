@@ -28,6 +28,7 @@ function callbacks() {
     onDeleteRoute: vi.fn(),
     onFocusRouteFailure: vi.fn(),
     onEditRoute: vi.fn(),
+    onSelectRoute: vi.fn(),
     onSetServiceTargetHeadway: vi.fn(),
     onDeployInitialFleet: vi.fn(),
     onAddServiceVehicle: vi.fn(),
@@ -160,15 +161,32 @@ describe("LinesPanel line workspace", () => {
     expect(props.onSetTool).toHaveBeenCalledWith("metroLine");
   });
 
-  it("uses the labelled primary row to launch route editing", async () => {
+  it("selects a route from the primary row without opening the editor", async () => {
+    const routes = routeFixtures();
+    routes[0].selected = true;
+    const props = panelProps({ routes });
+    render(LinesPanel, { props });
+
+    const select = screen.getByRole("button", { name: "Select Harbour Bus" });
+    expect(select).toHaveClass("active");
+    expect(select).toHaveAttribute("aria-pressed", "true");
+
+    await fireEvent.click(select);
+    expect(props.onSelectRoute).toHaveBeenCalledTimes(1);
+    expect(props.onSelectRoute).toHaveBeenCalledWith("route-bus-001");
+    expect(props.onEditRoute).not.toHaveBeenCalled();
+  });
+
+  it("offers an explicit Edit route action that launches route editing", async () => {
     const props = panelProps();
     render(LinesPanel, { props });
 
     await fireEvent.click(
-      screen.getByRole("button", { name: "Edit Harbour Bus" }),
+      screen.getByRole("button", { name: "Edit route Harbour Bus" }),
     );
     expect(props.onEditRoute).toHaveBeenCalledTimes(1);
     expect(props.onEditRoute).toHaveBeenCalledWith("route-bus-001");
+    expect(props.onSelectRoute).not.toHaveBeenCalled();
   });
 
   it("commits a route rename once when Enter is followed by blur", async () => {
