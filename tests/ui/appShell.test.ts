@@ -1326,7 +1326,7 @@ describe("App command shell", () => {
     );
     const service = screen.getByTestId("route-service-route-001");
     expect(service).toHaveTextContent("Target");
-    expect(service).toHaveTextContent("Required");
+    expect(service).toHaveTextContent("Recommended");
     expect(screen.queryByTestId("route-deploy-route-001")).toBeNull();
   });
 
