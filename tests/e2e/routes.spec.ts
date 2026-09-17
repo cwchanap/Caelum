@@ -661,30 +661,32 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     .toBe(true);
   await expect(service).toContainText("1.0 min");
 
-  // Required N is the Rust-derived row value (informational estimate). The
+  // Recommended N is the Rust-derived row value (informational estimate). The
   // Deploy button does not promise a specific count: on Tauri a tick in flight
   // when the click queues can change road flow before deploy_bus_fleet
   // recomputes required_fleet, so the purchased count is whatever Rust derives
   // at execution time. Assert the deployed count equals the post-deploy
-  // assignedFleet / Fleet readout rather than the pre-click Required readout.
-  const requiredReadout = service
-    .getByText("Required")
+  // assignedFleet Fleet readout rather than the pre-click Recommended readout.
+  const recommendedReadout = service
+    .getByText("Recommended")
     .locator("xpath=following-sibling::span[1]");
-  let requiredText = "";
+  let recommendedText = "";
   await expect
     .poll(async () => {
-      requiredText = ((await requiredReadout.textContent()) ?? "")
+      recommendedText = ((await recommendedReadout.textContent()) ?? "")
         .replace(/\s+/g, " ")
         .trim();
-      return requiredText;
+      return recommendedText;
     })
     .toMatch(/^\d+ bus(?:es)?$/);
-  const requiredFleet = Number(requiredText.match(/^(\d+) bus(?:es)?$/)![1]);
-  expect(requiredFleet).toBeGreaterThan(0);
+  const recommendedFleet = Number(
+    recommendedText.match(/^(\d+) bus(?:es)?$/)![1],
+  );
+  expect(recommendedFleet).toBeGreaterThan(0);
   const persisted = (await runtimeSnapshot(page)).state.transit.routes.find(
     (candidate) => candidate.id === "route-001",
   )!;
-  expect(persisted.serviceMetrics?.requiredFleet).toBe(requiredFleet);
+  expect(persisted.serviceMetrics?.requiredFleet).toBe(recommendedFleet);
   const deploy = page.getByRole("button", { name: "Deploy fleet" });
   await expect(deploy).toBeVisible();
 
@@ -720,22 +722,29 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     throw new Error("Post-deploy Rust required fleet is missing");
   }
 
-  // Post-deployment UI shows Target/Nominal/Fleet with the set/derived values and no setup controls.
+  // Post-deployment UI keeps the target editor and shows Estimated interval
+  // with separate Fleet/Recommended values; setup deploy controls stay absent.
   await expect(
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
   ).toHaveText("1.0 min");
   await expect(
-    service.getByText("Nominal").locator("xpath=following-sibling::span[1]"),
+    service
+      .getByText("Estimated interval")
+      .locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText(`${deployedFleet} / ${postDeployRequired} required`);
-  await expect(service.getByText("Required", { exact: true })).toHaveCount(0);
+  ).toHaveText(String(deployedFleet));
+  await expect(
+    service
+      .getByText("Recommended")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(new RegExp(`^${postDeployRequired} bus(?:es)?$`));
   await expect(service.getByText("No fleet")).toHaveCount(0);
-  await expect(page.getByTestId("route-headway-route-001")).toHaveCount(0);
+  await expect(page.getByTestId("route-headway-route-001")).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Set", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(
     page.getByRole("button", { name: /Deploy/, exact: true }),
   ).toHaveCount(0);
@@ -764,7 +773,7 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   // Resume before editing so the live Rust metrics can publish a top-up offer.
   await page.getByRole("button", { name: "Resume" }).click();
 
-  await page.getByRole("button", { name: /Edit Bus 1/ }).click();
+  await page.getByRole("button", { name: "Edit route Bus 1" }).click();
   await page.getByTestId("route-waypoint-2").click();
   await page.getByRole("button", { name: "Insert after" }).click();
   await clickMapTile(canvas, FARTHER_ROUTE_STOP);
@@ -923,7 +932,7 @@ test("turns between paired roads and edits the committed route", async ({
     .toBe(true);
 
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: /Edit Bus 1/ }).click();
+  await page.getByRole("button", { name: "Edit route Bus 1" }).click();
   await page.getByTestId("route-waypoint-0").click();
   await page.getByRole("button", { name: "Insert after" }).click();
   await clickMapTile(canvas, EXTRA_TURN_STOP);
@@ -1057,7 +1066,9 @@ test("starts a Metro service by setting a target headway and deploying the fleet
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
   ).toHaveText("6.0 min");
   await expect(
-    service.getByText("Required").locator("xpath=following-sibling::span[1]"),
+    service
+      .getByText("Recommended")
+      .locator("xpath=following-sibling::span[1]"),
   ).toHaveText("1 train");
   await expect(
     service
@@ -1081,12 +1092,15 @@ test("starts a Metro service by setting a target headway and deploying the fleet
     .toBe(true);
   expect(vehicleIds).not.toEqual([]);
 
-  // Deployment switches the row to Target/Nominal/Fleet and removes setup controls.
+  // Deployment keeps the target editor and switches the row to Estimated
+  // interval with separate Fleet/Recommended; setup deploy controls stay absent.
   await expect(
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
   ).toHaveText("6.0 min");
   await expect(
-    service.getByText("Nominal").locator("xpath=following-sibling::span[1]"),
+    service
+      .getByText("Estimated interval")
+      .locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
   const postDeploySnapshot = await runtimeSnapshot(page);
   const postDeployLine = postDeploySnapshot.state.transit.metroLines.find(
@@ -1098,13 +1112,17 @@ test("starts a Metro service by setting a target headway and deploying the fleet
   }
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText(`${vehicleIds.length} / ${postDeployRequired} required`);
-  await expect(service.getByText("Required", { exact: true })).toHaveCount(0);
+  ).toHaveText(String(vehicleIds.length));
+  await expect(
+    service
+      .getByText("Recommended")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(new RegExp(`^${postDeployRequired} trains?$`));
   await expect(service.getByText("Est. deploy cost")).toHaveCount(0);
-  await expect(page.getByTestId(`route-headway-${lineId}`)).toHaveCount(0);
+  await expect(page.getByTestId(`route-headway-${lineId}`)).toBeVisible();
   await expect(
     page.getByRole("button", { name: "Set", exact: true }),
-  ).toHaveCount(0);
+  ).toBeVisible();
   await expect(page.getByTestId(`route-deploy-${lineId}`)).toHaveCount(0);
 
   // Resume the paused sim and confirm the clock advances.
