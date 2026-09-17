@@ -353,6 +353,12 @@
     }
   }
 
+  function handleSelectRoute(routeId: string | null): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.selectRoute(routeId));
+    }
+  }
+
   function handleRenameRoute(routeId: string, name: string): void {
     if (runtime !== null) {
       void applyRuntimeResult(() => runtime.renameRoute(routeId, name));
@@ -708,6 +714,7 @@
             onDeleteRoute={handleDeleteRoute}
             onFocusRouteFailure={handleFocusRouteFailure}
             onEditRoute={handleStartRouteEdit}
+            onSelectRoute={handleSelectRoute}
             onSetServiceTargetHeadway={handleSetServiceTargetHeadway}
             onDeployInitialFleet={handleDeployInitialFleet}
             onAddServiceVehicle={handleAddServiceVehicle}

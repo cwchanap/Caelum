@@ -38,6 +38,7 @@
     onDeleteRoute: (routeId: string) => void;
     onFocusRouteFailure: (routeId: string, legIndex: number) => void;
     onEditRoute: (routeId: string) => void;
+    onSelectRoute: (routeId: string | null) => void;
     onSetServiceTargetHeadway: (
       routeId: string,
       targetHeadwaySeconds: number,
@@ -68,6 +69,7 @@
     onDeleteRoute,
     onFocusRouteFailure,
     onEditRoute,
+    onSelectRoute,
     onSetServiceTargetHeadway,
     onDeployInitialFleet,
     onAddServiceVehicle,
@@ -246,12 +248,12 @@
                     type="button"
                     class="route-select"
                     class:active={route.selected}
-                    aria-label={`Edit ${route.name}`}
+                    aria-label={`Select ${route.name}`}
                     aria-pressed={route.selected}
                     style={`--route-color: ${route.color}`}
                     onclick={() => {
                       pendingDeleteId = null;
-                      onEditRoute(route.id);
+                      onSelectRoute(route.id);
                     }}
                   >
                     <span class="route-swatch" aria-hidden="true"></span>
@@ -483,6 +485,18 @@
                   </button>
                 {/if}
                 <div class="route-item-controls">
+                  <button
+                    type="button"
+                    class="route-toggle"
+                    data-testid={`route-edit-${route.id}`}
+                    aria-label={`Edit route ${route.name}`}
+                    onclick={() => {
+                      pendingDeleteId = null;
+                      onEditRoute(route.id);
+                    }}
+                  >
+                    Edit
+                  </button>
                   <button
                     type="button"
                     class="route-toggle"
