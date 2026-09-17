@@ -494,6 +494,7 @@ fn target_headway_is_a_persistent_planning_input_and_enforces_the_minimum() {
     // every live vehicle and trip value is preserved.
     let mut deployed = one_bus_service_engine();
     let service_before = deployed.snapshot();
+    let service_revision = service_before.transit.routes[0].revision;
     let retarget = deployed.dispatch(GameIntent::SetServiceTargetHeadway {
         line_id: "route-001".to_string(),
         target_headway_seconds: 120,
@@ -508,7 +509,7 @@ fn target_headway_is_a_persistent_planning_input_and_enforces_the_minimum() {
         Some(120)
     );
     assert_eq!(
-        service_after.transit.routes[0].revision, revision,
+        service_after.transit.routes[0].revision, service_revision,
         "target edits do not change structural route revision"
     );
     assert_eq!(
