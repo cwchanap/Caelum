@@ -771,7 +771,8 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   const initialAssigned = deployedRoute.vehicleIds.length;
   expect(initialAssigned).toBeGreaterThan(0);
 
-  // Resume before editing so the live Rust metrics can publish a top-up offer.
+  // Resume so the unpaused simulation keeps live metrics and service state
+  // refreshed through the edits and the paid top-up below.
   await page.getByRole("button", { name: "Resume" }).click();
 
   await page.getByRole("button", { name: "Edit route Bus 1" }).click();

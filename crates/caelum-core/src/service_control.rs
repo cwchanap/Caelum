@@ -101,15 +101,17 @@ fn service_mode(state: &GameSnapshot, line_id: &str) -> Option<TransitMode> {
 }
 
 /// Return the nominal price for one additional vehicle on an active,
-/// operational, already-deployed service. The fleet recommendation is
-/// planning guidance, not an eligibility rule.
+/// operational, already-deployed service with a valid target headway. The
+/// fleet recommendation is planning guidance, not an eligibility rule.
 fn add_vehicle_offer(
     active: bool,
     legs: &[RouteLegPath],
     mode: TransitMode,
     assigned_fleet: usize,
+    has_target: bool,
 ) -> Option<i32> {
-    (active && is_route_operational(active, legs) && assigned_fleet > 0).then(|| vehicle_cost(mode))
+    (active && is_route_operational(active, legs) && assigned_fleet > 0 && has_target)
+        .then(|| vehicle_cost(mode))
 }
 
 /// Set the persistent planning target headway for a transit line — valid
@@ -360,7 +362,13 @@ fn metrics(
     } else {
         None
     };
-    let next_vehicle_cost = add_vehicle_offer(route_active, legs, mode, assigned_fleet);
+    let next_vehicle_cost = add_vehicle_offer(
+        route_active,
+        legs,
+        mode,
+        assigned_fleet,
+        target_headway_seconds.is_some(),
+    );
     Some(ServiceMetrics {
         round_trip_seconds,
         assigned_fleet,
@@ -1150,7 +1158,7 @@ mod tests {
     }
 
     #[test]
-    fn add_vehicle_offer_requires_an_operational_deployed_fleet() {
+    fn add_vehicle_offer_requires_an_operational_deployed_fleet_and_target() {
         let route = route_with_legs(vec![leg(
             RouteLegKind::Service,
             ServiceDirection::Outbound,
@@ -1159,27 +1167,32 @@ mod tests {
             road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
         )]);
         assert_eq!(
-            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 1),
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 1, true),
             Some(BUS_COST)
         );
         assert_eq!(
-            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 2),
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 2, true),
             Some(BUS_COST),
             "above the recommendation remains eligible"
         );
         assert_eq!(
-            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 0),
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 0, true),
             None
         );
         assert_eq!(
-            super::add_vehicle_offer(false, &route.legs, TransitMode::Bus, 1),
+            super::add_vehicle_offer(false, &route.legs, TransitMode::Bus, 1, true),
             None
+        );
+        assert_eq!(
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 1, false),
+            None,
+            "a fleet without a target headway gets no offer"
         );
 
         let mut broken = route.legs.clone();
         broken[0].status = RouteLegStatus::NetworkDisconnected;
         assert_eq!(
-            super::add_vehicle_offer(true, &broken, TransitMode::Bus, 1),
+            super::add_vehicle_offer(true, &broken, TransitMode::Bus, 1, true),
             None
         );
     }
