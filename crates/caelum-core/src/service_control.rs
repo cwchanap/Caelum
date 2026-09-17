@@ -100,21 +100,16 @@ fn service_mode(state: &GameSnapshot, line_id: &str) -> Option<TransitMode> {
     }
 }
 
-/// Return the nominal price for one additional vehicle only when a currently
-/// usable service has a live fleet shortfall.
-fn top_up_offer(
+/// Return the nominal price for one additional vehicle on an active,
+/// operational, already-deployed service. The fleet recommendation is
+/// planning guidance, not an eligibility rule.
+fn add_vehicle_offer(
     active: bool,
     legs: &[RouteLegPath],
     mode: TransitMode,
     assigned_fleet: usize,
-    required_fleet: Option<usize>,
 ) -> Option<i32> {
-    if !active || !is_route_operational(active, legs) || assigned_fleet == 0 {
-        return None;
-    }
-    required_fleet
-        .filter(|required| assigned_fleet < *required)
-        .map(|_| vehicle_cost(mode))
+    (active && is_route_operational(active, legs) && assigned_fleet > 0).then(|| vehicle_cost(mode))
 }
 
 /// Set the persistent planning target headway for a transit line — valid
@@ -253,8 +248,9 @@ pub(crate) fn deploy_initial_fleet(
     Ok(CostedMutation::new(candidate))
 }
 
-/// Buy one vehicle for an already deployed service when its live timing now
-/// requires a larger fleet. Existing vehicles retain their exact cursors and
+/// Buy one vehicle for an already deployed service. The recommendation is
+/// guidance, not a cap, so explicit extra capacity is purchasable on any
+/// active, operational line. Existing vehicles retain their exact cursors and
 /// passenger state; only the appended vehicle is placed in the largest cycle
 /// gap.
 pub(crate) fn add_service_vehicle(
@@ -314,21 +310,6 @@ pub(crate) fn add_service_vehicle(
     let flow = crate::traffic::derive_road_flow(state);
     let round_trip_seconds = round_trip_seconds(legs, mode, &flow)
         .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
-    let required_fleet = required_fleet(round_trip_seconds, target_headway_seconds);
-    // Match populate_snapshot_metrics: a paused service publishes no top-up
-    // offer, so a paused dispatch must be a free no-op rather than charging
-    // the player for a vehicle the UI never offered.
-    if top_up_offer(
-        active && !state.paused,
-        legs,
-        mode,
-        assigned_fleet,
-        Some(required_fleet),
-    )
-    .is_none()
-    {
-        return Ok(CostedMutation::free(state.clone()));
-    }
 
     let existing_offsets: Vec<f64> = state
         .transit
@@ -353,10 +334,8 @@ pub(crate) fn add_service_vehicle(
 /// Derive service metrics for either transit mode. Returns `None` when no
 /// positive cycle time is derivable (any leg missing `current_path`, or a
 /// walk that sums to zero).
-#[allow(clippy::too_many_arguments)]
 fn metrics(
     route_active: bool,
-    globally_paused: bool,
     legs: &[RouteLegPath],
     mode: TransitMode,
     flow: &RoadFlow,
@@ -381,13 +360,7 @@ fn metrics(
     } else {
         None
     };
-    let next_vehicle_cost = top_up_offer(
-        route_active && !globally_paused,
-        legs,
-        mode,
-        assigned_fleet,
-        required_fleet,
-    );
+    let next_vehicle_cost = add_vehicle_offer(route_active, legs, mode, assigned_fleet);
     Some(ServiceMetrics {
         round_trip_seconds,
         assigned_fleet,
@@ -423,7 +396,6 @@ pub(crate) fn service_metrics_by_line(
         let health = waiting_health.get(&route.id).copied().unwrap_or_default();
         if let Some(value) = metrics(
             route.active,
-            snapshot.paused,
             &route.legs,
             TransitMode::Bus,
             &flow,
@@ -439,7 +411,6 @@ pub(crate) fn service_metrics_by_line(
         let health = waiting_health.get(&line.id).copied().unwrap_or_default();
         if let Some(value) = metrics(
             line.active,
-            snapshot.paused,
             &line.legs,
             TransitMode::Metro,
             &flow,
@@ -1008,7 +979,6 @@ mod tests {
 
         let metrics = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Metro,
             &heavy,
@@ -1033,7 +1003,6 @@ mod tests {
 
         let metrics = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1067,7 +1036,6 @@ mod tests {
 
         let metrics = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Metro,
             &RoadFlow::new(),
@@ -1097,7 +1065,6 @@ mod tests {
         route.target_headway_seconds = Some(300);
         let metrics = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Metro,
             &RoadFlow::new(),
@@ -1124,7 +1091,6 @@ mod tests {
 
         let metrics = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1136,11 +1102,15 @@ mod tests {
         assert_eq!(metrics.nominal_headway_seconds, Some(300.0));
         assert_eq!(metrics.required_fleet, Some(2));
         assert_eq!(metrics.assigned_fleet, 2);
-        assert_eq!(metrics.next_vehicle_cost, None);
+        assert_eq!(
+            metrics.next_vehicle_cost,
+            Some(BUS_COST),
+            "an at-recommendation fleet still publishes the purchase offer"
+        );
     }
 
     #[test]
-    fn active_shortfall_metric_publishes_one_vehicle_price_but_pause_hides_it() {
+    fn active_shortfall_metric_publishes_one_vehicle_price() {
         let mut route = route_with_legs(vec![leg(
             RouteLegKind::Service,
             ServiceDirection::Outbound,
@@ -1153,7 +1123,6 @@ mod tests {
 
         let active = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1169,7 +1138,6 @@ mod tests {
         broken_legs[0].status = RouteLegStatus::NetworkDisconnected;
         let broken = metrics(
             true,
-            false,
             &broken_legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1179,25 +1147,10 @@ mod tests {
         )
         .expect("broken route still has timing metrics");
         assert_eq!(broken.next_vehicle_cost, None);
-
-        let paused = metrics(
-            true,
-            true,
-            &route.legs,
-            TransitMode::Bus,
-            &RoadFlow::new(),
-            route.vehicle_ids.len(),
-            route.target_headway_seconds,
-            WaitingHealth::default(),
-        )
-        .expect("paused route still has timing metrics");
-        assert_eq!(paused.required_fleet, Some(2));
-        assert_eq!(paused.daily_operating_cost, 400);
-        assert_eq!(paused.next_vehicle_cost, None);
     }
 
     #[test]
-    fn top_up_offer_requires_an_operational_deployed_shortfall() {
+    fn add_vehicle_offer_requires_an_operational_deployed_fleet() {
         let route = route_with_legs(vec![leg(
             RouteLegKind::Service,
             ServiceDirection::Outbound,
@@ -1206,26 +1159,27 @@ mod tests {
             road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
         )]);
         assert_eq!(
-            super::top_up_offer(true, &route.legs, TransitMode::Bus, 1, Some(2)),
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 1),
             Some(BUS_COST)
         );
         assert_eq!(
-            super::top_up_offer(true, &route.legs, TransitMode::Bus, 2, Some(2)),
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 2),
+            Some(BUS_COST),
+            "above the recommendation remains eligible"
+        );
+        assert_eq!(
+            super::add_vehicle_offer(true, &route.legs, TransitMode::Bus, 0),
             None
         );
         assert_eq!(
-            super::top_up_offer(true, &route.legs, TransitMode::Bus, 0, Some(2)),
-            None
-        );
-        assert_eq!(
-            super::top_up_offer(false, &route.legs, TransitMode::Bus, 1, Some(2)),
+            super::add_vehicle_offer(false, &route.legs, TransitMode::Bus, 1),
             None
         );
 
         let mut broken = route.legs.clone();
         broken[0].status = RouteLegStatus::NetworkDisconnected;
         assert_eq!(
-            super::top_up_offer(true, &broken, TransitMode::Bus, 1, Some(2)),
+            super::add_vehicle_offer(true, &broken, TransitMode::Bus, 1),
             None
         );
     }
@@ -1275,7 +1229,6 @@ mod tests {
 
         let free_flow = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Bus,
             &RoadFlow::new(),
@@ -1291,7 +1244,6 @@ mod tests {
         congested.insert(outbound_point, 8u16);
         let congested = metrics(
             true,
-            false,
             &route.legs,
             TransitMode::Bus,
             &congested,
@@ -1424,7 +1376,6 @@ mod tests {
         assert_eq!(
             metrics(
                 true,
-                false,
                 &route.legs,
                 TransitMode::Bus,
                 &RoadFlow::new(),

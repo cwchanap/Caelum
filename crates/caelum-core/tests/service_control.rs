@@ -1112,7 +1112,7 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
         serde_json::json!(BUS_COST)
     );
     // An independent engine over the same durable snapshot stands in for the
-    // paused service: paused services never publish a top-up offer.
+    // paused service: global pause is a planning state, not a purchase lock.
     let paused = GameEngine::from_snapshot(state).expect("shortfall waiter loads");
     assert_eq!(
         paused.snapshot().transit.routes[0]
@@ -1120,8 +1120,8 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
             .as_ref()
             .expect("paused response has metrics")
             .next_vehicle_cost,
-        None,
-        "paused service must not publish a top-up offer"
+        Some(BUS_COST),
+        "globally paused service still publishes the purchase offer"
     );
     let existing = before.transit.vehicles.clone();
     let before_budget = before.budget;
@@ -1165,61 +1165,47 @@ fn add_service_vehicle_fills_bus_shortfall_without_repositioning_existing_fleet(
             .as_ref()
             .expect("top-up response has metrics")
             .next_vehicle_cost,
-        None
+        Some(BUS_COST),
+        "the purchase offer stays available after an accepted purchase"
     );
     let wire = serde_json::to_value(engine.snapshot()).expect("top-up response serializes");
     assert_eq!(
         wire["transit"]["routes"][0]["serviceMetrics"]["nextVehicleCost"],
-        serde_json::json!(null)
+        serde_json::json!(BUS_COST)
     );
 }
 
 #[test]
-fn add_service_vehicle_is_a_free_no_op_while_paused() {
+fn globally_paused_active_service_still_publishes_and_accepts_one_add() {
     let mut engine = shortfall_bus_engine();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: true })
+            .applied
+    );
     let before = engine.snapshot();
     assert_eq!(
         before.transit.routes[0]
             .service_metrics
             .as_ref()
-            .expect("shortfall route has metrics")
-            .next_vehicle_cost,
-        Some(BUS_COST),
-        "unpaused shortfall must publish a top-up offer"
-    );
-    let paused = engine.dispatch(GameIntent::SetPaused { paused: true });
-    assert!(paused.applied, "pause should apply: {paused:?}");
-    assert_eq!(
-        engine.snapshot().transit.routes[0]
-            .service_metrics
-            .as_ref()
             .expect("paused route has metrics")
             .next_vehicle_cost,
-        None,
-        "paused service must not publish a top-up offer"
+        Some(BUS_COST),
+        "global pause must not hide the purchase offer"
     );
 
     let result = engine.dispatch(GameIntent::AddServiceVehicle {
         line_id: "route-001".into(),
     });
-    assert!(!result.applied, "paused top-up must be a no-op: {result:?}");
-    assert!(
-        result.rejection.is_none(),
-        "paused top-up must not reject: {result:?}"
-    );
+    assert!(result.applied, "paused purchase should apply: {result:?}");
     assert_eq!(
         engine.snapshot().budget,
-        before.budget,
-        "paused top-up is free"
-    );
-    assert_eq!(
-        engine.snapshot().transit.vehicles.len(),
-        before.transit.vehicles.len(),
-        "paused top-up appends no vehicle"
+        before.budget - BUS_COST,
+        "a paused purchase is a real paid purchase"
     );
     assert_eq!(
         engine.snapshot().transit.routes[0].vehicle_ids.len(),
-        before.transit.routes[0].vehicle_ids.len()
+        before.transit.routes[0].vehicle_ids.len() + 1
     );
 }
 
@@ -1265,33 +1251,74 @@ fn add_service_vehicle_rejects_insufficient_standard_budget_atomically() {
     );
 }
 
+/// The recommendation is guidance, not a purchase cap: a bus exactly at the
+/// recommendation accepts one Add, and a bus already above it accepts another
+/// — each accepted dispatch appends exactly one vehicle and keeps the offer
+/// available.
 #[test]
-fn repeated_top_up_actions_stop_at_the_live_requirement() {
-    let mut engine = shortfall_bus_engine();
+fn repeated_add_actions_each_append_exactly_one_vehicle() {
+    let mut engine = one_bus_service_engine();
+    engine.set_budget_for_test(10 * BUS_COST);
     let before = engine.snapshot();
+    let before_metrics = before.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("deployed route has metrics");
+    assert_eq!(
+        before_metrics.required_fleet,
+        Some(before.transit.routes[0].vehicle_ids.len()),
+        "fixture deploys exactly the recommended fleet"
+    );
+    assert_eq!(before_metrics.next_vehicle_cost, Some(BUS_COST));
+
     let first = engine.dispatch(GameIntent::AddServiceVehicle {
         line_id: "route-001".into(),
     });
-    assert!(first.applied, "first top-up should apply: {first:?}");
+    assert!(
+        first.applied,
+        "at-recommendation add should apply: {first:?}"
+    );
     let after_first = engine.snapshot();
+    assert_eq!(
+        after_first.transit.routes[0].vehicle_ids.len(),
+        before.transit.routes[0].vehicle_ids.len() + 1
+    );
+    assert_eq!(after_first.budget, before.budget - BUS_COST);
     assert_eq!(
         after_first.transit.routes[0]
             .service_metrics
             .as_ref()
-            .expect("metrics after first top-up")
+            .expect("metrics after first add")
             .next_vehicle_cost,
-        None
+        Some(BUS_COST),
+        "the offer stays available while otherwise eligible"
     );
-    let stale = engine.dispatch(GameIntent::AddServiceVehicle {
+
+    // The fleet is now above the recommendation; an explicit extra capacity
+    // purchase is still accepted.
+    let second = engine.dispatch(GameIntent::AddServiceVehicle {
         line_id: "route-001".into(),
     });
-    assert!(!stale.applied, "stale top-up should be a no-op: {stale:?}");
-    assert!(stale.rejection.is_none());
-    assert_eq!(engine.snapshot().budget, after_first.budget);
-    assert_eq!(
-        engine.snapshot().transit.routes[0].vehicle_ids.len(),
-        before.transit.routes[0].vehicle_ids.len() + 1
+    assert!(
+        second.applied,
+        "above-recommendation add should apply: {second:?}"
     );
+    let after_second = engine.snapshot();
+    assert_eq!(
+        after_second.transit.routes[0].vehicle_ids.len(),
+        after_first.transit.routes[0].vehicle_ids.len() + 1
+    );
+    assert_eq!(after_second.budget, after_first.budget - BUS_COST);
+    let metrics = after_second.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("metrics after second add");
+    assert!(
+        after_second.transit.routes[0].vehicle_ids.len()
+            > metrics.required_fleet.expect("target is set"),
+        "fixture must end above the recommendation: {metrics:?}"
+    );
+    assert_eq!(metrics.next_vehicle_cost, Some(BUS_COST));
 }
 
 #[test]
@@ -1351,8 +1378,10 @@ fn add_service_vehicle_validates_service_state_before_budget() {
     );
 }
 
+/// `AddServiceVehicle` never bypasses initial deployment: a zero-fleet line
+/// and a fleet assigned before any target exists both stay free no-ops.
 #[test]
-fn zero_fleet_and_at_target_top_ups_are_no_ops() {
+fn zero_fleet_and_missing_target_adds_stay_free_no_ops() {
     let mut zero = bus_route_engine();
     assert!(
         zero.dispatch(GameIntent::SetServiceTargetHeadway {
@@ -1370,40 +1399,27 @@ fn zero_fleet_and_at_target_top_ups_are_no_ops() {
     assert_eq!(zero.snapshot().budget, zero_before.budget);
     assert!(zero.snapshot().transit.vehicles.is_empty());
 
-    let mut at_target = bus_route_engine();
+    // The legacy AssignVehicle seam can put a vehicle on a line with no
+    // target; Add must still not act as an alternate first-deployment path.
+    let mut missing_target = bus_route_engine();
+    let assigned = missing_target.dispatch(GameIntent::AssignVehicle {
+        mode: "bus".to_string(),
+        line_id: "route-001".to_string(),
+    });
     assert!(
-        at_target
-            .dispatch(GameIntent::SetServiceTargetHeadway {
-                line_id: "route-001".into(),
-                target_headway_seconds: 60,
-            })
-            .applied
+        assigned.applied,
+        "fixture vehicle should apply: {assigned:?}"
     );
-    assert!(
-        at_target
-            .dispatch(GameIntent::DeployInitialFleet {
-                line_id: "route-001".into(),
-            })
-            .applied
-    );
-    let at_target_before = at_target.snapshot();
-    assert_eq!(
-        at_target_before.transit.routes[0]
-            .service_metrics
-            .as_ref()
-            .expect("at-target metrics")
-            .next_vehicle_cost,
-        None
-    );
-    let at_target_result = at_target.dispatch(GameIntent::AddServiceVehicle {
+    let missing_before = missing_target.snapshot();
+    let missing_result = missing_target.dispatch(GameIntent::AddServiceVehicle {
         line_id: "route-001".into(),
     });
-    assert!(!at_target_result.applied);
-    assert!(at_target_result.rejection.is_none());
-    assert_eq!(at_target.snapshot().budget, at_target_before.budget);
+    assert!(!missing_result.applied);
+    assert!(missing_result.rejection.is_none());
+    assert_eq!(missing_target.snapshot().budget, missing_before.budget);
     assert_eq!(
-        at_target.snapshot().transit.vehicles.len(),
-        at_target_before.transit.vehicles.len()
+        missing_target.snapshot().transit.vehicles.len(),
+        missing_before.transit.vehicles.len()
     );
 }
 
@@ -1462,6 +1478,88 @@ fn metro_shortfall_adds_one_metro_vehicle_by_line_id() {
         .expect("metro vehicle appended");
     assert_eq!(vehicle.mode, TransitMode::Metro);
     assert_eq!(vehicle.capacity, METRO_CAPACITY);
+}
+
+/// Metro follows the same at/above-recommendation rule as bus: the
+/// recommendation is guidance, so an at-recommendation line accepts one Add
+/// and an above-recommendation line accepts another.
+#[test]
+fn metro_add_actions_follow_the_at_and_above_recommendation_rule() {
+    let mut engine = metro_line_engine();
+    engine.set_budget_for_test(10 * METRO_COST);
+    assert!(
+        engine
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "metro-001".into(),
+                target_headway_seconds: 60,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::DeployInitialFleet {
+                line_id: "metro-001".into(),
+            })
+            .applied
+    );
+    let before = engine.snapshot();
+    let before_metrics = before.transit.metro_lines[0]
+        .service_metrics
+        .as_ref()
+        .expect("deployed line has metrics");
+    assert_eq!(
+        before_metrics.required_fleet,
+        Some(before.transit.metro_lines[0].vehicle_ids.len()),
+        "fixture deploys exactly the recommended fleet"
+    );
+    assert_eq!(before_metrics.next_vehicle_cost, Some(METRO_COST));
+
+    let first = engine.dispatch(GameIntent::AddServiceVehicle {
+        line_id: "metro-001".into(),
+    });
+    assert!(
+        first.applied,
+        "at-recommendation metro add should apply: {first:?}"
+    );
+    let after_first = engine.snapshot();
+    assert_eq!(
+        after_first.transit.metro_lines[0].vehicle_ids.len(),
+        before.transit.metro_lines[0].vehicle_ids.len() + 1
+    );
+    assert_eq!(after_first.budget, before.budget - METRO_COST);
+    assert_eq!(
+        after_first.transit.metro_lines[0]
+            .service_metrics
+            .as_ref()
+            .expect("metrics after first add")
+            .next_vehicle_cost,
+        Some(METRO_COST),
+        "the offer stays available while otherwise eligible"
+    );
+
+    let second = engine.dispatch(GameIntent::AddServiceVehicle {
+        line_id: "metro-001".into(),
+    });
+    assert!(
+        second.applied,
+        "above-recommendation metro add should apply: {second:?}"
+    );
+    let after_second = engine.snapshot();
+    assert_eq!(
+        after_second.transit.metro_lines[0].vehicle_ids.len(),
+        after_first.transit.metro_lines[0].vehicle_ids.len() + 1
+    );
+    assert_eq!(after_second.budget, after_first.budget - METRO_COST);
+    assert!(
+        after_second.transit.metro_lines[0].vehicle_ids.len()
+            > after_second.transit.metro_lines[0]
+                .service_metrics
+                .as_ref()
+                .expect("metrics after second add")
+                .required_fleet
+                .expect("target is set"),
+        "fixture must end above the recommendation"
+    );
 }
 
 #[test]
@@ -1584,7 +1682,11 @@ fn engine_snapshot_publishes_bus_service_metrics() {
         "required fleet is ceil(cycle / target)"
     );
     assert_eq!(metrics.nominal_headway_seconds, Some(cycle));
-    assert_eq!(metrics.next_vehicle_cost, None);
+    assert_eq!(
+        metrics.next_vehicle_cost,
+        Some(BUS_COST),
+        "a deployed service always publishes the purchase offer"
+    );
     assert_eq!(metrics.waiting_at_risk_count, 0);
     assert_eq!(metrics.longest_wait_seconds, None);
 
