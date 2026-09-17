@@ -117,8 +117,10 @@ fn top_up_offer(
         .map(|_| vehicle_cost(mode))
 }
 
-/// Set the pre-deployment target for a transit line without changing its
-/// structural revision or fleet.
+/// Set the persistent planning target headway for a transit line — valid
+/// before and after deployment — without changing its structural revision,
+/// fleet, or any live vehicle/passenger state. Deriving required fleet from
+/// the new target is the metrics projection's job.
 pub(crate) fn set_service_target_headway(
     state: &GameSnapshot,
     line_id: &str,
@@ -126,33 +128,10 @@ pub(crate) fn set_service_target_headway(
 ) -> GameplayResult<GameSnapshot> {
     let mode = service_mode(state, line_id)
         .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, line_id))?;
-    let mut next = state.clone();
-    let vehicle_count = if mode == TransitMode::Bus {
-        next.transit
-            .routes
-            .iter()
-            .find(|route| route.id == line_id)
-            .expect("route was found before candidate construction")
-            .vehicle_ids
-            .len()
-    } else {
-        next.transit
-            .metro_lines
-            .iter()
-            .find(|line| line.id == line_id)
-            .expect("metro line was found before candidate construction")
-            .vehicle_ids
-            .len()
-    };
-    if vehicle_count > 0 {
-        return Err(route_rejection(
-            RejectionCode::FleetAlreadyAssigned,
-            line_id,
-        ));
-    }
     if target_headway_seconds < MIN_HEADWAY_SECONDS {
         return Err(route_rejection(RejectionCode::InvalidHeadway, line_id));
     }
+    let mut next = state.clone();
     if mode == TransitMode::Bus {
         next.transit
             .routes

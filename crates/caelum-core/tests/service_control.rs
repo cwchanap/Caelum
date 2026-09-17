@@ -449,7 +449,7 @@ fn metro_line_creation_is_fleet_free_and_budget_free() {
 }
 
 #[test]
-fn target_headway_is_setup_only_and_enforces_the_minimum() {
+fn target_headway_is_a_persistent_planning_input_and_enforces_the_minimum() {
     let mut engine = bus_route_engine();
     let before = engine.snapshot();
     let revision = before.transit.routes[0].revision;
@@ -490,22 +490,185 @@ fn target_headway_is_setup_only_and_enforces_the_minimum() {
         Some(60)
     );
 
-    let assigned = engine.dispatch(GameIntent::AssignVehicle {
-        mode: "bus".to_string(),
-        line_id: "route-001".to_string(),
-    });
-    assert!(
-        assigned.applied,
-        "low-level assignment should remain valid: {assigned:?}"
-    );
-    let locked = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+    // A deployed service can be retargeted: only the planning target moves;
+    // every live vehicle and trip value is preserved.
+    let mut deployed = one_bus_service_engine();
+    let service_before = deployed.snapshot();
+    let retarget = deployed.dispatch(GameIntent::SetServiceTargetHeadway {
         line_id: "route-001".to_string(),
         target_headway_seconds: 120,
     });
-    assert_eq!(
-        locked.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::FleetAlreadyAssigned),
+    assert!(
+        retarget.applied,
+        "deployed retarget should apply: {retarget:?}"
     );
+    let service_after = deployed.snapshot();
+    assert_eq!(
+        service_after.transit.routes[0].target_headway_seconds,
+        Some(120)
+    );
+    assert_eq!(
+        service_after.transit.routes[0].revision, revision,
+        "target edits do not change structural route revision"
+    );
+    assert_eq!(
+        service_after.transit.routes[0].vehicle_ids, service_before.transit.routes[0].vehicle_ids,
+        "vehicle IDs must survive retarget"
+    );
+    assert_eq!(
+        service_after.transit.vehicles, service_before.transit.vehicles,
+        "vehicle cursors, parked positions, and passengers must survive retarget"
+    );
+    assert_eq!(
+        service_after.active_trips, service_before.active_trips,
+        "trip state must survive retarget"
+    );
+    assert_eq!(service_after.budget, service_before.budget);
+    let second_deploy = deployed.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".to_string(),
+    });
+    assert_eq!(
+        second_deploy
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::FleetAlreadyAssigned),
+        "retargeting must not unlock a second initial deployment"
+    );
+
+    // A tighter target raises the recommendation without changing the fleet;
+    // a looser target leaves deployed surplus vehicles in place.
+    let mut tuned = long_bus_route_engine();
+    tuned.set_budget_for_test(10 * BUS_COST);
+    assert!(
+        tuned
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
+                target_headway_seconds: 3_600,
+            })
+            .applied
+    );
+    assert!(
+        tuned
+            .dispatch(GameIntent::DeployInitialFleet {
+                line_id: "route-001".to_string(),
+            })
+            .applied
+    );
+    let snapshot = tuned.snapshot();
+    let metrics = snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("deployed route has metrics");
+    assert_eq!(metrics.assigned_fleet, 1);
+    assert_eq!(metrics.required_fleet, Some(1));
+    let fleet = tuned.snapshot().transit.routes[0].vehicle_ids.clone();
+
+    assert!(
+        tuned
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
+                target_headway_seconds: 60,
+            })
+            .applied
+    );
+    let snapshot = tuned.snapshot();
+    let metrics = snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("tightened route has metrics");
+    assert_eq!(
+        metrics.assigned_fleet, 1,
+        "required fleet is guidance; the fleet does not change"
+    );
+    assert!(
+        metrics.required_fleet.unwrap_or(0) > 1,
+        "tighter target should raise required fleet: {metrics:?}"
+    );
+    assert_eq!(tuned.snapshot().transit.routes[0].vehicle_ids, fleet);
+
+    assert!(
+        tuned
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    let topped_up = tuned.dispatch(GameIntent::AddServiceVehicle {
+        line_id: "route-001".to_string(),
+    });
+    assert!(
+        topped_up.applied,
+        "shortfall top-up should apply: {topped_up:?}"
+    );
+    assert!(
+        tuned
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "route-001".to_string(),
+                target_headway_seconds: 3_600,
+            })
+            .applied
+    );
+    let snapshot = tuned.snapshot();
+    let metrics = snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("loosened route has metrics");
+    assert_eq!(metrics.required_fleet, Some(1));
+    assert!(
+        metrics.assigned_fleet > metrics.required_fleet.unwrap_or(0),
+        "looser target leaves deployed surplus: {metrics:?}"
+    );
+    assert_eq!(tuned.snapshot().transit.routes[0].vehicle_ids.len(), 2);
+    assert_eq!(tuned.snapshot().transit.vehicles.len(), 2);
+}
+
+#[test]
+fn deployed_metro_retarget_updates_target_without_touching_live_state() {
+    let mut engine = metro_line_engine();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "metro-001".to_string(),
+                target_headway_seconds: 3_600,
+            })
+            .applied
+    );
+    engine.set_budget_for_test(METRO_COST);
+    assert!(
+        engine
+            .dispatch(GameIntent::DeployInitialFleet {
+                line_id: "metro-001".to_string(),
+            })
+            .applied
+    );
+    let before = engine.snapshot();
+    let revision = before.transit.metro_lines[0].revision;
+
+    let retarget = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "metro-001".to_string(),
+        target_headway_seconds: 120,
+    });
+    assert!(
+        retarget.applied,
+        "metro retarget should apply: {retarget:?}"
+    );
+    let after = engine.snapshot();
+    assert_eq!(
+        after.transit.metro_lines[0].target_headway_seconds,
+        Some(120)
+    );
+    assert_eq!(
+        after.transit.metro_lines[0].revision, revision,
+        "target edits do not change structural line revision"
+    );
+    assert_eq!(
+        after.transit.vehicles, before.transit.vehicles,
+        "metro fleet live state must survive retarget"
+    );
+    assert_eq!(
+        after.transit.metro_lines[0].vehicle_ids,
+        before.transit.metro_lines[0].vehicle_ids
+    );
+    assert_eq!(after.budget, before.budget);
 }
 
 #[test]
@@ -1492,6 +1655,75 @@ fn engine_snapshot_publishes_waiting_health_for_bus_and_metro() {
     assert_eq!(
         value["transit"]["metroLines"][0]["serviceMetrics"]["longestWaitSeconds"],
         90.0
+    );
+}
+
+/// Retarget characterization on the existing wait fixture: loosening the
+/// target moves only the risk threshold — the waiter's accumulated wait and
+/// patience are untouched, so the risk count clears without any trip change.
+#[test]
+fn retargeting_moves_only_the_wait_risk_threshold() {
+    let waiting_point = Point { x: 2, y: 4 };
+    let mut bus = bus_route_engine();
+    assert!(
+        bus.dispatch(GameIntent::AssignVehicle {
+            mode: "bus".to_string(),
+            line_id: "route-001".to_string(),
+        })
+        .applied
+    );
+    let mut state = bus.snapshot_for_save();
+    state.transit.routes[0].target_headway_seconds = Some(60);
+    state.sims.push(waiting_sim("sim-001", waiting_point));
+    state.active_trips.push(waiting_transit_trip(
+        "retarget-waiter",
+        "sim-001",
+        "route-001",
+        TransitMode::Bus,
+        waiting_point,
+        Point { x: 12, y: 4 },
+        // 240 - 150 = 90s current-leg wait: past the 60s target, while
+        // patience (150s) stays above the separate 60s patience-risk floor.
+        150.0,
+    ));
+    let mut engine = GameEngine::from_snapshot(state).expect("targeted bus waiter loads");
+
+    let before = engine.snapshot();
+    let before_metrics = before.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("targeted waiter has metrics");
+    assert_eq!(before_metrics.longest_wait_seconds, Some(90.0));
+    assert!(before_metrics.waiting_at_risk_count > 0);
+    let trips_before = before.active_trips.clone();
+
+    let retarget = engine.dispatch(GameIntent::SetServiceTargetHeadway {
+        line_id: "route-001".to_string(),
+        target_headway_seconds: 120,
+    });
+    assert!(
+        retarget.applied,
+        "deployed retarget should apply: {retarget:?}"
+    );
+
+    let after = engine.snapshot();
+    assert_eq!(after.transit.routes[0].target_headway_seconds, Some(120));
+    assert_eq!(
+        after.active_trips, trips_before,
+        "the same passenger/trip object must be unchanged"
+    );
+    let metrics = after.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("retargeted waiter has metrics");
+    assert_eq!(
+        metrics.longest_wait_seconds,
+        Some(90.0),
+        "the wait itself did not change"
+    );
+    assert_eq!(
+        metrics.waiting_at_risk_count, 0,
+        "only the target threshold moved"
     );
 }
 
