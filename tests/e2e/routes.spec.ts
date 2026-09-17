@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { MovementKind, RouteLegPath } from "../../src/domain/types";
+import { formatBudget } from "../../src/runtime/runtimeSelectors";
 import {
   selectBuildLeaf,
   clickMapTile,
@@ -889,6 +890,204 @@ test("starts a bus service and recovers fleet after a route edit", async ({
         "",
     )
     .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
+});
+
+test("tunes a deployed bus service from its line summary", async ({ page }) => {
+  await createDefaultCity(page);
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  // Road + three roadside bus stops beside it (same fixtures as above).
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of SIMPLE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
+
+  // Create the Bus line, set a valid 1-minute target, deploy initial fleet.
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of SIMPLE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "Save route" }).click();
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+
+  await page.getByTestId("route-headway-route-001").fill("1");
+  await page.getByTestId("route-headway-set-route-001").click();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return (
+        route?.targetHeadwaySeconds === 60 &&
+        route?.serviceMetrics?.requiredFleet != null
+      );
+    })
+    .toBe(true);
+  await page.getByRole("button", { name: "Deploy fleet" }).click();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return (route?.vehicleIds.length ?? 0) > 0;
+    })
+    .toBe(true);
+
+  // Leave geometry edit mode so no later interaction can add waypoints.
+  await selectTool(page, "select");
+
+  // The plain line summary selects and highlights the row without opening
+  // the geometry editor.
+  await page.getByRole("button", { name: "Select Bus 1" }).click();
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return {
+        selected: snapshot.ui.selectedRouteId === "route-001",
+        draftClosed: snapshot.ui.routeDraft === null,
+      };
+    })
+    .toEqual({ selected: true, draftClosed: true });
+  await expect(page.getByTestId("route-draft")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: "Select Bus 1" }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  // Record the deployed baseline from Rust before retargeting.
+  const baselineSnapshot = await runtimeSnapshot(page);
+  const baselineRoute = baselineSnapshot.state.transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  if (baselineRoute === undefined || baselineRoute.serviceMetrics === null) {
+    throw new Error("Deployed bus route is missing from the runtime snapshot");
+  }
+  const baselineAssigned = baselineRoute.vehicleIds.length;
+  const originalVehicleIds = [...baselineRoute.vehicleIds];
+  const baselineBudget = baselineSnapshot.state.budget;
+  const baselineNominal =
+    baselineRoute.serviceMetrics.nominalHeadwaySeconds ?? null;
+  const baselineDailyCost = baselineRoute.serviceMetrics.dailyOperatingCost;
+  expect(baselineAssigned).toBeGreaterThan(0);
+  expect(baselineNominal).not.toBeNull();
+
+  // Retarget the deployed service to a longer headway. Rust's required fleet
+  // is monotone in the target, so 4 minutes cannot exceed the fleet that was
+  // deployed at 1 minute — read the post-dispatch snapshot rather than
+  // recomputing the recommendation in the browser.
+  await page.getByTestId("route-headway-route-001").fill("4");
+  await page.getByTestId("route-headway-set-route-001").click();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return (
+        route?.targetHeadwaySeconds === 240 &&
+        route?.serviceMetrics?.requiredFleet != null
+      );
+    })
+    .toBe(true);
+  const retargetedSnapshot = await runtimeSnapshot(page);
+  const retargetedRoute = retargetedSnapshot.state.transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  if (
+    retargetedRoute === undefined ||
+    retargetedRoute.serviceMetrics === null ||
+    retargetedRoute.serviceMetrics.requiredFleet === null
+  ) {
+    throw new Error("Retargeted service metrics are missing from the runtime");
+  }
+  const retargetedRequired = retargetedRoute.serviceMetrics.requiredFleet;
+  expect(baselineAssigned).toBeGreaterThanOrEqual(retargetedRequired);
+
+  // At or above the recommendation the Add offer persists at Rust's price.
+  const nextVehicleCost =
+    retargetedRoute.serviceMetrics.nextVehicleCost ?? null;
+  expect(nextVehicleCost).not.toBeNull();
+  if (nextVehicleCost === null) {
+    throw new Error("Rust did not publish an Add price for the deployed fleet");
+  }
+  const addBus = page.getByTestId("route-add-vehicle-route-001");
+  await expect(addBus).toBeVisible();
+
+  // Add exactly one vehicle: fleet +1, originals remain, Standard budget
+  // drops by the recorded price.
+  await addBus.click();
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      const route = snapshot.state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return (
+        route !== undefined &&
+        route.vehicleIds.length === baselineAssigned + 1 &&
+        snapshot.state.budget === baselineBudget - nextVehicleCost
+      );
+    })
+    .toBe(true);
+  const postAddSnapshot = await runtimeSnapshot(page);
+  const postAddRoute = postAddSnapshot.state.transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  if (postAddRoute === undefined || postAddRoute.serviceMetrics === null) {
+    throw new Error("Post-add service metrics are missing from the runtime");
+  }
+  expect(postAddRoute.vehicleIds.length).toBe(baselineAssigned + 1);
+  for (const vehicleId of originalVehicleIds) {
+    expect(postAddRoute.vehicleIds).toContain(vehicleId);
+  }
+  expect(postAddSnapshot.state.budget).toBe(baselineBudget - nextVehicleCost);
+
+  // The deployed block refreshes from the same Rust projection: interval
+  // shortens with the larger fleet, daily cost grows with it.
+  const postAddMetrics = postAddRoute.serviceMetrics;
+  const postAddNominal = postAddMetrics.nominalHeadwaySeconds ?? null;
+  expect(postAddNominal).not.toBeNull();
+  if (postAddNominal === null) {
+    throw new Error("Post-add nominal headway is missing from the runtime");
+  }
+  expect(postAddNominal).toBeLessThan(baselineNominal!);
+  expect(postAddMetrics.dailyOperatingCost).toBeGreaterThan(baselineDailyCost);
+  const service = page.getByTestId("route-service-route-001");
+  await expect(
+    service
+      .getByText("Estimated interval")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(`${(postAddNominal / 60).toFixed(1)} min`);
+  await expect(
+    service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(String(postAddRoute.vehicleIds.length));
+  await expect(
+    service
+      .getByText("Recommended")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(new RegExp(`^${retargetedRequired} bus(?:es)?$`));
+  await expect(
+    service.getByText("Daily cost").locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(formatBudget(postAddMetrics.dailyOperatingCost));
+
+  // No sim time has elapsed, so Rust reports no waiters: the wait rows stay
+  // absent rather than fabricating a benchmark number.
+  expect(postAddMetrics.longestWaitSeconds ?? null).toBeNull();
+  expect(postAddMetrics.waitingAtRiskCount ?? 0).toBe(0);
+  await expect(service.getByText("Longest wait")).toHaveCount(0);
+  await expect(page.getByTestId("route-health-route-001")).toHaveCount(0);
+
+  // The whole journey ran without ever entering geometry edit mode.
+  const finalSnapshot = await runtimeSnapshot(page);
+  expect(finalSnapshot.ui.routeDraft).toBeNull();
+  expect(finalSnapshot.ui.selectedRouteId).toBe("route-001");
+  await expect(page.getByTestId("route-draft")).toHaveCount(0);
 });
 
 test("turns between paired roads and edits the committed route", async ({
