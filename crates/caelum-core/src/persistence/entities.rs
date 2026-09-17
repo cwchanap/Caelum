@@ -819,8 +819,7 @@ fn validate_routes(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         // both player-facing mutations (`SetServiceTargetHeadway`,
         // `DeployInitialFleet`) floor at `MIN_HEADWAY_SECONDS`. A persisted
         // value below that floor is a service state the gameplay API cannot
-        // create, and once a fleet exists the Lines UI removes headway editing
-        // so it cannot be corrected either. Reject it at restore so impossible
+        // create. Reject it at restore so impossible
         // service state cannot become engine authority.
         if let Some(target) = route.target_headway_seconds {
             let floor = crate::service_control::MIN_HEADWAY_SECONDS;

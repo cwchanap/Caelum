@@ -331,22 +331,51 @@
                     {/each}
                   </ul>
                 {/if}
-                {#if route.service.assignedFleet === 0}
-                  <div
-                    class="route-service"
-                    data-testid={`route-service-${route.id}`}
-                  >
-                    <div class="route-service-row">
-                      <span class="route-service-label">Target</span>
-                      <span class="route-service-value"
-                        >{formatHeadway(
-                          route.service.targetHeadwaySeconds,
-                        )}</span
-                      >
-                    </div>
+                <div
+                  class="route-service"
+                  data-testid={`route-service-${route.id}`}
+                >
+                  <div class="route-service-row">
+                    <span class="route-service-label">Target</span>
+                    <span class="route-service-value"
+                      >{formatHeadway(route.service.targetHeadwaySeconds)}</span
+                    >
+                  </div>
+                  <div class="route-service-row">
+                    <input
+                      type="number"
+                      min="1"
+                      max={MAX_HEADWAY_MINUTES}
+                      step="1"
+                      class="route-headway-input route-input"
+                      data-testid={`route-headway-${route.id}`}
+                      value={headwayMinuteValue(
+                        route.id,
+                        route.service.targetHeadwaySeconds,
+                      )}
+                      aria-label={`Set target headway for ${route.name}`}
+                      oninput={(event) =>
+                        handleHeadwayInput(
+                          route.id,
+                          event as Event & {
+                            currentTarget: HTMLInputElement;
+                          },
+                        )}
+                    />
+                    <span class="route-service-label">min</span>
+                    <button
+                      type="button"
+                      class="route-toggle"
+                      data-testid={`route-headway-set-${route.id}`}
+                      onclick={() => commitHeadway(route.id)}
+                    >
+                      Set
+                    </button>
+                  </div>
+                  {#if route.service.assignedFleet === 0}
                     {#if route.service.requiredFleet !== null}
                       <div class="route-service-row">
-                        <span class="route-service-label">Required</span>
+                        <span class="route-service-label">Recommended</span>
                         <span class="route-service-value"
                           >{route.service.requiredFleet}
                           {fleetNoun(
@@ -376,37 +405,6 @@
                         </span>
                       </div>
                     {/if}
-                    <div class="route-service-row">
-                      <input
-                        type="number"
-                        min="1"
-                        max={MAX_HEADWAY_MINUTES}
-                        step="1"
-                        class="route-headway-input route-input"
-                        data-testid={`route-headway-${route.id}`}
-                        value={headwayMinuteValue(
-                          route.id,
-                          route.service.targetHeadwaySeconds,
-                        )}
-                        aria-label={`Set target headway for ${route.name}`}
-                        oninput={(event) =>
-                          handleHeadwayInput(
-                            route.id,
-                            event as Event & {
-                              currentTarget: HTMLInputElement;
-                            },
-                          )}
-                      />
-                      <span class="route-service-label">min</span>
-                      <button
-                        type="button"
-                        class="route-toggle"
-                        data-testid={`route-headway-set-${route.id}`}
-                        onclick={() => commitHeadway(route.id)}
-                      >
-                        Set
-                      </button>
-                    </div>
                     {#if route.status.primary === "noFleet" && route.service.targetHeadwaySeconds !== null && route.service.requiredFleet !== null}
                       <button
                         type="button"
@@ -419,22 +417,10 @@
                           : `Deploy fleet · est. ${formatBudget(route.service.estimatedDeploymentCost)}`}
                       </button>
                     {/if}
-                  </div>
-                {:else}
-                  <div
-                    class="route-service"
-                    data-testid={`route-service-${route.id}`}
-                  >
+                  {:else}
                     <div class="route-service-row">
-                      <span class="route-service-label">Target</span>
-                      <span class="route-service-value"
-                        >{formatHeadway(
-                          route.service.targetHeadwaySeconds,
-                        )}</span
+                      <span class="route-service-label">Estimated interval</span
                       >
-                    </div>
-                    <div class="route-service-row">
-                      <span class="route-service-label">Nominal</span>
                       <span class="route-service-value"
                         >{formatHeadway(
                           route.service.nominalHeadwaySeconds,
@@ -444,9 +430,18 @@
                     <div class="route-service-row">
                       <span class="route-service-label">Fleet</span>
                       <span class="route-service-value"
+                        >{route.service.assignedFleet}</span
+                      >
+                    </div>
+                    <div class="route-service-row">
+                      <span class="route-service-label">Recommended</span>
+                      <span class="route-service-value"
                         >{route.service.requiredFleet === null
-                          ? route.service.assignedFleet
-                          : `${route.service.assignedFleet} / ${route.service.requiredFleet} required`}</span
+                          ? "—"
+                          : `${route.service.requiredFleet} ${fleetNoun(
+                              route.mode,
+                              route.service.requiredFleet,
+                            )}`}</span
                       >
                     </div>
                     <div class="route-service-row">
@@ -455,24 +450,29 @@
                         {formatBudget(route.service.dailyOperatingCost)}
                       </span>
                     </div>
-                  </div>
-                  {#if route.status.primary === "running" && route.service.waitingAtRiskCount > 0}
-                    <p
-                      class="route-status-note"
-                      data-testid={`route-health-${route.id}`}
-                    >
-                      {route.service.waitingAtRiskCount}
-                      {route.service.waitingAtRiskCount === 1
-                        ? "rider"
-                        : "riders"}
-                      at risk · longest {formatHeadway(
-                        route.service.longestWaitSeconds,
-                      )}{#if route.service.nextVehicleCost !== null}. Add {route.mode ===
-                        "metro"
-                          ? "train"
-                          : "bus"} to recover.{/if}
-                    </p>
+                    {#if route.service.longestWaitSeconds !== null}
+                      <div class="route-service-row">
+                        <span class="route-service-label">Longest wait</span>
+                        <span class="route-service-value"
+                          >{formatHeadway(
+                            route.service.longestWaitSeconds,
+                          )}</span
+                        >
+                      </div>
+                    {/if}
                   {/if}
+                </div>
+                {#if route.status.primary === "running" && route.service.waitingAtRiskCount > 0}
+                  <p
+                    class="route-status-note"
+                    data-testid={`route-health-${route.id}`}
+                  >
+                    {route.service.waitingAtRiskCount}
+                    {route.service.waitingAtRiskCount === 1
+                      ? "rider"
+                      : "riders"}
+                    at risk
+                  </p>
                 {/if}
                 {#if route.service.nextVehicleCost !== null}
                   <button

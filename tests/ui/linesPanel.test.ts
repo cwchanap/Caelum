@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import LinesPanel from "../../src/components/hud/panels/LinesPanel.svelte";
 import type { BuildingType, Tool } from "../../src/domain/types";
@@ -99,6 +105,14 @@ function routeFixtures(): ShellRouteListState {
       ],
     },
   ];
+}
+
+function serviceValue(scope: HTMLElement, label: string): string | null {
+  const row = [...scope.querySelectorAll(".route-service-row")].find(
+    (candidate) =>
+      candidate.querySelector(".route-service-label")?.textContent === label,
+  );
+  return row?.querySelector(".route-service-value")?.textContent ?? null;
 }
 
 function panelProps(
@@ -286,7 +300,7 @@ describe("LinesPanel line workspace", () => {
     const service = screen.getByTestId("route-service-route-bus-001");
     expect(service).toHaveTextContent("Target");
     expect(service).toHaveTextContent("6.0 min");
-    expect(service).toHaveTextContent("Required");
+    expect(service).toHaveTextContent("Recommended");
     expect(service).toHaveTextContent("3 buses");
     expect(service).toHaveTextContent("Est. daily cost");
     expect(service).toHaveTextContent("$1,200");
@@ -352,7 +366,7 @@ describe("LinesPanel line workspace", () => {
     const service = screen.getByTestId("route-service-line-metro-setup");
     expect(screen.getByText("No fleet")).toBeVisible();
     expect(service).toHaveTextContent("Target");
-    expect(service).toHaveTextContent("Required");
+    expect(service).toHaveTextContent("Recommended");
     expect(service).toHaveTextContent("2 trains");
     expect(service).toHaveTextContent("Est. deploy cost");
     expect(
@@ -434,7 +448,7 @@ describe("LinesPanel line workspace", () => {
     for (const routeId of ["route-bus-paused", "route-bus-broken"]) {
       const service = screen.getByTestId(`route-service-${routeId}`);
       expect(service).toHaveTextContent("Target");
-      expect(service).toHaveTextContent("Required");
+      expect(service).toHaveTextContent("Recommended");
       expect(screen.queryByTestId(`route-deploy-${routeId}`)).toBeNull();
     }
     expect(screen.getByText("Paused")).toBeVisible();
@@ -508,7 +522,7 @@ describe("LinesPanel line workspace", () => {
     }
   });
 
-  it("shows Target/Nominal/Fleet requirements after deployment and no setup controls", async () => {
+  it("shows Target with editor, Estimated interval, separate Fleet/Recommended, and Daily cost after deployment", async () => {
     const props = panelProps({
       routes: [
         {
@@ -564,31 +578,151 @@ describe("LinesPanel line workspace", () => {
     render(LinesPanel, { props });
 
     const service = screen.getByTestId("route-service-route-bus-002");
-    expect(service).toHaveTextContent("Target");
-    expect(service).toHaveTextContent("6.0 min");
-    expect(service).toHaveTextContent("Nominal");
-    expect(service).toHaveTextContent("5.8 min");
-    expect(service).toHaveTextContent("Fleet");
-    expect(service).toHaveTextContent("2 / 3 required");
-    expect(service).toHaveTextContent("Daily cost");
-    expect(service).toHaveTextContent("$800");
-    expect(service).not.toHaveTextContent("Est. daily cost");
-    expect(service.textContent).not.toContain("assigned");
-    expect(screen.queryByTestId("route-health-route-bus-002")).toBeNull();
-    expect(screen.queryByTestId("route-headway-route-bus-002")).toBeNull();
-    expect(screen.queryByRole("button", { name: "Set" })).toBeNull();
+    expect(serviceValue(service, "Target")).toBe("6.0 min");
+    expect(serviceValue(service, "Estimated interval")).toBe("5.8 min");
+    expect(serviceValue(service, "Fleet")).toBe("2");
+    expect(serviceValue(service, "Recommended")).toBe("3 buses");
+    expect(serviceValue(service, "Daily cost")).toBe("$800");
+    expect(service.textContent).not.toContain("required");
+    expect(service.textContent).not.toContain("Est. daily cost");
+
+    // The deployed row keeps the target editor and dispatches minutes * 60.
+    const serviceScope = within(service);
+    const input = serviceScope.getByTestId("route-headway-route-bus-002");
+    expect(input).toHaveValue(6); // no draft: initialized from 360 / 60
+    await fireEvent.input(input, { target: { value: "4" } });
+    await fireEvent.click(serviceScope.getByRole("button", { name: "Set" }));
+    expect(props.onSetServiceTargetHeadway).toHaveBeenCalledTimes(1);
+    expect(props.onSetServiceTargetHeadway).toHaveBeenCalledWith(
+      "route-bus-002",
+      240,
+    );
+
+    // Setup-only deploy controls stay absent after deployment.
+    expect(screen.queryByTestId("route-deploy-route-bus-002")).toBeNull();
     expect(screen.queryByRole("button", { name: /Deploy/ })).toBeNull();
-    expect(
-      screen.queryByRole("button", { name: /AssignVehicle|Assign Vehicle/ }),
-    ).toBeNull();
+
     const metroService = screen.getByTestId("route-service-line-metro-001");
-    expect(metroService).toHaveTextContent("Target");
-    expect(metroService).toHaveTextContent("Nominal");
-    expect(metroService).toHaveTextContent("Fleet");
-    expect(metroService).toHaveTextContent("2 / 2 required");
-    expect(metroService).toHaveTextContent("Daily cost");
-    expect(metroService).toHaveTextContent("$0");
-    expect(screen.queryByTestId("route-headway-line-metro-001")).toBeNull();
+    expect(serviceValue(metroService, "Estimated interval")).toBe("5.0 min");
+    expect(serviceValue(metroService, "Fleet")).toBe("2");
+    expect(serviceValue(metroService, "Recommended")).toBe("2 trains");
+    expect(serviceValue(metroService, "Daily cost")).toBe("$0");
+    expect(screen.queryByTestId("route-health-route-bus-002")).toBeNull();
+    expect(screen.queryByTestId("route-health-line-metro-001")).toBeNull();
+  });
+
+  it("shows raw Longest wait on a paused deployed row without the running-service warning", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-paused-wait",
+          name: "Paused Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: false,
+          selected: false,
+          status: { primary: "paused", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 300,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: 150,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-paused-wait");
+    expect(serviceValue(service, "Longest wait")).toBe("2.5 min");
+    expect(
+      screen.queryByTestId("route-health-route-bus-paused-wait"),
+    ).toBeNull();
+  });
+
+  it("renders a zero-second wait as zero and hides the warning at zero risk count", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-zero-wait",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 3,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 300,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: 0,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-zero-wait");
+    expect(serviceValue(service, "Longest wait")).toBe("0.0 min");
+    expect(screen.queryByTestId("route-health-route-bus-zero-wait")).toBeNull();
+  });
+
+  it("still offers Add at or above the recommendation when Rust prices a vehicle", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-above-rec",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 4,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: 2_000,
+            nominalHeadwaySeconds: 300,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+          },
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-above-rec");
+    expect(serviceValue(service, "Fleet")).toBe("4");
+    expect(serviceValue(service, "Recommended")).toBe("3 buses");
+    expect(serviceValue(service, "Longest wait")).toBeNull();
+    expect(
+      screen.getByTestId("route-add-vehicle-route-bus-above-rec"),
+    ).toBeVisible();
   });
 
   it("offers a Rust-priced bus top-up and dispatches it once", async () => {
@@ -622,17 +756,18 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
+    const service = screen.getByTestId("route-service-route-bus-top-up");
+    expect(serviceValue(service, "Longest wait")).toBe("3.2 min");
     const health = screen.getByTestId("route-health-route-bus-top-up");
     expect(health).toHaveTextContent("2 riders at risk");
-    expect(health).toHaveTextContent("longest 3.2 min");
-    expect(health).toHaveTextContent("Add bus to recover");
+    expect(health).not.toHaveTextContent("longest");
+    expect(health).not.toHaveTextContent("recover");
+    expect(health).not.toHaveTextContent("Add bus");
     const add = screen.getByRole("button", {
       name: "Add bus · $12,500",
     });
     expect(add).toBeVisible();
-    expect(
-      screen.getByTestId("route-service-route-bus-top-up"),
-    ).toHaveTextContent("Fleet");
+    expect(serviceValue(service, "Fleet")).toBe("1");
 
     await fireEvent.click(add);
     expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
@@ -670,9 +805,9 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
-    expect(
-      screen.getByTestId("route-health-line-metro-top-up"),
-    ).toHaveTextContent("Add train to recover");
+    const health = screen.getByTestId("route-health-line-metro-top-up");
+    expect(health).toHaveTextContent("1 rider at risk");
+    expect(health).not.toHaveTextContent("recover");
     expect(
       screen.getByRole("button", { name: "Add train · $80,000" }),
     ).toBeVisible();
@@ -709,16 +844,15 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
+    const service = screen.getByTestId("route-service-route-bus-no-offer");
+    expect(serviceValue(service, "Longest wait")).toBe("2.5 min");
     const health = screen.getByTestId("route-health-route-bus-no-offer");
     expect(health).toHaveTextContent("1 rider at risk");
-    expect(health).toHaveTextContent("longest 2.5 min");
     expect(health).not.toHaveTextContent("recover");
     expect(
       screen.queryByTestId("route-add-vehicle-route-bus-no-offer"),
     ).toBeNull();
-    expect(
-      screen.getByTestId("route-service-route-bus-no-offer"),
-    ).toHaveTextContent("Fleet 2");
+    expect(serviceValue(service, "Fleet")).toBe("2");
     expect(props.onAddServiceVehicle).not.toHaveBeenCalled();
   });
 

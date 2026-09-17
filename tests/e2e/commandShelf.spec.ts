@@ -273,7 +273,9 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
     })
     .toEqual({ name: "Harbour Shuttle", color: differentColor, active: false });
 
-  await page.getByRole("button", { name: "Edit Harbour Shuttle" }).click();
+  await page
+    .getByRole("button", { name: "Edit route Harbour Shuttle" })
+    .click();
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("route-draft")).toHaveCount(0);
