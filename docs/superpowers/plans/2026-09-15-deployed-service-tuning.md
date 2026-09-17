@@ -191,17 +191,18 @@ Use it for the **metrics-published offer**. Its inputs should be only what the o
 - route active;
 - route legs/operational status;
 - mode;
-- assigned fleet.
+- assigned fleet;
+- target-headway presence.
 
 It must not take `required_fleet` or global-pause state.
 
 A lean shape is:
 
 ```text
-add_vehicle_offer(active, legs, mode, assigned_fleet)
+add_vehicle_offer(active, legs, mode, assigned_fleet, has_target)
 ```
 
-and it returns the existing vehicle price iff the route is active, operational, and already has a deployed fleet.
+and it returns the existing vehicle price iff the route is active, operational, already has a deployed fleet, and has a target headway.
 
 In `add_service_vehicle(...)`, keep the existing typed validation directly:
 

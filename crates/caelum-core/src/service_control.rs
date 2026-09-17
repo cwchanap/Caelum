@@ -252,9 +252,10 @@ pub(crate) fn deploy_initial_fleet(
 
 /// Buy one vehicle for an already deployed service. The recommendation is
 /// guidance, not a cap, so explicit extra capacity is purchasable on any
-/// active, operational line. Existing vehicles retain their exact cursors and
-/// passenger state; only the appended vehicle is placed in the largest cycle
-/// gap.
+/// active, operational line that already has a deployed fleet and a target
+/// headway; a missing fleet or target is a free no-op, not a purchase.
+/// Existing vehicles retain their exact cursors and passenger state; only the
+/// appended vehicle is placed in the largest cycle gap.
 pub(crate) fn add_service_vehicle(
     state: &GameSnapshot,
     line_id: &str,
