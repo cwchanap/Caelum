@@ -9,12 +9,12 @@ Make Office Tower and Factory materially different transport destinations withou
 
 - Office Tower workers use the existing `standard` shift template.
 - Factory workers use the existing `early` or `late` shift template, chosen deterministically from citizen identity.
-- Other workplaces keep the current identity-derived shift behavior.
+- Other workplaces do not change a worker's existing stored shift when assigned/reassigned; only Office Tower and Factory provide workplace-specific overrides.
 - The existing `Routine::Worker.shift_template` remains the only worker schedule state. Assignment updates that field; the exact-time scheduler, trip lifecycle, day-off logic, optional outings, routing, and persistence remain unchanged.
 - The Build panel explains Office/Factory size, price, job capacity, and schedule before placement.
 - The selected-building inspector shows staffing, work pattern, and current destination demand from existing aggregate presentation rows.
-- The WebGPU overlay emphasizes the selected Office/Factory footprint and its current demand using the existing overlay geometry path.
-- Small Town replaces its current supermarket demonstration destination with an Office Tower while retaining its Factory, so both patterns are playable through the ordinary sandbox flow.
+- The WebGPU overlay generically emphasizes any selected building footprint and any current `demandFlow` rows inside that footprint; the renderer does not know Office/Factory taxonomy.
+- Small Town keeps its Supermarket/optional-outing path, adds one Small House and an Office Tower, and retains its Factory so office/factory patterns remain playable without disabling existing sandbox behavior.
 
 This is one vertical slice and one PR. No new art, schema, backend query, schedule registry, simulation class hierarchy, or passenger model is needed.
 
@@ -30,7 +30,7 @@ The current implementation already has almost every required concept:
 - `demandFlow` already exposes aggregate destination demand by tile.
 - `runtimeSelectors.ts` already resolves selected building footprints and builds the building inspector.
 - `overlayBatch.ts` already draws demand fills and selection/preview geometry through WebGPU.
-- Small Town already contains two Small Houses, a Factory, a destination occupying the exact 2x2 footprint needed by an Office Tower, and road access around both sites.
+- Small Town already contains two Small Houses, a Supermarket (its only optional-outing site), a Factory, and free road-adjacent space for one additional Small House plus an Office Tower.
 
 The feature should grow these seams in place rather than introduce new authorities.
 
@@ -56,10 +56,10 @@ This is unnecessary for two rules that map directly onto four existing canonical
 
 ## Rust scheduling rule
 
-Add one focused helper in `commute.rs`:
+Add one focused **override** helper in `commute.rs`:
 
 ```rust
-pub fn shift_template_for_workplace(
+pub fn workplace_shift_template(
     citizen_id: &str,
     building_type: &str,
 ) -> Option<&'static str>
@@ -67,15 +67,15 @@ pub fn shift_template_for_workplace(
 
 Rules:
 
-| Worker destination | Stored template |
+| Worker destination | Override |
 | --- | --- |
-| `officeTower` | `standard` |
-| `factory` | `early` for one stable identity bucket, `late` for the other |
-| any other workplace | existing `shift_template_for_id(citizen_id)` result |
+| `officeTower` | `Some("standard")` |
+| `factory` | `Some("early")` for one stable identity bucket, `Some("late")` for the other |
+| any other workplace | `None` — keep the worker's existing stored template |
 
-Factory bucketing uses the numeric citizen-ID suffix parity. The rule is intentionally simple and deterministic: the same citizen receives the same Factory template across days, save/load, and reassignment. The UI describes Factory as an early/late mix; it does not promise a 50/50 ratio for a particular building.
+Factory bucketing uses numeric citizen-ID suffix parity. The same citizen therefore receives the same Factory override across days, save/load, and later Factory assignments. The UI describes Factory as an early/late mix; it does not promise a 50/50 ratio for a particular building.
 
-`shift_template_for_id` continues to decide whether a new citizen is a Worker or Student. The workplace helper is only applied to Workers.
+`shift_template_for_id` continues to decide Worker versus Student and supplies the Worker's initial identity-derived template. `workplace_shift_template` never carries Student semantics; `None` means only "this workplace does not override the current Worker template." This keeps non-featured workplaces structurally unchanged and avoids an impossible-state `.expect()` at assignment.
 
 ### Initial move-in
 
@@ -84,28 +84,27 @@ Factory bucketing uses the numeric citizen-ID suffix parity. The rule is intenti
 1. mint the citizen ID;
 2. determine Worker versus Student through `shift_template_for_id`;
 3. for a Worker, find the first stable available workplace;
-4. when a workplace exists, derive the stored worker shift from the assigned building type;
-5. when no workplace exists, keep the current identity-derived worker template until a job is assigned;
+4. when the assigned workplace has a workplace-specific override, replace the stored worker shift with it;
+5. otherwise keep the current identity-derived worker template;
 6. schedule through `routine_from_now` as today.
 
 `find_available_workplace` keeps its current private `(building_id, point)` return shape. After assignment, the caller reads `PopulationBuilding.building_type` from the existing `PopulationIndex` by `building_id`; no tuple widening or new public type is required.
 
 ### Reassignment / vacancy refill
 
-The existing global refill loop remains the authority for who gets each vacancy. When it fills a slot, update `Routine::Worker.workplace` and `Routine::Worker.shift_template` together using the same workplace helper.
+The existing global refill loop remains the authority for who gets each vacancy. When it fills a slot, always update `Routine::Worker.workplace`; update `shift_template` only when `workplace_shift_template` returns an override. Assigning/reassigning a worker to Warehouse, Supermarket, Business Park, or another unfeatured workplace therefore preserves that worker's current template.
 
-There is one existing timing seam that must also be updated for an **idle unemployed Worker**. Such a Worker can already hold a future `NextActivity::DailyRoutine` scheduled from the old identity-derived template. If a newly placed Office Tower or Factory fills that vacancy and the worker has no active trip, keeping that wake would make today's commute leave on the old clock.
+There is one existing timing seam that must also be corrected for an **idle unemployed Worker**. Such a Worker can already hold a future `NextActivity::DailyRoutine` scheduled from the old template. If a newly placed Office Tower or Factory fills that vacancy, keeping the old wake would make today's commute leave on the old clock.
 
-Handle only that case locally in `population/schedule.rs`:
+Make activity supersession safe at the one scheduler insertion seam rather than at this call site:
 
-1. after assigning the new workplace/template, inspect the worker's current `NextActivity`;
-2. if it is not `DailyRoutine`, leave it alone;
-3. if the worker has an active trip, leave scheduler state alone and let the existing trip-resolution path own the next wake;
-4. otherwise replace the pending DailyRoutine wake with `routine_from_now` computed from the new template.
+- extend private `schedule_activity(world, entity, activity)` so, when the entity already has `NextActivity`, it removes every matching `PopulationEvent::Activity { entity }` from that previous exact due-time bucket and removes the bucket if empty;
+- then insert the new event and replace the `NextActivity` component as it already does;
+- keep `boundary_generation` monotonic; removing an obsolete key does not decrement it.
 
-`schedule_activity` cannot be called blindly for this replacement because it inserts a second bucket entry without removing the old wake. Add one narrow private helper beside the scheduler functions that removes that entity's old `PopulationEvent::Activity` from the exact old due-time bucket before scheduling the replacement. It is not a generic rescheduling framework and is used only by this assignment seam.
+With that invariant in place, idle refill can simply call `schedule_activity(world, entity, routine_from_now(...))` after applying an Office/Factory override. Existing call sites that already schedule only when no activity exists keep their behavior, including the recovery guard after dropped trips.
 
-Do not change vacancy ordering, nearest-home behavior, capacity, or global employment balancing.
+Do not change vacancy ordering, nearest-home behavior, capacity, global employment balancing, or the existing dropped-trip recovery precedence.
 
 ### Active-trip behavior
 
@@ -115,7 +114,7 @@ Existing demolition reconciliation is preserved: when a cleared worker already h
 
 The new stored template becomes visible through the existing lifecycle:
 
-- an idle worker with a pending `DailyRoutine` wake receives the narrow wake replacement described above, so a newly assigned Office/Factory can affect the next outbound departure;
+- an idle worker with a pending `DailyRoutine` wake schedules a replacement through the now-superseding `schedule_activity`, so a newly assigned Office/Factory affects the next outbound departure without leaving a stale bucket entry;
 - an outbound trip resolution schedules the return using the worker's current template;
 - a return trip resolution schedules the next daily routine using the current template;
 - the existing `.max(now)` late-return clamp prevents a newly selected return window from scheduling into the past;
@@ -142,16 +141,16 @@ These strings describe the exact existing Rust windows. They are explanatory cop
 
 ### Build panel
 
-For Office Tower and Factory entries, show the existing catalog values before placement:
+Do **not** inject long schedule prose into the existing uniform building buttons. Those buttons intentionally remain compact command leaves.
 
-- rotated footprint (`width × height`);
+Instead, when a building is currently armed and the player opens the Buildings submenu, render one accessible summary block beside/above the existing Rotate control:
+
+- current rotated footprint (`width × height`);
 - price;
-- job capacity;
-- `workPattern`.
+- the relevant authored capacity (`N residents` or `N jobs`);
+- `workPattern` on a second line only when the armed definition has one.
 
-Do this inside the existing Buildings submenu. Do not add a new detail screen or another build-menu state machine.
-
-Other build items keep their current compact presentation unless the small shared markup naturally supports the same size/price/capacity row without extra branching.
+The summary is generic for every armed building; `workPattern` is optional data, not a branch for two hard-coded building names. Arming a building already closes the command panel, so this summary appears when Build is reopened while that building remains armed; placement behavior and panel occlusion stay unchanged. Do not add a detail screen or another build-menu state machine.
 
 ## Selected-building inspector
 
@@ -181,32 +180,38 @@ It always shows the authored `Jobs X / Y` separately from live demand and schedu
 
 Housing and other existing building-inspector behavior stays unchanged.
 
-## WebGPU selected-workplace emphasis
+## WebGPU selected-building emphasis
 
-Keep the existing renderer path and `UiState.selectedId` selection.
+The Linear acceptance scope explicitly requires selected-workplace map emphasis, so keep one bounded WebGPU change — but make it **generic selection presentation**, not workplace taxonomy.
 
-Export/reuse the existing selected-point parser from `runtimeSelectors.ts` rather than inventing another selection store. In `overlayBatch.ts`, add a small selected-workplace pass before previews:
+Keep the existing renderer path and `UiState.selectedId` selection. Export/reuse the existing selected-point parser from `runtimeSelectors.ts` rather than inventing another selection store. In `overlayBatch.ts`, add one selected-building pass before previews:
 
 1. resolve the selected point;
-2. find the building whose occupied footprint contains it;
-3. continue only for Office Tower or Factory and only for building selection (not a transit-node selection);
-4. stroke the selected building's existing occupied tiles with the existing demand color;
-5. when the global Demand overlay is not already active, fill only selected-footprint tiles that have `demandFlow` rows, using the existing `demandAlpha` calculation;
-6. when the Demand overlay is active, retain only the outline so the demand fill is not double-darkened.
+2. if `selectedNodeKind !== null`, stop so transit-node selection keeps priority;
+3. find **any** building whose `occupiedTiles` contain the selected point;
+4. stroke its existing footprint with the existing demand color;
+5. when the global Demand overlay is not active, fill only `demandFlow` rows whose points are inside that selected footprint using existing `demandAlpha`;
+6. when Demand overlay is active, retain only the outline so demand fill is not double-darkened.
 
-This makes an unstaffed/quiet selected workplace locatable while still showing where current destination demand is landing. No new color registry, canvas fallback, camera movement, or second overlay system.
+The renderer never checks `building.type === "officeTower"` or `"factory"`; future buildings gain the same selection behavior automatically. Unit coverage asserts exact expected tile coordinates/color/alpha using the test file's existing `hasVertexNear` / `alphaAt` helpers, not only buffer length.
+
+This makes a quiet selected workplace locatable while also emphasizing current destination-demand tiles. No new color registry, canvas fallback, camera movement, renderer layer, or simulation taxonomy.
 
 ## Small Town playable example
 
-Keep the existing Small Town road and housing layout.
+Keep the existing roads, Supermarket, and Factory. The Supermarket is Small Town's only current optional-outing destination, so replacing it would silently disable `OptionalOutbound` / `OptionalReturn` gameplay in the only populated authored sandbox.
 
-Change the authored 2x2 site at `(18, 6)` from Commercial + Supermarket to Office + Office Tower. Keep the existing 3x2 Industrial + Factory site at `(15, 11)`.
+Make the smallest additive layout change:
 
-The two existing Small Houses provide eight Worker move-in slots before the first Student ID is reached. With Office Tower capacity 4 and Factory capacity 6, stable vacancy filling necessarily gives both workplaces at least some staff regardless of which job-building ID sorts first: the first can consume at most six of eight workers, leaving at least two for the other.
+- keep Small Houses at `(4, 7)` and `(8, 7)`;
+- add a third Small House at `(6, 7)` inside the existing Residential zone;
+- keep Commercial + Supermarket at `(18, 6)`;
+- add Office area `(21, 6)` through `(22, 7)` and Office Tower at `(21, 6)`, adjacent to the existing y=8 road;
+- keep Industrial + Factory at `(15, 11)`.
 
-This is sufficient to demonstrate both patterns without adding housing, changing catalog capacities, seeding passengers, or creating another template.
+Place buildings in deterministic order: three Small Houses, Office Tower, Supermarket, Factory. The twelve housing slots mint `sim-001` through `sim-012`; `sim-010` remains the canonical Student, leaving eleven Workers. Stable building-ID vacancy filling therefore staffs Office Tower first (four workers), Supermarket next (four), and Factory with the remaining three workers. That gives both featured patterns real staff while retaining optional outings and existing destination behavior.
 
-Blank Grid and Crossroads are untouched.
+No catalog capacity, starting capital, passenger seed, or second template changes. Blank Grid and Crossroads remain untouched.
 
 ## Testing strategy
 
@@ -214,9 +219,9 @@ Blank Grid and Crossroads are untouched.
 
 Pin the rule and lifecycle, not implementation details:
 
-- `commute.rs` unit coverage for Office = standard, Factory = deterministic early/late, and other workplace = current identity-derived behavior;
+- `commute.rs` unit coverage for Office/Factory overrides and `None` for unfeatured workplaces, plus a drift guard that asserts the standard/early/late departure+return window boundaries used by the TypeScript `workPattern` copy;
 - population integration coverage that ordinary move-in assigns Office/Factory workers the workplace-derived template **and that their first pending DailyRoutine due time falls in the expected standard/early/late window**;
-- idle vacancy-fill coverage proving an unemployed worker's stale identity-derived DailyRoutine wake is replaced: ticking through the old wake must not emit an early commute, while the new workplace-derived wake does;
+- idle vacancy-fill coverage proving scheduler supersession: ticking through the old wake must not emit a commute, while the new workplace-derived wake emits exactly one;
 - a representative demolition/refill reassignment updates the template while preserving one active trip with the same trip ID; do not assert the trip payload is byte-for-byte unchanged because existing reconciliation retargets an outbound in place;
 - snapshot → `GameEngine::from_snapshot` restore preserves the assignment/template and subsequent schedule;
 - existing Student/day-off/optional-outing/capacity tests remain green.
@@ -225,13 +230,13 @@ Pin the rule and lifecycle, not implementation details:
 
 - building catalog test pins the two exact pattern strings;
 - runtime selector tests cover unstaffed, staffed-but-quiet, active-demand sum across a footprint, and unchanged housing inspector behavior;
-- Build panel UI test verifies Office/Factory footprint, price, capacity, and pattern copy are visible in the existing submenu;
+- Build panel UI test verifies the generic armed-building summary shows rotated footprint/price/capacity for ordinary buildings and adds Office/Factory pattern copy when present;
 - Inspect panel UI test verifies the three workplace states and separate Jobs/capacity line;
-- WebGPU overlay unit test verifies selected workplace outline/demand vertices exist, quiet selection still outlines, and the global Demand overlay does not double-fill selected demand.
+- WebGPU overlay unit test verifies exact selected-building outline coordinates and demand fill color/alpha, quiet selection still outlines, and global Demand overlay does not double-fill selected demand.
 
 ### Sandbox/browser
 
-- sandbox factory test pins Small Town to Office Tower + Factory while Blank Grid/Crossroads remain unchanged;
+- sandbox factory test pins Small Town's three Houses + Office Tower + retained Supermarket + Factory, preserving the optional-outing destination while Blank Grid/Crossroads remain unchanged;
 - one Chromium real-WASM Small Town path creates the template **paused at t=0**, selects both authored workplaces through ordinary UI, and verifies `Unstaffed`, `Jobs 0 / capacity`, and the correct pattern copy. Deterministic Rust tests own the staffing/timing proof; the browser test must not spend wall-clock time waiting for normal move-in.
 
 ## Verification
@@ -257,6 +262,13 @@ bun run format:check
 bun run build
 bun run test:e2e
 ```
+
+## Risks and trade-offs
+
+- **Scheduler supersession:** changing `schedule_activity` affects a central private seam. The implementation must remove only the same entity's prior `Activity` event at the prior `NextActivity.due_time`; MoveIn events and other citizens in that bucket stay untouched. Focused scheduler/population regressions plus the full Rust suite guard this.
+- **Small Town balance/layout:** adding one House and one Office Tower changes deterministic building IDs and resident count for Small Town. This is intentional development content churn; tests pin the new authored order. Keeping the Supermarket avoids accidentally removing optional-outing coverage.
+- **UI schedule-copy drift:** the prose remains TypeScript-local by design to avoid a new wire field. A Rust boundary test pins every standard/early/late window endpoint and explicitly names the catalog copy as its consumer so schedule edits fail near the simulation authority.
+- **Selection overlay scope:** rendering becomes aware of generic selected buildings for the first time. The pass is presentation-only, uses existing `selectedId`/footprints/demand rows, and contains no building-type taxonomy.
 
 ## Non-goals
 
