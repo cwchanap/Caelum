@@ -36,7 +36,7 @@
 - `src/domain/catalog/buildings.ts` — player-facing work-pattern copy only.
 - `src/runtime/types.ts` — two small derived inspector fields.
 - `src/runtime/runtimeSelectors.ts` — selected workplace demand aggregation and shared selected-point parser.
-- `src/components/hud/panels/BuildPanel.svelte` — pre-build workplace facts.
+- `src/components/hud/panels/BuildPanel.svelte` — one generic armed-building facts summary near the existing Rotate control.
 - `src/components/hud/panels/InspectPanel.svelte` — staffing/pattern/current-demand states.
 - `src/render/webgpu/overlayBatch.ts` — selected workplace outline/current-demand emphasis.
 - `tests/runtime/buildingCatalog.test.ts` — copy/catalog contract.
@@ -581,7 +581,7 @@ git commit -m "feat(ui): derive workplace staffing and demand facts"
 
 ---
 
-### Task 5: Show the workplace rule before and after placement
+### Task 5: Show building facts without breaking the command grid
 
 **Files:**
 - Modify: `src/components/hud/panels/BuildPanel.svelte`
@@ -590,26 +590,24 @@ git commit -m "feat(ui): derive workplace staffing and demand facts"
 - Create: `tests/ui/inspectPanel.test.ts`
 
 **Interfaces:**
-- Consumes: `BUILDING_CATALOG[*].workPattern` and the extended `ShellBuildingInspectorState`.
-- Produces: no new runtime state.
+- Consumes: `BUILDING_CATALOG`, `getRotatedFootprintSize`, `selectedBuilding`, `buildingRotation`, and the extended `ShellBuildingInspectorState`.
+- Produces: one generic armed-building facts block; no new runtime state.
 
-- [ ] **Step 1: Add failing Build panel assertions**
+- [ ] **Step 1: Add failing generic armed-building summary tests**
 
-Render/open the existing Buildings group and assert Office Tower and Factory expose their facts before placement. Give the facts stable test IDs in the implementation, for example:
+In \`tests/ui/buildPanel.test.ts\`, render \`activeBuildGroup: "buildings"\` with an armed ordinary building and assert a facts block outside the leaf button:
 
-```ts
-expect(screen.getByTestId("workplace-facts-officeTower")).toHaveTextContent(
-  "2 × 2 · $18,000 · 4 jobs",
+\`\`\`ts
+renderPanel({
+  activeBuildGroup: "buildings",
+  selectedBuilding: "smallHouse",
+});
+expect(screen.getByTestId("armed-building-facts")).toHaveTextContent(
+  "2 × 1 · $4,000 · 4 residents",
 );
-expect(screen.getByTestId("workplace-facts-officeTower")).toHaveTextContent(
-  "Standard · 07:00–09:00 starts, 17:00–19:00 returns",
-);
-expect(screen.getByTestId("workplace-facts-factory")).toHaveTextContent(
-  "3 × 2 · $16,000 · 6 jobs",
-);
-```
+\`\`\`
 
-Use `getRotatedFootprintSize` so the displayed footprint follows the current building rotation if the facts are rendered for the armed item; do not create another rotation state.
+Then render Office Tower and Factory and assert their footprint/price/job capacity plus pattern copy. Also assert the existing leaf buttons do not contain the long schedule prose, so the uniform 13-button grid stays compact.
 
 - [ ] **Step 2: Add failing Inspector assertions**
 
@@ -639,22 +637,13 @@ bunx vitest run --project ui tests/ui/buildPanel.test.ts tests/ui/inspectPanel.t
 
 Expected: FAIL because the facts/status copy is not rendered yet.
 
-- [ ] **Step 4: Add narrow workplace facts to `BuildPanel.svelte`**
+- [ ] **Step 4: Add one generic facts summary near Rotate**
 
-Import `BUILDING_CATALOG` and `getRotatedFootprintSize`. Render extra metadata only when `item.action.kind === "building"` and that definition has `workPattern`:
+Import \`BUILDING_CATALOG\` and \`getRotatedFootprintSize\`. Before the existing Rotate control, render a single \`data-testid="armed-building-facts"\` block only when \`selectedBuilding !== null\`.
 
-```svelte
-{#if item.action.kind === "building" && BUILDING_CATALOG[item.action.building].workPattern}
-  {@const definition = BUILDING_CATALOG[item.action.building]}
-  {@const footprint = getRotatedFootprintSize(item.action.building, buildingRotation)}
-  <span data-testid={`workplace-facts-${item.action.building}`} class="workplace-facts">
-    <span>{footprint.width} × {footprint.height} · ${definition.cost.toLocaleString("en-US")} · {definition.jobCapacity} jobs</span>
-    <span>{definition.workPattern}</span>
-  </span>
-{/if}
-```
+The block shows current rotated footprint, price, and either resident capacity or job capacity for **every** armed building. Render \`definition.workPattern\` on a second line only when present.
 
-Keep this inside the existing building item; do not add a modal/detail route.
+Keep the facts outside the uniform item buttons so long prose cannot distort the grid and remains available to assistive technology. Existing behavior where arming closes the command panel stays unchanged; reopening Build while the building remains armed shows the summary before placement. Do not add another panel state or modal.
 
 - [ ] **Step 5: Extend `InspectPanel.svelte` only for non-null workplace metadata**
 
@@ -680,7 +669,7 @@ Do not label zero demand as well-served/no-future-demand.
 - [ ] **Step 6: Run UI + type checks**
 
 ```bash
-bun run test:unit
+bunx vitest run --project ui tests/ui/buildPanel.test.ts tests/ui/inspectPanel.test.ts
 bun run check
 ```
 
