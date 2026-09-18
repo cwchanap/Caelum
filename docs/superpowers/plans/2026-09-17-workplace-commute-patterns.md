@@ -4,7 +4,7 @@
 
 **Goal:** Make Office Tower workers use standard shifts and Factory workers use deterministic early/late shifts, then expose staffing/current demand clearly in the existing UI and Small Town sandbox.
 
-**Architecture:** Keep `Routine::Worker.shift_template` as the only authoritative worker schedule state. Derive that value when a Worker receives a workplace, reuse existing aggregate `buildingOccupancy`/`demandFlow` rows for presentation, and extend the existing WebGPU overlay and sandbox template in place. No new schema, query, renderer, scheduling registry, or per-citizen UI payload.
+**Architecture:** Keep `Routine::Worker.shift_template` as the only authoritative worker schedule state. Office/Factory provide assignment-time overrides; unfeatured workplaces preserve the current Worker template. Make the existing `schedule_activity` seam safely supersede prior wakes, reuse aggregate `buildingOccupancy`/`demandFlow`, keep Small Town optional outings live, and make selected-building WebGPU emphasis generic. No new schema, query, renderer, scheduling registry, or per-citizen UI payload.
 
 **Tech Stack:** Rust (`caelum-core`, Bevy ECS), TypeScript, Svelte 5, WebGPU, Vitest, Playwright, Bun.
 
@@ -15,9 +15,9 @@
 - One Linear ticket = one GitHub PR. Continue implementation on this HPA-463 PR; do not open implementation/QA follow-up PRs.
 - Office Tower workers use canonical `standard` windows.
 - Factory workers use canonical `early` or `late` windows selected deterministically from citizen identity and stable across days/reloads.
-- Other workplaces retain the current `shift_template_for_id` behavior.
+- Other workplaces provide no workplace-specific override and preserve the Worker's current stored template.
 - Students, days off, optional outings, trip mode choice, finite job capacity, and one-active-trip lifecycle stay unchanged.
-- Assignment/reassignment updates the existing `Routine::Worker.shift_template`; never add a second schedule authority.
+- Office/Factory assignment/reassignment may update the existing `Routine::Worker.shift_template`; unfeatured workplaces leave it unchanged. Never add a second schedule authority.
 - Never rewrite/restart an already-active trip solely because a worker's workplace changed.
 - No persistence/schema change unless implementation discovers an unavoidable contract break. Do not add backward compatibility or migration code.
 - Rust remains simulation authority. TypeScript receives only existing aggregates and local display metadata.
@@ -28,8 +28,8 @@
 
 ## File map
 
-- `crates/caelum-core/src/commute.rs` — canonical workplace-to-shift rule.
-- `crates/caelum-core/src/population/schedule.rs` — apply the rule on initial assignment/vacancy refill, replace an idle worker's stale pending `DailyRoutine` wake, and preserve existing active-trip retarget/drop behavior.
+- `crates/caelum-core/src/commute.rs` — Office/Factory workplace-shift override plus a Rust drift guard for the UI window copy.
+- `crates/caelum-core/src/population/schedule.rs` — apply assignment overrides and centralize activity supersession in `schedule_activity` while preserving active-trip retarget/drop behavior.
 - `crates/caelum-core/tests/population.rs` — end-to-end Rust assignment/reassignment/save-restore behavior.
 - `crates/caelum-core/src/sandbox.rs` — Small Town Office Tower + Factory authored example.
 - `crates/caelum-core/tests/sandbox_factory.rs` — template contract.
@@ -48,14 +48,14 @@
 
 ---
 
-### Task 1: Add the canonical workplace-to-shift rule
+### Task 1: Add the workplace-shift override and guard the UI schedule copy
 
 **Files:**
 - Modify: `crates/caelum-core/src/commute.rs`
 
 **Interfaces:**
-- Consumes: existing `numeric_id_suffix(id)` and `shift_template_for_id(id)`.
-- Produces: `pub fn shift_template_for_workplace(citizen_id: &str, building_type: &str) -> Option<&'static str>`.
+- Consumes: existing `numeric_id_suffix(id)`, `shift_template_for_id(id)`, and `departure_minute_for_sim(...)`.
+- Produces: `pub fn workplace_shift_template(citizen_id: &str, building_type: &str) -> Option<&'static str>` where `Some` is an Office/Factory override and `None` means keep the current Worker template.
 
 - [ ] **Step 1: Write focused failing unit tests**
 
@@ -66,7 +66,7 @@ Add tests in `commute.rs` that pin all three rule branches:
 fn office_workers_always_use_standard_shift() {
     for id in ["sim-001", "sim-008", "sim-009"] {
         assert_eq!(
-            shift_template_for_workplace(id, "officeTower"),
+            workplace_shift_template(id, "officeTower"),
             Some("standard")
         );
     }
@@ -74,25 +74,44 @@ fn office_workers_always_use_standard_shift() {
 
 #[test]
 fn factory_workers_use_stable_early_or_late_identity_buckets() {
-    assert_eq!(shift_template_for_workplace("sim-001", "factory"), Some("early"));
-    assert_eq!(shift_template_for_workplace("sim-002", "factory"), Some("late"));
-    assert_eq!(shift_template_for_workplace("sim-001", "factory"), Some("early"));
+    assert_eq!(workplace_shift_template("sim-001", "factory"), Some("early"));
+    assert_eq!(workplace_shift_template("sim-002", "factory"), Some("late"));
+    assert_eq!(workplace_shift_template("sim-001", "factory"), Some("early"));
 }
 
 #[test]
-fn other_workplaces_keep_identity_derived_shift() {
-    for id in ["sim-001", "sim-008", "sim-009", "sim-010"] {
-        assert_eq!(
-            shift_template_for_workplace(id, "warehouse"),
-            shift_template_for_id(id)
-        );
+fn unfeatured_workplaces_do_not_override_current_worker_shift() {
+    for building_type in ["warehouse", "supermarket", "businessPark", "clinic"] {
+        assert_eq!(workplace_shift_template("sim-008", building_type), None);
     }
 }
 ```
 
-The exact Factory mapping is odd numeric suffix → `early`, even → `late`; student IDs are never turned into Workers because callers still classify Worker/Student first.
+The exact Factory mapping is odd numeric suffix → `early`, even → `late`. The helper never decides Worker vs Student; callers classify first, and `None` means only “no workplace override.”
 
-- [ ] **Step 2: Run the tests and verify they fail**
+- [ ] **Step 2: Add a Rust drift guard for the TypeScript pattern copy**
+
+Add a unit test beside the simulation authority that pins all standard/early/late window endpoints consumed by \`src/domain/catalog/buildings.ts\`:
+
+\`\`\`rust
+// Consumer: src/domain/catalog/buildings.ts workPattern for Office Tower / Factory.
+assert_eq!(departure_minute_for_sim("sim-121", "standard", "outbound"), 420);
+assert_eq!(departure_minute_for_sim("sim-120", "standard", "outbound"), 540);
+assert_eq!(departure_minute_for_sim("sim-121", "standard", "return"), 1_020);
+assert_eq!(departure_minute_for_sim("sim-120", "standard", "return"), 1_140);
+assert_eq!(departure_minute_for_sim("sim-091", "early", "outbound"), 330);
+assert_eq!(departure_minute_for_sim("sim-090", "early", "outbound"), 420);
+assert_eq!(departure_minute_for_sim("sim-091", "early", "return"), 900);
+assert_eq!(departure_minute_for_sim("sim-090", "early", "return"), 990);
+assert_eq!(departure_minute_for_sim("sim-091", "late", "outbound"), 600);
+assert_eq!(departure_minute_for_sim("sim-090", "late", "outbound"), 690);
+assert_eq!(departure_minute_for_sim("sim-091", "late", "return"), 1_170);
+assert_eq!(departure_minute_for_sim("sim-090", "late", "return"), 1_260);
+\`\`\`
+
+This keeps prose out of the wire contract while making Rust window changes fail near the owning constants.
+
+- [ ] **Step 3: Run the tests and verify they fail**
 
 Run:
 
@@ -100,14 +119,14 @@ Run:
 cargo test -p caelum-core commute::
 ```
 
-Expected: compile failure because `shift_template_for_workplace` does not exist.
+Expected: compile failure because `workplace_shift_template` does not exist.
 
-- [ ] **Step 3: Implement the minimal helper**
+- [ ] **Step 4: Implement the minimal helper**
 
 Add next to `shift_template_for_id`:
 
 ```rust
-pub fn shift_template_for_workplace(
+pub fn workplace_shift_template(
     citizen_id: &str,
     building_type: &str,
 ) -> Option<&'static str> {
@@ -118,14 +137,14 @@ pub fn shift_template_for_workplace(
         } else {
             "early"
         }),
-        _ => shift_template_for_id(citizen_id),
+        _ => None,
     }
 }
 ```
 
 Do not change `departure_minute_for_sim`, canonical template validation, Student classification, or the four existing window definitions.
 
-- [ ] **Step 4: Run the focused tests**
+- [ ] **Step 5: Run the focused tests**
 
 ```bash
 cargo test -p caelum-core commute::
@@ -133,26 +152,26 @@ cargo test -p caelum-core commute::
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [ ] **Step 6: Commit**
 
 ```bash
 git add crates/caelum-core/src/commute.rs
-git commit -m "feat(population): derive shifts from workplace type"
+git commit -m "feat(commute): add workplace shift overrides"
 ```
 
 ---
 
-### Task 2: Apply the rule at both worker-assignment seams
+### Task 2: Apply overrides at assignment and make activity scheduling safely supersede
 
 **Files:**
 - Modify: \`crates/caelum-core/src/population/schedule.rs\`
 - Modify: \`crates/caelum-core/tests/population.rs\`
 
 **Interfaces:**
-- Consumes: \`shift_template_for_workplace(citizen_id, building_type)\`, existing \`find_available_workplace\`, \`routine_from_now\`, \`NextActivity\`, and \`PopulationScheduler\`.
-- Produces: assignment updates \`Routine::Worker.shift_template\` + \`workplace\` together.
-- Produces: one private helper in \`schedule.rs\` that replaces an **idle** worker's pending \`DailyRoutine\` wake without leaving the old scheduler event behind.
-- Preserves: existing demolition outbound-trip retarget/drop semantics and the same active trip ID.
+- Consumes: `workplace_shift_template(citizen_id, building_type)`, existing `find_available_workplace`, `routine_from_now`, `NextActivity`, and `PopulationScheduler`.
+- Produces: Office/Factory assignment may update `Routine::Worker.shift_template`; unfeatured assignment preserves it while still updating `workplace`.
+- Produces: central `schedule_activity` removes the same entity's previous scheduled Activity before inserting a replacement.
+- Preserves: the existing dropped-trip recovery guard, demolition retarget/drop semantics, and the same active trip ID.
 
 - [ ] **Step 1: Add a failing initial-assignment timing test**
 
@@ -216,7 +235,7 @@ let workplace = find_available_workplace(index);
 let assigned_shift = workplace
     .as_ref()
     .and_then(|(building_id, _)| index.buildings.get(building_id))
-    .and_then(|building| shift_template_for_workplace(&sim_id, building.building_type))
+    .and_then(|building| workplace_shift_template(&sim_id, building.building_type))
     .unwrap_or(shift_template);
 \`\`\`
 
@@ -269,90 +288,23 @@ cargo test -p caelum-core --test population idle_factory_assignment_replaces_old
 
 Expected: FAIL because refill currently changes only \`workplace\`; after adding the shift update, it would still leave the old scheduled wake unless that wake is replaced safely.
 
-- [ ] **Step 7: Add one narrow private wake-replacement helper**
+- [ ] **Step 7: Make \`schedule_activity\` safely supersede an old wake**
 
-In \`population/schedule.rs\`, add a private helper beside \`schedule_activity\`:
+Extend the existing private scheduler insertion seam. Before inserting a new Activity event, read the entity's current \`NextActivity\`; if present, remove matching \`PopulationEvent::Activity { entity }\` rows from that previous exact due-time bucket and delete the bucket if it becomes empty. Then insert the new wake and replace the component as today.
 
-\`\`\`rust
-fn replace_pending_daily_routine(
-    world: &mut World,
-    entity: Entity,
-    citizen_id: &str,
-    now: f64,
-) {
-    let Some(existing) = world.get::<NextActivity>(entity).map(|next| next.0.clone()) else {
-        return;
-    };
-    if existing.kind != ScheduledActivityKind::DailyRoutine {
-        return;
-    }
+Keep \`boundary_generation\` monotonic; removing an obsolete key does not decrement it. Keep the existing dropped-trip recovery guard that skips scheduling when a legitimate \`NextActivity\` already exists; that guard encodes semantic precedence, not merely duplicate-bucket avoidance.
 
-    let old_key = ScheduledTime::new(existing.due_time);
-    {
-        let mut scheduler = world.resource_mut::<PopulationScheduler>();
-        let mut remove_bucket = false;
-        if let Some(events) = scheduler.buckets.get_mut(&old_key) {
-            events.retain(|event| {
-                !matches!(event, PopulationEvent::Activity { entity: scheduled } if *scheduled == entity)
-            });
-            remove_bucket = events.is_empty();
-        }
-        if remove_bucket {
-            scheduler.buckets.remove(&old_key);
-        }
-    }
+- [ ] **Step 8: Apply workplace overrides in the global refill loop**
 
-    let routine = world
-        .get::<Routine>(entity)
-        .cloned()
-        .expect("assigned worker must retain a routine");
-    schedule_activity(world, entity, routine_from_now(&routine, citizen_id, now));
-}
-\`\`\`
+Always update the new \`workplace\`. Change \`shift_template\` only when \`workplace_shift_template(&citizen_id, building.building_type)\` returns \`Some\`; assigning to Warehouse, Supermarket, Business Park, or another unfeatured workplace leaves the current Worker template unchanged.
 
-Do not make this public or generic. \`boundary_generation\` stays monotonic; removing an obsolete key does not decrement it.
+If the citizen has no non-terminal active trip and its current \`NextActivity\` is \`DailyRoutine\`, call the existing \`schedule_activity(world, entity, routine_from_now(...))\`. Central supersession removes the old bucket entry. Do not mutate active trips in this block.
 
-- [ ] **Step 8: Update the global refill mutation**
+- [ ] **Step 9: Pin unfeatured reassignment preservation**
 
-Move/reuse \`let now = after.time;\` so it is available during refill.
+Add one case where a Worker carrying an Office-derived \`standard\` template is later assigned to an unfeatured Warehouse/Supermarket vacancy. Assert the stored template remains \`standard\` rather than being re-derived from citizen identity.
 
-When a free slot is assigned:
-
-1. look up \`building.building_type\` already present on \`PopulationBuilding\`;
-2. set \`shift_template\` and \`workplace\` together;
-3. determine whether that citizen already has a non-terminal active trip in \`after.active_trips\`;
-4. if there is **no** active trip, call \`replace_pending_daily_routine\`. The helper itself no-ops for \`PrimaryReturn\` / \`OptionalReturn\`.
-
-Core mutation:
-
-\`\`\`rust
-if let Some(mut routine) = world.get_mut::<Routine>(entity) {
-    if let Routine::Worker {
-        shift_template,
-        workplace,
-    } = &mut *routine
-    {
-        *shift_template = shift_template_for_workplace(&citizen_id, building.building_type)
-            .expect("indexed unassigned worker must remain a worker")
-            .to_string();
-        *workplace = Some(BuildingAssignment {
-            building_id: Some(building_id.clone()),
-            point,
-        });
-    }
-}
-
-let has_active_trip = after.active_trips.iter().any(|trip| {
-    trip.sim_id == citizen_id && !is_terminal_status(trip.status)
-});
-if !has_active_trip {
-    replace_pending_daily_routine(world, entity, &citizen_id, now);
-}
-\`\`\`
-
-Do not mutate any active trip in this block.
-
-- [ ] **Step 9: Re-pin representative active-trip reassignment to the existing contract**
+- [ ] **Step 10: Re-pin representative active-trip reassignment to the existing contract**
 
 Add/adjust \`workplace_reassignment_updates_shift_without_duplicating_active_trip\`.
 
@@ -383,7 +335,7 @@ assert_eq!(shift_of(reassigned_worker), Some("standard")); // Office replacement
 
 It is valid for existing reconciliation to change that same trip's destination/status/route-plan/deadline.
 
-- [ ] **Step 10: Add save/restore timing coverage**
+- [ ] **Step 11: Add save/restore timing coverage**
 
 After staffing Office/Factory workers, snapshot and restore through the public engine constructor:
 
@@ -400,7 +352,7 @@ assert_eq!(
 
 Advance the restored engine to a representative stored work wake and assert the emitted commute still targets the persisted workplace. Do not bump the schema.
 
-- [ ] **Step 11: Run population coverage**
+- [ ] **Step 12: Run population coverage**
 
 \`\`\`bash
 cargo test -p caelum-core --test population
@@ -409,11 +361,11 @@ cargo test -p caelum-core population::
 
 Expected: PASS, including existing Student/day-off/optional/capacity/recovery tests.
 
-- [ ] **Step 12: Commit**
+- [ ] **Step 13: Commit**
 
 \`\`\`bash
 git add crates/caelum-core/src/population/schedule.rs crates/caelum-core/tests/population.rs
-git commit -m "feat(population): apply workplace shifts on assignment"
+git commit -m "feat(population): apply workplace shift overrides"
 \`\`\`
 
 ---
