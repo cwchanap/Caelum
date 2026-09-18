@@ -13,6 +13,10 @@
     type BuildGroup,
     type BuildItemAction,
   } from "../../../domain/catalog/buildGroups";
+  import {
+    BUILDING_CATALOG,
+    getRotatedFootprintSize,
+  } from "../../../domain/catalog/buildings";
   import CommandPlateGrid from "../CommandPlateGrid.svelte";
   import roadsPlate from "../../../assets/command-plates/roads.webp";
   import transitPlate from "../../../assets/command-plates/transit.webp";
@@ -56,6 +60,19 @@
   ).filter((plate) => BUILD_GROUPS.some((group) => group.id === plate.id));
 
   const activeGroup = $derived(findBuildGroup(activeBuildGroup));
+
+  const armedDefinition = $derived(
+    selectedBuilding === null ? null : BUILDING_CATALOG[selectedBuilding],
+  );
+  const armedFactsSummary = $derived.by(() => {
+    if (selectedBuilding === null || armedDefinition === null) return null;
+    const size = getRotatedFootprintSize(selectedBuilding, buildingRotation);
+    const capacity =
+      armedDefinition.residentCapacity > 0
+        ? `${armedDefinition.residentCapacity} residents`
+        : `${armedDefinition.jobCapacity} jobs`;
+    return `${size.width} × ${size.height} · $${armedDefinition.cost.toLocaleString("en-US")} · ${capacity}`;
+  });
 
   function isItemActive(action: BuildItemAction): boolean {
     if (action.kind === "building") {
@@ -139,6 +156,15 @@
           </div>
         </section>
       {/each}
+
+      {#if armedDefinition !== null && armedFactsSummary !== null}
+        <div class="armed-facts" data-testid="armed-building-facts">
+          <p class="facts-line">{armedFactsSummary}</p>
+          {#if armedDefinition.workPattern !== undefined}
+            <p class="facts-pattern">{armedDefinition.workPattern}</p>
+          {/if}
+        </div>
+      {/if}
 
       <button
         type="button"

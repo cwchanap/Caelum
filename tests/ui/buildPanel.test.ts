@@ -1,11 +1,17 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import BuildPanel from "../../src/components/hud/panels/BuildPanel.svelte";
+import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import type {
   BuildGroup,
   BuildItemAction,
 } from "../../src/domain/catalog/buildGroups";
-import type { AreaKind, BuildingType, Tool } from "../../src/domain/types";
+import type {
+  AreaKind,
+  BuildingRotation,
+  BuildingType,
+  Tool,
+} from "../../src/domain/types";
 
 type Overrides = Partial<{
   activeBuildGroup: BuildGroup | null;
@@ -14,6 +20,7 @@ type Overrides = Partial<{
   selectedBuilding: BuildingType | null;
   roadPreset: "twoWay" | "oneWay" | "dualBidirectional";
   roundaboutSize: "compact2x2" | "standard3x3";
+  buildingRotation: BuildingRotation;
 }>;
 
 function renderPanel(overrides: Overrides = {}) {
@@ -132,5 +139,58 @@ describe("BuildPanel detail view", () => {
     expect(
       screen.getAllByRole("button", { name: /rotate building/i }).at(-1),
     ).toBeEnabled();
+  });
+});
+
+describe("BuildPanel armed-building facts", () => {
+  it("summarizes an armed residential building outside the leaf grid", () => {
+    renderPanel({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "smallHouse",
+    });
+    expect(screen.getByTestId("armed-building-facts")).toHaveTextContent(
+      "2 × 1 · $4,000 · 4 residents",
+    );
+  });
+
+  it("shows the current rotated footprint", () => {
+    renderPanel({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "smallHouse",
+      buildingRotation: 90,
+    });
+    expect(screen.getByTestId("armed-building-facts")).toHaveTextContent(
+      "1 × 2 · $4,000 · 4 residents",
+    );
+  });
+
+  it("summarizes office jobs and the standard shift pattern", () => {
+    renderPanel({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "officeTower",
+    });
+    const facts = screen.getByTestId("armed-building-facts");
+    expect(facts).toHaveTextContent("2 × 2 · $18,000 · 4 jobs");
+    expect(facts).toHaveTextContent(BUILDING_CATALOG.officeTower.workPattern!);
+  });
+
+  it("summarizes factory jobs and the early/late shift pattern", () => {
+    renderPanel({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "factory",
+    });
+    const facts = screen.getByTestId("armed-building-facts");
+    expect(facts).toHaveTextContent("3 × 2 · $16,000 · 6 jobs");
+    expect(facts).toHaveTextContent(BUILDING_CATALOG.factory.workPattern!);
+  });
+
+  it("keeps the long schedule prose out of the leaf buttons", () => {
+    renderPanel({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "factory",
+    });
+    const leafButton = screen.getByTestId("build-item-factory");
+    expect(leafButton).not.toHaveTextContent("05:30");
+    expect(leafButton).not.toHaveTextContent("19:30");
   });
 });
