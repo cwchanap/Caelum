@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import { COSTS } from "../../src/domain/catalog/transit";
 import type {
   ServiceMetrics,
@@ -72,6 +73,8 @@ describe("selectShellState inspector", () => {
       metricLabel: "Residents",
       occupancy: 1,
       capacity: 4,
+      workPattern: null,
+      currentDestinationDemand: null,
     });
   });
 
@@ -93,6 +96,66 @@ describe("selectShellState inspector", () => {
       metricLabel: "Jobs",
       occupancy: 1,
       capacity: 4,
+      workPattern: null,
+      currentDestinationDemand: null,
+    });
+  });
+
+  it("derives office work pattern with zero demand before any flow rows", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "officeTower", { x: 5, y: 1 }, 0);
+    const building = state.buildings[0];
+    state = { ...state, buildingOccupancy: [buildingRow(building.id, 0)] };
+
+    const shell = selectShellState(state, inspectAt("5,1"));
+
+    expect(shell.inspector).toMatchObject({
+      kind: "building",
+      metricLabel: "Jobs",
+      occupancy: 0,
+      capacity: 4,
+      workPattern: BUILDING_CATALOG.officeTower.workPattern,
+      currentDestinationDemand: 0,
+    });
+  });
+
+  it("keeps a staffed office quiet when no demand rows exist", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "officeTower", { x: 5, y: 1 }, 0);
+    const building = state.buildings[0];
+    state = { ...state, buildingOccupancy: [buildingRow(building.id, 3)] };
+
+    const shell = selectShellState(state, inspectAt("6,2"));
+
+    expect(shell.inspector).toMatchObject({
+      kind: "building",
+      occupancy: 3,
+      workPattern: BUILDING_CATALOG.officeTower.workPattern,
+      currentDestinationDemand: 0,
+    });
+  });
+
+  it("sums demand rows across the office footprint and ignores outside tiles", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "officeTower", { x: 5, y: 1 }, 0);
+    const building = state.buildings[0];
+    state = {
+      ...state,
+      buildingOccupancy: [buildingRow(building.id, 2)],
+      demandFlow: [
+        { point: { x: 5, y: 1 }, count: 2 },
+        { point: { x: 6, y: 2 }, count: 3 },
+        { point: { x: 9, y: 9 }, count: 40 },
+      ],
+    };
+
+    const shell = selectShellState(state, inspectAt("5,2"));
+
+    expect(shell.inspector).toMatchObject({
+      kind: "building",
+      occupancy: 2,
+      workPattern: BUILDING_CATALOG.officeTower.workPattern,
+      currentDestinationDemand: 5,
     });
   });
 

@@ -34,4 +34,14 @@ describe("building capacity catalog", () => {
       ).toMatchObject(capacities);
     }
   });
+
+  it("pins exact player-facing pattern copy for featured workplaces", () => {
+    expect(BUILDING_CATALOG.officeTower.workPattern).toBe(
+      "Standard · 07:00–09:00 starts, 17:00–19:00 returns",
+    );
+    expect(BUILDING_CATALOG.factory.workPattern).toBe(
+      "Early / late · 05:30–07:00 or 10:00–11:30 starts; 15:00–16:30 or 19:30–21:00 returns",
+    );
+    expect(BUILDING_CATALOG.warehouse.workPattern).toBeUndefined();
+  });
 });

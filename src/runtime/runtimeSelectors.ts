@@ -84,7 +84,7 @@ export function formatActiveTool(ui: UiState): string {
   return labels[ui.activeTool];
 }
 
-function parseSelectedPoint(selectedId: string | null): {
+export function parseSelectedPoint(selectedId: string | null): {
   x: number;
   y: number;
 } | null {
@@ -192,6 +192,14 @@ function buildInspector(
     state.buildingOccupancy.find((row) => row.buildingId === building.id)
       ?.occupancy ?? 0;
 
+  const workPattern = definition.workPattern ?? null;
+  const currentDestinationDemand =
+    workPattern === null
+      ? null
+      : state.demandFlow
+          .filter((row) => includesPoint(building.occupiedTiles, row.point))
+          .reduce((sum, row) => sum + row.count, 0);
+
   return {
     kind: "building",
     buildingId: building.id,
@@ -202,6 +210,8 @@ function buildInspector(
       metricLabel === "Residents"
         ? definition.residentCapacity
         : definition.jobCapacity,
+    workPattern,
+    currentDestinationDemand,
   };
 }
 

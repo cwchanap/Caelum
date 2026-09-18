@@ -109,6 +109,8 @@ export interface ShellBuildingInspectorState {
   metricLabel: "Residents" | "Jobs";
   occupancy: number;
   capacity: number;
+  workPattern: string | null;
+  currentDestinationDemand: number | null;
 }
 
 export type ShellInspectorState =
