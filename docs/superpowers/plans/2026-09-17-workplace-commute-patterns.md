@@ -38,10 +38,10 @@
 - `src/runtime/runtimeSelectors.ts` — selected workplace demand aggregation and shared selected-point parser.
 - `src/components/hud/panels/BuildPanel.svelte` — one generic armed-building facts summary near the existing Rotate control.
 - `src/components/hud/panels/InspectPanel.svelte` — staffing/pattern/current-demand states.
-- `src/render/webgpu/overlayBatch.ts` — selected workplace outline/current-demand emphasis.
+- `src/render/webgpu/overlayBatch.ts` — generic selected-building outline/current-demand emphasis; no Office/Factory type checks.
 - `tests/runtime/buildingCatalog.test.ts` — copy/catalog contract.
 - `tests/runtime/runtimeSelectors.test.ts` — inspector aggregation contract.
-- `tests/render/webgpuOverlayBatch.test.ts` — selected-workplace render geometry.
+- `tests/render/webgpuOverlayBatch.test.ts` — exact selected-building render geometry/color/alpha.
 - `tests/ui/buildPanel.test.ts` — Build facts for Office/Factory.
 - Create: `tests/ui/inspectPanel.test.ts` — isolated InspectPanel copy/state coverage using the existing Testing Library pattern; this is a test file, not a new harness.
 - `tests/e2e/newCity.spec.ts` — one real-WASM Small Town proof.
@@ -684,7 +684,7 @@ git commit -m "feat(ui): explain workplace staffing and shifts"
 
 ---
 
-### Task 6: Emphasize selected workplace demand in WebGPU
+### Task 6: Add generic selected-building demand emphasis in WebGPU
 
 **Files:**
 - Modify: `src/render/webgpu/overlayBatch.ts`
@@ -692,19 +692,21 @@ git commit -m "feat(ui): explain workplace staffing and shifts"
 
 **Interfaces:**
 - Consumes: exported `parseSelectedPoint`, existing `UiState.selectedId`, `selectedNodeKind`, `GameState.buildings`, `demandFlow`, `DEMAND`, `demandAlpha`, `strokeTile`, `fillTile`.
-- Produces: geometry only; no new renderer state.
+- Produces: geometry only; no building-type taxonomy and no new renderer state.
 
-- [ ] **Step 1: Add failing geometry tests**
+- [ ] **Step 1: Add failing exact-geometry tests using existing helpers**
 
-Create a state with one Office Tower selected by a tile in its footprint.
+Use an arbitrary selected building; the test does not need to be Office/Factory. Give it a footprint containing \`{ x: 5, y: 5 }\` and \`{ x: 6, y: 5 }\`.
 
-Pin three cases:
+Use the existing \`hasVertexNear\` and \`alphaAt\` helpers to pin:
 
-1. selected + zero demand still adds outline geometry;
-2. selected + demand adds more geometry than the quiet case when global Demand overlay is off;
-3. selected + demand with `activeOverlay = "demand"` does not add a second selected demand fill (only the outline is extra).
+1. selected + zero demand produces demand-color outline vertices at expected world coordinates;
+2. a demand row at \`{ x: 5, y: 5 }\` produces demand-color fill at \`160,160\` with alpha \`0.24\` when the global Demand overlay is off;
+3. a demand row outside the selected footprint is not added by this selected-building pass;
+4. with \`activeOverlay = "demand"\`, the selected row keeps the normal global-overlay alpha rather than being double-darkened;
+5. \`selectedNodeKind !== null\` suppresses the building pass so transit selection keeps priority.
 
-Use vertex-buffer lengths or the existing primitive spy/assertion style already used in this test file; do not add pixel screenshots for this unit.
+Do not use only vertex-buffer length comparisons.
 
 - [ ] **Step 2: Run the render test and verify failure**
 
@@ -714,30 +716,15 @@ bunx vitest run tests/render/webgpuOverlayBatch.test.ts
 
 Expected: FAIL because selected buildings currently have no overlay pass.
 
-- [ ] **Step 3: Add a private selected-workplace resolver**
+- [ ] **Step 3: Add a generic selected-building resolver**
 
-Use the existing selection rather than new UI state:
+Resolve the selected point with exported \`parseSelectedPoint\`. Return \`null\` when \`ui.selectedNodeKind !== null\`, then find **any** building whose \`occupiedTiles\` contain that point.
 
-```ts
-function selectedWorkplace(state: GameState, ui: UiState) {
-  if (ui.selectedNodeKind !== null) return null;
-  const point = parseSelectedPoint(ui.selectedId);
-  if (point === null) return null;
-  return (
-    state.buildings.find(
-      (building) =>
-        (building.type === "officeTower" || building.type === "factory") &&
-        building.occupiedTiles.some(
-          (tile) => tile.x === point.x && tile.y === point.y,
-        ),
-    ) ?? null
-  );
-}
-```
+Do not check \`building.type\` and do not import the building catalog into the renderer.
 
 - [ ] **Step 4: Draw outline + selected demand with existing primitives**
 
-Add a `drawSelectedWorkplaceDemand` pass after global data overlays and before previews:
+Add a selected-building pass after global data overlays and before previews:
 
 ```ts
 for (const tile of building.occupiedTiles) {
@@ -768,7 +755,7 @@ Expected: PASS.
 
 ```bash
 git add src/render/webgpu/overlayBatch.ts tests/render/webgpuOverlayBatch.test.ts
-git commit -m "feat(render): highlight selected workplace demand"
+git commit -m "feat(render): emphasize selected building demand"
 ```
 
 ---
