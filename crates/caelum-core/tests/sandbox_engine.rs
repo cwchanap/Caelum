@@ -131,14 +131,14 @@ fn small_town_resume_uses_existing_move_in_workplace_and_commute_rules_determini
 
     assert_eq!(first, second);
     assert_eq!(first.clock_minutes, MORNING_CLOCK_MINUTE);
-    assert_eq!(first.sims.len(), 8);
+    assert_eq!(first.sims.len(), 12);
 
     let workers = first
         .sims
         .iter()
         .filter(|sim| matches!(sim.routine, CitizenRoutine::Worker { .. }))
         .collect::<Vec<_>>();
-    assert_eq!(workers.len(), 8);
+    assert_eq!(workers.len(), 11);
     assert!(workers.iter().all(|sim| matches!(
         &sim.routine,
         CitizenRoutine::Worker {

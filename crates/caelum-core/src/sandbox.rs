@@ -272,6 +272,7 @@ fn create_small_town_candidate(
         ("residential", Point { x: 4, y: 6 }, Point { x: 10, y: 7 }),
         ("commercial", Point { x: 18, y: 6 }, Point { x: 19, y: 7 }),
         ("industrial", Point { x: 15, y: 11 }, Point { x: 17, y: 12 }),
+        ("office", Point { x: 21, y: 6 }, Point { x: 22, y: 7 }),
     ] {
         snapshot =
             areas::paint_area_rectangle(&snapshot, area, &start, &end).map_err(|_| fail())?;
@@ -280,6 +281,8 @@ fn create_small_town_candidate(
     for (building_type, origin) in [
         ("smallHouse", Point { x: 4, y: 7 }),
         ("smallHouse", Point { x: 8, y: 7 }),
+        ("smallHouse", Point { x: 6, y: 7 }),
+        ("officeTower", Point { x: 21, y: 6 }),
         ("supermarket", Point { x: 18, y: 6 }),
         ("factory", Point { x: 15, y: 11 }),
     ] {

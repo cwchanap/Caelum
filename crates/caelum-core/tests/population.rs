@@ -3,7 +3,7 @@ use caelum_core::model::{
     ActiveTrip, CitizenRoutine, GameSnapshot, Point, RouteLeg, RoutePlan, ScheduledActivityKind,
     Sim, TransitMode, TripPosition, TripPurpose, TripStatus,
 };
-use caelum_core::{clock, GameEngine, GameIntent};
+use caelum_core::{clock, create_sandbox_snapshot, GameEngine, GameIntent, SandboxCreationRequest};
 
 fn scheduled_time_seconds(day: u32, minute: u16) -> f64 {
     f64::from(day) * clock::GAME_DAY_SECONDS
@@ -1594,6 +1594,80 @@ fn restore_preserves_partially_occupied_building_without_replaying_filled_slots(
 
 // === HPA-463: workplace-specific shift overrides at assignment/refill, and
 // safe wake supersession in the central activity scheduler.
+
+/// The unmodified Small Town template must staff normally: twelve housing
+/// slots mint twelve citizens (sim-010 the canonical Student), and the stable
+/// building-ID vacancy order fills Office Tower (building-004), Supermarket
+/// (building-005), then Factory (building-006) with the globally lowest
+/// worker ordinals. Do not seed `sims` manually.
+#[test]
+fn small_town_normal_move_in_staffs_office_supermarket_and_factory() {
+    let snapshot = create_sandbox_snapshot(SandboxCreationRequest {
+        template_id: "smallTown".to_string(),
+        economy_preset: "standard".to_string(),
+        starting_capital: Some(f64::from(caelum_core::DEFAULT_STARTING_CAPITAL)),
+        demand_multiplier: Some(1.0),
+    })
+    .expect("small town template must remain valid");
+    let mut engine = GameEngine::from_snapshot(snapshot).expect("small town engine loads");
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    // All three houses are placed at t=0, so the twelve slots (50 s apart)
+    // are filled by t=150. Stop before the earliest outbound departure
+    // (~t=275) so the assertions see pure assignment state.
+    let mut state = engine.snapshot();
+    for _ in 0..8 {
+        if state.sims.len() >= 12 {
+            break;
+        }
+        engine.tick(50.0);
+        state = engine.snapshot();
+    }
+    assert_eq!(state.sims.len(), 12);
+    let student = state
+        .sims
+        .iter()
+        .find(|sim| matches!(sim.routine, CitizenRoutine::Student))
+        .expect("a canonical Student moved in");
+    assert_eq!(student.id, "sim-010");
+
+    let tiles_of = |building_type: &str| -> Vec<Point> {
+        state
+            .buildings
+            .iter()
+            .find(|building| building.building_type == building_type)
+            .unwrap_or_else(|| panic!("{building_type} must be authored"))
+            .occupied_tiles
+            .clone()
+    };
+    let workers_at = |tiles: &[Point]| -> Vec<&Sim> {
+        state
+            .sims
+            .iter()
+            .filter(|sim| workplace_of(sim).is_some_and(|workplace| tiles.contains(&workplace)))
+            .collect()
+    };
+
+    let office_workers = workers_at(&tiles_of("officeTower"));
+    let supermarket_workers = workers_at(&tiles_of("supermarket"));
+    let factory_workers = workers_at(&tiles_of("factory"));
+    assert_eq!(office_workers.len(), 4);
+    assert_eq!(supermarket_workers.len(), 4);
+    assert_eq!(factory_workers.len(), 3);
+
+    let factory_shifts: Vec<&str> = factory_workers
+        .iter()
+        .filter_map(|sim| shift_of(sim))
+        .collect();
+    assert!(
+        factory_shifts.contains(&"early") && factory_shifts.contains(&"late"),
+        "factory staffing must mix early and late shifts: {factory_shifts:?}"
+    );
+}
 
 #[test]
 fn office_and_factory_move_ins_use_workplace_shifts_and_first_wakes() {

@@ -2210,7 +2210,9 @@
         "building-001",
         "building-002",
         "building-003",
-        "building-004"
+        "building-004",
+        "building-005",
+        "building-006"
       ],
       "metroLines": [],
       "routes": [],
@@ -2342,6 +2344,22 @@
         "y": 6
       },
       {
+        "area": "office",
+        "id": "tile-21-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 6
+      },
+      {
+        "area": "office",
+        "id": "tile-22-6",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
+        "y": 6
+      },
+      {
         "area": "residential",
         "id": "tile-4-7",
         "kind": "empty",
@@ -2421,6 +2439,22 @@
         "kind": "empty",
         "roadConnections": [],
         "x": 19,
+        "y": 7
+      },
+      {
+        "area": "office",
+        "id": "tile-21-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 21,
+        "y": 7
+      },
+      {
+        "area": "office",
+        "id": "tile-22-7",
+        "kind": "empty",
+        "roadConnections": [],
+        "x": 22,
         "y": 7
       },
       {
