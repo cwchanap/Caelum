@@ -12,7 +12,7 @@ use crate::clock::{day_index, GAME_DAY_SECONDS};
 use crate::commute::{
     departure_minute_for_sim, is_day_off, numeric_id_suffix, optional_departure_minute,
     shift_template_for_id, stable_daily_seed, student_departure_minute, trip_deadline_seconds,
-    OPTIONAL_SALT, SCHOOL_SALT,
+    workplace_shift_template, OPTIONAL_SALT, SCHOOL_SALT,
 };
 use crate::ids::entity_id;
 use crate::model::{
@@ -589,19 +589,57 @@ pub(crate) fn reconcile_buildings(
                     break;
                 };
                 let point = building.occupied_tiles[used % building.occupied_tiles.len()];
-                index.unassigned_workers.remove(&(ordinal, citizen_id));
+                index
+                    .unassigned_workers
+                    .remove(&(ordinal, citizen_id.clone()));
                 index
                     .workers_by_building
                     .entry(building_id.clone())
                     .or_default()
                     .push(entity);
                 if let Some(mut routine) = world.get_mut::<Routine>(entity) {
-                    if let Routine::Worker { workplace, .. } = &mut *routine {
+                    if let Routine::Worker {
+                        workplace,
+                        shift_template,
+                    } = &mut *routine
+                    {
                         *workplace = Some(BuildingAssignment {
                             building_id: Some(building_id.clone()),
                             point,
                         });
+                        // Workplace shift overrides beat the current Worker
+                        // template; an unfeatured workplace leaves it alone.
+                        if let Some(assigned_shift) =
+                            workplace_shift_template(&citizen_id, building.building_type)
+                        {
+                            *shift_template = assigned_shift.to_string();
+                        }
                     }
+                }
+                // An idle citizen's stored DailyRoutine wake still points at
+                // the old shift's departure window: reschedule from the
+                // updated routine (central supersession removes the stale
+                // bucket entry). Citizens owned by a non-terminal trip keep
+                // that trip untouched — it is retargeted or dropped below —
+                // and citizens between trip stages keep their existing wake.
+                let travelling = after
+                    .active_trips
+                    .iter()
+                    .any(|trip| trip.sim_id == citizen_id && !is_terminal_status(trip.status));
+                if !travelling
+                    && world.get::<NextActivity>(entity).is_some_and(|activity| {
+                        activity.0.kind == ScheduledActivityKind::DailyRoutine
+                    })
+                {
+                    let routine = world
+                        .get::<Routine>(entity)
+                        .cloned()
+                        .expect("indexed citizen must carry a Routine");
+                    schedule_activity(
+                        world,
+                        entity,
+                        routine_from_now(&routine, &citizen_id, after.time),
+                    );
                 }
                 changed = true;
             }
@@ -921,7 +959,29 @@ fn insert_scheduler_event(
 
 /// Install the durable [`NextActivity`] component and its wake event. The
 /// component is authoritative state; the bucket entry is only the wake-up.
+/// Central supersession: a citizen's previous wake, if any, is removed from
+/// its exact due-time bucket first, so a reassigned citizen never keeps two
+/// live wakes (the stale one would fire the old routine's demand). The
+/// dropped-trip recovery guard upstream still skips citizens whose existing
+/// [`NextActivity`] is legitimate — this only ever replaces an obsolete wake.
+/// `boundary_generation` stays monotonic: removing an obsolete key never
+/// decrements it.
 fn schedule_activity(world: &mut World, entity: Entity, activity: ScheduledActivity) {
+    if let Some(previous_due) = world
+        .get::<NextActivity>(entity)
+        .map(|wake| wake.0.due_time)
+    {
+        let mut scheduler = world.resource_mut::<PopulationScheduler>();
+        let previous = ScheduledTime::new(previous_due);
+        if let Some(rows) = scheduler.buckets.get_mut(&previous) {
+            rows.retain(|event| {
+                !matches!(event, PopulationEvent::Activity { entity: queued } if *queued == entity)
+            });
+            if rows.is_empty() {
+                scheduler.buckets.remove(&previous);
+            }
+        }
+    }
     insert_scheduler_event(
         &mut world.resource_mut::<PopulationScheduler>(),
         activity.due_time,
@@ -1026,13 +1086,22 @@ fn apply_move_in(world: &mut World, building_id: &str, slot: u16) {
 
     let shift_template = shift_template_for_id(&sim_id);
     let routine = match shift_template {
-        Some(shift_template) => {
+        Some(identity_shift) => {
             // Assign a workplace if one has a free slot (stable building-ID
             // order). Task 3's reconciliation owns the global
-            // preserve-and-refill ordering.
-            let workplace = find_available_workplace(world.resource::<PopulationIndex>());
+            // preserve-and-refill ordering. A workplace shift override
+            // (Office standard / Factory early-late) beats the identity
+            // template; an unfeatured workplace keeps it. Worker/Student
+            // classification still comes only from `shift_template_for_id`.
+            let index = world.resource::<PopulationIndex>();
+            let workplace = find_available_workplace(index);
+            let assigned_shift = workplace
+                .as_ref()
+                .and_then(|(building_id, _)| index.buildings.get(building_id))
+                .and_then(|building| workplace_shift_template(&sim_id, building.building_type))
+                .unwrap_or(identity_shift);
             Routine::Worker {
-                shift_template: shift_template.to_string(),
+                shift_template: assigned_shift.to_string(),
                 workplace: workplace.map(|(job_building_id, point)| BuildingAssignment {
                     building_id: Some(job_building_id),
                     point,

@@ -89,6 +89,92 @@ fn active_trip_identity(state: &GameSnapshot) -> Vec<(String, String, TripPurpos
         .collect()
 }
 
+fn shift_of(sim: &Sim) -> Option<&str> {
+    match &sim.routine {
+        CitizenRoutine::Worker { shift_template, .. } => Some(shift_template),
+        CitizenRoutine::Student => None,
+    }
+}
+
+/// Comparable projection of the worker-facing fields the shift wiring owns:
+/// assignment point, stored template, and pending wake.
+type WorkerShiftProjection = Vec<(
+    String,
+    Option<Point>,
+    Option<String>,
+    Option<(ScheduledActivityKind, f64)>,
+)>;
+
+fn worker_assignments_shifts_and_next_activity(state: &GameSnapshot) -> WorkerShiftProjection {
+    state
+        .sims
+        .iter()
+        .map(|sim| {
+            (
+                sim.id.clone(),
+                workplace_of(sim),
+                shift_of(sim).map(str::to_string),
+                sim.next_activity
+                    .as_ref()
+                    .map(|activity| (activity.kind, activity.due_time)),
+            )
+        })
+        .collect()
+}
+
+/// One smallHouse plus one workplace building, both placed before the first
+/// move-in. The workplace needs its matching painted area.
+fn house_and_workplace_engine(
+    workplace_type: &str,
+    area: &str,
+    start: (i32, i32),
+    end: (i32, i32),
+) -> GameEngine {
+    let mut engine = GameEngine::new();
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "residential".to_string(),
+                start: (2, 3).into(),
+                end: (3, 3).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: area.to_string(),
+                start: start.into(),
+                end: end.into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: workplace_type.to_string(),
+                origin: start.into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine
+}
+
 #[test]
 fn two_small_houses_and_supermarket_assign_only_four_workers() {
     let mut engine = GameEngine::new();
@@ -1504,4 +1590,459 @@ fn restore_preserves_partially_occupied_building_without_replaying_filled_slots(
         filled.next_citizen_ordinal, 5,
         "allocator advanced to 5 after two post-restore move-ins"
     );
+}
+
+// === HPA-463: workplace-specific shift overrides at assignment/refill, and
+// safe wake supersession in the central activity scheduler.
+
+#[test]
+fn office_and_factory_move_ins_use_workplace_shifts_and_first_wakes() {
+    let mut office = house_and_workplace_engine("officeTower", "office", (8, 3), (9, 4));
+    let mut factory = house_and_workplace_engine("factory", "industrial", (8, 3), (10, 4));
+
+    // The slot-zero move-in is due at the placement timestamp.
+    office.tick(0.0);
+    factory.tick(0.0);
+
+    let office_worker = office
+        .snapshot()
+        .sims
+        .into_iter()
+        .find(|sim| sim.id == "sim-001")
+        .expect("office worker");
+    assert_eq!(shift_of(&office_worker), Some("standard"));
+    assert_eq!(
+        office_worker
+            .next_activity
+            .as_ref()
+            .map(|activity| activity.due_time),
+        Some(scheduled_time_seconds(
+            0,
+            departure_minute_for_sim("sim-001", "standard", "outbound"),
+        )),
+    );
+
+    // The factory override (odd suffix -> early) must beat sim-001's identity
+    // template ("standard"), including on the player-visible departure clock.
+    let factory_worker = factory
+        .snapshot()
+        .sims
+        .into_iter()
+        .find(|sim| sim.id == "sim-001")
+        .expect("factory worker");
+    assert_eq!(shift_of(&factory_worker), Some("early"));
+    assert_eq!(
+        factory_worker
+            .next_activity
+            .as_ref()
+            .map(|activity| activity.due_time),
+        Some(scheduled_time_seconds(
+            0,
+            departure_minute_for_sim("sim-001", "early", "outbound"),
+        )),
+    );
+}
+
+#[test]
+fn idle_factory_assignment_replaces_old_daily_routine_wake() {
+    // Housing only: sim-002 moves in with its identity-derived "standard"
+    // DailyRoutine wake. A factory deterministically maps even suffixes to
+    // "late"; assigning the idle citizen must replace the stored wake with
+    // the late departure — leaving the old scheduler bucket behind would
+    // fire a phantom standard outbound at the old due time first.
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("industrial", (8, 3), (10, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "smallHouse".to_string(),
+                origin: (2, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(150.0);
+    let before = engine.snapshot();
+    assert_eq!(
+        before.sims.len(),
+        4,
+        "housing only: four residents, no workplace"
+    );
+    let old_due = before
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-002")
+        .expect("sim-002 moved in")
+        .next_activity
+        .as_ref()
+        .expect("idle DailyRoutine wake")
+        .due_time;
+    assert_eq!(
+        old_due,
+        scheduled_time_seconds(
+            0,
+            departure_minute_for_sim("sim-002", "standard", "outbound")
+        )
+    );
+
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "factory".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+
+    let after_assignment = engine.snapshot();
+    let worker = after_assignment
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-002")
+        .expect("assigned sim-002");
+
+    assert_eq!(shift_of(worker), Some("late"));
+    let expected_late_due = scheduled_time_seconds(
+        after_assignment.day,
+        departure_minute_for_sim("sim-002", "late", "outbound"),
+    );
+    assert_eq!(
+        worker
+            .next_activity
+            .as_ref()
+            .map(|activity| activity.due_time),
+        Some(expected_late_due),
+    );
+
+    // Advancing only to the OLD standard due time must not emit sim-002's
+    // outbound: the stale wake is gone, not left in its bucket.
+    engine.tick(old_due - after_assignment.time);
+    let at_old_standard = engine.snapshot();
+    assert!(
+        !at_old_standard
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == "sim-002" && trip.purpose == TripPurpose::CommuteOutbound),
+        "the old standard wake must be gone, not firing"
+    );
+
+    engine.tick(expected_late_due - at_old_standard.time);
+    let at_late = engine.snapshot();
+    assert_eq!(
+        at_late
+            .active_trips
+            .iter()
+            .filter(|trip| trip.sim_id == "sim-002" && trip.purpose == TripPurpose::CommuteOutbound)
+            .count(),
+        1,
+        "exactly one late outbound fires for the reassigned worker"
+    );
+}
+
+#[test]
+fn unfeatured_supermarket_reassignment_preserves_office_derived_standard_shift() {
+    // sim-008's identity template is "early"; only an Office assignment can
+    // make it "standard". Two houses mint sim-001..sim-008; the office
+    // absorbs the four lowest ids. Demolishing the first house despawns those
+    // office workers, and the office refill promotes sim-005..sim-008 into
+    // Office-derived "standard" roles. Reassigning sim-008 again to an
+    // unfeatured supermarket vacancy must keep the stored "standard" rather
+    // than re-deriving "early" from citizen identity.
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("residential", (2, 7), (3, 7)),
+        ("office", (8, 3), (9, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for (building_type, origin) in [
+        ("smallHouse", (2, 3)),
+        ("smallHouse", (2, 7)),
+        ("officeTower", (8, 3)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: building_type.to_string(),
+                    origin: origin.into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(150.0);
+    assert_eq!(engine.snapshot().sims.len(), 8);
+
+    // The first house's residents hold the office jobs; demolishing it frees
+    // both the housing spots and the office slots for the survivors.
+    let removed_house = engine.dispatch(GameIntent::RemoveAtTile {
+        point: (2, 3).into(),
+    });
+    assert!(removed_house.applied, "{removed_house:?}");
+    let promoted = engine.snapshot();
+    assert_eq!(promoted.sims.len(), 4, "only the second house survives");
+    let sim008 = promoted
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-008")
+        .expect("sim-008 survives");
+    assert_eq!(
+        shift_of(sim008),
+        Some("standard"),
+        "office refill overrides sim-008's identity template"
+    );
+
+    let office_tile = promoted
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "officeTower")
+        .expect("office")
+        .occupied_tiles[0];
+    let removed_office = engine.dispatch(GameIntent::RemoveAtTile { point: office_tile });
+    assert!(removed_office.applied, "{removed_office:?}");
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "commercial".to_string(),
+                start: (8, 3).into(),
+                end: (9, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (8, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+
+    let reassigned = engine.snapshot();
+    let sim008 = reassigned
+        .sims
+        .iter()
+        .find(|sim| sim.id == "sim-008")
+        .expect("sim-008 remains");
+    assert!(
+        workplace_of(sim008).is_some(),
+        "sim-008 refills the supermarket vacancy"
+    );
+    assert_eq!(
+        shift_of(sim008),
+        Some("standard"),
+        "unfeatured supermarket keeps the stored Office-derived standard"
+    );
+}
+
+#[test]
+fn workplace_reassignment_updates_shift_without_duplicating_active_trip() {
+    // A worker mid-outbound to a factory that gets demolished keeps the SAME
+    // active trip row, reset in place to the replacement office destination,
+    // and gains the Office-derived standard shift. Byte-for-byte trip
+    // equality is deliberately not pinned: reconciliation may rewrite that
+    // one row's destination/status/route-plan/deadline.
+    let mut engine = GameEngine::new();
+    for (area, start, end) in [
+        ("residential", (2, 3), (3, 3)),
+        ("industrial", (8, 3), (10, 4)),
+        ("office", (4, 3), (5, 4)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PaintAreaRectangle {
+                    area: area.to_string(),
+                    start: start.into(),
+                    end: end.into(),
+                })
+                .applied
+        );
+    }
+    for (building_type, origin) in [
+        ("smallHouse", (2, 3)),
+        ("factory", (8, 3)),
+        ("officeTower", (4, 3)),
+    ] {
+        assert!(
+            engine
+                .dispatch(GameIntent::PlaceBuilding {
+                    building_type: building_type.to_string(),
+                    origin: origin.into(),
+                    rotation: 0,
+                })
+                .applied
+        );
+    }
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    engine.tick(150.0);
+    let filled = engine.snapshot();
+    assert_eq!(filled.sims.len(), 4);
+
+    // The factory (lower building id) absorbs all four residents.
+    let factory_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "factory")
+        .expect("factory")
+        .occupied_tiles
+        .clone();
+    let office_tiles = filled
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "officeTower")
+        .expect("office")
+        .occupied_tiles
+        .clone();
+    let factory_tile = factory_tiles[0];
+    let worker_id = filled
+        .sims
+        .iter()
+        .find(|sim| workplace_of(sim) == Some(factory_tile))
+        .expect("factory worker")
+        .id
+        .clone();
+
+    let mut mid = filled.clone();
+    let home = mid
+        .sims
+        .iter()
+        .find(|sim| sim.id == worker_id)
+        .map(|sim| sim.home)
+        .expect("worker home");
+    for sim in &mut mid.sims {
+        if sim.id == worker_id {
+            sim.next_activity = None;
+        }
+    }
+    mid.active_trips.retain(|trip| trip.sim_id != worker_id);
+    mid.active_trips.push(mid_outbound_trip(
+        &worker_id,
+        TripPurpose::CommuteOutbound,
+        home,
+        factory_tile,
+    ));
+    let mut engine = GameEngine::from_snapshot(mid).expect("mid-outbound snapshot loads");
+
+    let before = engine.snapshot();
+    let before_trip_id = before
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == worker_id)
+        .expect("active outbound")
+        .id
+        .clone();
+
+    let removed = engine.dispatch(GameIntent::RemoveAtTile {
+        point: factory_tile,
+    });
+    assert!(removed.applied, "{removed:?}");
+
+    let after = engine.snapshot();
+    let reassigned_worker = after
+        .sims
+        .iter()
+        .find(|sim| sim.id == worker_id)
+        .expect("worker remains");
+    assert_eq!(
+        workplace_of(reassigned_worker).map(|point| office_tiles.contains(&point)),
+        Some(true),
+        "worker refills the office replacement"
+    );
+    assert_eq!(
+        shift_of(reassigned_worker),
+        Some("standard"),
+        "office replacement overrides the factory-derived shift"
+    );
+    let after_trips = after
+        .active_trips
+        .iter()
+        .filter(|trip| trip.sim_id == worker_id)
+        .collect::<Vec<_>>();
+    assert_eq!(after_trips.len(), 1);
+    assert_eq!(after_trips[0].id, before_trip_id);
+}
+
+#[test]
+fn save_restore_preserves_staffed_shifts_and_workplace_wakes() {
+    let mut office = house_and_workplace_engine("officeTower", "office", (8, 3), (9, 4));
+    let mut factory = house_and_workplace_engine("factory", "industrial", (8, 3), (10, 4));
+    office.tick(0.0);
+    factory.tick(0.0);
+
+    let saved_office = office.snapshot();
+    let saved_factory = factory.snapshot();
+    let restored_office =
+        GameEngine::from_snapshot(saved_office.clone()).expect("restore staffed office town");
+    let mut restored_factory =
+        GameEngine::from_snapshot(saved_factory.clone()).expect("restore staffed factory town");
+
+    assert_eq!(
+        worker_assignments_shifts_and_next_activity(&restored_office.snapshot()),
+        worker_assignments_shifts_and_next_activity(&saved_office),
+    );
+    assert_eq!(
+        worker_assignments_shifts_and_next_activity(&restored_factory.snapshot()),
+        worker_assignments_shifts_and_next_activity(&saved_factory),
+    );
+
+    // Advance the restored factory town to the stored early work wake: the
+    // emitted commute must still target the persisted factory workplace.
+    let factory_tile = saved_factory
+        .buildings
+        .iter()
+        .find(|building| building.building_type == "factory")
+        .expect("factory")
+        .occupied_tiles[0];
+    let wake = scheduled_time_seconds(0, departure_minute_for_sim("sim-001", "early", "outbound"));
+    assert!(
+        restored_factory
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    restored_factory.tick(wake);
+    let after_wake = restored_factory.snapshot();
+    let outbound = after_wake
+        .active_trips
+        .iter()
+        .find(|trip| trip.sim_id == "sim-001" && trip.purpose == TripPurpose::CommuteOutbound)
+        .expect("restored commute fires at its stored wake");
+    assert_eq!(outbound.destination, factory_tile);
 }
