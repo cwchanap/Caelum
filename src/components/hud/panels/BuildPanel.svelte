@@ -70,8 +70,14 @@
     const capacity =
       armedDefinition.residentCapacity > 0
         ? `${armedDefinition.residentCapacity} residents`
-        : `${armedDefinition.jobCapacity} jobs`;
-    return `${size.width} × ${size.height} · $${armedDefinition.cost.toLocaleString("en-US")} · ${capacity}`;
+        : armedDefinition.jobCapacity > 0
+          ? `${armedDefinition.jobCapacity} jobs`
+          : null;
+    return [
+      `${size.width} × ${size.height}`,
+      `$${armedDefinition.cost.toLocaleString("en-US")}`,
+      ...(capacity === null ? [] : [capacity]),
+    ].join(" · ");
   });
 
   function isItemActive(action: BuildItemAction): boolean {
