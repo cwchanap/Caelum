@@ -8,6 +8,7 @@ import { ROAD_DIRECTION_OFFSET } from "../../domain/types";
 import type { AuthoredRoadTilePreview } from "../../runtime/backend/types";
 import {
   buildRoadMutationPreview,
+  parseSelectedPoint,
   selectRouteEditorView,
 } from "../../runtime/runtimeSelectors";
 import { getBuildingFootprint } from "../../domain/catalog/buildings";
@@ -174,6 +175,48 @@ function drawDataOverlays(
         node.position,
         withAlpha(CROWDING, maxRatio >= 1 ? 0.55 : 0.3),
       );
+    }
+  }
+}
+
+/** Any building whose footprint contains the selected tile, ignoring type:
+ *  transit selections keep priority via selectedNodeKind. */
+function findSelectedBuilding(
+  state: GameState,
+  ui: UiState,
+): GameState["buildings"][number] | undefined {
+  if (ui.selectedNodeKind !== null) return undefined;
+  const point = parseSelectedPoint(ui.selectedId);
+  if (point === null) return undefined;
+  return state.buildings.find((building) =>
+    building.occupiedTiles.some(
+      (tile) => tile.x === point.x && tile.y === point.y,
+    ),
+  );
+}
+
+function drawSelectedBuilding(
+  g: SolidGeometry,
+  state: GameState,
+  ui: UiState,
+): void {
+  const building = findSelectedBuilding(state, ui);
+  if (building === undefined) return;
+
+  for (const tile of building.occupiedTiles) {
+    strokeTile(g, tile, DEMAND);
+  }
+
+  if (ui.activeOverlay !== "demand") {
+    for (const row of state.demandFlow) {
+      if (
+        !building.occupiedTiles.some(
+          (tile) => tile.x === row.point.x && tile.y === row.point.y,
+        )
+      ) {
+        continue;
+      }
+      fillTile(g, row.point, withAlpha(DEMAND, demandAlpha(row.count)));
     }
   }
 }
@@ -562,6 +605,7 @@ export function buildOverlayRanges(
 
   drawDataOverlays(g, state, ui);
   drawBrokenRouteMarkers(g, state, ui);
+  drawSelectedBuilding(g, state, ui);
 
   let previewsRendered = false;
   if (ui.drag !== null) {
