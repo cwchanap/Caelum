@@ -268,6 +268,15 @@ fn small_town_has_authored_structure_and_connected_building_access() {
             .as_deref(),
         Some("industrial")
     );
+    assert_eq!(
+        snapshot
+            .map
+            .tile(Point { x: 21, y: 6 })
+            .unwrap()
+            .area
+            .as_deref(),
+        Some("office")
+    );
 
     let authored = snapshot
         .buildings
@@ -285,6 +294,8 @@ fn small_town_has_authored_structure_and_connected_building_access() {
         vec![
             ("smallHouse", Point { x: 4, y: 7 }, 0),
             ("smallHouse", Point { x: 8, y: 7 }, 0),
+            ("smallHouse", Point { x: 6, y: 7 }, 0),
+            ("officeTower", Point { x: 21, y: 6 }, 0),
             ("supermarket", Point { x: 18, y: 6 }, 0),
             ("factory", Point { x: 15, y: 11 }, 0),
         ]
