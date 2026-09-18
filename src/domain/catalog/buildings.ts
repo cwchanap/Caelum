@@ -17,6 +17,7 @@ export interface BuildingDefinition {
   allowedArea?: AreaKind;
   residentCapacity: number;
   jobCapacity: number;
+  workPattern?: string;
 }
 
 export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
@@ -104,6 +105,8 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     allowedArea: "industrial",
     residentCapacity: 0,
     jobCapacity: 6,
+    workPattern:
+      "Early / late · 05:30–07:00 or 10:00–11:30 starts; 15:00–16:30 or 19:30–21:00 returns",
   },
   warehouse: {
     type: "warehouse",
@@ -126,6 +129,7 @@ export const BUILDING_CATALOG: Record<BuildingType, BuildingDefinition> = {
     allowedArea: "office",
     residentCapacity: 0,
     jobCapacity: 4,
+    workPattern: "Standard · 07:00–09:00 starts, 17:00–19:00 returns",
   },
   businessPark: {
     type: "businessPark",
