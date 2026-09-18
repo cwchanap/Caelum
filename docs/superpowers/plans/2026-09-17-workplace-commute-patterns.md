@@ -91,9 +91,9 @@ The exact Factory mapping is odd numeric suffix → `early`, even → `late`. Th
 
 - [ ] **Step 2: Add a Rust drift guard for the TypeScript pattern copy**
 
-Add a unit test beside the simulation authority that pins all standard/early/late window endpoints consumed by \`src/domain/catalog/buildings.ts\`:
+Add a unit test beside the simulation authority that pins all standard/early/late window endpoints consumed by `src/domain/catalog/buildings.ts`:
 
-\`\`\`rust
+```rust
 // Consumer: src/domain/catalog/buildings.ts workPattern for Office Tower / Factory.
 assert_eq!(departure_minute_for_sim("sim-121", "standard", "outbound"), 420);
 assert_eq!(departure_minute_for_sim("sim-120", "standard", "outbound"), 540);
@@ -107,7 +107,7 @@ assert_eq!(departure_minute_for_sim("sim-091", "late", "outbound"), 600);
 assert_eq!(departure_minute_for_sim("sim-090", "late", "outbound"), 690);
 assert_eq!(departure_minute_for_sim("sim-091", "late", "return"), 1_170);
 assert_eq!(departure_minute_for_sim("sim-090", "late", "return"), 1_260);
-\`\`\`
+```
 
 This keeps prose out of the wire contract while making Rust window changes fail near the owning constants.
 
@@ -164,8 +164,8 @@ git commit -m "feat(commute): add workplace shift overrides"
 ### Task 2: Apply overrides at assignment and make activity scheduling safely supersede
 
 **Files:**
-- Modify: \`crates/caelum-core/src/population/schedule.rs\`
-- Modify: \`crates/caelum-core/tests/population.rs\`
+- Modify: `crates/caelum-core/src/population/schedule.rs`
+- Modify: `crates/caelum-core/tests/population.rs`
 
 **Interfaces:**
 - Consumes: `workplace_shift_template(citizen_id, building_type)`, existing `find_available_workplace`, `routine_from_now`, `NextActivity`, and `PopulationScheduler`.
@@ -175,13 +175,13 @@ git commit -m "feat(commute): add workplace shift overrides"
 
 - [ ] **Step 1: Add a failing initial-assignment timing test**
 
-In \`crates/caelum-core/tests/population.rs\`, add \`office_and_factory_move_ins_use_workplace_shifts_and_first_wakes\`.
+In `crates/caelum-core/tests/population.rs`, add `office_and_factory_move_ins_use_workplace_shifts_and_first_wakes`.
 
-Use the existing placement helpers to create a house plus an Office Tower in one engine and a house plus a Factory in another before the first move-in. Run the due-at-zero move-in with \`tick(0.0)\`, then inspect the durable snapshots.
+Use the existing placement helpers to create a house plus an Office Tower in one engine and a house plus a Factory in another before the first move-in. Run the due-at-zero move-in with `tick(0.0)`, then inspect the durable snapshots.
 
 Pin both the stored template and the actual pending departure clock:
 
-\`\`\`rust
+```rust
 let office_worker = office
     .snapshot()
     .sims
@@ -211,25 +211,25 @@ assert_eq!(
         departure_minute_for_sim("sim-001", "early", "outbound"),
     )),
 );
-\`\`\`
+```
 
 The test proves the player-visible clock, not only the stored string.
 
 - [ ] **Step 2: Run the focused test and verify it fails**
 
-\`\`\`bash
+```bash
 cargo test -p caelum-core --test population office_and_factory_move_ins_use_workplace_shifts_and_first_wakes
-\`\`\`
+```
 
-Expected: FAIL because move-in currently keeps \`shift_template_for_id\` even after a workplace is chosen.
+Expected: FAIL because move-in currently keeps `shift_template_for_id` even after a workplace is chosen.
 
 - [ ] **Step 3: Apply the workplace rule during move-in without widening the workplace tuple**
 
-Keep \`find_available_workplace\` returning its current \`(building_id, point)\`.
+Keep `find_available_workplace` returning its current `(building_id, point)`.
 
 After it returns an assignment, read the building type from the existing index and derive the template:
 
-\`\`\`rust
+```rust
 let index = world.resource::<PopulationIndex>();
 let workplace = find_available_workplace(index);
 let assigned_shift = workplace
@@ -237,27 +237,27 @@ let assigned_shift = workplace
     .and_then(|(building_id, _)| index.buildings.get(building_id))
     .and_then(|building| workplace_shift_template(&sim_id, building.building_type))
     .unwrap_or(shift_template);
-\`\`\`
+```
 
-Construct \`Routine::Worker\` with \`assigned_shift.to_string()\` and the existing \`BuildingAssignment\`. Worker/Student classification still comes only from \`shift_template_for_id\`.
+Construct `Routine::Worker` with `assigned_shift.to_string()` and the existing `BuildingAssignment`. Worker/Student classification still comes only from `shift_template_for_id`.
 
 - [ ] **Step 4: Run the initial-assignment test**
 
-\`\`\`bash
+```bash
 cargo test -p caelum-core --test population office_and_factory_move_ins_use_workplace_shifts_and_first_wakes
-\`\`\`
+```
 
 Expected: PASS.
 
 - [ ] **Step 5: Add a failing idle-refill wake replacement test**
 
-Add \`idle_factory_assignment_replaces_old_daily_routine_wake\`.
+Add `idle_factory_assignment_replaces_old_daily_routine_wake`.
 
-Build housing with no workplace, run until at least \`sim-002\` has moved in, and capture \`sim-002\`'s existing identity-derived \`DailyRoutine\` due time. Then place a Factory while \`sim-002\` is idle/unemployed. The Factory deterministically maps even \`sim-002\` to \`late\`, which is later than its existing \`standard\` departure.
+Build housing with no workplace, run until at least `sim-002` has moved in, and capture `sim-002`'s existing identity-derived `DailyRoutine` due time. Then place a Factory while `sim-002` is idle/unemployed. The Factory deterministically maps even `sim-002` to `late`, which is later than its existing `standard` departure.
 
 Pin all of the following:
 
-\`\`\`rust
+```rust
 let after_assignment = engine.snapshot();
 let worker = after_assignment
     .sims
@@ -274,45 +274,45 @@ assert_eq!(
     worker.next_activity.as_ref().map(|activity| activity.due_time),
     Some(expected_late_due),
 );
-\`\`\`
+```
 
-Then advance only to the **old** standard due time and assert no \`CommuteOutbound\` exists for \`sim-002\`. Advance to \`expected_late_due\` and assert exactly one outbound exists for that citizen.
+Then advance only to the **old** standard due time and assert no `CommuteOutbound` exists for `sim-002`. Advance to `expected_late_due` and assert exactly one outbound exists for that citizen.
 
 This test specifically catches leaving the old scheduler bucket behind.
 
 - [ ] **Step 6: Run the idle-refill test and verify it fails**
 
-\`\`\`bash
+```bash
 cargo test -p caelum-core --test population idle_factory_assignment_replaces_old_daily_routine_wake
-\`\`\`
+```
 
-Expected: FAIL because refill currently changes only \`workplace\`; after adding the shift update, it would still leave the old scheduled wake unless that wake is replaced safely.
+Expected: FAIL because refill currently changes only `workplace`; after adding the shift update, it would still leave the old scheduled wake unless that wake is replaced safely.
 
-- [ ] **Step 7: Make \`schedule_activity\` safely supersede an old wake**
+- [ ] **Step 7: Make `schedule_activity` safely supersede an old wake**
 
-Extend the existing private scheduler insertion seam. Before inserting a new Activity event, read the entity's current \`NextActivity\`; if present, remove matching \`PopulationEvent::Activity { entity }\` rows from that previous exact due-time bucket and delete the bucket if it becomes empty. Then insert the new wake and replace the component as today.
+Extend the existing private scheduler insertion seam. Before inserting a new Activity event, read the entity's current `NextActivity`; if present, remove matching `PopulationEvent::Activity { entity }` rows from that previous exact due-time bucket and delete the bucket if it becomes empty. Then insert the new wake and replace the component as today.
 
-Keep \`boundary_generation\` monotonic; removing an obsolete key does not decrement it. Keep the existing dropped-trip recovery guard that skips scheduling when a legitimate \`NextActivity\` already exists; that guard encodes semantic precedence, not merely duplicate-bucket avoidance.
+Keep `boundary_generation` monotonic; removing an obsolete key does not decrement it. Keep the existing dropped-trip recovery guard that skips scheduling when a legitimate `NextActivity` already exists; that guard encodes semantic precedence, not merely duplicate-bucket avoidance.
 
 - [ ] **Step 8: Apply workplace overrides in the global refill loop**
 
-Always update the new \`workplace\`. Change \`shift_template\` only when \`workplace_shift_template(&citizen_id, building.building_type)\` returns \`Some\`; assigning to Warehouse, Supermarket, Business Park, or another unfeatured workplace leaves the current Worker template unchanged.
+Always update the new `workplace`. Change `shift_template` only when `workplace_shift_template(&citizen_id, building.building_type)` returns `Some`; assigning to Warehouse, Supermarket, Business Park, or another unfeatured workplace leaves the current Worker template unchanged.
 
-If the citizen has no non-terminal active trip and its current \`NextActivity\` is \`DailyRoutine\`, call the existing \`schedule_activity(world, entity, routine_from_now(...))\`. Central supersession removes the old bucket entry. Do not mutate active trips in this block.
+If the citizen has no non-terminal active trip and its current `NextActivity` is `DailyRoutine`, call the existing `schedule_activity(world, entity, routine_from_now(...))`. Central supersession removes the old bucket entry. Do not mutate active trips in this block.
 
 - [ ] **Step 9: Pin unfeatured reassignment preservation**
 
-Add one case where a Worker carrying an Office-derived \`standard\` template is later assigned to an unfeatured Warehouse/Supermarket vacancy. Assert the stored template remains \`standard\` rather than being re-derived from citizen identity.
+Add one case where a Worker carrying an Office-derived `standard` template is later assigned to an unfeatured Warehouse/Supermarket vacancy. Assert the stored template remains `standard` rather than being re-derived from citizen identity.
 
 - [ ] **Step 10: Re-pin representative active-trip reassignment to the existing contract**
 
-Add/adjust \`workplace_reassignment_updates_shift_without_duplicating_active_trip\`.
+Add/adjust `workplace_reassignment_updates_shift_without_duplicating_active_trip`.
 
 The current demolition path may reset an outbound trip in place to the replacement destination, so **do not** assert byte-for-byte trip equality.
 
 Capture the worker's active trip ID before demolition, then assert afterward:
 
-\`\`\`rust
+```rust
 let before_trip_id = before
     .active_trips
     .iter()
@@ -331,7 +331,7 @@ let after_trips = after
 assert_eq!(after_trips.len(), 1);
 assert_eq!(after_trips[0].id, before_trip_id);
 assert_eq!(shift_of(reassigned_worker), Some("standard")); // Office replacement
-\`\`\`
+```
 
 It is valid for existing reconciliation to change that same trip's destination/status/route-plan/deadline.
 
@@ -339,7 +339,7 @@ It is valid for existing reconciliation to change that same trip's destination/s
 
 After staffing Office/Factory workers, snapshot and restore through the public engine constructor:
 
-\`\`\`rust
+```rust
 let saved = engine.snapshot();
 let restored = GameEngine::from_snapshot(saved.clone()).expect("restore staffed town");
 let restored_snapshot = restored.snapshot();
@@ -348,25 +348,25 @@ assert_eq!(
     worker_assignments_shifts_and_next_activity(&restored_snapshot),
     worker_assignments_shifts_and_next_activity(&saved),
 );
-\`\`\`
+```
 
 Advance the restored engine to a representative stored work wake and assert the emitted commute still targets the persisted workplace. Do not bump the schema.
 
 - [ ] **Step 12: Run population coverage**
 
-\`\`\`bash
+```bash
 cargo test -p caelum-core --test population
 cargo test -p caelum-core population::
-\`\`\`
+```
 
 Expected: PASS, including existing Student/day-off/optional/capacity/recovery tests.
 
 - [ ] **Step 13: Commit**
 
-\`\`\`bash
+```bash
 git add crates/caelum-core/src/population/schedule.rs crates/caelum-core/tests/population.rs
 git commit -m "feat(population): apply workplace shift overrides"
-\`\`\`
+```
 
 ---
 
@@ -383,9 +383,9 @@ git commit -m "feat(population): apply workplace shift overrides"
 
 - [ ] **Step 1: Update the failing Small Town authored-content contract**
 
-In \`crates/caelum-core/tests/sandbox_factory.rs\`, pin the exact building order:
+In `crates/caelum-core/tests/sandbox_factory.rs`, pin the exact building order:
 
-\`\`\`rust
+```rust
 assert_eq!(
     building_types,
     vec![
@@ -397,9 +397,9 @@ assert_eq!(
         "factory",
     ]
 );
-\`\`\`
+```
 
-Also assert \`(21, 6)\` is Office, \`(18, 6)\` remains Commercial, Supermarket still occupies \`(18, 6)\`, and Factory remains \`(15, 11)\`.
+Also assert `(21, 6)` is Office, `(18, 6)` remains Commercial, Supermarket still occupies `(18, 6)`, and Factory remains `(15, 11)`.
 
 - [ ] **Step 2: Run the focused test and verify it fails**
 
@@ -413,30 +413,30 @@ Expected: FAIL because Small Town currently has four buildings and no Office are
 
 Keep the existing Residential/Commercial/Industrial rectangles and add:
 
-\`\`\`rust
+```rust
 ("office", Point { x: 21, y: 6 }, Point { x: 22, y: 7 }),
-\`\`\`
+```
 
 Place buildings in this exact order:
 
-\`\`\`rust
+```rust
 ("smallHouse", Point { x: 4, y: 7 }),
 ("smallHouse", Point { x: 8, y: 7 }),
 ("smallHouse", Point { x: 6, y: 7 }),
 ("officeTower", Point { x: 21, y: 6 }),
-("supermarket", Point { x: 18, y: 6 }),
+("supermarket", Point { x: 21, y: 6 }),
 ("factory", Point { x: 15, y: 11 }),
-\`\`\`
+```
 
 The third House fits the existing Residential zone and touches the y=8 road; Office Tower touches the same road from y=7. Keep roads, starting capital, capacities, map size, Supermarket, and optional-outing behavior unchanged.
 
-- [ ] **Step 4: Prove deterministic normal staffing in \`population.rs\`**
+- [ ] **Step 4: Prove deterministic normal staffing in `population.rs`**
 
-Add \`small_town_normal_move_in_staffs_office_supermarket_and_factory\` in **\`crates/caelum-core/tests/population.rs\`**.
+Add `small_town_normal_move_in_staffs_office_supermarket_and_factory` in **`crates/caelum-core/tests/population.rs`**.
 
-Create Small Town through \`create_sandbox_snapshot\`, build \`GameEngine::from_snapshot\`, unpause, and advance until all twelve housing slots have moved in.
+Create Small Town through `create_sandbox_snapshot`, build `GameEngine::from_snapshot`, unpause, and advance until all twelve housing slots have moved in.
 
-Assert population 12, \`sim-010\` is the Student, Office Tower has exactly 4 assigned Workers, Supermarket exactly 4, Factory exactly 3, and the Factory set includes at least one \`early\` and one \`late\` Worker. Do not seed \`sims\` manually.
+Assert population 12, `sim-010` is the Student, Office Tower has exactly 4 assigned Workers, Supermarket exactly 4, Factory exactly 3, and the Factory set includes at least one `early` and one `late` Worker. Do not seed `sims` manually.
 
 - [ ] **Step 5: Run sandbox + population focused coverage**
 
@@ -595,9 +595,9 @@ git commit -m "feat(ui): derive workplace staffing and demand facts"
 
 - [ ] **Step 1: Add failing generic armed-building summary tests**
 
-In \`tests/ui/buildPanel.test.ts\`, render \`activeBuildGroup: "buildings"\` with an armed ordinary building and assert a facts block outside the leaf button:
+In `tests/ui/buildPanel.test.ts`, render `activeBuildGroup: "buildings"` with an armed ordinary building and assert a facts block outside the leaf button:
 
-\`\`\`ts
+```ts
 renderPanel({
   activeBuildGroup: "buildings",
   selectedBuilding: "smallHouse",
@@ -605,7 +605,7 @@ renderPanel({
 expect(screen.getByTestId("armed-building-facts")).toHaveTextContent(
   "2 × 1 · $4,000 · 4 residents",
 );
-\`\`\`
+```
 
 Then render Office Tower and Factory and assert their footprint/price/job capacity plus pattern copy. Also assert the existing leaf buttons do not contain the long schedule prose, so the uniform 13-button grid stays compact.
 
@@ -639,9 +639,9 @@ Expected: FAIL because the facts/status copy is not rendered yet.
 
 - [ ] **Step 4: Add one generic facts summary near Rotate**
 
-Import \`BUILDING_CATALOG\` and \`getRotatedFootprintSize\`. Before the existing Rotate control, render a single \`data-testid="armed-building-facts"\` block only when \`selectedBuilding !== null\`.
+Import `BUILDING_CATALOG` and `getRotatedFootprintSize`. Before the existing Rotate control, render a single `data-testid="armed-building-facts"` block only when `selectedBuilding !== null`.
 
-The block shows current rotated footprint, price, and either resident capacity or job capacity for **every** armed building. Render \`definition.workPattern\` on a second line only when present.
+The block shows current rotated footprint, price, and either resident capacity or job capacity for **every** armed building. Render `definition.workPattern` on a second line only when present.
 
 Keep the facts outside the uniform item buttons so long prose cannot distort the grid and remains available to assistive technology. Existing behavior where arming closes the command panel stays unchanged; reopening Build while the building remains armed shows the summary before placement. Do not add another panel state or modal.
 
@@ -696,15 +696,15 @@ git commit -m "feat(ui): explain workplace staffing and shifts"
 
 - [ ] **Step 1: Add failing exact-geometry tests using existing helpers**
 
-Use an arbitrary selected building; the test does not need to be Office/Factory. Give it a footprint containing \`{ x: 5, y: 5 }\` and \`{ x: 6, y: 5 }\`.
+Use an arbitrary selected building; the test does not need to be Office/Factory. Give it a footprint containing `{ x: 5, y: 5 }` and `{ x: 6, y: 5 }`.
 
-Use the existing \`hasVertexNear\` and \`alphaAt\` helpers to pin:
+Use the existing `hasVertexNear` and `alphaAt` helpers to pin:
 
 1. selected + zero demand produces demand-color outline vertices at expected world coordinates;
-2. a demand row at \`{ x: 5, y: 5 }\` produces demand-color fill at \`160,160\` with alpha \`0.24\` when the global Demand overlay is off;
+2. a demand row at `{ x: 5, y: 5 }` produces demand-color fill at `160,160` with alpha `0.24` when the global Demand overlay is off;
 3. a demand row outside the selected footprint is not added by this selected-building pass;
-4. with \`activeOverlay = "demand"\`, the selected row keeps the normal global-overlay alpha rather than being double-darkened;
-5. \`selectedNodeKind !== null\` suppresses the building pass so transit selection keeps priority.
+4. with `activeOverlay = "demand"`, the selected row keeps the normal global-overlay alpha rather than being double-darkened;
+5. `selectedNodeKind !== null` suppresses the building pass so transit selection keeps priority.
 
 Do not use only vertex-buffer length comparisons.
 
@@ -718,9 +718,9 @@ Expected: FAIL because selected buildings currently have no overlay pass.
 
 - [ ] **Step 3: Add a generic selected-building resolver**
 
-Resolve the selected point with exported \`parseSelectedPoint\`. Return \`null\` when \`ui.selectedNodeKind !== null\`, then find **any** building whose \`occupiedTiles\` contain that point.
+Resolve the selected point with exported `parseSelectedPoint`. Return `null` when `ui.selectedNodeKind !== null`, then find **any** building whose `occupiedTiles` contain that point.
 
-Do not check \`building.type\` and do not import the building catalog into the renderer.
+Do not check `building.type` and do not import the building catalog into the renderer.
 
 - [ ] **Step 4: Draw outline + selected demand with existing primitives**
 
@@ -763,34 +763,46 @@ git commit -m "feat(render): emphasize selected building demand"
 ### Task 7: Add one real-WASM paused-state proof and run the repository gate
 
 **Files:**
-- Modify: \`tests/e2e/newCity.spec.ts\`
-- Reuse: \`tests/e2e/helpers.ts\` (\`clickMapTile\`, \`selectTool\`, \`runtimeSnapshot\`)
+- Modify: `tests/e2e/newCity.spec.ts`
+- Reuse: `tests/e2e/helpers.ts` (`clickMapTile`, `selectTool`, `runtimeSnapshot`)
 - Update: HPA-463 PR body/checklist as implementation lands
 
 **Interfaces:**
 - Consumes: ordinary New City UI, real WASM runtime, existing Select tool/inspector.
 - Produces: one browser acceptance path for authored workplace identity/copy at paused t=0; Rust tests own normal-move-in staffing and timing.
 
-- [ ] **Step 1: Extend the existing Small Town Chromium flow without waiting for move-in**
+- [ ] **Step 1: Update the existing Small Town paused-state flow**
 
-Keep the existing \`creates Small Town through the real WASM New City flow\` test paused at \`t=0\`.
+Keep the existing `creates Small Town through the real WASM New City flow` test paused at `t=0`. Change its building-count assertion from 4 to 6.
+
+Immediately before map selection, re-read `runtimeSnapshot(page)` and assert:
+
+```ts
+const beforeSelection = await runtimeSnapshot(page);
+// Authored slot-0 move-ins are due at t=0, but the paused host must not tick
+// implicitly during mount/selection; keep this premise explicit.
+expect(beforeSelection.state.paused).toBe(true);
+expect(beforeSelection.state.populationCount).toBe(0);
+```
+
+If selection advances population from zero, treat that as a real host-behavior regression rather than relaxing the assertion.
 
 After its current template assertions:
 
 1. locate the gameplay canvas;
 2. arm the existing Select tool;
-3. click the authored Office Tower at \`{ x: 18, y: 6 }\`;
-4. assert Office Tower, \`Jobs 0 / 4\`, \`Unstaffed\`, and \`Standard · 07:00–09:00 starts, 17:00–19:00 returns\`;
-5. click the authored Factory at \`{ x: 15, y: 11 }\`;
-6. assert Factory, \`Jobs 0 / 6\`, \`Unstaffed\`, and the Early / late pattern copy.
+3. click the authored Office Tower at `{ x: 21, y: 6 }`;
+4. assert Office Tower, `Jobs 0 / 4`, `Unstaffed`, and `Standard · 07:00–09:00 starts, 17:00–19:00 returns`;
+5. click the authored Factory at `{ x: 15, y: 11 }`;
+6. assert Factory, `Jobs 0 / 6`, `Unstaffed`, and the Early / late pattern copy.
 
-Use the same ordinary map-selection pattern already exercised by \`tests/e2e/smoke.spec.ts\`:
+Use the same ordinary map-selection pattern already exercised by `tests/e2e/smoke.spec.ts`:
 
-\`\`\`ts
+```ts
 const canvas = page.locator("canvas[data-runtime-canvas='true']");
 await selectTool(page, "select");
 
-await clickMapTile(canvas, { x: 18, y: 6 });
+await clickMapTile(canvas, { x: 21, y: 6 });
 const inspector = page.getByTestId("panel-inspect");
 await expect(inspector.getByText("Office Tower")).toBeVisible();
 await expect(inspector.getByText("Jobs 0 / 4")).toBeVisible();
@@ -802,34 +814,35 @@ await expect(inspector.getByText("Factory")).toBeVisible();
 await expect(inspector.getByText("Jobs 0 / 6")).toBeVisible();
 await expect(inspector.getByTestId("workplace-status")).toHaveText("Unstaffed");
 await expect(inspector).toContainText("Early / late ·");
-\`\`\`
+```
 
 Do **not** unpause and wait for all residents to move in. Playwright's repository timeout is 30 seconds, while normal simulation pacing is intentionally wall-clock driven; deterministic Rust population tests already prove staffing and commute windows.
 
 - [ ] **Step 2: Rebuild WASM and run the browser proof**
 
-\`\`\`bash
+```bash
 bun run wasm:build
 bunx playwright test tests/e2e/newCity.spec.ts --project=chromium
-\`\`\`
+```
 
 Expected: PASS.
 
 - [ ] **Step 3: Run focused feature suites together**
 
-\`\`\`bash
+```bash
+cargo test -p caelum-core commute::
 cargo test -p caelum-core --test population
 cargo test -p caelum-core --test sandbox_factory
 bunx vitest run --project runtime tests/runtime/buildingCatalog.test.ts tests/runtime/runtimeSelectors.test.ts
 bunx vitest run --project ui tests/ui/buildPanel.test.ts tests/ui/inspectPanel.test.ts
 bunx vitest run tests/render/webgpuOverlayBatch.test.ts
-\`\`\`
+```
 
 Expected: PASS.
 
 - [ ] **Step 4: Run the full repository gate**
 
-\`\`\`bash
+```bash
 cargo test --workspace
 bun run test
 bun run check
@@ -837,7 +850,7 @@ bun run lint
 bun run format:check
 bun run build
 bun run test:e2e
-\`\`\`
+```
 
 Expected: all commands PASS.
 
@@ -849,17 +862,20 @@ Confirm there is no:
 - workplace schedule registry/class hierarchy;
 - second active trip introduced by workplace reassignment;
 - per-citizen frontend payload;
-- new renderer/camera path (the existing WebGPU overlay task is allowed and required);
+- Office/Factory taxonomy inside renderer code;
+- new renderer/camera path (the generic WebGPU selection pass is allowed and required);
 - new art asset;
 - HPA-464 stop/line navigation work;
 - second PR/task for QA/closeout.
 
+Also confirm Small Town still contains its Supermarket so optional-outing gameplay remains reachable.
+
 - [ ] **Step 6: Commit the browser proof / final integration adjustments**
 
-\`\`\`bash
+```bash
 git add tests/e2e/newCity.spec.ts
 git commit -m "test(e2e): prove workplace commute presentation"
-\`\`\`
+```
 
 Do not create a second PR. Push these commits to the existing HPA-463 draft PR and mark that PR ready only after the full gate passes.
 
@@ -867,8 +883,9 @@ Do not create a second PR. Push these commits to the existing HPA-463 draft PR a
 
 ## Self-review
 
-- **Spec coverage:** Office/Factory timing, assignment + idle-wake replacement + active-trip reassignment, persistence, build explanation, staffing/current demand inspector, required WebGPU emphasis, Small Town example, Rust/browser verification, and non-goals all map to tasks above.
-- **Scope:** one simulation rule, one aggregate read model extension, one renderer pass, one existing template edit. No independent subsystem warrants another PR.
+- **Spec coverage:** Office/Factory override timing, centralized wake supersession, active-trip reassignment, persistence, build explanation, staffing/current-demand inspector, generic selected-building WebGPU emphasis, additive Small Town content with optional outings preserved, Rust/browser verification, and non-goals all map to tasks above.
+- **Scope:** one Worker-template override rule, one correction at the existing private scheduler insertion seam, one aggregate read-model extension, one generic renderer pass, and one additive template edit. No new subsystem or second PR.
 - **Type consistency:** `workPattern` is optional in the building catalog and becomes `string | null` in shell inspector state; `currentDestinationDemand` is `number | null`; no backend wire type changes.
 - **Persistence:** existing `CitizenRoutine::Worker.shift_template` remains durable; no schema change or migration.
+- **Risk review:** Supermarket optional outings are preserved; Rust pins UI window-copy drift; scheduler supersession is centralized; renderer selection is taxonomy-free; paused E2E explicitly asserts no implicit tick.
 - **No placeholders:** all behavioral branches, target files, commands, public/private seams, and copy strings are specified.
