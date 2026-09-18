@@ -184,6 +184,17 @@ describe("BuildPanel armed-building facts", () => {
     expect(facts).toHaveTextContent(BUILDING_CATALOG.factory.workPattern!);
   });
 
+  it("omits the capacity segment for a zero-capacity transit building", () => {
+    renderPanel({
+      activeBuildGroup: "transit",
+      selectedBuilding: "busTerminal",
+    });
+    const facts = screen.getByTestId("armed-building-facts");
+    expect(facts).toHaveTextContent("3 × 2 · $12,000");
+    expect(facts).not.toHaveTextContent("jobs");
+    expect(facts).not.toHaveTextContent("residents");
+  });
+
   it("keeps the long schedule prose out of the leaf buttons", () => {
     renderPanel({
       activeBuildGroup: "buildings",
