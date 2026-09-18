@@ -622,6 +622,8 @@ pub(crate) fn reconcile_buildings(
                 // bucket entry). Citizens owned by a non-terminal trip keep
                 // that trip untouched — it is retargeted or dropped below —
                 // and citizens between trip stages keep their existing wake.
+                // A pending OptionalOuting wake is not shift-derived: a day
+                // off's deferred outing survives reassignment unchanged.
                 let travelling = after
                     .active_trips
                     .iter()
@@ -1147,7 +1149,10 @@ fn apply_activity(world: &mut World, entity: Entity, due_time: f64) {
         return;
     };
     match next.0.kind {
-        ScheduledActivityKind::DailyRoutine => {
+        // A deferred OptionalOuting wake re-enters the same handler: the
+        // stranded guard still wins, and at its due time the day-off branch
+        // falls through to `apply_optional_outing` instead of deferring again.
+        ScheduledActivityKind::DailyRoutine | ScheduledActivityKind::OptionalOuting => {
             apply_daily_routine(world, entity, &citizen_id, due_time);
         }
         // Both return kinds emit one return-to-home trip; the resolution
@@ -1224,7 +1229,7 @@ fn apply_daily_routine(world: &mut World, entity: Entity, citizen_id: &str, due_
                 world,
                 entity,
                 ScheduledActivity {
-                    kind: ScheduledActivityKind::DailyRoutine,
+                    kind: ScheduledActivityKind::OptionalOuting,
                     due_time: outing_departure,
                 },
             );

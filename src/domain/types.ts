@@ -378,7 +378,8 @@ export type CitizenRoutine =
 export type ScheduledActivityKind =
   | "dailyRoutine"
   | "primaryReturn"
-  | "optionalReturn";
+  | "optionalReturn"
+  | "optionalOuting";
 
 export interface ScheduledActivity {
   kind: ScheduledActivityKind;
