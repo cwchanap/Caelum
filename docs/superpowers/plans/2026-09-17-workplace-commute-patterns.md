@@ -424,7 +424,7 @@ Place buildings in this exact order:
 ("smallHouse", Point { x: 8, y: 7 }),
 ("smallHouse", Point { x: 6, y: 7 }),
 ("officeTower", Point { x: 21, y: 6 }),
-("supermarket", Point { x: 21, y: 6 }),
+("supermarket", Point { x: 18, y: 6 }),
 ("factory", Point { x: 15, y: 11 }),
 ```
 
