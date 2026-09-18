@@ -47,6 +47,22 @@ pub fn shift_template_for_id(id: &str) -> Option<&'static str> {
     }
 }
 
+/// Workplace-specific shift override. Office workers always work the standard
+/// window; factory workers split into stable odd=early / even=late identity
+/// buckets. `None` means no override — keep the current Worker template. The
+/// helper never decides Worker vs Student; callers classify first.
+pub fn workplace_shift_template(citizen_id: &str, building_type: &str) -> Option<&'static str> {
+    match building_type {
+        "officeTower" => Some("standard"),
+        "factory" => Some(if numeric_id_suffix(citizen_id).is_multiple_of(2) {
+            "late"
+        } else {
+            "early"
+        }),
+        _ => None,
+    }
+}
+
 pub fn departure_minute_for_sim(sim_id: &str, template: &str, direction: &str) -> u16 {
     let (start, end) = match (template, direction) {
         ("standard", "outbound") => (420, 540),
@@ -87,4 +103,74 @@ pub fn optional_departure_minute(sim_id: &str, day: u32) -> u16 {
 
 pub fn trip_deadline_seconds(scheduled_time: f64) -> f64 {
     scheduled_time + 900.0
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn office_workers_always_use_standard_shift() {
+        for id in ["sim-001", "sim-008", "sim-009"] {
+            assert_eq!(
+                workplace_shift_template(id, "officeTower"),
+                Some("standard")
+            );
+        }
+    }
+
+    #[test]
+    fn factory_workers_use_stable_early_or_late_identity_buckets() {
+        assert_eq!(
+            workplace_shift_template("sim-001", "factory"),
+            Some("early")
+        );
+        assert_eq!(workplace_shift_template("sim-002", "factory"), Some("late"));
+        assert_eq!(
+            workplace_shift_template("sim-001", "factory"),
+            Some("early")
+        );
+    }
+
+    #[test]
+    fn unfeatured_workplaces_do_not_override_current_worker_shift() {
+        for building_type in ["warehouse", "supermarket", "businessPark", "clinic"] {
+            assert_eq!(workplace_shift_template("sim-008", building_type), None);
+        }
+    }
+
+    // Consumer: src/domain/catalog/buildings.ts workPattern for Office Tower / Factory.
+    #[test]
+    fn shift_window_endpoints_match_ui_pattern_copy() {
+        assert_eq!(
+            departure_minute_for_sim("sim-121", "standard", "outbound"),
+            420
+        );
+        assert_eq!(
+            departure_minute_for_sim("sim-120", "standard", "outbound"),
+            540
+        );
+        assert_eq!(
+            departure_minute_for_sim("sim-121", "standard", "return"),
+            1_020
+        );
+        assert_eq!(
+            departure_minute_for_sim("sim-120", "standard", "return"),
+            1_140
+        );
+        assert_eq!(
+            departure_minute_for_sim("sim-091", "early", "outbound"),
+            330
+        );
+        assert_eq!(
+            departure_minute_for_sim("sim-090", "early", "outbound"),
+            420
+        );
+        assert_eq!(departure_minute_for_sim("sim-091", "early", "return"), 900);
+        assert_eq!(departure_minute_for_sim("sim-090", "early", "return"), 990);
+        assert_eq!(departure_minute_for_sim("sim-091", "late", "outbound"), 600);
+        assert_eq!(departure_minute_for_sim("sim-090", "late", "outbound"), 690);
+        assert_eq!(departure_minute_for_sim("sim-091", "late", "return"), 1_170);
+        assert_eq!(departure_minute_for_sim("sim-090", "late", "return"), 1_260);
+    }
 }
