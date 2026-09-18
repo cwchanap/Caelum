@@ -73,6 +73,19 @@
         {inspector.metricLabel}
         {inspector.occupancy} / {inspector.capacity}
       </span>
+      {#if inspector.workPattern !== null && inspector.currentDestinationDemand !== null}
+        <p data-testid="workplace-status">
+          {#if inspector.occupancy === 0}
+            Unstaffed
+          {:else if inspector.currentDestinationDemand === 0}
+            Staffed · quiet now
+          {:else}
+            Staffed · current destination demand
+            {inspector.currentDestinationDemand}
+          {/if}
+        </p>
+        <p class="workplace-pattern">{inspector.workPattern}</p>
+      {/if}
     </section>
   {/if}
 </aside>
