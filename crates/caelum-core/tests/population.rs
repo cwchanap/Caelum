@@ -1,7 +1,7 @@
-use caelum_core::commute::departure_minute_for_sim;
+use caelum_core::commute::{self, departure_minute_for_sim};
 use caelum_core::model::{
-    ActiveTrip, CitizenRoutine, GameSnapshot, Point, RouteLeg, RoutePlan, ScheduledActivityKind,
-    Sim, TransitMode, TripPosition, TripPurpose, TripStatus,
+    ActiveTrip, CitizenRoutine, GameSnapshot, Point, RouteLeg, RoutePlan, ScheduledActivity,
+    ScheduledActivityKind, Sim, TransitMode, TripPosition, TripPurpose, TripStatus,
 };
 use caelum_core::{clock, create_sandbox_snapshot, GameEngine, GameIntent, SandboxCreationRequest};
 
@@ -1829,6 +1829,129 @@ fn idle_factory_assignment_replaces_old_daily_routine_wake() {
             .count(),
         1,
         "exactly one late outbound fires for the reassigned worker"
+    );
+}
+
+/// Refilling an idle worker between their day-off primary wake and the
+/// deferred optional-outing wake must not cancel the outing: the pending
+/// `OptionalOuting` wake is not a shift-derived `DailyRoutine`, so vacancy
+/// refill leaves it alone and the outing still emits at its deterministic
+/// departure.
+#[test]
+fn workplace_refill_preserves_a_pending_day_off_outing_wake() {
+    // The lowest citizen id whose day 0 is a day off AND an eligible outing
+    // day — derived from the published helpers so the fixture stays honest.
+    let citizen_id = (1..=1000usize)
+        .map(|suffix| format!("sim-{suffix:03}"))
+        .find(|id| {
+            commute::is_day_off(id, 0)
+                && commute::stable_daily_seed(id, 0, commute::OPTIONAL_SALT).is_multiple_of(4)
+        })
+        .expect("an eligible day-off citizen exists");
+    let home = Point { x: 2, y: 7 };
+    let primary_due = scheduled_time_seconds(
+        0,
+        departure_minute_for_sim(&citizen_id, "standard", "outbound"),
+    );
+    let outing_due = scheduled_time_seconds(0, commute::optional_departure_minute(&citizen_id, 0));
+
+    // A lone unassigned worker waiting on their day-0 primary wake; no
+    // workplace exists yet.
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot.sims = vec![Sim {
+        id: citizen_id.clone(),
+        home,
+        position: home,
+        routine: CitizenRoutine::Worker {
+            shift_template: "standard".to_string(),
+            workplace: None,
+        },
+        next_activity: Some(ScheduledActivity {
+            kind: ScheduledActivityKind::DailyRoutine,
+            due_time: primary_due,
+        }),
+    }];
+    let mut engine = GameEngine::from_snapshot(snapshot).expect("seeded snapshot loads");
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+
+    // The day-off primary wake defers to the deterministic outing departure.
+    // Advance past it but stay short of the outing: reassignment lands in the
+    // same window the review describes — after the primary wake, before the
+    // optional-outing wake.
+    let mid_window = (primary_due + outing_due) / 2.0;
+    engine.tick(mid_window);
+    let deferred = engine
+        .snapshot()
+        .sims
+        .into_iter()
+        .find(|sim| sim.id == citizen_id)
+        .expect("citizen remains")
+        .next_activity
+        .expect("a deferred wake is pending");
+    assert_eq!(
+        deferred,
+        ScheduledActivity {
+            kind: ScheduledActivityKind::OptionalOuting,
+            due_time: outing_due,
+        },
+        "the day-off wake defers to the optional-outing departure"
+    );
+
+    // A new workplace vacancy refills the idle worker mid-window. The
+    // assignment lands, but the outing wake is not shift-derived and must
+    // survive untouched.
+    assert!(
+        engine
+            .dispatch(GameIntent::PaintAreaRectangle {
+                area: "commercial".to_string(),
+                start: (4, 3).into(),
+                end: (5, 4).into(),
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::PlaceBuilding {
+                building_type: "supermarket".to_string(),
+                origin: (4, 3).into(),
+                rotation: 0,
+            })
+            .applied
+    );
+    let reassigned = engine
+        .snapshot()
+        .sims
+        .into_iter()
+        .find(|sim| sim.id == citizen_id)
+        .expect("citizen remains");
+    assert!(
+        workplace_of(&reassigned).is_some(),
+        "refill assigns the supermarket vacancy"
+    );
+    assert_eq!(
+        reassigned.next_activity,
+        Some(ScheduledActivity {
+            kind: ScheduledActivityKind::OptionalOuting,
+            due_time: outing_due,
+        }),
+        "the pending outing wake survives workplace reassignment"
+    );
+
+    // The outing still emits at its deterministic departure, targeting the
+    // only eligible site — the supermarket just placed.
+    let now = engine.snapshot().time;
+    engine.tick(outing_due - now);
+    let state = engine.snapshot();
+    assert!(
+        state
+            .active_trips
+            .iter()
+            .any(|trip| trip.sim_id == citizen_id && trip.purpose == TripPurpose::OptionalOutbound),
+        "the deferred outing still emits its OptionalOutbound trip"
     );
 }
 

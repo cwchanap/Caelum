@@ -234,6 +234,10 @@ pub enum ScheduledActivityKind {
     DailyRoutine,
     PrimaryReturn,
     OptionalReturn,
+    /// A day-off wake deferred to the citizen's optional-outing departure —
+    /// not a shift-derived primary wake, so workplace reassignment must not
+    /// reschedule it.
+    OptionalOuting,
 }
 
 /// One scheduled citizen activity with its exact validated due timestamp.
