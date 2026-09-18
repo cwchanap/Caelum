@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
-import { runtimeSnapshot } from "./helpers";
+import { clickMapTile, runtimeSnapshot, selectTool } from "./helpers";
 
 interface StoredCityRecord {
   city: { id: string; name: string };
@@ -84,7 +84,7 @@ test("creates Small Town through the real WASM New City flow", async ({
   const snapshot = await runtimeSnapshot(page);
   expect(snapshot.state.rules.sandbox.templateId).toBe("smallTown");
   expect(snapshot.state.paused).toBe(true);
-  expect(snapshot.state.buildings).toHaveLength(4);
+  expect(snapshot.state.buildings).toHaveLength(6);
   expect(snapshot.state.populationCount).toBe(0);
   expect(snapshot.state.transit.stops).toEqual([]);
   expect(snapshot.state.transit.stations).toEqual([]);
@@ -100,4 +100,32 @@ test("creates Small Town through the real WASM New City flow", async ({
     hasText: "Population",
   });
   await expect(populationReadout.getByText("0")).toBeVisible();
+
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectTool(page, "select");
+
+  const beforeSelection = await runtimeSnapshot(page);
+  // Authored slot-0 move-ins are due at t=0, but the paused host must not tick
+  // implicitly during mount/selection; keep this premise explicit.
+  expect(beforeSelection.state.paused).toBe(true);
+  expect(beforeSelection.state.populationCount).toBe(0);
+
+  await clickMapTile(canvas, { x: 21, y: 6 });
+  const inspector = page.getByTestId("panel-inspect");
+  await expect(inspector.getByText("Office Tower")).toBeVisible();
+  await expect(inspector.getByText("Jobs 0 / 4")).toBeVisible();
+  await expect(inspector.getByTestId("workplace-status")).toHaveText(
+    "Unstaffed",
+  );
+  await expect(inspector).toContainText(
+    "Standard · 07:00–09:00 starts, 17:00–19:00 returns",
+  );
+
+  await clickMapTile(canvas, { x: 15, y: 11 });
+  await expect(inspector.getByText("Factory")).toBeVisible();
+  await expect(inspector.getByText("Jobs 0 / 6")).toBeVisible();
+  await expect(inspector.getByTestId("workplace-status")).toHaveText(
+    "Unstaffed",
+  );
+  await expect(inspector).toContainText("Early / late ·");
 });
