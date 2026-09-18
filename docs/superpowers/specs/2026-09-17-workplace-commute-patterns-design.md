@@ -88,20 +88,34 @@ Factory bucketing uses the numeric citizen-ID suffix parity. The rule is intenti
 5. when no workplace exists, keep the current identity-derived worker template until a job is assigned;
 6. schedule through `routine_from_now` as today.
 
-`find_available_workplace` may widen its private return tuple to include `building_type`; no new public type is required.
+`find_available_workplace` keeps its current private `(building_id, point)` return shape. After assignment, the caller reads `PopulationBuilding.building_type` from the existing `PopulationIndex` by `building_id`; no tuple widening or new public type is required.
 
 ### Reassignment / vacancy refill
 
 The existing global refill loop remains the authority for who gets each vacancy. When it fills a slot, update `Routine::Worker.workplace` and `Routine::Worker.shift_template` together using the same workplace helper.
 
+There is one existing timing seam that must also be updated for an **idle unemployed Worker**. Such a Worker can already hold a future `NextActivity::DailyRoutine` scheduled from the old identity-derived template. If a newly placed Office Tower or Factory fills that vacancy and the worker has no active trip, keeping that wake would make today's commute leave on the old clock.
+
+Handle only that case locally in `population/schedule.rs`:
+
+1. after assigning the new workplace/template, inspect the worker's current `NextActivity`;
+2. if it is not `DailyRoutine`, leave it alone;
+3. if the worker has an active trip, leave scheduler state alone and let the existing trip-resolution path own the next wake;
+4. otherwise replace the pending DailyRoutine wake with `routine_from_now` computed from the new template.
+
+`schedule_activity` cannot be called blindly for this replacement because it inserts a second bucket entry without removing the old wake. Add one narrow private helper beside the scheduler functions that removes that entity's old `PopulationEvent::Activity` from the exact old due-time bucket before scheduling the replacement. It is not a generic rescheduling framework and is used only by this assignment seam.
+
 Do not change vacancy ordering, nearest-home behavior, capacity, or global employment balancing.
 
 ### Active-trip behavior
 
-Changing a worker's assignment must not rewrite, restart, duplicate, or directly reschedule an active trip.
+Changing a worker's assignment must not create a second active trip or add a new shift-driven trip restart path.
 
-The new stored template becomes visible at the next existing scheduling boundary:
+Existing demolition reconciliation is preserved: when a cleared worker already has an outbound commute and receives a replacement workplace, `reconcile_buildings` may reset that **same trip ID** in place to the new destination with a fresh deadline/patience window. HPA-463 does not replace or duplicate that behavior.
 
+The new stored template becomes visible through the existing lifecycle:
+
+- an idle worker with a pending `DailyRoutine` wake receives the narrow wake replacement described above, so a newly assigned Office/Factory can affect the next outbound departure;
 - an outbound trip resolution schedules the return using the worker's current template;
 - a return trip resolution schedules the next daily routine using the current template;
 - the existing `.max(now)` late-return clamp prevents a newly selected return window from scheduling into the past;
@@ -201,8 +215,9 @@ Blank Grid and Crossroads are untouched.
 Pin the rule and lifecycle, not implementation details:
 
 - `commute.rs` unit coverage for Office = standard, Factory = deterministic early/late, and other workplace = current identity-derived behavior;
-- population integration coverage that ordinary move-in assigns Office/Factory workers the workplace-derived template;
-- a representative demolition/refill reassignment updates the template without duplicating an active trip and relies on the existing past-return clamp;
+- population integration coverage that ordinary move-in assigns Office/Factory workers the workplace-derived template **and that their first pending DailyRoutine due time falls in the expected standard/early/late window**;
+- idle vacancy-fill coverage proving an unemployed worker's stale identity-derived DailyRoutine wake is replaced: ticking through the old wake must not emit an early commute, while the new workplace-derived wake does;
+- a representative demolition/refill reassignment updates the template while preserving one active trip with the same trip ID; do not assert the trip payload is byte-for-byte unchanged because existing reconciliation retargets an outbound in place;
 - snapshot → `GameEngine::from_snapshot` restore preserves the assignment/template and subsequent schedule;
 - existing Student/day-off/optional-outing/capacity tests remain green.
 
@@ -217,7 +232,7 @@ Pin the rule and lifecycle, not implementation details:
 ### Sandbox/browser
 
 - sandbox factory test pins Small Town to Office Tower + Factory while Blank Grid/Crossroads remain unchanged;
-- one Chromium real-WASM Small Town path creates the template, runs normal move-in, selects the two workplaces through ordinary UI, and observes staffing/pattern/current-demand presentation without a test-only passenger seed.
+- one Chromium real-WASM Small Town path creates the template **paused at t=0**, selects both authored workplaces through ordinary UI, and verifies `Unstaffed`, `Jobs 0 / capacity`, and the correct pattern copy. Deterministic Rust tests own the staffing/timing proof; the browser test must not spend wall-clock time waiting for normal move-in.
 
 ## Verification
 
