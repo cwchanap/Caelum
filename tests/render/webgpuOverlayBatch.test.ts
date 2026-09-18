@@ -282,6 +282,106 @@ describe("buildOverlayRanges data overlays", () => {
   });
 });
 
+describe("buildOverlayRanges selected building", () => {
+  // Arbitrary building (type is never inspected by the renderer): footprint
+  // covers tiles (5,5) and (6,5) -> pixels x 160..224, y 160..192.
+  function withSelectedBuilding(state: GameState): GameState {
+    return {
+      ...state,
+      buildings: [
+        {
+          id: "building-1",
+          type: "factory",
+          origin: { x: 5, y: 5 },
+          rotation: 0,
+          occupiedTiles: [
+            { x: 5, y: 5 },
+            { x: 6, y: 5 },
+          ],
+          placedAt: 0,
+        },
+      ],
+    };
+  }
+
+  it("outlines the selected building footprint in the demand color", () => {
+    const state = withSelectedBuilding(createTestGameState());
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedId: "5,5",
+    });
+
+    // strokeTile insets tile (5,5) to (162,162)..(190,190); its top edge
+    // quad has vertices at y = 162 ± 1.
+    expect(hasVertexNear(underRoutes, colors.demand, 162, 161)).toBe(true);
+    // Tile (6,5) insets to (194,162)..(222,190).
+    expect(hasVertexNear(underRoutes, colors.demand, 194, 161)).toBe(true);
+  });
+
+  it("fills demand rows inside the selected footprint when the overlay is off", () => {
+    const state = {
+      ...withSelectedBuilding(createTestGameState()),
+      demandFlow: [{ point: { x: 5, y: 5 }, count: 1 }],
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedId: "5,5",
+    });
+
+    // demandAlpha(1) = 0.24.
+    expect(alphaAt(underRoutes, colors.demand, 160, 160)).toBeCloseTo(0.24, 5);
+  });
+
+  it("ignores demand rows outside the selected footprint", () => {
+    const state = {
+      ...withSelectedBuilding(createTestGameState()),
+      demandFlow: [{ point: { x: 9, y: 9 }, count: 1 }],
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedId: "5,5",
+    });
+
+    expect(hasVertexNear(underRoutes, colors.demand, 288, 288)).toBe(false);
+  });
+
+  it("keeps the global overlay alpha with the Demand overlay active", () => {
+    const state = {
+      ...withSelectedBuilding(createTestGameState()),
+      demandFlow: [{ point: { x: 5, y: 5 }, count: 1 }],
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeOverlay: "demand",
+      selectedId: "5,5",
+    });
+
+    // The global overlay already fills the row; the selected pass must add
+    // outline only, not a second fill that would double-darken to
+    // 1 - 0.76^2.
+    expect(alphaAt(underRoutes, colors.demand, 160, 160)).toBeCloseTo(0.24, 5);
+    expect(hasVertexNear(underRoutes, colors.demand, 162, 161)).toBe(true);
+  });
+
+  it("suppresses the selected building when a transit node is selected", () => {
+    const state = {
+      ...withSelectedBuilding(createTestGameState()),
+      demandFlow: [{ point: { x: 5, y: 5 }, count: 1 }],
+    };
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeOverlay: "demand",
+      selectedId: "5,5",
+      selectedNodeKind: "stop",
+    });
+
+    // Transit selection keeps priority: the global overlay still fills, the
+    // selected-building outline does not render.
+    expect(alphaAt(underRoutes, colors.demand, 160, 160)).toBeCloseTo(0.24, 5);
+    expect(hasVertexNear(underRoutes, colors.demand, 162, 161)).toBe(false);
+  });
+});
+
 describe("buildOverlayRanges broken route markers", () => {
   it("draws markers for a selected metro line and enlarges the focused leg", () => {
     const base = withStops(createTestGameState(), []);
