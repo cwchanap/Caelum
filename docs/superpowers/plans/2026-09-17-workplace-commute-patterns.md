@@ -31,7 +31,7 @@
 - `crates/caelum-core/src/commute.rs` — Office/Factory workplace-shift override plus a Rust drift guard for the UI window copy.
 - `crates/caelum-core/src/population/schedule.rs` — apply assignment overrides and centralize activity supersession in `schedule_activity` while preserving active-trip retarget/drop behavior.
 - `crates/caelum-core/tests/population.rs` — end-to-end Rust assignment/reassignment/save-restore behavior.
-- `crates/caelum-core/src/sandbox.rs` — Small Town Office Tower + Factory authored example.
+- `crates/caelum-core/src/sandbox.rs` — add one Small House + Office Tower while retaining Small Town's Supermarket and Factory.
 - `crates/caelum-core/tests/sandbox_factory.rs` — template contract.
 - `src/domain/catalog/buildings.ts` — player-facing work-pattern copy only.
 - `src/runtime/types.ts` — two small derived inspector fields.
@@ -370,34 +370,36 @@ git commit -m "feat(population): apply workplace shift overrides"
 
 ---
 
-### Task 3: Make Small Town demonstrate both workplace patterns
+### Task 3: Add Office Tower without killing Small Town optional outings
 
 **Files:**
 - Modify: `crates/caelum-core/src/sandbox.rs`
 - Modify: `crates/caelum-core/tests/sandbox_factory.rs`
+- Modify: `crates/caelum-core/tests/population.rs`
 
 **Interfaces:**
 - Consumes: existing `create_small_town_candidate`, area painting, building placement, road topology.
-- Produces: Small Town contains two Small Houses, one Office Tower, and one Factory on the existing road layout.
+- Produces: Small Town contains three Small Houses, one Office Tower, the existing Supermarket, and the existing Factory.
 
-- [ ] **Step 1: Update/add the failing Small Town contract test first**
+- [ ] **Step 1: Update the failing Small Town authored-content contract**
 
-Pin the authored destination types and areas, while leaving the other templates' expectations unchanged:
+In \`crates/caelum-core/tests/sandbox_factory.rs\`, pin the exact building order:
 
-```rust
-let snapshot = create_sandbox_snapshot(small_town_request()).expect("small town");
-let building_types = snapshot
-    .buildings
-    .iter()
-    .map(|building| building.building_type.as_str())
-    .collect::<Vec<_>>();
-
+\`\`\`rust
 assert_eq!(
     building_types,
-    vec!["smallHouse", "smallHouse", "officeTower", "factory"]
+    vec![
+        "smallHouse",
+        "smallHouse",
+        "smallHouse",
+        "officeTower",
+        "supermarket",
+        "factory",
+    ]
 );
-assert_eq!(snapshot.map.tile(Point { x: 18, y: 6 }).unwrap().area.as_deref(), Some("office"));
-```
+\`\`\`
+
+Also assert \`(21, 6)\` is Office, \`(18, 6)\` remains Commercial, Supermarket still occupies \`(18, 6)\`, and Factory remains \`(15, 11)\`.
 
 - [ ] **Step 2: Run the focused test and verify it fails**
 
@@ -405,33 +407,42 @@ assert_eq!(snapshot.map.tile(Point { x: 18, y: 6 }).unwrap().area.as_deref(), So
 cargo test -p caelum-core --test sandbox_factory small_town
 ```
 
-Expected: FAIL because the 2x2 destination is currently Commercial + Supermarket.
+Expected: FAIL because Small Town currently has four buildings and no Office area/Tower.
 
-- [ ] **Step 3: Swap only the existing 2x2 authored destination**
+- [ ] **Step 3: Make the additive authored change**
 
-In `create_small_town_candidate`:
+Keep the existing Residential/Commercial/Industrial rectangles and add:
 
-```rust
-("office", Point { x: 18, y: 6 }, Point { x: 19, y: 7 }),
-```
+\`\`\`rust
+("office", Point { x: 21, y: 6 }, Point { x: 22, y: 7 }),
+\`\`\`
 
-and:
+Place buildings in this exact order:
 
-```rust
-("officeTower", Point { x: 18, y: 6 }),
-```
+\`\`\`rust
+("smallHouse", Point { x: 4, y: 7 }),
+("smallHouse", Point { x: 8, y: 7 }),
+("smallHouse", Point { x: 6, y: 7 }),
+("officeTower", Point { x: 21, y: 6 }),
+("supermarket", Point { x: 18, y: 6 }),
+("factory", Point { x: 15, y: 11 }),
+\`\`\`
 
-Keep the two Small Houses, Industrial Factory, roads, map dimensions, capital, and catalog capacities unchanged.
+The third House fits the existing Residential zone and touches the y=8 road; Office Tower touches the same road from y=7. Keep roads, starting capital, capacities, map size, Supermarket, and optional-outing behavior unchanged.
 
-- [ ] **Step 4: Prove the existing eight residents can staff both destinations**
+- [ ] **Step 4: Prove deterministic normal staffing in \`population.rs\`**
 
-Add/extend one integration assertion (in `population.rs` or `sandbox_factory.rs`, whichever already runs an engine from Small Town) that after normal move-in both Office Tower and Factory have `buildingOccupancy > 0`. Do not seed `sims` manually.
+Add \`small_town_normal_move_in_staffs_office_supermarket_and_factory\` in **\`crates/caelum-core/tests/population.rs\`**.
+
+Create Small Town through \`create_sandbox_snapshot\`, build \`GameEngine::from_snapshot\`, unpause, and advance until all twelve housing slots have moved in.
+
+Assert population 12, \`sim-010\` is the Student, Office Tower has exactly 4 assigned Workers, Supermarket exactly 4, Factory exactly 3, and the Factory set includes at least one \`early\` and one \`late\` Worker. Do not seed \`sims\` manually.
 
 - [ ] **Step 5: Run sandbox + population focused coverage**
 
 ```bash
 cargo test -p caelum-core --test sandbox_factory
-cargo test -p caelum-core --test population office_and_factory_assign_workplace_derived_worker_shifts
+cargo test -p caelum-core --test population small_town_normal_move_in_staffs_office_supermarket_and_factory
 ```
 
 Expected: PASS.
@@ -440,7 +451,7 @@ Expected: PASS.
 
 ```bash
 git add crates/caelum-core/src/sandbox.rs crates/caelum-core/tests/sandbox_factory.rs crates/caelum-core/tests/population.rs
-git commit -m "feat(sandbox): showcase office and factory shifts"
+git commit -m "feat(sandbox): add office to small town"
 ```
 
 ---
