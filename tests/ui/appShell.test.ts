@@ -1336,6 +1336,11 @@ describe("App command shell", () => {
     expect(returned.selectedId).toBe("7,7");
     expect(screen.getByTestId("panel-lines")).toBeVisible();
     expect(runtime.openServiceControls).toHaveBeenCalledWith("route-001");
+
+    // Closing Lines returns to the same stop inspector.
+    await fireEvent.click(screen.getByRole("button", { name: "Close Lines" }));
+    expect(screen.getByTestId("panel-inspect")).toBeVisible();
+    expect(runtime.getSnapshot().ui.selectedId).toBe("7,7");
   });
 
   it("sets a Metro target headway and deploys a fleet from the Lines panel", async () => {
