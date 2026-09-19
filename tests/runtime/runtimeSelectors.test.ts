@@ -315,6 +315,11 @@ describe("selectShellState inspector", () => {
       ["route-001", 2, 120],
       ["route-002", 1, 30],
     ]);
+    expect(platformA.routes.map((r) => r.name)).toEqual(["Bus 1", "Bus 2"]);
+    expect(platformA.routes.map((r) => r.color)).toEqual([
+      "#e04f39",
+      "#2867b2",
+    ]);
     // Warning classification stays off the inspector route model.
     expect("atRiskCount" in platformA.routes[0]).toBe(false);
     expect(platformA.routes[0].moveTargets.map((t) => t.label).sort()).toEqual([
