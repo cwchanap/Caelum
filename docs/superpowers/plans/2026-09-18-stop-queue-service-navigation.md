@@ -165,7 +165,6 @@ refactor: retain platform identity in waiter health groups
 
 - Modify: `crates/caelum-core/src/service_control.rs`
 - Modify: `crates/caelum-core/tests/service_control.rs`
-- Modify if needed for the boarding proof: `crates/caelum-core/tests/trip_lifecycle.rs`
 
 ### 2.1 Write failing location-health tests beside existing wait-health authority
 
