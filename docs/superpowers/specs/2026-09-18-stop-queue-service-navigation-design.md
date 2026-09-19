@@ -116,9 +116,9 @@ For each admitted trip:
   - current-leg wait is greater than the target, **or**
   - remaining patience is at most `MIN_HEADWAY_SECONDS`.
 
-The current per-line `ServiceMetrics.waitingAtRiskCount` / `longestWaitSeconds` continues to be derived from the same location rows rather than a second independent waiter pass.
+Every non-empty admitted `(line_id, platform_id)` group produces a location row even when the line has **no target**. In that case the row still carries the real `waiting_count` and `longest_wait_seconds`, while `at_risk_count = 0` because target-relative warning semantics do not exist.
 
-Preserve the existing service-metric contract for lines without a target; HPA-464 does not redefine HPA-48's line-level metric availability.
+The current per-line `ServiceMetrics.waitingAtRiskCount` / `longestWaitSeconds` continues to be derived from the same location rows rather than a second independent waiter pass, but preserves HPA-48's existing target gate. Therefore an untargeted line may have live location rows for the stop inspector while its line-level `ServiceMetrics.longestWaitSeconds` remains null and `waitingAtRiskCount` remains zero. Focused tests must pin this split so the inspector cannot silently report zero wait when an untargeted serving line really has admitted waiters.
 
 ## Presentation wire
 
@@ -128,7 +128,6 @@ Add one frame-only row:
 #[serde(rename_all = "camelCase")]
 pub struct WaitingLocationPresentation {
     pub line_id: String,
-    pub node_id: String,
     pub platform_id: String,
     pub waiting_count: u32,
     pub at_risk_count: u32,
@@ -144,19 +143,19 @@ pub waiting_locations: Vec<WaitingLocationPresentation>
 
 to `PresentationFrame`.
 
-`node_id` is presentation metadata, not simulation state. Build a small platform-id → node-id lookup in `presentation.rs` from the current present stops/stations, then map the Rust line/platform health rows into deterministic presentation rows.
+Keep the wire keyed only by `line_id + platform_id`. The platform already belongs to static scene topology, just like `PlatformOccupancyPresentation`; repeating `node_id` on every 10 Hz frame would duplicate data the frontend can resolve from current present stops/stations.
 
 Properties:
 
 - frame-only, never persisted;
 - no citizen/trip IDs;
-- one row per non-empty line/platform group;
-- deterministic ordering by line/node/platform;
+- one row per non-empty line/platform group, including untargeted lines;
+- deterministic ordering by line/platform;
 - no zero rows;
 - no new scene resend trigger;
 - no new backend method.
 
-TypeScript adds the matching `WaitingLocationView` to `GameState` and copies `update.frame.waitingLocations` through the existing `applyPresentationUpdate` fold.
+TypeScript adds the matching `WaitingLocationView` to `GameState` and copies `update.frame.waitingLocations` through the existing `applyPresentationUpdate` fold. Selectors and WebGPU resolve `platformId → current present node` by walking the existing stop/station platforms, matching the same topology-join pattern already used by platform occupancy.
 
 ## Stop inspector
 
@@ -166,15 +165,16 @@ Extend `ShellPlatformRoute` with only the live values the panel consumes:
 
 ```ts
 waitingCount: number;
-atRiskCount: number;
 longestWaitSeconds: number | null;
 ```
 
 For each selected platform + serving route:
 
 - find the matching `waitingLocations` row;
-- no row means `waitingCount = 0`, `atRiskCount = 0`, and `longestWaitSeconds = null`;
+- no row means `waitingCount = 0` and `longestWaitSeconds = null`;
 - retain current route name/color and platform reassignment targets.
+
+Do not put `atRiskCount` on `ShellPlatformRoute`: the inspector does not render warning classification, and carrying an unused warning field there would create a second place for Lines-warning semantics to drift. Keep `atRiskCount` only on `ShellRouteWaitLocation`, where the Lines warning consumes it.
 
 Do not aggregate across platforms in the inspector. The panel is already platform-shaped.
 
@@ -275,10 +275,16 @@ Behavior:
 
 1. no-op when dead or a route draft is active;
 2. verify the route and present stop/station still exist;
-3. reuse `nextToolUiState("inspect", ui)` to clear placement/road tool state and close the command panel;
-4. set the existing selected point and `selectedNodeKind` from the resolved node;
-5. set `selectedRouteId = routeId`;
-6. clear `routeFailureFocus`.
+3. commit the exact UI fields this navigation owns:
+   - `activeTool = "inspect"`;
+   - `activeCommandDestination = null` so the contextual inspector mounts;
+   - `selectedId` from the resolved node position;
+   - `selectedNodeKind` from whether the node is a stop or station;
+   - `selectedRouteId = routeId`;
+   - `routeFailureFocus = null`;
+4. preserve the rest of the current UI state unless one of those owned fields supersedes it.
+
+Do **not** build this by spreading `nextToolUiState("inspect", ui)`. That helper intentionally clears `selectedRouteId`, and an existing runtime test pins "switching to Inspect deselects the line." HPA-464 must not change that generic tool-switch contract merely to implement focused navigation.
 
 Result:
 
@@ -310,13 +316,13 @@ state.waitingLocations.filter(
 )
 ```
 
-Resolve `nodeId` to the current stop/station position and draw a small existing-style warning ring/outline at each unique node.
+Resolve each row's `platformId` to its current present stop/station and draw a small existing-style warning ring/outline at each unique node.
 
 Constraints:
 
 - no new UI state;
 - no new shader, canvas fallback, render loop, camera state, or persistent marker cache;
-- deduplicate by node ID if multiple platform rows ever point to the same node;
+- deduplicate by resolved node ID if multiple platform rows point to the same node;
 - selected route remains the gate, so unrelated warning locations are not drawn;
 - rows disappearing on a frame removes markers automatically.
 
@@ -354,10 +360,10 @@ Focused tests must prove:
 - onboard riders, future/non-waiting trips, wrong-location riders, and platform-capacity overflow do not enter line/platform wait-location rows;
 - shared-platform admitted riders appear exactly once under their current line;
 - waiting count, longest current-leg wait, and at-risk count use the same rules as existing route health;
-- the sum/max of location rows agrees with current per-line `ServiceMetrics`;
-- a controlled at-risk waiting rider actually boards before patience expires in a lifecycle/integration test, so a later queue reduction is not treated as sufficient proof by itself.
+- the sum/max of targeted location rows agrees with current per-line `ServiceMetrics`;
+- one admitted waiter on a **no-target** line still produces a location row with real waiting count/longest wait and `atRiskCount = 0`, while line-level `ServiceMetrics` remains target-gated.
 
-Keep existing platform occupancy overflow characterization unchanged.
+Keep existing platform occupancy overflow characterization unchanged. Do not add another trip-lifecycle boarding test: the existing `waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk` already proves a waiting rider boards and continues through the real vehicle lifecycle before its 240-second patience budget expires. The new grouping tests only need to pin that `TripStatus::Riding` no longer appears in wait-location rows.
 
 ### TypeScript/UI
 
@@ -368,6 +374,7 @@ Focused tests cover:
 - serving-line action opens/selects existing service controls without a draft;
 - warning shows only real at-risk locations for that line;
 - focusing a warning location selects the existing stop/station inspector and retains line selection;
+- one required App-level round-trip test starts with a selected route, focuses one wait location, then activates that inspector's serving-line chip and proves Lines reopens on the **same** `selectedRouteId`, with no route draft and the same stop `selectedId`; this pins the non-toggle `selectRoute` guard rather than testing only component callbacks;
 - target-relative warning can disappear while raw wait evidence remains;
 - selected route WebGPU overlay emphasizes only its current at-risk nodes;
 - one stale-selection case through existing lifecycle handling.
@@ -377,14 +384,16 @@ Focused tests cover:
 Use one representative real-WASM browser journey, preferably extending the existing routes E2E setup rather than adding a new scenario framework:
 
 ```text
-selected stop
-→ serving line
-→ Lines operating controls
-→ explicit Add vehicle
-→ refreshed fleet/daily-cost + current queue/wait display
+selected served stop
+→ serving-line action
+→ Lines on the same selected route, with no route draft
+→ close Lines
+→ the same stop inspector / selectedId is visible again
 ```
 
-Do not rely on elapsed browser time to prove queue improvement. Rust owns the deterministic waiting/boarding proof.
+A zero-wait line row is an acceptable assertion; do not manufacture a long wait in Playwright. HPA-48's existing routes E2E already proves explicit Add vehicle, fleet +1, daily-cost refresh, and the absence of a solved/success claim, so HPA-464 must not clone that purchase flow.
+
+Do not rely on elapsed browser time to prove boarding or queue improvement. Existing Rust lifecycle coverage owns boarding correctness; HPA-464's Rust tests own wait-row eligibility.
 
 ## Non-goals
 
