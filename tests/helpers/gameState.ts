@@ -292,6 +292,7 @@ export function createTestGameState(
     populationCount: 0,
     buildingOccupancy: [],
     platformOccupancy: [],
+    waitingLocations: [],
     trafficFlow: [],
     demandFlow: [],
   };
