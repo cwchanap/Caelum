@@ -3,6 +3,7 @@ import type {
   GameState,
   RouteLegPath,
   TransitPath,
+  WaitingLocationView,
 } from "../../src/domain/types";
 import { buildOverlayRanges } from "../../src/render/webgpu/overlayBatch";
 import {
@@ -954,6 +955,82 @@ describe("buildOverlayRanges drag gestures", () => {
     expect(hasVertexNear(underRoutes, colors.previewValid, 140, 110)).toBe(
       false,
     );
+  });
+});
+
+describe("buildOverlayRanges wait-risk markers", () => {
+  const stopPositions = [
+    { id: "stop-atrisk", position: { x: 2, y: 2 } },
+    { id: "stop-raw", position: { x: 5, y: 2 } },
+    { id: "stop-other", position: { x: 8, y: 2 } },
+  ];
+
+  function waitRow(
+    lineId: string,
+    stopId: string,
+    atRiskCount: number,
+  ): WaitingLocationView {
+    return {
+      lineId,
+      platformId: `${stopId}-p0`,
+      waitingCount: atRiskCount + 1,
+      atRiskCount,
+      longestWaitSeconds: 90,
+    };
+  }
+
+  function waitState(rows: WaitingLocationView[]): GameState {
+    const base = withStops(
+      createTestGameState(),
+      stopPositions.map(({ id, position }) => presentStop(id, position)),
+    );
+    return { ...base, waitingLocations: rows };
+  }
+
+  it("marks only the selected line's at-risk stops", () => {
+    const state = waitState([
+      waitRow("route-001", "stop-atrisk", 2),
+      waitRow("route-001", "stop-raw", 0),
+      waitRow("route-002", "stop-other", 1),
+    ]);
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    });
+
+    // Compact warning ring radius 8 around tile (2,2) center (80,80):
+    // exact rim vertex at (88,80).
+    expect(hasVertexNear(underRoutes, colors.late, 88, 80)).toBe(true);
+    // Raw-only location (5,2) and route-002 location (8,2) stay unmarked.
+    expect(hasVertexNear(underRoutes, colors.late, 184, 80)).toBe(false);
+    expect(hasVertexNear(underRoutes, colors.late, 280, 80)).toBe(false);
+  });
+
+  it("emits no wait-risk markers without a selected route", () => {
+    const state = waitState([waitRow("route-001", "stop-atrisk", 2)]);
+    const { underRoutes } = buildOverlayRanges(state, createUiState());
+
+    expect(underRoutes.length).toBe(0);
+  });
+
+  it("collapses duplicate platform rows onto one marker", () => {
+    const state = waitState([waitRow("route-001", "stop-atrisk", 2)]);
+    const duplicated = {
+      ...state,
+      waitingLocations: [
+        waitRow("route-001", "stop-atrisk", 2),
+        waitRow("route-001", "stop-atrisk", 1),
+      ],
+    };
+    const ui = {
+      ...createUiState(),
+      selectedRouteId: "route-001",
+    };
+    const single = buildOverlayRanges(state, ui).underRoutes;
+    const dup = buildOverlayRanges(duplicated, ui).underRoutes;
+
+    expect(dup.length).toBe(single.length);
+    expect(hasVertexNear(dup, colors.late, 88, 80)).toBe(true);
   });
 });
 

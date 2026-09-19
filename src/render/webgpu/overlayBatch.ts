@@ -262,6 +262,40 @@ function drawBrokenRouteMarkers(
   });
 }
 
+/** At-risk waiting riders on the selected line: one compact warning ring per
+ *  present stop/station whose platform row is at risk. Rendered from the live
+ *  frame rows each batch build — no cached marker state. */
+function drawWaitRiskMarkers(
+  g: SolidGeometry,
+  state: GameState,
+  ui: UiState,
+): void {
+  if (ui.selectedRouteId === null) return;
+  const nodesByPlatform = new Map<string, { id: string; position: Point }>();
+  for (const node of [...state.transit.stops, ...state.transit.stations]) {
+    if (node.status !== "present") continue;
+    for (const platform of node.platforms) {
+      nodesByPlatform.set(platform.id, node);
+    }
+  }
+  const marked = new Set<string>();
+  for (const row of state.waitingLocations) {
+    if (row.lineId !== ui.selectedRouteId || row.atRiskCount <= 0) continue;
+    const node = nodesByPlatform.get(row.platformId);
+    if (node === undefined || marked.has(node.id)) continue;
+    marked.add(node.id);
+    g.ring(
+      {
+        x: node.position.x * tileSize + tileSize / 2,
+        y: node.position.y * tileSize + tileSize / 2,
+      },
+      8,
+      2,
+      LATE,
+    );
+  }
+}
+
 type RoundaboutStructure = Extract<RoadStructure, { kind: "roundabout" }>;
 
 function drawRoundaboutPreviewStructure(
@@ -605,6 +639,7 @@ export function buildOverlayRanges(
 
   drawDataOverlays(g, state, ui);
   drawBrokenRouteMarkers(g, state, ui);
+  drawWaitRiskMarkers(g, state, ui);
   drawSelectedBuilding(g, state, ui);
 
   let previewsRendered = false;
