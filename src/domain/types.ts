@@ -483,6 +483,14 @@ export interface DemandFlowView {
   count: number;
 }
 
+export interface WaitingLocationView {
+  lineId: string;
+  platformId: string;
+  waitingCount: number;
+  atRiskCount: number;
+  longestWaitSeconds: number;
+}
+
 export interface TransitNetwork {
   stops: Stop[];
   stations: Station[];
@@ -507,6 +515,7 @@ export interface GameState {
   populationCount: number;
   buildingOccupancy: BuildingOccupancyView[];
   platformOccupancy: PlatformOccupancyView[];
+  waitingLocations: WaitingLocationView[];
   trafficFlow: TrafficFlowView[];
   demandFlow: DemandFlowView[];
 }

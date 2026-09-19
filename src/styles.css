@@ -878,6 +878,13 @@ body {
   font-weight: 500;
 }
 
+.platform-route-wait {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--ink-mid);
+}
+
 .move-route {
   padding: 2px 8px;
   border-radius: 4px;
@@ -1203,6 +1210,27 @@ body {
 .route-status-note,
 .route-repair-guidance {
   color: var(--ink-mid);
+}
+
+.route-wait-locations {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin: 4px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.route-wait-location {
+  padding: 3px 8px;
+  border: 1px solid var(--line-strong);
+  border-radius: 4px;
+  background: var(--surface-raised);
+  color: var(--ink-mid);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+  text-align: left;
 }
 
 .route-failures {

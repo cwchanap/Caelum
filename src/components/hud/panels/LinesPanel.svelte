@@ -7,6 +7,7 @@
   } from "../../../domain/types";
   import type { RouteDraft, RouteEditorView } from "../../../runtime/types";
   import type { ShellRouteListState } from "../../../runtime/types";
+  import { formatMinutes } from "../../../format";
   import { formatBudget } from "../../../runtime/runtimeSelectors";
   import { ROUTE_COLOR_PALETTE } from "../../../ui/routePalette";
   import RouteEditor from "./RouteEditor.svelte";
@@ -39,6 +40,7 @@
     onFocusRouteFailure: (routeId: string, legIndex: number) => void;
     onEditRoute: (routeId: string) => void;
     onSelectRoute: (routeId: string | null) => void;
+    onFocusWaitLocation: (routeId: string, nodeId: string) => void;
     onSetServiceTargetHeadway: (
       routeId: string,
       targetHeadwaySeconds: number,
@@ -70,6 +72,7 @@
     onFocusRouteFailure,
     onEditRoute,
     onSelectRoute,
+    onFocusWaitLocation,
     onSetServiceTargetHeadway,
     onDeployInitialFleet,
     onAddServiceVehicle,
@@ -120,10 +123,6 @@
     } else {
       pendingDeleteId = routeId;
     }
-  }
-
-  function formatHeadway(seconds: number | null): string {
-    return seconds === null ? "—" : `${(seconds / 60).toFixed(1)} min`;
   }
 
   function handleHeadwayInput(
@@ -338,7 +337,7 @@
                   <div class="route-service-row">
                     <span class="route-service-label">Target</span>
                     <span class="route-service-value"
-                      >{formatHeadway(route.service.targetHeadwaySeconds)}</span
+                      >{formatMinutes(route.service.targetHeadwaySeconds)}</span
                     >
                   </div>
                   <div class="route-service-row">
@@ -422,7 +421,7 @@
                       <span class="route-service-label">Estimated interval</span
                       >
                       <span class="route-service-value"
-                        >{formatHeadway(
+                        >{formatMinutes(
                           route.service.nominalHeadwaySeconds,
                         )}</span
                       >
@@ -454,7 +453,7 @@
                       <div class="route-service-row">
                         <span class="route-service-label">Longest wait</span>
                         <span class="route-service-value"
-                          >{formatHeadway(
+                          >{formatMinutes(
                             route.service.longestWaitSeconds,
                           )}</span
                         >
@@ -473,6 +472,31 @@
                       : "riders"}
                     at risk
                   </p>
+                  {#if route.waitLocations.length > 0}
+                    <ul
+                      class="route-wait-locations"
+                      data-testid={`route-wait-locations-${route.id}`}
+                    >
+                      {#each route.waitLocations as location (location.nodeId)}
+                        <li>
+                          <button
+                            type="button"
+                            class="route-wait-location"
+                            data-testid={`route-wait-location-${route.id}-${location.nodeId}`}
+                            aria-label={`Inspect ${location.nodeLabel}`}
+                            onclick={() =>
+                              onFocusWaitLocation(route.id, location.nodeId)}
+                          >
+                            {location.nodeLabel} · {location.atRiskCount}
+                            {location.atRiskCount === 1 ? "rider" : "riders"}
+                            at risk · {formatMinutes(
+                              location.longestWaitSeconds,
+                            )}
+                          </button>
+                        </li>
+                      {/each}
+                    </ul>
+                  {/if}
                 {/if}
                 {#if route.service.nextVehicleCost !== null}
                   <button

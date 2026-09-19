@@ -37,6 +37,7 @@ import type {
   PlatformOccupancyView,
   TrafficFlowView,
   DemandFlowView,
+  WaitingLocationView,
 } from "../../domain/types";
 import type { SnapshotError, SnapshotResult } from "./persistenceContract";
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
@@ -285,6 +286,7 @@ export interface PresentationFrame {
   populationCount: number;
   buildingOccupancy: BuildingOccupancyView[];
   platformOccupancy: PlatformOccupancyView[];
+  waitingLocations: WaitingLocationView[];
   trafficFlow: TrafficFlowView[];
   demandFlow: DemandFlowView[];
   vehicles: PresentationVehicle[];

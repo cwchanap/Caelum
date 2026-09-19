@@ -1,10 +1,11 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import InspectPanel from "../../src/components/hud/panels/InspectPanel.svelte";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import type {
   ShellBuildingInspectorState,
   ShellInspectorState,
+  ShellTransitInspectorState,
 } from "../../src/runtime/types";
 
 const OFFICE_PATTERN = BUILDING_CATALOG.officeTower.workPattern ?? null;
@@ -25,10 +26,61 @@ function buildingInspector(
   };
 }
 
-function renderPanel(inspector: ShellInspectorState) {
+function renderPanel(
+  inspector: ShellInspectorState,
+  callbacks: {
+    onAssignRouteToPlatform?: (
+      nodeId: string,
+      routeId: string,
+      platformId: string,
+    ) => void;
+    onOpenServiceControls?: (routeId: string) => void;
+  } = {},
+) {
   render(InspectPanel, {
-    props: { inspector, onAssignRouteToPlatform: vi.fn() },
+    props: {
+      inspector,
+      onAssignRouteToPlatform: callbacks.onAssignRouteToPlatform ?? vi.fn(),
+      onOpenServiceControls: callbacks.onOpenServiceControls ?? vi.fn(),
+    },
   });
+}
+
+function transitInspector(
+  overrides: Partial<ShellTransitInspectorState> = {},
+): ShellTransitInspectorState {
+  return {
+    kind: "transit",
+    nodeId: "stop-001",
+    nodeLabel: "Bus Stop",
+    canReassign: true,
+    platforms: [
+      {
+        id: "stop-001-p0",
+        label: "A",
+        occupancy: 4,
+        capacity: 30,
+        routes: [
+          {
+            id: "route-001",
+            name: "Bus 1",
+            color: "#2563eb",
+            waitingCount: 2,
+            longestWaitSeconds: 192,
+            moveTargets: [{ platformId: "stop-001-p1", label: "B" }],
+          },
+        ],
+      },
+      {
+        id: "stop-001-p1",
+        label: "B",
+        occupancy: 0,
+        capacity: 30,
+        routes: [],
+      },
+    ],
+    ...overrides,
+  };
 }
 
 describe("InspectPanel workplace status", () => {
@@ -95,5 +147,76 @@ describe("InspectPanel workplace status", () => {
       screen.getByTestId("building-panel").querySelector(".workplace-pattern"),
     ).toBeNull();
     expect(screen.getByText("Jobs 1 / 4")).toBeVisible();
+  });
+});
+
+describe("InspectPanel platform wait evidence", () => {
+  it("labels the platform queue/capacity total separately from per-line waits", () => {
+    renderPanel(transitInspector());
+
+    expect(screen.getByTestId("platform-queue-stop-001-p0")).toHaveTextContent(
+      "Queue 4/30",
+    );
+    const wait = screen.getByTestId("route-wait-route-001");
+    expect(wait).toHaveTextContent("2 waiting");
+    expect(wait).toHaveTextContent("3.2 min");
+  });
+
+  it("shows a serving line with zero wait as present but without a current wait", () => {
+    renderPanel(
+      transitInspector({
+        platforms: [
+          {
+            id: "stop-001-p0",
+            label: "A",
+            occupancy: 0,
+            capacity: 30,
+            routes: [
+              {
+                id: "route-001",
+                name: "Bus 1",
+                color: "#2563eb",
+                waitingCount: 0,
+                longestWaitSeconds: null,
+                moveTargets: [],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+
+    const wait = screen.getByTestId("route-wait-route-001");
+    expect(wait).toHaveTextContent("0 waiting");
+    expect(wait).toHaveTextContent("No current wait");
+  });
+
+  it("opens service controls with only the route id", async () => {
+    const onOpenServiceControls = vi.fn();
+    const onAssignRouteToPlatform = vi.fn();
+    renderPanel(transitInspector(), { onOpenServiceControls });
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Open service controls for Bus 1" }),
+    );
+
+    expect(onOpenServiceControls).toHaveBeenCalledTimes(1);
+    expect(onOpenServiceControls).toHaveBeenCalledWith("route-001");
+    expect(onAssignRouteToPlatform).not.toHaveBeenCalled();
+  });
+
+  it("keeps platform reassignment controls working", async () => {
+    const onAssignRouteToPlatform = vi.fn();
+    renderPanel(transitInspector(), { onAssignRouteToPlatform });
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Move Bus 1 to Platform B" }),
+    );
+
+    expect(onAssignRouteToPlatform).toHaveBeenCalledWith(
+      "stop-001",
+      "route-001",
+      "stop-001-p1",
+    );
   });
 });

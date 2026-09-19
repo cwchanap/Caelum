@@ -202,6 +202,37 @@ function createRuntimeHarness(
     deleteRoute: vi.fn(async () => publish()),
     selectRoute: vi.fn(() => publish()),
     focusRouteFailure: vi.fn(() => publish()),
+    focusWaitLocation: vi.fn((routeId: string, nodeId: string) => {
+      const node = [...state.transit.stops, ...state.transit.stations].find(
+        (candidate) =>
+          candidate.id === nodeId && candidate.status === "present",
+      );
+      if (node === undefined) return publish();
+      ui = {
+        ...ui,
+        activeTool: "inspect",
+        activeCommandDestination: null,
+        selectedId: `${node.position.x},${node.position.y}`,
+        selectedNodeKind: state.transit.stations.some(
+          (candidate) => candidate.id === nodeId,
+        )
+          ? "station"
+          : "stop",
+        selectedRouteId: routeId,
+        routeFailureFocus: null,
+      };
+      return publish();
+    }),
+    openServiceControls: vi.fn((routeId: string) => {
+      ui = {
+        ...ui,
+        selectedRouteId: routeId,
+        activeCommandDestination: "lines",
+        activeBuildGroup: null,
+        routeFailureFocus: null,
+      };
+      return publish();
+    }),
     setHoverTile: vi.fn(() => publish()),
     previewRoadMutation: vi.fn(() => publish()),
     dismissRejection: vi.fn(() => {
@@ -1227,6 +1258,89 @@ describe("App command shell", () => {
 
     expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(1);
     expect(runtime.addServiceVehicle).toHaveBeenCalledWith("route-001");
+  });
+
+  it("round-trips a wait location to the inspector and back to service controls", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          vehicleIds: ["vehicle-001"],
+          targetHeadwaySeconds: 360,
+          serviceMetrics: {
+            roundTripSeconds: 900,
+            assignedFleet: 1,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 450,
+            waitingAtRiskCount: 2,
+            longestWaitSeconds: 192,
+          },
+        })),
+      },
+      waitingLocations: [
+        {
+          lineId: "route-001",
+          platformId: `${stopId}-p0`,
+          waitingCount: 3,
+          atRiskCount: 2,
+          longestWaitSeconds: 192,
+        },
+      ],
+    };
+    const { runtime } = createRuntimeHarness({
+      state,
+      ui: { ...createUiState(), selectedRouteId: "route-001" },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    expect(screen.getByTestId("panel-lines")).toBeVisible();
+
+    // Following the wait-location row opens the inspector on that stop with
+    // the line still selected.
+    await fireEvent.click(
+      screen.getByTestId(`route-wait-location-route-001-${stopId}`),
+    );
+    const focused = runtime.getSnapshot().ui;
+    expect(focused.activeTool).toBe("inspect");
+    expect(focused.activeCommandDestination).toBeNull();
+    expect(focused.selectedId).toBe("7,7");
+    expect(focused.selectedNodeKind).toBe("stop");
+    expect(focused.selectedRouteId).toBe("route-001");
+    expect(focused.routeDraft).toBeNull();
+    expect(screen.getByTestId("panel-inspect")).toBeVisible();
+    expect(runtime.focusWaitLocation).toHaveBeenCalledWith("route-001", stopId);
+
+    // Activating the serving-line chip returns to Lines on the SAME route,
+    // with no draft and the same stop still selected.
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: "Open service controls for Bus 1",
+      }),
+    );
+    const returned = runtime.getSnapshot().ui;
+    expect(returned.activeCommandDestination).toBe("lines");
+    expect(returned.selectedRouteId).toBe("route-001");
+    expect(returned.routeDraft).toBeNull();
+    expect(returned.selectedId).toBe("7,7");
+    expect(screen.getByTestId("panel-lines")).toBeVisible();
+    expect(runtime.openServiceControls).toHaveBeenCalledWith("route-001");
+
+    // Closing Lines returns to the same stop inspector.
+    await fireEvent.click(screen.getByRole("button", { name: "Close Lines" }));
+    expect(screen.getByTestId("panel-inspect")).toBeVisible();
+    expect(runtime.getSnapshot().ui.selectedId).toBe("7,7");
   });
 
   it("sets a Metro target headway and deploys a fleet from the Lines panel", async () => {

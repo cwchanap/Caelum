@@ -113,6 +113,25 @@ function dragMutationPoints(
     : axisLockedLine(start, current);
 }
 
+/** Resolves a physically present stop/station by id, so focused navigation
+ *  can never select a tombstone footprint. */
+function presentNodeAt(
+  state: GameState,
+  nodeId: string,
+): { position: Point; kind: "stop" | "station" } | null {
+  const stop = state.transit.stops.find((candidate) => candidate.id === nodeId);
+  if (stop !== undefined && stop.status === "present") {
+    return { position: stop.position, kind: "stop" };
+  }
+  const station = state.transit.stations.find(
+    (candidate) => candidate.id === nodeId,
+  );
+  if (station !== undefined && station.status === "present") {
+    return { position: station.position, kind: "station" };
+  }
+  return null;
+}
+
 export interface CreateGameRuntimeOptions {
   backend: GameBackend;
   saveStore?: CitySaveStore;
@@ -1784,6 +1803,40 @@ export async function createGameRuntime(
         ...ui,
         selectedRouteId: routeId,
         routeFailureFocus: { routeId, legIndex },
+      });
+    },
+    focusWaitLocation(routeId, nodeId) {
+      if (dead) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
+      const route =
+        state.transit.routes.find((candidate) => candidate.id === routeId) ??
+        state.transit.metroLines.find((candidate) => candidate.id === routeId);
+      if (route === undefined) return commit(state, ui);
+      const node = presentNodeAt(state, nodeId);
+      if (node === null) return commit(state, ui);
+      return commit(state, {
+        ...ui,
+        activeTool: "inspect",
+        activeCommandDestination: null,
+        selectedId: `${node.position.x},${node.position.y}`,
+        selectedNodeKind: node.kind,
+        selectedRouteId: routeId,
+        routeFailureFocus: null,
+      });
+    },
+    openServiceControls(routeId) {
+      if (dead) return getSnapshot();
+      if (ui.routeDraft !== null) return getSnapshot();
+      const route =
+        state.transit.routes.find((candidate) => candidate.id === routeId) ??
+        state.transit.metroLines.find((candidate) => candidate.id === routeId);
+      if (route === undefined) return commit(state, ui);
+      return commit(state, {
+        ...ui,
+        selectedRouteId: routeId,
+        activeCommandDestination: "lines",
+        activeBuildGroup: null,
+        routeFailureFocus: null,
       });
     },
     setHoverTile(point) {
