@@ -14,6 +14,7 @@ Keep this as one HPA-464 PR. The implementation adds one compact frame-only wait
 - Rust owns waiter eligibility, capacity admission, current-leg wait, and at-risk classification.
 - Existing `platformOccupancy` keeps counting the full physical platform queue, including overflow.
 - New per-line wait rows use the exact capacity-admitted eligibility used by route health. Label the two concepts separately.
+- Every non-empty admitted line/platform group gets a raw wait row even without a target; only at-risk classification and line-level HPA-48 ServiceMetrics remain target-gated.
 - No citizen/trip IDs cross the presentation boundary.
 - No snapshot field, schema bump, migration, backend query, gameplay intent, or event bus.
 - Reuse `selectedRouteId`, `selectedId`, `selectedNodeKind`, `setCommandDestination`, and the existing Lines/Inspect panels.
@@ -30,9 +31,10 @@ Keep this as one HPA-464 PR. The implementation adds one compact frame-only wait
 - `crates/caelum-core/src/platforms.rs` — preserve platform identity while grouping capacity-admitted waiters.
 - `crates/caelum-core/src/service_control.rs` — derive per-line/platform waiting count, longest current-leg wait, and at-risk count once; aggregate existing line health from the same rows.
 - `crates/caelum-core/src/presentation.rs` — add deterministic `WaitingLocationPresentation` rows to `PresentationFrame`.
-- `crates/caelum-core/tests/service_control.rs` — line/location consistency and controlled warning fixture.
-- Modify if this is the narrowest existing lifecycle home: `crates/caelum-core/tests/trip_lifecycle.rs` — prove the controlled waiter boards before patience expires.
+- `crates/caelum-core/tests/service_control.rs` — targeted/no-target line/location consistency and controlled warning fixture.
 - `crates/caelum-core/tests/model_wire_format.rs` — update exact camelCase frame/wire expectations only where the frame shape is pinned.
+
+Do not add another trip-lifecycle boarding test. Existing `waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk` already exercises a waiting rider through boarding/disembark with a 240-second patience budget; HPA-464 only needs grouping tests to keep `Riding` trips out of wait rows.
 
 ### TypeScript presentation / view model
 
@@ -61,7 +63,7 @@ Keep this as one HPA-464 PR. The implementation adds one compact frame-only wait
 - `tests/runtime/gameRuntime.test.ts`
 - `tests/ui/inspectPanel.test.ts` if present; otherwise create this isolated component test beside existing panel tests.
 - `tests/ui/linesPanel.test.ts`
-- `tests/ui/appShell.test.ts` only for App callback integration that is not already covered elsewhere.
+- `tests/ui/appShell.test.ts` — required full warning-focus → inspector chip → same-line Lines round-trip, not optional callback-only coverage.
 - `tests/render/webgpuOverlayBatch.test.ts`
 - `tests/e2e/routes.spec.ts`
 - Shared fixture defaults that construct `GameState` / `PresentationFrame`, especially:
@@ -184,6 +186,13 @@ Pin:
 - line `ServiceMetrics.waiting_at_risk_count` equals the sum of its location counts;
 - line `longest_wait_seconds` equals the max location longest wait.
 
+Add one explicit **no-target** case before implementation:
+
+- one capacity-admitted waiter on `route-none` with no target still produces a location row;
+- that row has `waiting_count > 0`, `at_risk_count = 0`, and the real `longest_wait_seconds`;
+- the existing line-level contract remains target-gated: `ServiceMetrics.longest_wait_seconds` stays null and `waiting_at_risk_count == 0` for that line;
+- keep the existing `none-ignored` assertion as a line-level ServiceMetrics/health assertion, not as a location-row exclusion.
+
 Also keep the existing transfer test proving wait health uses `current_leg_wait_seconds`, not trip-wide elapsed wait.
 
 Run:
@@ -220,7 +229,9 @@ risk = target exists &&
 
 Rows exist only for non-empty groups.
 
-Keep the current line-level target semantics. Do not expand this task into a new no-target service-metric contract.
+Rows exist for every non-empty admitted group, including lines with no target. The risk predicate is target-gated, so untargeted rows publish raw count/longest wait with `at_risk_count = 0`.
+
+Keep the current **line-level** target semantics. HPA-464 does not make HPA-48 `ServiceMetrics.longestWaitSeconds` available on untargeted lines.
 
 ### 2.3 Make `waiting_health_by_line` aggregate the location rows
 
@@ -234,23 +245,16 @@ Line health should be derived from the new rows:
 
 This is the important drift-prevention lock: the warning total and the warning's concrete locations cannot use different eligibility/formulas.
 
-### 2.4 Add one real boarding characterization
+### 2.4 Reuse existing boarding coverage; pin only the new grouping boundary
 
-The UI must not treat "queue got smaller" as proof that service improved.
+Do not add another engine/trip-lifecycle characterization. Existing `waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk` already proves a Waiting trip boards/disembarks through the real lifecycle before its 240-second patience budget expires.
 
-Using the narrowest existing integration fixture, create one capacity-admitted waiting passenger for a valid line with enough remaining patience, advance the real simulation/vehicle lifecycle, and prove:
-
-- the same trip enters the onboard/riding state before patience expires;
-- it does not disappear as `Unserved`;
-- location wait rows no longer count it after boarding.
-
-Do not make this a browser timing test.
+The new HPA-464 coverage belongs next to the grouping rule: keep the Task 1 assertion that a `TripStatus::Riding` trip does not appear in `platform_waiters_by_location`. That is the only new boarding-related contract this feature needs.
 
 ### 2.5 Verify
 
 ```bash
 cargo test -p caelum-core --test service_control
-cargo test -p caelum-core --test trip_lifecycle
 cargo test -p caelum-core
 ```
 
@@ -282,7 +286,6 @@ Add a deterministic presentation test with two wait locations and assert exact r
 [
   {
     "lineId": "route-001",
-    "nodeId": "stop-001",
     "platformId": "stop-001-p0",
     "waitingCount": 1,
     "atRiskCount": 1,
@@ -293,10 +296,10 @@ Add a deterministic presentation test with two wait locations and assert exact r
 
 The exact fixture values may differ; pin these properties:
 
-- node ID comes from current present stop/station structure;
 - row exists only for a non-empty capacity-admitted line/platform group;
-- ordering is deterministic;
-- no trip/citizen IDs appear;
+- untargeted admitted groups still produce raw rows with `atRiskCount = 0`;
+- ordering is deterministic by line/platform;
+- no trip/citizen IDs or duplicated node ID appear;
 - existing `platformOccupancy` still reports the physical queue total independently.
 
 Run the focused presentation/model-wire tests and confirm RED.
@@ -308,7 +311,6 @@ Add:
 ```rust
 pub struct WaitingLocationPresentation {
     pub line_id: String,
-    pub node_id: String,
     pub platform_id: String,
     pub waiting_count: u32,
     pub at_risk_count: u32,
@@ -322,9 +324,9 @@ and:
 pub waiting_locations: Vec<WaitingLocationPresentation>
 ```
 
-Build one local platform-id → node-id map from present stops/stations inside the projection path. Do not change `Platform`, `Stop`, `Station`, or durable models.
+Do not add `node_id` to the frame row. Like `PlatformOccupancyPresentation`, the dynamic row carries the platform key and the frontend joins it to current present stop/station topology when it needs a node.
 
-Sort by `(line_id, node_id, platform_id)` before returning.
+Sort by `(line_id, platform_id)` before returning.
 
 ### 3.3 Add the strict TypeScript wire/view field
 
@@ -335,7 +337,6 @@ In `src/domain/types.ts`, add:
 ```ts
 export interface WaitingLocationView {
   lineId: string;
-  nodeId: string;
   platformId: string;
   waitingCount: number;
   atRiskCount: number;
@@ -406,11 +407,10 @@ Assert the selected inspector returns, per serving line:
 
 - route ID/name/color;
 - `waitingCount`;
-- `atRiskCount`;
 - `longestWaitSeconds`;
 - existing platform reassignment targets unchanged.
 
-No matching wait row must yield `0 / 0 / null`.
+No matching wait row must yield `0 / null`. Do not expose `atRiskCount` on the inspector route model.
 
 ### 4.2 Extend `ShellPlatformRoute`
 
@@ -418,7 +418,6 @@ Add:
 
 ```ts
 waitingCount: number;
-atRiskCount: number;
 longestWaitSeconds: number | null;
 ```
 
@@ -451,7 +450,7 @@ waitLocations: ShellRouteWaitLocation[];
 
 to `ShellRouteListItem`.
 
-Resolve node/platform labels from current scene rows. Reuse `waypointLabel(...)` for the node label rather than inventing another ordinal system.
+Resolve each `platformId` back to its current present stop/station, then derive node/platform labels there. Reuse `waypointLabel(...)` for the node label rather than inventing another ordinal system. `nodeId` exists only on this shell row, not on the 10 Hz frame row.
 
 Sort locations in route itinerary order where possible, then platform label/ID for deterministic fallback. Do not add a generic navigation model.
 
@@ -513,16 +512,28 @@ Tests first:
 4. missing/deleted route or node -> no-op.
 5. city replacement/reset clears selected route and point through existing `createUiState()` lifecycle.
 
-### 5.2 Implement `focusWaitLocation` using existing state constructors
+Separately, make the full App loop a required jsdom test rather than optional callback coverage:
 
-Do not add a `UiState` field.
+- start with `selectedRouteId` already set on a line with an at-risk location;
+- call/follow `focusWaitLocation` so the inspector opens on that stop and the line stays selected;
+- activate that inspector's serving-line chip;
+- assert Lines opens with the **same** `selectedRouteId`, no route draft, and the same stop `selectedId` preserved.
 
-Implementation shape:
+This test is required because `selectRoute` toggles; a component-only "chip emitted route ID" test cannot catch an accidental deselection.
+
+### 5.2 Implement `focusWaitLocation` as an explicit focused-navigation commit
+
+Do not add a `UiState` field and do not spread `nextToolUiState("inspect", ui)`.
+
+That generic helper intentionally clears `selectedRouteId`, and `gameRuntime.test.ts` already locks "switching to Inspect clears the selected route." HPA-464 must preserve that generic tool-switch contract.
+
+After validating the route and present stop/station, commit the fields this action owns directly:
 
 ```ts
-const base = nextToolUiState("inspect", ui);
 return commit(state, {
-  ...base,
+  ...ui,
+  activeTool: "inspect",
+  activeCommandDestination: null,
   selectedId: `${node.position.x},${node.position.y}`,
   selectedNodeKind,
   selectedRouteId: routeId,
@@ -530,9 +541,7 @@ return commit(state, {
 });
 ```
 
-Before that, validate the route and present node from current `state`.
-
-Because `nextToolUiState("inspect", ...)` already closes the command destination and clears placement/tool state, do not duplicate that reset list by hand.
+Keep the dead/draft/missing route or node paths as no-ops. Do not copy `focusRouteFailure`'s panel behavior: `focusWaitLocation` must explicitly close Lines so `InspectPanel` can mount.
 
 ### 5.3 Make the stop inspector show factual live waits
 
@@ -543,8 +552,7 @@ In `InspectPanel.svelte`:
 - make each serving-line chip/action accessible as an "Open service controls for …" action;
 - show line-specific:
   - waiting count;
-  - longest current wait or em dash/No current wait;
-  - optionally the already-derived at-risk count as factual secondary copy.
+  - longest current wait or em dash/No current wait.
 
 Keep the line wait row present at zero so the player can distinguish a serving line with no current wait from a line that does not serve the platform.
 
@@ -566,9 +574,9 @@ In App add a small handler:
 4. call `runtime.setCommandDestination("lines")`;
 5. publish the resulting snapshot.
 
-Do not call `selectRoute` when the same line is already selected because the existing method toggles selection.
+Do not call `selectRoute` when the same line is already selected because the existing method toggles selection. This non-toggle guard is part of the required App-level round-trip test from Task 5.1.
 
-Do not clear `selectedId`; closing Lines should reveal the same stop inspector.
+Do not clear `selectedId`; closing Lines should reveal the same stop inspector. `setCommandDestination("lines")` also toggles, but the inspector only renders while the destination is null, so this open-from-inspector call is not ambiguous.
 
 ### 5.5 Make the existing line warning local
 
@@ -611,7 +619,7 @@ This one call closes Lines, keeps route selection, and opens the existing contex
 ### 5.7 Verify
 
 ```bash
-bunx vitest run   tests/runtime/gameRuntime.test.ts   tests/ui/inspectPanel.test.ts   tests/ui/linesPanel.test.ts   tests/ui/appShell.test.ts
+bunx vitest run tests/runtime/gameRuntime.test.ts tests/ui/inspectPanel.test.ts tests/ui/linesPanel.test.ts tests/ui/appShell.test.ts
 bun run check
 ```
 
@@ -657,8 +665,8 @@ Inside the existing overlay batch construction:
 
 1. if `selectedRouteId === null`, skip;
 2. filter `state.waitingLocations` by selected line and `atRiskCount > 0`;
-3. dedupe node IDs;
-4. resolve each current node position;
+3. resolve each `platformId` through current present stop/station platforms;
+4. dedupe resolved node IDs;
 5. draw a compact existing-style warning ring/outline.
 
 Do not cache the node list in `UiState`. Frame updates must add/remove markers naturally.
@@ -691,22 +699,21 @@ feat: highlight selected line wait-risk stops
 
 Extend the current HPA-48 route E2E rather than creating a new sandbox/test framework.
 
-The browser path does **not** need to manufacture a long wait. Use the selected-stop branch allowed by HPA-464:
+The browser path does **not** need to manufacture a long wait and must not clone HPA-48's existing Add-vehicle journey. Use the selected-stop branch allowed by HPA-464:
 
-1. ensure one deployed route already serves a visible stop;
+1. ensure one route serves a visible stop;
 2. select that stop using ordinary Inspect UI;
-3. assert platform total and the line's current wait row are visible (zero/null is acceptable before time elapses);
-4. activate the serving line;
-5. assert Lines opens with that route selected and route draft absent;
-6. record assigned fleet, daily cost, and current wait display;
-7. click the existing explicit Add vehicle action;
-8. assert assigned fleet increments by exactly one and daily cost refreshes;
-9. assert queue/wait UI remains factual and does not show a success/solved claim;
-10. close Lines and assert the same stop inspector is restored.
+3. assert platform total and the serving line's current wait row are visible; zero wait is acceptable before simulation time elapses;
+4. activate the serving-line control;
+5. assert Lines opens on that same route with `routeDraft === null`;
+6. close Lines;
+7. assert the same `panel-inspect` returns and runtime `selectedId` is still the same stop.
 
-Do not use browser sleep/elapsed wall time to prove boarding or improved waits. Task 2's Rust lifecycle test owns that correctness.
+HPA-48's existing routes E2E already asserts Add vehicle, fleet +1, daily-cost refresh, and no solved/success claim. Do not repeat those assertions here.
 
-If a warning-path UI can be exercised deterministically with an existing fixture at no extra framework cost, it may replace the selected-stop start; it is not required when the Rust warning-location tests already cover the warning data path.
+Do not use browser sleep/elapsed wall time to prove boarding or improved waits. Existing Rust lifecycle coverage owns boarding correctness; Tasks 1–2 own wait-row eligibility/classification.
+
+If a warning-path UI can be exercised deterministically with an existing fixture at no extra framework cost, it may replace the selected-stop start; it is not required when Rust + jsdom coverage already pins the warning-focus round trip.
 
 ### 7.2 Run focused suites
 
