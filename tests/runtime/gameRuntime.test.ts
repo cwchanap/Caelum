@@ -4950,6 +4950,133 @@ describe("route creation and management", () => {
     expect(snapshot.state.transit.routes).toHaveLength(1);
   });
 
+  describe("wait location and service navigation", () => {
+    async function navigationRuntime(initial = routeSnapshotWithRoute()) {
+      const backend = backendSpy(initial);
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+      return { backend, runtime };
+    }
+
+    it("focuses a present stop without dispatching and keeps the route selected", async () => {
+      const { backend, runtime } = await navigationRuntime();
+
+      const snapshot = runtime.focusWaitLocation("route-001", "stop-001");
+
+      expect(snapshot.ui.activeTool).toBe("inspect");
+      expect(snapshot.ui.selectedId).toBe("14,7");
+      expect(snapshot.ui.selectedNodeKind).toBe("stop");
+      expect(snapshot.ui.selectedRouteId).toBe("route-001");
+      expect(snapshot.ui.activeCommandDestination).toBeNull();
+      expect(snapshot.ui.routeDraft).toBeNull();
+      expect(backend.intents).toEqual([]);
+    });
+
+    it("focuses a station wait location with station parity", async () => {
+      const { backend, runtime } = await navigationRuntime(
+        snapshotWithMetroLine(),
+      );
+
+      const snapshot = runtime.focusWaitLocation("metro-001", "station-001");
+
+      expect(snapshot.ui.selectedId).toBe("14,7");
+      expect(snapshot.ui.selectedNodeKind).toBe("station");
+      expect(snapshot.ui.selectedRouteId).toBe("metro-001");
+      expect(snapshot.ui.activeCommandDestination).toBeNull();
+      expect(backend.intents).toEqual([]);
+    });
+
+    it("no-ops focusWaitLocation while a route draft is active", async () => {
+      const { runtime } = await navigationRuntime();
+      runtime.setTool("busRoute");
+      const before = runtime.getSnapshot();
+
+      const snapshot = runtime.focusWaitLocation("route-001", "stop-001");
+
+      expect(snapshot.ui).toBe(before.ui);
+      expect(snapshot.ui.routeDraft).not.toBeNull();
+    });
+
+    it("no-ops focusWaitLocation for a missing route, node, or tombstone", async () => {
+      const initial = routeSnapshotWithRoute();
+      initial.transit.stops.push({
+        id: "stop-tomb",
+        kind: "busStop",
+        status: "missing",
+        position: { x: 14, y: 10 },
+        platforms: [],
+      });
+      const { runtime } = await navigationRuntime(initial);
+      const before = runtime.getSnapshot();
+
+      expect(runtime.focusWaitLocation("route-404", "stop-001").ui).toBe(
+        before.ui,
+      );
+      expect(runtime.focusWaitLocation("route-001", "stop-404").ui).toBe(
+        before.ui,
+      );
+      expect(runtime.focusWaitLocation("route-001", "stop-tomb").ui).toBe(
+        before.ui,
+      );
+    });
+
+    it("clears the focused route and stop when the city is replaced", async () => {
+      const { runtime } = await navigationRuntime();
+      runtime.focusWaitLocation("route-001", "stop-001");
+      expect(runtime.getSnapshot().ui.selectedRouteId).toBe("route-001");
+
+      const snapshot = await runtime.reset();
+
+      expect(snapshot.ui.selectedRouteId).toBeNull();
+      expect(snapshot.ui.selectedId).toBeNull();
+      expect(snapshot.ui.selectedNodeKind).toBeNull();
+    });
+
+    it("opens service controls while preserving the selected stop", async () => {
+      const { backend, runtime } = await navigationRuntime();
+      runtime.focusWaitLocation("route-001", "stop-001");
+      runtime.focusRouteFailure("route-001", 0);
+
+      const snapshot = runtime.openServiceControls("route-001");
+
+      expect(snapshot.ui.selectedRouteId).toBe("route-001");
+      expect(snapshot.ui.activeCommandDestination).toBe("lines");
+      expect(snapshot.ui.activeBuildGroup).toBeNull();
+      expect(snapshot.ui.routeFailureFocus).toBeNull();
+      expect(snapshot.ui.selectedId).toBe("14,7");
+      expect(snapshot.ui.selectedNodeKind).toBe("stop");
+      expect(backend.intents).toEqual([]);
+    });
+
+    it("keeps the route selected when service controls are opened twice", async () => {
+      const { runtime } = await navigationRuntime();
+
+      const first = runtime.openServiceControls("route-001");
+      const second = runtime.openServiceControls("route-001");
+
+      expect(first.ui.selectedRouteId).toBe("route-001");
+      expect(second.ui.selectedRouteId).toBe("route-001");
+      expect(second.ui.activeCommandDestination).toBe("lines");
+    });
+
+    it("no-ops service controls for a missing route, draft, or dead runtime", async () => {
+      const { runtime } = await navigationRuntime();
+      const before = runtime.getSnapshot();
+      expect(runtime.openServiceControls("route-404").ui).toBe(before.ui);
+
+      runtime.setTool("busRoute");
+      const draftUi = runtime.getSnapshot().ui;
+      expect(runtime.openServiceControls("route-001").ui).toBe(draftUi);
+
+      runtime.dispose();
+      const terminal = runtime.getSnapshot();
+      expect(runtime.openServiceControls("route-001").ui).toBe(terminal.ui);
+    });
+  });
+
   it("surfaces gameplay rejections from regular dispatches on the snapshot", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({
