@@ -16,7 +16,7 @@ use crate::model::{
     RouteLegPath, ServiceMetrics, ServicePattern, Station, Stop, TransitMode, TripPosition,
 };
 use crate::platforms::platform_waiting_occupancy;
-use crate::service_control::service_metrics_by_line;
+use crate::service_control::{service_metrics_by_line, waiting_location_health};
 use crate::traffic::derive_road_flow;
 
 /// Population-derived frame inputs, built either from a durable snapshot
@@ -313,7 +313,7 @@ fn project_frame(snapshot: &GameSnapshot, population: &PopulationAggregates) -> 
                 parked_position: vehicle.parked_position.clone(),
             })
             .collect(),
-        service_metrics: service_metrics_by_line(snapshot)
+        service_metrics: service_metrics_by_line(snapshot, &waiting_location_health(snapshot))
             .into_iter()
             .map(|(line_id, metrics)| ServiceMetricsPresentation { line_id, metrics })
             .collect(),

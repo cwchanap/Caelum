@@ -8,11 +8,11 @@
 //! persisted saves never carry a derived cache.
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::cost_policy::{CostPolicy, CostedMutation};
 use crate::model::{GameSnapshot, RouteLegPath, ServiceMetrics, TransitMode, Vehicle};
-use crate::platforms::platform_waiters_by_line;
+use crate::platforms::platform_waiters_by_location;
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::route_lifecycle::is_route_operational;
 use crate::traffic::RoadFlow;
@@ -28,7 +28,22 @@ struct WaitingHealth {
     longest_wait_seconds: Option<f64>,
 }
 
-fn waiting_health_by_line(state: &GameSnapshot) -> HashMap<String, WaitingHealth> {
+/// Per-`(line_id, platform_id)` wait evidence over capacity-admitted
+/// waiters. Rows exist for every non-empty admitted group, including lines
+/// with no target; only the risk predicate is target-gated, so an untargeted
+/// row publishes raw counts and longest wait with `at_risk_count = 0`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct WaitingLocationHealth {
+    pub waiting_count: u32,
+    pub at_risk_count: u32,
+    pub longest_wait_seconds: f64,
+}
+
+/// The one admitted-waiter derivation: both the stop-inspector location rows
+/// and the line-level `ServiceMetrics` wait health fold from this map.
+pub(crate) fn waiting_location_health(
+    state: &GameSnapshot,
+) -> BTreeMap<(String, String), WaitingLocationHealth> {
     let targets: HashMap<&str, u32> = state
         .transit
         .routes
@@ -44,26 +59,55 @@ fn waiting_health_by_line(state: &GameSnapshot) -> HashMap<String, WaitingHealth
         }))
         .collect();
 
-    let mut health = HashMap::new();
-    for (line_id, waiters) in platform_waiters_by_line(state) {
-        let Some(target) = targets.get(line_id.as_str()).copied() else {
-            continue;
+    let mut rows = BTreeMap::new();
+    for ((line_id, platform_id), waiters) in platform_waiters_by_location(state) {
+        let target = targets.get(line_id.as_str()).copied();
+        let mut row = WaitingLocationHealth {
+            waiting_count: 0,
+            at_risk_count: 0,
+            longest_wait_seconds: 0.0,
         };
-        let mut line_health = WaitingHealth::default();
         for trip in waiters {
             let wait_seconds = current_leg_wait_seconds(trip);
-            line_health.longest_wait_seconds = Some(
-                line_health
-                    .longest_wait_seconds
-                    .map_or(wait_seconds, |longest| longest.max(wait_seconds)),
-            );
-            if wait_seconds > f64::from(target)
-                || trip.patience_remaining <= f64::from(MIN_HEADWAY_SECONDS)
-            {
-                line_health.waiting_at_risk_count += 1;
+            row.waiting_count += 1;
+            row.longest_wait_seconds = row.longest_wait_seconds.max(wait_seconds);
+            if let Some(target) = target {
+                if wait_seconds > f64::from(target)
+                    || trip.patience_remaining <= f64::from(MIN_HEADWAY_SECONDS)
+                {
+                    row.at_risk_count += 1;
+                }
             }
         }
-        health.insert(line_id, line_health);
+        rows.insert((line_id, platform_id), row);
+    }
+    rows
+}
+
+/// Fold one line's location rows into its line-level wait health. The HPA-48
+/// target gate stays here: an untargeted line publishes no line-level wait
+/// metric even though its raw location rows feed the stop inspector.
+fn line_waiting_health(
+    line_id: &str,
+    target_headway_seconds: Option<u32>,
+    waiting_locations: &BTreeMap<(String, String), WaitingLocationHealth>,
+) -> WaitingHealth {
+    if target_headway_seconds.is_none() {
+        return WaitingHealth::default();
+    }
+    let mut health = WaitingHealth::default();
+    for ((row_line_id, _platform_id), row) in waiting_locations {
+        if row_line_id.as_str() != line_id {
+            continue;
+        }
+        health.longest_wait_seconds = Some(
+            health
+                .longest_wait_seconds
+                .map_or(row.longest_wait_seconds, |longest| {
+                    longest.max(row.longest_wait_seconds)
+                }),
+        );
+        health.waiting_at_risk_count += row.at_risk_count as usize;
     }
     health
 }
@@ -396,13 +440,14 @@ pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u3
 /// derivation. Returns no entry for a line whose metrics are unavailable.
 pub(crate) fn service_metrics_by_line(
     snapshot: &GameSnapshot,
-) -> std::collections::BTreeMap<String, ServiceMetrics> {
+    waiting_locations: &BTreeMap<(String, String), WaitingLocationHealth>,
+) -> BTreeMap<String, ServiceMetrics> {
     let flow = crate::traffic::derive_road_flow(snapshot);
-    let waiting_health = waiting_health_by_line(snapshot);
-    let mut result = std::collections::BTreeMap::new();
+    let mut result = BTreeMap::new();
 
     for route in &snapshot.transit.routes {
-        let health = waiting_health.get(&route.id).copied().unwrap_or_default();
+        let health =
+            line_waiting_health(&route.id, route.target_headway_seconds, waiting_locations);
         if let Some(value) = metrics(
             route.active,
             &route.legs,
@@ -417,7 +462,7 @@ pub(crate) fn service_metrics_by_line(
     }
 
     for line in &snapshot.transit.metro_lines {
-        let health = waiting_health.get(&line.id).copied().unwrap_or_default();
+        let health = line_waiting_health(&line.id, line.target_headway_seconds, waiting_locations);
         if let Some(value) = metrics(
             line.active,
             &line.legs,
@@ -437,7 +482,8 @@ pub(crate) fn service_metrics_by_line(
 /// Fill every route and metro line's `service_metrics` on an output snapshot
 /// clone. Derives the `RoadFlow` once for both modes.
 pub(crate) fn populate_snapshot_metrics(snapshot: &mut GameSnapshot) {
-    let metrics_by_line = service_metrics_by_line(snapshot);
+    let waiting_locations = waiting_location_health(snapshot);
+    let metrics_by_line = service_metrics_by_line(snapshot, &waiting_locations);
     for route in &mut snapshot.transit.routes {
         route.service_metrics = metrics_by_line.get(&route.id).cloned();
     }
@@ -602,8 +648,9 @@ fn round_trip_seconds(legs: &[RouteLegPath], mode: TransitMode, flow: &RoadFlow)
 #[cfg(test)]
 mod tests {
     use super::{
-        largest_gap_midpoint, metrics, required_fleet, resolve_service_cursor,
-        vehicle_cycle_offset, waiting_health_by_line, ServiceCursor, WaitingHealth,
+        largest_gap_midpoint, line_waiting_health, metrics, required_fleet, resolve_service_cursor,
+        service_metrics_by_line, vehicle_cycle_offset, waiting_location_health, ServiceCursor,
+        WaitingHealth, WaitingLocationHealth,
     };
     use crate::model::{
         ActiveTrip, BusStopKind, Heading, MovementKind, PathGeometry, Platform, Point,
@@ -789,23 +836,29 @@ mod tests {
             ),
         ];
 
-        let health = waiting_health_by_line(&snapshot);
+        let locations = waiting_location_health(&snapshot);
 
         assert_eq!(
-            health.get("route-short"),
-            Some(&WaitingHealth {
+            line_waiting_health("route-short", Some(60), &locations),
+            WaitingHealth {
                 waiting_at_risk_count: 2,
                 longest_wait_seconds: Some(90.0),
-            })
+            }
         );
         assert_eq!(
-            health.get("route-long"),
-            Some(&WaitingHealth {
+            line_waiting_health("route-long", Some(300), &locations),
+            WaitingHealth {
                 waiting_at_risk_count: 1,
                 longest_wait_seconds: Some(181.0),
-            })
+            }
         );
-        assert_eq!(health.get("route-none"), None);
+        // HPA-48 gate: an untargeted line keeps no line-level wait metric
+        // even though its raw location row exists (pinned by the dedicated
+        // untargeted-row test below).
+        assert_eq!(
+            line_waiting_health("route-none", None, &locations),
+            WaitingHealth::default()
+        );
     }
 
     #[test]
@@ -880,18 +933,126 @@ mod tests {
         };
         snapshot.active_trips = vec![transfer_trip];
 
-        let health = waiting_health_by_line(&snapshot);
+        let locations = waiting_location_health(&snapshot);
 
         // Route-B must not inherit route-A's 130 s wait.
         assert_eq!(
-            health.get("route-B"),
-            Some(&WaitingHealth {
+            line_waiting_health("route-B", Some(120), &locations),
+            WaitingHealth {
                 waiting_at_risk_count: 0,
                 longest_wait_seconds: Some(1.0),
-            })
+            }
         );
         // Route-A has no current waiters (the trip is past it).
-        assert_eq!(health.get("route-A"), None);
+        assert_eq!(
+            line_waiting_health("route-A", Some(60), &locations),
+            WaitingHealth::default()
+        );
+    }
+
+    #[test]
+    fn waiting_location_health_splits_admitted_waiters_by_platform_for_a_targeted_line() {
+        let mut targeted = route_with_legs(Vec::new());
+        targeted.id = "route-targeted".into();
+        targeted.target_headway_seconds = Some(60);
+
+        let mut snapshot = crate::state::create_initial_snapshot();
+        snapshot.transit.routes = vec![targeted];
+        snapshot.transit.stations.clear();
+        snapshot.transit.stops = vec![
+            platform_stop("stop-a", Point::from((5, 5)), "route-targeted"),
+            platform_stop("stop-b", Point::from((7, 5)), "route-targeted"),
+        ];
+        snapshot.active_trips = vec![
+            // Location A: past the 60 s target, patience still comfortable.
+            waiting_trip("a-past-target", "route-targeted", Point::from((5, 5)), 90.0),
+            // Location B: one rider at risk through the patience arm despite a
+            // short current-leg wait, one through the wait arm.
+            {
+                let mut low_patience = waiting_trip(
+                    "b-low-patience",
+                    "route-targeted",
+                    Point::from((7, 5)),
+                    30.0,
+                );
+                low_patience.patience_remaining = 50.0;
+                low_patience
+            },
+            waiting_trip(
+                "b-past-target",
+                "route-targeted",
+                Point::from((7, 5)),
+                150.0,
+            ),
+        ];
+
+        let locations = waiting_location_health(&snapshot);
+
+        assert_eq!(
+            locations,
+            BTreeMap::from([
+                (
+                    ("route-targeted".to_string(), "stop-a-p0".to_string()),
+                    WaitingLocationHealth {
+                        waiting_count: 1,
+                        at_risk_count: 1,
+                        longest_wait_seconds: 90.0,
+                    },
+                ),
+                (
+                    ("route-targeted".to_string(), "stop-b-p0".to_string()),
+                    WaitingLocationHealth {
+                        waiting_count: 2,
+                        at_risk_count: 2,
+                        longest_wait_seconds: 150.0,
+                    },
+                ),
+            ]),
+        );
+    }
+
+    #[test]
+    fn untargeted_line_publishes_a_raw_wait_row_but_no_line_metric() {
+        let mut untargeted = route_with_legs(vec![leg(
+            RouteLegKind::Service,
+            ServiceDirection::Outbound,
+            "stop-none",
+            "stop-return",
+            road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
+        )]);
+        untargeted.id = "route-none".into();
+        untargeted.target_headway_seconds = None;
+
+        let mut snapshot = crate::state::create_initial_snapshot();
+        snapshot.transit.routes = vec![untargeted];
+        snapshot.transit.stations.clear();
+        snapshot.transit.stops = vec![platform_stop(
+            "stop-none",
+            Point::from((7, 5)),
+            "route-none",
+        )];
+        snapshot.active_trips = vec![waiting_trip(
+            "none-waiter",
+            "route-none",
+            Point::from((7, 5)),
+            200.0,
+        )];
+
+        let locations = waiting_location_health(&snapshot);
+        assert_eq!(
+            locations.get(&("route-none".to_string(), "stop-none-p0".to_string())),
+            Some(&WaitingLocationHealth {
+                waiting_count: 1,
+                at_risk_count: 0,
+                longest_wait_seconds: 200.0,
+            }),
+            "a capacity-admitted waiter produces a raw row even without a target"
+        );
+
+        // HPA-48 line-level contract stays target-gated.
+        let metrics_by_line = service_metrics_by_line(&snapshot, &locations);
+        assert_eq!(metrics_by_line["route-none"].longest_wait_seconds, None);
+        assert_eq!(metrics_by_line["route-none"].waiting_at_risk_count, 0);
     }
 
     #[test]
