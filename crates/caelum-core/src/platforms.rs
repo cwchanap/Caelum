@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 
 use crate::model::{
     ActiveTrip, BusStopKind, GameSnapshot, Platform, RouteLeg, TransitMode, TripStatus,
@@ -217,22 +217,32 @@ pub(crate) fn platform_waiter_ids(state: &GameSnapshot) -> HashMap<String, Vec<S
     ordered
 }
 
-#[allow(clippy::needless_lifetimes)]
-pub(crate) fn platform_waiters_by_line<'a>(
-    state: &'a GameSnapshot,
-) -> HashMap<String, Vec<&'a ActiveTrip>> {
+pub(crate) fn platform_waiters_by_location(
+    state: &GameSnapshot,
+) -> BTreeMap<(String, String), Vec<&ActiveTrip>> {
     // Apply the same platform-capacity admission as `on_platform_trip_ids`:
     // `platform_waiter_candidates` returns every Waiting trip on a serving
     // platform, but only the first `capacity` riders (by patience/id ordering)
     // can actually board. Overflow riders on a shared, full platform cannot
     // board any line there, so they must not inflate route health.
     let on_platform = on_platform_trip_ids(state);
-    let mut groups: HashMap<String, Vec<&ActiveTrip>> = HashMap::new();
-    for (trip, line_id, _) in platform_waiter_candidates(state) {
+    let mut groups: BTreeMap<(String, String), Vec<&ActiveTrip>> = BTreeMap::new();
+    for (trip, line_id, platform_id) in platform_waiter_candidates(state) {
         if !on_platform.contains(&trip.id) {
             continue;
         }
-        groups.entry(line_id).or_default().push(trip);
+        groups.entry((line_id, platform_id)).or_default().push(trip);
+    }
+    groups
+}
+
+#[allow(clippy::needless_lifetimes)]
+pub(crate) fn platform_waiters_by_line<'a>(
+    state: &'a GameSnapshot,
+) -> HashMap<String, Vec<&'a ActiveTrip>> {
+    let mut groups: HashMap<String, Vec<&ActiveTrip>> = HashMap::new();
+    for ((line_id, _platform_id), waiters) in platform_waiters_by_location(state) {
+        groups.entry(line_id).or_default().extend(waiters);
     }
     groups
 }
@@ -467,6 +477,75 @@ mod tests {
         // Only admitted riders appear; overflow riders a1/a2 are excluded.
         assert_eq!(route_001_ids, vec!["a3"]);
         assert_eq!(route_002_ids, vec!["b1"]);
+    }
+
+    #[test]
+    fn platform_waiters_by_location_groups_by_line_and_platform() {
+        // Two shared platforms each serve route-001 and route-002. Line-only
+        // grouping would merge same-line riders across platforms; the
+        // (line_id, platform_id) grouping must keep them distinct and admit
+        // per platform via `on_platform_trip_ids`.
+        let shared_platform = |platform_id: &str| Platform {
+            id: platform_id.to_string(),
+            label: "A".to_string(),
+            capacity: 2,
+            route_ids: vec!["route-001".to_string(), "route-002".to_string()],
+        };
+        let mut snapshot = create_initial_snapshot();
+        snapshot.transit.stops = vec![
+            Stop {
+                id: "stop-a".to_string(),
+                kind: BusStopKind::BusStop,
+                status: TransitNodeStatus::Present,
+                position: Point::from((5, 5)),
+                platforms: vec![shared_platform("stop-a-p0")],
+                road_access: None,
+            },
+            Stop {
+                id: "stop-b".to_string(),
+                kind: BusStopKind::BusStop,
+                status: TransitNodeStatus::Present,
+                position: Point::from((7, 5)),
+                platforms: vec![shared_platform("stop-b-p0")],
+                road_access: None,
+            },
+        ];
+        snapshot.active_trips = vec![
+            waiting_trip_for_line("a-r1", Point::from((5, 5)), "route-001", 10.0),
+            waiting_trip_for_line("a-r2", Point::from((5, 5)), "route-002", 1.0),
+            // Capacity 2 per platform: this overflow rider cannot board
+            // either line at stop-a-p0.
+            waiting_trip_for_line("a-overflow", Point::from((5, 5)), "route-001", 100.0),
+            // Non-waiting trips never group.
+            waiting_trip("riding", Point::from((5, 5)), TripStatus::Riding),
+            // Same lines, but standing at no serving platform position.
+            waiting_trip_for_line("wrong-pos", Point::from((8, 5)), "route-001", 5.0),
+            waiting_trip_for_line("b-r1", Point::from((7, 5)), "route-001", 10.0),
+            waiting_trip_for_line("b-r2", Point::from((7, 5)), "route-002", 5.0),
+        ];
+
+        let grouped = platform_waiters_by_location(&snapshot);
+
+        let flat: Vec<(&str, &str, Vec<&str>)> = grouped
+            .iter()
+            .map(|((line_id, platform_id), trips)| {
+                (
+                    line_id.as_str(),
+                    platform_id.as_str(),
+                    trips.iter().map(|trip| trip.id.as_str()).collect(),
+                )
+            })
+            .collect();
+        assert_eq!(
+            flat,
+            vec![
+                ("route-001", "stop-a-p0", vec!["a-r1"]),
+                ("route-001", "stop-b-p0", vec!["b-r1"]),
+                ("route-002", "stop-a-p0", vec!["a-r2"]),
+                ("route-002", "stop-b-p0", vec!["b-r2"]),
+            ],
+            "groups keyed by (line_id, platform_id); admitted waiters appear exactly once"
+        );
     }
 
     #[test]
