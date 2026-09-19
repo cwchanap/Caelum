@@ -17,7 +17,8 @@ Keep this as one HPA-464 PR. The implementation adds one compact frame-only wait
 - Every non-empty admitted line/platform group gets a raw wait row even without a target; only at-risk classification and line-level HPA-48 ServiceMetrics remain target-gated.
 - No citizen/trip IDs cross the presentation boundary.
 - No snapshot field, schema bump, migration, backend query, gameplay intent, or event bus.
-- Reuse `selectedRouteId`, `selectedId`, `selectedNodeKind`, `setCommandDestination`, and the existing Lines/Inspect panels.
+- Reuse `selectedRouteId`, `selectedId`, `selectedNodeKind`, and the existing Lines/Inspect panels.
+- Runtime owns both composite navigation transitions as single commits: `focusWaitLocation(routeId, nodeId)` and `openServiceControls(routeId)`.
 - Add no wait-focus field to `UiState`.
 - An active route draft keeps the existing pinned Save/Cancel gate and cannot be silently replaced.
 - A target edit or vehicle purchase never displays causal success language.
@@ -29,9 +30,9 @@ Keep this as one HPA-464 PR. The implementation adds one compact frame-only wait
 ### Rust authority / projection
 
 - `crates/caelum-core/src/platforms.rs` — preserve platform identity while grouping capacity-admitted waiters.
-- `crates/caelum-core/src/service_control.rs` — derive per-line/platform waiting count, longest current-leg wait, and at-risk count once; aggregate existing line health from the same rows.
-- `crates/caelum-core/src/presentation.rs` — add deterministic `WaitingLocationPresentation` rows to `PresentationFrame`.
-- `crates/caelum-core/tests/service_control.rs` — targeted/no-target line/location consistency and controlled warning fixture.
+- `crates/caelum-core/src/service_control.rs` — derive per-line/platform waiting count, longest current-leg wait, and at-risk count once; unit-test the private location map and aggregate existing line health from the same rows.
+- `crates/caelum-core/src/presentation.rs` — compute that admitted location map once per frame, feed it to service metrics, and project deterministic `WaitingLocationPresentation` rows.
+- `crates/caelum-core/tests/service_control.rs` — public/integration `ServiceMetrics` assertions only where the engine/output contract is the subject.
 - `crates/caelum-core/tests/model_wire_format.rs` — update exact camelCase frame/wire expectations only where the frame shape is pinned.
 
 Do not add another trip-lifecycle boarding test. Existing `waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk` already exercises a waiting rider through boarding/disembark with a 240-second patience budget; HPA-464 only needs grouping tests to keep `Riding` trips out of wait rows.
@@ -41,13 +42,14 @@ Do not add another trip-lifecycle boarding test. Existing `waiting_trip_that_boa
 - `src/runtime/backend/types.ts` — wire type for `WaitingLocationPresentation` and `PresentationFrame.waitingLocations`.
 - `src/domain/types.ts` — flat `WaitingLocationView` and `GameState.waitingLocations`.
 - `src/runtime/presentationView.ts` — copy newest frame rows into `GameState`.
-- `src/runtime/types.ts` — add stop/line wait fields to shell rows and one `focusWaitLocation` controller method.
-- `src/runtime/runtimeSelectors.ts` — join wait rows to selected platforms and group at-risk locations into line rows.
+- `src/runtime/types.ts` — add consumed stop/line wait fields plus `focusWaitLocation` and `openServiceControls`.
+- `src/runtime/runtimeSelectors.ts` — join wait rows to selected platforms and project only consumed at-risk location fields into line rows.
+- `src/format.ts` — host the existing one-decimal-minute duration formatter shared by Lines and Inspect.
 
 ### UI / runtime navigation
 
-- `src/runtime/createGameRuntime.ts` — one UI-only `focusWaitLocation(routeId, nodeId)` action; no new `UiState` field.
-- `src/App.svelte` — wire stop→line controls and line-warning→stop focus.
+- `src/runtime/createGameRuntime.ts` — two UI-only single-commit actions, `focusWaitLocation(routeId, nodeId)` and `openServiceControls(routeId)`; no new `UiState` field.
+- `src/App.svelte` — one-line delegates for stop→line controls and line-warning→stop focus.
 - `src/components/hud/panels/InspectPanel.svelte` — platform total plus per-serving-line live wait evidence; serving-line button opens Lines.
 - `src/components/hud/panels/LinesPanel.svelte` — local at-risk stop buttons under the existing warning.
 
@@ -182,8 +184,7 @@ Pin:
 - each location's `waiting_count`;
 - each location's exact longest current-leg wait;
 - each location's `at_risk_count`;
-- line `ServiceMetrics.waiting_at_risk_count` equals the sum of its location counts;
-- line `longest_wait_seconds` equals the max location longest wait.
+- exact targeted location counts / longest waits / at-risk counts.
 
 Add one explicit **no-target** case before implementation:
 
@@ -194,10 +195,13 @@ Add one explicit **no-target** case before implementation:
 
 Also keep the existing transfer test proving wait health uses `current_leg_wait_seconds`, not trip-wide elapsed wait.
 
+These private location-health tests belong in the existing `#[cfg(test)]` module inside `src/service_control.rs`, where the current `none-ignored` and transfer fixtures already live. Do not put them in `crates/caelum-core/tests/service_control.rs`, which cannot see crate-private helpers.
+
+Keep `tests/service_control.rs` only for public engine/`ServiceMetrics` behavior that genuinely crosses that boundary.
+
 Run:
 
 ```bash
-cargo test -p caelum-core --test service_control
 cargo test -p caelum-core service_control::
 ```
 
@@ -232,27 +236,42 @@ Rows exist for every non-empty admitted group, including lines with no target. T
 
 Keep the current **line-level** target semantics. HPA-464 does not make HPA-48 `ServiceMetrics.longestWaitSeconds` available on untargeted lines.
 
-### 2.3 Make `waiting_health_by_line` aggregate the location rows
+### 2.3 Feed one location-health map into line metrics
 
-Remove the second independent waiter scan.
+Remove the second independent admitted-waiter scan.
 
-Line health should be derived from the new rows:
+Expose the location-health map crate-privately and change `service_metrics_by_line` to consume it by reference. Its line health remains:
 
 - sum `at_risk_count`;
 - max `longest_wait_seconds`;
 - preserve the current target gate for the existing `ServiceMetrics` row.
 
-This is the important drift-prevention lock: the warning total and the warning's concrete locations cannot use different eligibility/formulas.
+Do not add a unit assertion that "ServiceMetrics risk count equals the sum of location counts" after this refactor: that would assert the implementation against itself. Existing line-health tests continue to pin target-gated behavior, and Task 4's selector test checks consistency across the real Rust → TypeScript boundary.
 
-### 2.4 Reuse existing boarding coverage; pin only the new grouping boundary
+This is the drift-prevention lock: line warnings and concrete warning locations share one admitted-waiter derivation.
+
+### 2.4 Document the intentional untargeted-line display asymmetry
+
+Keep HPA-48's line-level `ServiceMetrics.longestWaitSeconds` target-gated. Therefore an untargeted line may show raw wait evidence in the stop inspector while Lines omits its existing `Longest wait` row.
+
+This is accepted, not a bug:
+
+- Inspect answers current physical wait evidence from raw location rows;
+- Lines shows target-configured operating/service metrics;
+- do not add a Lines fallback aggregate solely for visual symmetry.
+
+Add this note to the design and keep one focused selector/panel assertion that the inspector can show the no-target raw wait row without fabricating a Lines metric.
+
+### 2.5 Reuse existing boarding coverage; pin only the new grouping boundary
 
 Do not add another engine/trip-lifecycle characterization. Existing `waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk` already proves a Waiting trip boards/disembarks through the real lifecycle before its 240-second patience budget expires.
 
 The new HPA-464 coverage belongs next to the grouping rule: keep the Task 1 assertion that a `TripStatus::Riding` trip does not appear in `platform_waiters_by_location`. That is the only new boarding-related contract this feature needs.
 
-### 2.5 Verify
+### 2.6 Verify
 
 ```bash
+cargo test -p caelum-core service_control::
 cargo test -p caelum-core --test service_control
 cargo test -p caelum-core
 ```
@@ -303,7 +322,7 @@ The exact fixture values may differ; pin these properties:
 
 Run the focused presentation/model-wire tests and confirm RED.
 
-### 3.2 Add `WaitingLocationPresentation` to `PresentationFrame`
+### 3.2 Project the already-derived location map into `PresentationFrame`
 
 Add:
 
@@ -325,7 +344,17 @@ pub waiting_locations: Vec<WaitingLocationPresentation>
 
 Do not add `node_id` to the frame row. Like `PlatformOccupancyPresentation`, the dynamic row carries the platform key and the frontend joins it to current present stop/station topology when it needs a node.
 
-Sort by `(line_id, platform_id)` before returning.
+In `project_frame`:
+
+1. compute `waiting_location_health(snapshot)` once;
+2. pass that map to `service_metrics_by_line(snapshot, &waiting_locations)`;
+3. map that same value into `PresentationFrame.waiting_locations`.
+
+`platform_waiting_occupancy(snapshot)` remains separate because it intentionally includes overflow. The goal is to remove the redundant **second admitted-waiter derivation**, not to merge two different queue semantics.
+
+Update the other `service_metrics_by_line` call site, `populate_snapshot_metrics`, to compute one location map for its snapshot-output path and pass it by reference.
+
+Sort wire rows by `(line_id, platform_id)` before returning.
 
 ### 3.3 Add the strict TypeScript wire/view field
 
@@ -432,10 +461,6 @@ Add:
 export interface ShellRouteWaitLocation {
   nodeId: string;
   nodeLabel: string;
-  nodeKind: "stop" | "station";
-  platformId: string;
-  platformLabel: string;
-  waitingCount: number;
   atRiskCount: number;
   longestWaitSeconds: number;
 }
@@ -449,18 +474,22 @@ waitLocations: ShellRouteWaitLocation[];
 
 to `ShellRouteListItem`.
 
-Resolve each `platformId` back to its current present stop/station, then derive node/platform labels there. Reuse `waypointLabel(...)` for the node label rather than inventing another ordinal system. `nodeId` exists only on this shell row, not on the 10 Hz frame row.
+Resolve each `platformId` back to its current present stop/station and reuse `waypointLabel(...)` for the node label. `nodeId` exists only on this shell row, not on the 10 Hz frame row.
 
-Sort locations in route itinerary order where possible, then platform label/ID for deterministic fallback. Do not add a generic navigation model.
+Do not copy `nodeKind`, `platformId`, `platformLabel`, or raw `waitingCount` into the shell warning row: no Lines consumer reads them. Duplicate route waypoints are rejected, so one line cannot require two platform-distinguished warning buttons at the same node.
+
+Only create `waitLocations` entries whose `atRiskCount > 0`. Sort them in route itinerary order with node ID as deterministic fallback. Do not add a generic navigation model.
 
 ### 4.4 Pin line/location consistency in selector tests
 
 For one selected route:
 
 - warning total remains the Rust-projected `service.waitingAtRiskCount`;
-- `waitLocations.filter(atRiskCount > 0)` contains only that line's affected nodes;
-- summed location at-risk count equals the service warning count in the controlled fixture;
+- `waitLocations` contains only that line's at-risk affected nodes;
+- summed location at-risk count equals the Rust-projected service warning count in the controlled fixture;
 - unrelated line rows are absent.
+
+This assertion earns its keep because it crosses the Rust frame projection → TypeScript topology join boundary; do not duplicate it as a Rust unit "sum equals the sum used to build the metric" test.
 
 ### 4.5 Verify
 
@@ -492,11 +521,16 @@ feat: expose wait evidence in shell selectors
   - `tests/ui/linesPanel.test.ts`
   - `tests/ui/appShell.test.ts` only if needed.
 
-### 5.1 Add failing runtime tests for `focusWaitLocation`
+### 5.1 Add failing runtime tests for both navigation actions
 
-Add `RuntimeController.focusWaitLocation(routeId, nodeId)`.
+Add:
 
-Tests first:
+```ts
+RuntimeController.focusWaitLocation(routeId, nodeId)
+RuntimeController.openServiceControls(routeId)
+```
+
+Tests first for `focusWaitLocation`:
 
 1. valid route + present stop:
    - `activeTool === "inspect"`;
@@ -518,7 +552,19 @@ Separately, make the full App loop a required jsdom test rather than optional ca
 - activate that inspector's serving-line chip;
 - assert Lines opens with the **same** `selectedRouteId`, no route draft, and the same stop `selectedId` preserved.
 
-This test is required because `selectRoute` toggles; a component-only "chip emitted route ID" test cannot catch an accidental deselection.
+Add focused `openServiceControls` runtime tests beside these:
+
+- valid route assigns `selectedRouteId = routeId` directly, sets `activeCommandDestination = "lines"`, clears `routeFailureFocus` / `activeBuildGroup`, and preserves `selectedId` / `selectedNodeKind`;
+- calling it when the same route is already selected keeps that route selected rather than toggling it off;
+- active route draft, dead runtime, or missing route -> no-op;
+- no gameplay/backend dispatch occurs.
+
+The full App loop remains a required jsdom test, but now it guards wiring rather than compensating for toggle-prone component logic:
+
+- start with `selectedRouteId` already set on a line with an at-risk location;
+- follow `focusWaitLocation` so the inspector opens on that stop and the line stays selected;
+- activate that inspector's serving-line chip;
+- assert Lines opens with the **same** `selectedRouteId`, no route draft, and the same stop `selectedId` preserved.
 
 ### 5.2 Implement `focusWaitLocation` as an explicit focused-navigation commit
 
@@ -542,7 +588,15 @@ return commit(state, {
 
 Keep the dead/draft/missing route or node paths as no-ops. Do not copy `focusRouteFailure`'s panel behavior: `focusWaitLocation` must explicitly close Lines so `InspectPanel` can mount.
 
-### 5.3 Make the stop inspector show factual live waits
+### 5.3 Share one wait-duration formatter and show factual live waits
+
+Move the existing `LinesPanel.svelte` formatter into `src/format.ts`, preserving its exact behavior:
+
+```ts
+seconds === null ? "—" : `${(seconds / 60).toFixed(1)} min`
+```
+
+Use it from both Lines and Inspect. Do not introduce a second `Xm Ys` format.
 
 In `InspectPanel.svelte`:
 
@@ -563,19 +617,24 @@ Add component tests for:
 - route action fires only the route ID;
 - platform reassignment action still works.
 
-### 5.4 Open existing Lines controls from the inspector
+### 5.4 Open existing Lines controls through the runtime
 
-In App add a small handler:
+Implement `openServiceControls(routeId)` in `createGameRuntime.ts` as one explicit UI commit:
 
-1. if no runtime/snapshot, return;
-2. if a draft is active, return (defensive; inspector should not be reachable while Lines is pinned);
-3. if `snapshot.ui.selectedRouteId !== routeId`, call `runtime.selectRoute(routeId)`;
-4. call `runtime.setCommandDestination("lines")`;
-5. publish the resulting snapshot.
+- no-op when dead, a route draft is active, or the route is missing;
+- set `selectedRouteId: routeId` directly, never through toggle-style `selectRoute`;
+- set `activeCommandDestination: "lines"`;
+- set `activeBuildGroup: null`;
+- clear `routeFailureFocus`;
+- preserve `selectedId` / `selectedNodeKind`.
 
-Do not call `selectRoute` when the same line is already selected because the existing method toggles selection. This non-toggle guard is part of the required App-level round-trip test from Task 5.1.
+In App, the serving-line handler is one line:
 
-Do not clear `selectedId`; closing Lines should reveal the same stop inspector. `setCommandDestination("lines")` also toggles, but the inspector only renders while the destination is null, so this open-from-inspector call is not ambiguous.
+```ts
+setSnapshot(runtime.openServiceControls(routeId))
+```
+
+This removes the multi-step toggle guard from Svelte and produces one publication/commit per player action. Closing Lines through the existing panel control reveals the preserved stop inspector.
 
 ### 5.5 Make the existing line warning local
 
@@ -584,7 +643,7 @@ In `LinesPanel.svelte`, keep the existing running + at-risk warning gate.
 Under it, render only:
 
 ```ts
-route.waitLocations.filter(location => location.atRiskCount > 0)
+route.waitLocations
 ```
 
 as buttons carrying route ID + node ID to a new `onFocusWaitLocation` callback.
@@ -593,7 +652,7 @@ Copy stays descriptive, for example:
 
 ```text
 2 riders at risk
-Bus Stop B · 1 at risk · 3m 10s
+Bus Stop B · 1 at risk · 3.2 min
 ```
 
 Do not add "Add bus/train", "capacity problem", "fixed", or before/after claims.
@@ -607,13 +666,9 @@ Panel tests must prove:
 
 ### 5.6 Wire App warning focus
 
-Pass the callback to:
+Pass the warning callback to `runtime.focusWaitLocation(routeId, nodeId)` and the inspector serving-line callback to `runtime.openServiceControls(routeId)`.
 
-```ts
-runtime.focusWaitLocation(routeId, nodeId)
-```
-
-This one call closes Lines, keeps route selection, and opens the existing contextual inspector.
+Both App handlers remain one-line delegates.
 
 ### 5.7 Verify
 
@@ -623,6 +678,8 @@ bun run check
 ```
 
 If `inspectPanel.test.ts` does not exist before this task, create only that test file; do not introduce a panel test harness/framework.
+
+Also keep the existing generic runtime test that `setTool("inspect")` clears route selection unchanged; the focused navigation methods are explicit exceptions, not a change to generic tool switching.
 
 Suggested commit:
 
@@ -746,6 +803,9 @@ Any integration correction required by HPA-464 belongs on this same PR.
 Before marking ready, inspect the branch diff and confirm:
 
 - one new frame-only waiting-location row;
+- one admitted location-health derivation per output path, shared by service metrics + wait-location projection;
+- two concrete runtime navigation actions, no component-owned composite navigation;
+- one shared minute-duration formatter;
 - no snapshot schema change;
 - no persistence migration;
 - no gameplay intent;
