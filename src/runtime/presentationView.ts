@@ -70,6 +70,7 @@ export function applyPresentationUpdate(
     populationCount: update.frame.populationCount,
     buildingOccupancy: update.frame.buildingOccupancy,
     platformOccupancy: update.frame.platformOccupancy,
+    waitingLocations: update.frame.waitingLocations,
     trafficFlow: update.frame.trafficFlow,
     demandFlow: update.frame.demandFlow,
   };

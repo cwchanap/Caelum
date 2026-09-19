@@ -140,6 +140,7 @@ pub struct PresentationFrame {
     pub population_count: u32,
     pub building_occupancy: Vec<BuildingOccupancyPresentation>,
     pub platform_occupancy: Vec<PlatformOccupancyPresentation>,
+    pub waiting_locations: Vec<WaitingLocationPresentation>,
     pub traffic_flow: Vec<TrafficFlowPresentation>,
     pub demand_flow: Vec<DemandFlowPresentation>,
     pub vehicles: Vec<VehiclePresentation>,
@@ -168,6 +169,20 @@ pub struct PlatformOccupancyPresentation {
     pub platform_id: String,
     pub count: u32,
     pub capacity: u16,
+}
+
+/// Stop-inspector row over capacity-admitted waiters grouped by (line,
+/// platform). Carries only the platform key; the frontend joins it to current
+/// present stop/station topology when it needs a node (same rule as
+/// [`PlatformOccupancyPresentation`]).
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WaitingLocationPresentation {
+    pub line_id: String,
+    pub platform_id: String,
+    pub waiting_count: u32,
+    pub at_risk_count: u32,
+    pub longest_wait_seconds: f64,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -265,6 +280,10 @@ fn project_scene(snapshot: &GameSnapshot) -> PresentationScene {
 }
 
 fn project_frame(snapshot: &GameSnapshot, population: &PopulationAggregates) -> PresentationFrame {
+    // One admitted-waiter derivation, two uses: line-level service metrics and
+    // the frame's wait-location rows. `platform_waiting_occupancy` stays a
+    // separate scan because the physical queue includes overflow.
+    let waiting_locations = waiting_location_health(snapshot);
     PresentationFrame {
         time: snapshot.time,
         day: snapshot.day,
@@ -313,9 +332,22 @@ fn project_frame(snapshot: &GameSnapshot, population: &PopulationAggregates) -> 
                 parked_position: vehicle.parked_position.clone(),
             })
             .collect(),
-        service_metrics: service_metrics_by_line(snapshot, &waiting_location_health(snapshot))
+        service_metrics: service_metrics_by_line(snapshot, &waiting_locations)
             .into_iter()
             .map(|(line_id, metrics)| ServiceMetricsPresentation { line_id, metrics })
+            .collect(),
+        // BTreeMap iteration is already sorted by (line_id, platform_id).
+        waiting_locations: waiting_locations
+            .into_iter()
+            .map(
+                |((line_id, platform_id), row)| WaitingLocationPresentation {
+                    line_id,
+                    platform_id,
+                    waiting_count: row.waiting_count,
+                    at_risk_count: row.at_risk_count,
+                    longest_wait_seconds: row.longest_wait_seconds,
+                },
+            )
             .collect(),
     }
 }
@@ -360,9 +392,9 @@ mod tests {
     use crate::intent::{GameIntent, RoadPreset};
     use crate::model::{
         ActiveTrip, BusStopKind, CitizenRoutine, Heading, MovementKind, PathGeometry, Platform,
-        PrivateCarTrip, RoadPathStep, RouteLeg, RoutePlan, ScheduledActivity,
-        ScheduledActivityKind, ServiceDirection, Sim, Stop, TransitNodeStatus, TransitPath,
-        TripPurpose, TripStatus, Vehicle,
+        PrivateCarTrip, RoadPathStep, Route, RouteLeg, RoutePlan, ScheduledActivity,
+        ScheduledActivityKind, ServiceDirection, ServicePattern, Sim, Stop, TransitNodeStatus,
+        TransitPath, TripPurpose, TripStatus, Vehicle,
     };
     use crate::platforms::on_platform_trip_ids;
     use crate::state::create_initial_snapshot;
@@ -591,6 +623,106 @@ mod tests {
             1,
             "boarding admission still truncates at capacity"
         );
+    }
+
+    fn route(id: &str, target_headway_seconds: Option<u32>) -> Route {
+        Route {
+            id: id.to_string(),
+            name: "Fixture".to_string(),
+            color: "#111111".to_string(),
+            stop_ids: Vec::new(),
+            vehicle_ids: Vec::new(),
+            active: true,
+            pattern: ServicePattern::Loop,
+            revision: 0,
+            legs: Vec::new(),
+            path_broken: false,
+            target_headway_seconds,
+            service_metrics: None,
+        }
+    }
+
+    fn stop_with_platform(id: &str, position: Point, capacity: u16, route_id: &str) -> Stop {
+        Stop {
+            id: id.to_string(),
+            kind: BusStopKind::BusStop,
+            status: TransitNodeStatus::Present,
+            position,
+            platforms: vec![Platform {
+                id: format!("{id}-p0"),
+                label: "A".to_string(),
+                capacity,
+                route_ids: vec![route_id.to_string()],
+            }],
+            road_access: None,
+        }
+    }
+
+    #[test]
+    fn frame_projects_deterministic_wait_location_rows_with_physical_occupancy_separate() {
+        let mut snapshot = create_initial_snapshot();
+        snapshot.transit.stops = vec![
+            stop_with_platform("stop-001", Point::from((5, 5)), 50, "route-002"),
+            // Empty platform: an admitted-group row exists only when waiters do.
+            stop_with_platform("stop-005", Point::from((9, 5)), 50, "route-001"),
+            // Capacity 1 with two waiters: admission truncates the wait row
+            // while physical occupancy still reports the full queue.
+            stop_with_platform("stop-009", Point::from((7, 5)), 1, "route-001"),
+        ];
+        snapshot.transit.routes = vec![route("route-001", Some(60)), route("route-002", None)];
+
+        let mut past_target =
+            waiting_trip_for_line("trip-a", Point::from((7, 5)), "route-001", 150.0);
+        past_target.current_leg_wait_seconds = 90.0;
+        let mut overflow = waiting_trip_for_line("trip-b", Point::from((7, 5)), "route-001", 230.0);
+        overflow.current_leg_wait_seconds = 10.0;
+        let mut untargeted =
+            waiting_trip_for_line("trip-c", Point::from((5, 5)), "route-002", 40.0);
+        untargeted.current_leg_wait_seconds = 200.0;
+        snapshot.active_trips = vec![past_target, overflow, untargeted];
+
+        let frame = project_update(
+            &snapshot,
+            &population_aggregates_from_snapshot(&snapshot),
+            false,
+        )
+        .frame;
+
+        // Sorted by (line_id, platform_id) — note the platform order inverts
+        // the line order, so a platform-only sort would fail. The untargeted
+        // group still publishes a raw row with the risk count gated to 0.
+        assert_eq!(
+            serde_json::to_value(&frame.waiting_locations).unwrap(),
+            serde_json::json!([
+                {
+                    "lineId": "route-001",
+                    "platformId": "stop-009-p0",
+                    "waitingCount": 1,
+                    "atRiskCount": 1,
+                    "longestWaitSeconds": 90.0
+                },
+                {
+                    "lineId": "route-002",
+                    "platformId": "stop-001-p0",
+                    "waitingCount": 1,
+                    "atRiskCount": 0,
+                    "longestWaitSeconds": 200.0
+                }
+            ])
+        );
+        let serialized = serde_json::to_string(&frame.waiting_locations).unwrap();
+        assert!(!serialized.contains("trip-"), "{serialized}");
+        assert!(!serialized.contains("sim-"), "{serialized}");
+        assert!(!serialized.contains("nodeId"), "{serialized}");
+
+        // The physical queue (including overflow) stays a separate projection.
+        assert!(frame
+            .platform_occupancy
+            .contains(&PlatformOccupancyPresentation {
+                platform_id: "stop-009-p0".to_string(),
+                count: 2,
+                capacity: 1,
+            }));
     }
 
     #[test]

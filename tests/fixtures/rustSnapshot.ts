@@ -144,6 +144,7 @@ export function createPresentationUpdate(
       populationCount: snapshot.sims.length,
       buildingOccupancy: [],
       platformOccupancy: [],
+      waitingLocations: [],
       trafficFlow: [],
       demandFlow: [],
       vehicles: snapshot.transit.vehicles.map((vehicle) => {
