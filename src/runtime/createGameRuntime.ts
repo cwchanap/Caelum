@@ -1822,6 +1822,8 @@ export async function createGameRuntime(
         selectedNodeKind: node.kind,
         selectedRouteId: routeId,
         routeFailureFocus: null,
+        selectedBuilding: null,
+        selectedArea: null,
       });
     },
     openServiceControls(routeId) {

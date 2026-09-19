@@ -311,6 +311,9 @@ Behavior:
    - `selectedNodeKind` from whether the node is a stop or station;
    - `selectedRouteId = routeId`;
    - `routeFailureFocus = null`;
+   - `selectedBuilding = null` and `selectedArea = null`, since a preserved
+     armed placement would make the next canvas click `placeBuilding` while
+     the active-tool label keeps showing the armed selector;
 4. preserve the rest of the current UI state unless one of those owned fields supersedes it.
 
 Do **not** build this by spreading `nextToolUiState("inspect", ui)`. That helper intentionally clears `selectedRouteId`, and an existing runtime test pins "switching to Inspect deselects the line." HPA-464 must not change that generic tool-switch contract merely to implement focused navigation.

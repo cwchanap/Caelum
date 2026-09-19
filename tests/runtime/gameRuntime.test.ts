@@ -4975,6 +4975,29 @@ describe("route creation and management", () => {
       expect(backend.intents).toEqual([]);
     });
 
+    it("disarms an armed building or area when focusing a wait location", async () => {
+      const { backend, runtime } = await navigationRuntime();
+
+      runtime.setBuilding("smallHouse");
+      const armed = runtime.focusWaitLocation("route-001", "stop-001");
+
+      expect(armed.ui.activeTool).toBe("inspect");
+      expect(armed.ui.selectedBuilding).toBeNull();
+      expect(armed.ui.selectedArea).toBeNull();
+      expect(armed.ui.selectedId).toBe("14,7");
+      expect(armed.ui.selectedRouteId).toBe("route-001");
+
+      // The follow-up canvas click inspects instead of placing the building
+      // the player had armed before navigating.
+      await runtime.handleTileClick({ x: 2, y: 2 });
+      expect(backend.intents).toEqual([]);
+
+      runtime.setArea("residential");
+      const fromArea = runtime.focusWaitLocation("route-001", "stop-001");
+      expect(fromArea.ui.selectedArea).toBeNull();
+      expect(fromArea.shell.command.activeModeLabel).toBe("SELECT");
+    });
+
     it("focuses a station wait location with station parity", async () => {
       const { backend, runtime } = await navigationRuntime(
         snapshotWithMetroLine(),
