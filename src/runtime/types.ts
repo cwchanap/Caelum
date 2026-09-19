@@ -83,6 +83,8 @@ export interface ShellPlatformRoute {
   id: string;
   name: string;
   color: string;
+  waitingCount: number;
+  longestWaitSeconds: number | null;
   moveTargets: ShellPlatformMoveTarget[];
 }
 
@@ -205,6 +207,13 @@ export interface ShellActionFeedback {
   announce: boolean;
 }
 
+export interface ShellRouteWaitLocation {
+  nodeId: string;
+  nodeLabel: string;
+  atRiskCount: number;
+  longestWaitSeconds: number;
+}
+
 export interface ShellRouteListItem {
   id: string;
   name: string;
@@ -216,6 +225,7 @@ export interface ShellRouteListItem {
   status: RouteServiceStatus;
   service: ShellServiceState;
   failures: RouteFailureRow[];
+  waitLocations: ShellRouteWaitLocation[];
 }
 
 export type ShellRouteListState = ShellRouteListItem[];

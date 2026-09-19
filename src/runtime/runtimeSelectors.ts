@@ -8,6 +8,7 @@ import type {
   SandboxTemplateId,
   Tool,
   Point,
+  WaitingLocationView,
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
@@ -32,6 +33,7 @@ import type {
   ShellServiceState,
   ShellRouteListItem,
   ShellRouteListState,
+  ShellRouteWaitLocation,
   ShellState,
 } from "./types";
 
@@ -138,6 +140,12 @@ function buildInspector(
   if (resolved !== null) {
     const node = resolved.node;
 
+    const waitRows = new Map(
+      state.waitingLocations.map((row) => [
+        `${row.lineId}|${row.platformId}`,
+        row,
+      ]),
+    );
     const platforms: ShellPlatform[] = node.platforms.map((platform) => ({
       id: platform.id,
       label: platform.label,
@@ -147,10 +155,13 @@ function buildInspector(
       capacity: platform.capacity,
       routes: platform.routeIds.map((routeId) => {
         const { name, color } = routeNameAndColor(state, routeId);
+        const wait = waitRows.get(`${routeId}|${platform.id}`);
         return {
           id: routeId,
           name,
           color,
+          waitingCount: wait?.waitingCount ?? 0,
+          longestWaitSeconds: wait?.longestWaitSeconds ?? null,
           moveTargets: node.platforms
             .filter((other) => other.id !== platform.id)
             .map((other) => ({ platformId: other.id, label: other.label })),
@@ -216,11 +227,40 @@ function buildInspector(
 }
 
 function buildRouteList(state: GameState, ui: UiState): ShellRouteListState {
+  const waitRowsByLine = new Map<string, WaitingLocationView[]>();
+  for (const row of state.waitingLocations) {
+    const rows = waitRowsByLine.get(row.lineId);
+    if (rows === undefined) waitRowsByLine.set(row.lineId, [row]);
+    else rows.push(row);
+  }
+  const nodeIdByPlatform = new Map<string, string>();
+  for (const stop of state.transit.stops) {
+    for (const platform of stop.platforms)
+      nodeIdByPlatform.set(platform.id, stop.id);
+  }
+  for (const station of state.transit.stations) {
+    for (const platform of station.platforms)
+      nodeIdByPlatform.set(platform.id, station.id);
+  }
   const buses: ShellRouteListItem[] = state.transit.routes.map((route) =>
-    selectRouteRow(state, route, "bus", ui.selectedRouteId === route.id),
+    selectRouteRow(
+      state,
+      route,
+      "bus",
+      ui.selectedRouteId === route.id,
+      waitRowsByLine,
+      nodeIdByPlatform,
+    ),
   );
   const metros: ShellRouteListItem[] = state.transit.metroLines.map((line) =>
-    selectRouteRow(state, line, "metro", ui.selectedRouteId === line.id),
+    selectRouteRow(
+      state,
+      line,
+      "metro",
+      ui.selectedRouteId === line.id,
+      waitRowsByLine,
+      nodeIdByPlatform,
+    ),
   );
   return [...buses, ...metros];
 }
@@ -529,11 +569,44 @@ function selectServiceState(route: Route | MetroLine): ShellServiceState {
   };
 }
 
+function selectRouteWaitLocations(
+  state: GameState,
+  route: Route | MetroLine,
+  waitRowsByLine: Map<string, WaitingLocationView[]>,
+  nodeIdByPlatform: Map<string, string>,
+): ShellRouteWaitLocation[] {
+  const waypointIds = "stopIds" in route ? route.stopIds : route.stationIds;
+  return (waitRowsByLine.get(route.id) ?? [])
+    .filter((row) => row.atRiskCount > 0)
+    .flatMap((row): Array<ShellRouteWaitLocation & { order: number }> => {
+      const nodeId = nodeIdByPlatform.get(row.platformId);
+      if (nodeId === undefined) return [];
+      const itineraryIndex = waypointIds.indexOf(nodeId);
+      return [
+        {
+          nodeId,
+          nodeLabel: waypointLabel(state, nodeId),
+          atRiskCount: row.atRiskCount,
+          longestWaitSeconds: row.longestWaitSeconds,
+          order: itineraryIndex === -1 ? waypointIds.length : itineraryIndex,
+        },
+      ];
+    })
+    .sort(
+      (a, b) =>
+        a.order - b.order ||
+        (a.nodeId < b.nodeId ? -1 : a.nodeId > b.nodeId ? 1 : 0),
+    )
+    .map(({ order: _order, ...location }) => location);
+}
+
 function selectRouteRow(
   state: GameState,
   route: Route | MetroLine,
   mode: "bus" | "metro",
   selected: boolean,
+  waitRowsByLine: Map<string, WaitingLocationView[]>,
+  nodeIdByPlatform: Map<string, string>,
 ): ShellRouteListItem {
   return {
     id: route.id,
@@ -551,6 +624,12 @@ function selectRouteRow(
       route.pattern,
       "stopIds" in route ? route.stopIds : route.stationIds,
       route.legs,
+    ),
+    waitLocations: selectRouteWaitLocations(
+      state,
+      route,
+      waitRowsByLine,
+      nodeIdByPlatform,
     ),
   };
 }
