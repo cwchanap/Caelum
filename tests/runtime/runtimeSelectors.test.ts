@@ -246,6 +246,95 @@ describe("selectShellState inspector", () => {
     expect(routedPlatforms[0].occupancy).toBe(1);
   });
 
+  it("joins wait rows into serving route chips without conflating platform occupancy", () => {
+    let state = { ...createTestGameState(), budget: 1_000_000 };
+    state = withRoads(state, pointsOnColumn(14, 7, 8));
+    state = addTestBusStop(state, { x: 14, y: 7 }, "busTerminal");
+    state = addTestBusStop(state, { x: 14, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    // Two serving routes share terminal platform A; route-003 serves B.
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stops: state.transit.stops.map((stop) =>
+          stop.id === "stop-001"
+            ? {
+                ...stop,
+                platforms: stop.platforms.map((platform) => {
+                  if (platform.id === "stop-001-p0") {
+                    return {
+                      ...platform,
+                      routeIds: ["route-001", "route-002"],
+                    };
+                  }
+                  return platform.id === "stop-001-p1"
+                    ? { ...platform, routeIds: ["route-003"] }
+                    : platform;
+                }),
+              }
+            : stop,
+        ),
+      },
+      // Platform total 6 exceeds the admitted per-line waits (2 + 1), so a
+      // label that summed line waits could never masquerade as the total.
+      platformOccupancy: [
+        { platformId: "stop-001-p0", count: 6, capacity: 80 },
+      ],
+      waitingLocations: [
+        {
+          lineId: "route-001",
+          platformId: "stop-001-p0",
+          waitingCount: 2,
+          atRiskCount: 1,
+          longestWaitSeconds: 120,
+        },
+        {
+          lineId: "route-002",
+          platformId: "stop-001-p0",
+          waitingCount: 1,
+          atRiskCount: 0,
+          longestWaitSeconds: 30,
+        },
+      ],
+    };
+
+    const shell = selectShellState(state, inspectAt("14,7"));
+    const inspector = shell.inspector;
+    if (inspector?.kind !== "transit") {
+      throw new Error("expected transit inspector");
+    }
+
+    const platformA = inspector.platforms.find((p) => p.id === "stop-001-p0")!;
+    expect(platformA.occupancy).toBe(6);
+    expect(
+      platformA.routes.map((r) => [r.id, r.waitingCount, r.longestWaitSeconds]),
+    ).toEqual([
+      ["route-001", 2, 120],
+      ["route-002", 1, 30],
+    ]);
+    // Warning classification stays off the inspector route model.
+    expect("atRiskCount" in platformA.routes[0]).toBe(false);
+    expect(platformA.routes[0].moveTargets.map((t) => t.label).sort()).toEqual([
+      "B",
+      "C",
+    ]);
+
+    // No matching wait row yields 0 / null.
+    const platformB = inspector.platforms.find((p) => p.id === "stop-001-p1")!;
+    expect(platformB.routes[0]).toMatchObject({
+      id: "route-003",
+      waitingCount: 0,
+      longestWaitSeconds: null,
+    });
+    expect(platformB.routes[0].moveTargets.map((t) => t.label).sort()).toEqual([
+      "A",
+      "C",
+    ]);
+  });
+
   it("emits a metro-station inspector with line route chips", () => {
     let state = { ...createTestGameState(), budget: 1_000_000 };
     state = withTracks(state, pointsOnRow(2, 7, 22));
@@ -907,6 +996,7 @@ describe("route selectors", () => {
           waitingAtRiskCount: 0,
           longestWaitSeconds: null,
         },
+        waitLocations: [],
         failures: [],
       },
       {
@@ -931,6 +1021,7 @@ describe("route selectors", () => {
           waitingAtRiskCount: 0,
           longestWaitSeconds: null,
         },
+        waitLocations: [],
         failures: [],
       },
     ]);
@@ -1333,6 +1424,132 @@ describe("route selectors", () => {
     });
     expect(service.waitingAtRiskCount).toBe(2);
     expect(service.longestWaitSeconds).toBe(95);
+  });
+
+  it("pins route wait locations to the Rust-projected at-risk warning count", () => {
+    let state = twoStops();
+    state = addTestBusStop(state, { x: 11, y: 8 });
+    state = addTestBusStop(state, { x: 19, y: 8 });
+    state = addTestBusStop(state, { x: 23, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-003", "stop-002"]);
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) =>
+          route.id === "route-001"
+            ? {
+                ...route,
+                serviceMetrics: {
+                  roundTripSeconds: 600,
+                  assignedFleet: 1,
+                  requiredFleet: 1,
+                  estimatedDeploymentCost: null,
+                  dailyOperatingCost: 0,
+                  estimatedDailyOperatingCost: null,
+                  nextVehicleCost: null,
+                  nominalHeadwaySeconds: 600,
+                  waitingAtRiskCount: 4,
+                  longestWaitSeconds: 190,
+                },
+              }
+            : route,
+        ),
+      },
+      // Frame rows deliberately scrambled against itinerary order; the two
+      // stop-004/stop-005 rows are off-route and sort last by node ID.
+      waitingLocations: [
+        {
+          lineId: "route-001",
+          platformId: "stop-005-p0",
+          waitingCount: 1,
+          atRiskCount: 1,
+          longestWaitSeconds: 60,
+        },
+        {
+          lineId: "route-001",
+          platformId: "stop-002-p0",
+          waitingCount: 1,
+          atRiskCount: 1,
+          longestWaitSeconds: 120,
+        },
+        {
+          lineId: "route-001",
+          platformId: "stop-001-p0",
+          waitingCount: 4,
+          atRiskCount: 0,
+          longestWaitSeconds: 40,
+        },
+        {
+          lineId: "route-001",
+          platformId: "stop-004-p0",
+          waitingCount: 1,
+          atRiskCount: 1,
+          longestWaitSeconds: 95,
+        },
+        {
+          lineId: "route-001",
+          platformId: "stop-003-p0",
+          waitingCount: 1,
+          atRiskCount: 1,
+          longestWaitSeconds: 190,
+        },
+        {
+          lineId: "route-002",
+          platformId: "stop-001-p0",
+          waitingCount: 2,
+          atRiskCount: 2,
+          longestWaitSeconds: 60,
+        },
+      ],
+    };
+
+    const routes = selectShellState(state, createUiState()).routes;
+    const [route, other] = routes;
+
+    // The warning total stays the untouched Rust projection.
+    expect(route.service.waitingAtRiskCount).toBe(4);
+    expect(route.waitLocations).toEqual([
+      {
+        nodeId: "stop-003",
+        nodeLabel: "Stop C",
+        atRiskCount: 1,
+        longestWaitSeconds: 190,
+      },
+      {
+        nodeId: "stop-002",
+        nodeLabel: "Stop B",
+        atRiskCount: 1,
+        longestWaitSeconds: 120,
+      },
+      {
+        nodeId: "stop-004",
+        nodeLabel: "Stop D",
+        atRiskCount: 1,
+        longestWaitSeconds: 95,
+      },
+      {
+        nodeId: "stop-005",
+        nodeLabel: "Stop E",
+        atRiskCount: 1,
+        longestWaitSeconds: 60,
+      },
+    ]);
+    // Summed location at-risk counts equal the Rust-projected warning count.
+    expect(
+      route.waitLocations.reduce((total, row) => total + row.atRiskCount, 0),
+    ).toBe(route.service.waitingAtRiskCount);
+
+    // Unrelated line rows never leak across lines sharing a platform.
+    expect(other.waitLocations).toEqual([
+      {
+        nodeId: "stop-001",
+        nodeLabel: "Stop A",
+        atRiskCount: 2,
+        longestWaitSeconds: 60,
+      },
+    ]);
   });
 
   it("prioritizes Broken while preserving paused-after-repair state", () => {
