@@ -10,6 +10,7 @@ import LinesPanel from "../../src/components/hud/panels/LinesPanel.svelte";
 import type { BuildingType, Tool } from "../../src/domain/types";
 import type {
   RouteEditorView,
+  ShellRouteListItem,
   ShellRouteListState,
 } from "../../src/runtime/types";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
@@ -35,6 +36,7 @@ function callbacks() {
     onFocusRouteFailure: vi.fn(),
     onEditRoute: vi.fn(),
     onSelectRoute: vi.fn(),
+    onFocusWaitLocation: vi.fn(),
     onSetServiceTargetHeadway: vi.fn(),
     onDeployInitialFleet: vi.fn(),
     onAddServiceVehicle: vi.fn(),
@@ -886,5 +888,102 @@ describe("LinesPanel line workspace", () => {
     expect(list).toHaveAttribute("aria-label", "Lines list");
     expect(list).toHaveAttribute("tabindex", "-1");
     expect(list.tagName).toBe("SECTION");
+  });
+});
+
+describe("LinesPanel wait locations", () => {
+  function atRiskRoute(
+    id: string,
+    overrides: Partial<ShellRouteListItem> = {},
+  ): ShellRouteListItem {
+    return {
+      id,
+      name: `Route ${id}`,
+      color: ROUTE_COLOR_PALETTE[0],
+      mode: "bus",
+      stopCount: 2,
+      active: true,
+      selected: false,
+      status: { primary: "running", pausedAfterRepair: false },
+      service: {
+        targetHeadwaySeconds: 360,
+        roundTripSeconds: 900,
+        assignedFleet: 2,
+        requiredFleet: 3,
+        estimatedDeploymentCost: null,
+        dailyOperatingCost: 0,
+        estimatedDailyOperatingCost: null,
+        nextVehicleCost: null,
+        nominalHeadwaySeconds: 348,
+        waitingAtRiskCount: 1,
+        longestWaitSeconds: 192,
+      },
+      waitLocations: [
+        {
+          nodeId: `node-${id}`,
+          nodeLabel: "Bus Stop B",
+          atRiskCount: 1,
+          longestWaitSeconds: 192,
+        },
+      ],
+      failures: [],
+      ...overrides,
+    };
+  }
+
+  it("scopes the wait-location list to the route's own at-risk stops", () => {
+    const props = panelProps({
+      routes: [
+        atRiskRoute("route-001"),
+        atRiskRoute("route-002", {
+          waitLocations: [
+            {
+              nodeId: "node-C",
+              nodeLabel: "Bus Stop C",
+              atRiskCount: 2,
+              longestWaitSeconds: 60,
+            },
+          ],
+        }),
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const own = screen.getByTestId("route-wait-locations-route-001");
+    expect(own).toHaveTextContent("Bus Stop B · 1 rider at risk · 3.2 min");
+    expect(own).not.toHaveTextContent("Bus Stop C");
+
+    const other = screen.getByTestId("route-wait-locations-route-002");
+    expect(other).toHaveTextContent("Bus Stop C · 2 riders at risk · 1.0 min");
+    expect(other).not.toHaveTextContent("Bus Stop B");
+  });
+
+  it("hides the wait-location list when the running warning gate is closed", () => {
+    const props = panelProps({
+      routes: [
+        atRiskRoute("route-001", {
+          status: { primary: "paused", pausedAfterRepair: false },
+        }),
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(screen.queryByTestId("route-wait-locations-route-001")).toBeNull();
+  });
+
+  it("focuses a wait location through the runtime with route and node ids", async () => {
+    const props = panelProps({ routes: [atRiskRoute("route-001")] });
+    render(LinesPanel, { props });
+
+    await fireEvent.click(
+      screen.getByTestId("route-wait-location-route-001-node-route-001"),
+    );
+
+    expect(props.onFocusWaitLocation).toHaveBeenCalledTimes(1);
+    expect(props.onFocusWaitLocation).toHaveBeenCalledWith(
+      "route-001",
+      "node-route-001",
+    );
+    expect(props.onEditRoute).not.toHaveBeenCalled();
   });
 });

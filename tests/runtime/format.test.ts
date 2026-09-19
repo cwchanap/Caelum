@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { pad2 } from "../../src/format";
+import { formatMinutes, pad2 } from "../../src/format";
 
 describe("format.pad2", () => {
   it("left-pads single digits to two digits", () => {
@@ -15,5 +15,16 @@ describe("format.pad2", () => {
 
   it("passes through values wider than two digits unchanged", () => {
     expect(pad2(100)).toBe("100");
+  });
+});
+
+describe("format.formatMinutes", () => {
+  it("renders seconds as one-decimal minutes", () => {
+    expect(formatMinutes(192)).toBe("3.2 min");
+    expect(formatMinutes(0)).toBe("0.0 min");
+  });
+
+  it("renders an em dash when there is no current wait", () => {
+    expect(formatMinutes(null)).toBe("—");
   });
 });

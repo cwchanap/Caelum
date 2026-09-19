@@ -412,6 +412,18 @@
     }
   }
 
+  function handleFocusWaitLocation(routeId: string, nodeId: string): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.focusWaitLocation(routeId, nodeId));
+    }
+  }
+
+  function handleOpenServiceControls(routeId: string): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.openServiceControls(routeId));
+    }
+  }
+
   function handleShellError(message: string): void {
     shellError = message;
   }
@@ -659,6 +671,7 @@
           <InspectPanel
             inspector={snapshot.shell.inspector}
             onAssignRouteToPlatform={handleAssignRouteToPlatform}
+            onOpenServiceControls={handleOpenServiceControls}
           />
         {/if}
       </div>
@@ -715,6 +728,7 @@
             onFocusRouteFailure={handleFocusRouteFailure}
             onEditRoute={handleStartRouteEdit}
             onSelectRoute={handleSelectRoute}
+            onFocusWaitLocation={handleFocusWaitLocation}
             onSetServiceTargetHeadway={handleSetServiceTargetHeadway}
             onDeployInitialFleet={handleDeployInitialFleet}
             onAddServiceVehicle={handleAddServiceVehicle}

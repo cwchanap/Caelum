@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatMinutes } from "../../../format";
   import type { ShellInspectorState } from "../../../runtime/types";
 
   interface Props {
@@ -8,9 +9,11 @@
       routeId: string,
       platformId: string,
     ) => void;
+    onOpenServiceControls: (routeId: string) => void;
   }
 
-  let { inspector, onAssignRouteToPlatform }: Props = $props();
+  let { inspector, onAssignRouteToPlatform, onOpenServiceControls }: Props =
+    $props();
 </script>
 
 <aside
@@ -26,9 +29,12 @@
         <div class="platform-row">
           <div class="platform-head">
             <span class="platform-label">Platform {platform.label}</span>
-            <span class="platform-occupancy"
-              >{platform.occupancy}/{platform.capacity}</span
+            <span
+              class="platform-occupancy"
+              data-testid={`platform-queue-${platform.id}`}
             >
+              Queue {platform.occupancy}/{platform.capacity}
+            </span>
           </div>
           {#if platform.routes.length === 0}
             <p class="platform-empty">No routes</p>
@@ -36,10 +42,25 @@
             <ul class="platform-routes">
               {#each platform.routes as route (route.id)}
                 <li class="platform-route">
-                  <span
+                  <button
+                    type="button"
                     class="route-chip"
-                    style={`--route-color: ${route.color}`}>{route.name}</span
+                    style={`--route-color: ${route.color}`}
+                    aria-label={`Open service controls for ${route.name}`}
+                    data-testid={`open-service-${route.id}`}
+                    onclick={() => onOpenServiceControls(route.id)}
                   >
+                    {route.name}
+                  </button>
+                  <span
+                    class="platform-route-wait"
+                    data-testid={`route-wait-${route.id}`}
+                  >
+                    {route.waitingCount} waiting ·
+                    {route.longestWaitSeconds === null
+                      ? "No current wait"
+                      : formatMinutes(route.longestWaitSeconds)}
+                  </span>
                   {#if inspector.canReassign}
                     {#each route.moveTargets as target (target.platformId)}
                       <button

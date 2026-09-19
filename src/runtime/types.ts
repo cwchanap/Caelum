@@ -322,6 +322,12 @@ export interface RuntimeController {
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;
   focusRouteFailure: (routeId: string, legIndex: number) => RuntimeSnapshot;
+  /** Focused navigation to a route's waiting stop/station: opens the
+   *  inspector on that node while keeping the route selected. */
+  focusWaitLocation: (routeId: string, nodeId: string) => RuntimeSnapshot;
+  /** Opens the Lines destination with the route selected, without toggling
+   *  or touching route-editing state. */
+  openServiceControls: (routeId: string) => RuntimeSnapshot;
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
