@@ -276,10 +276,15 @@ fn with_commands<R: tauri::Runtime>(builder: tauri::Builder<R>) -> tauri::Builde
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    let builder = tauri::Builder::default().manage(Mutex::new(OwnedEngine {
+    let mut builder = tauri::Builder::default().manage(Mutex::new(OwnedEngine {
         engine: GameEngine::new(),
         runtime_epoch: 0,
     }));
+
+    #[cfg(debug_assertions)]
+    {
+        builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    }
 
     with_commands(builder)
         .setup(|app| {
