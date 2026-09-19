@@ -1339,6 +1339,112 @@ test("starts a Metro service by setting a target headway and deploying the fleet
     .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
 });
 
+test("navigates from a selected stop to its serving line and back", async ({
+  page,
+}) => {
+  await createDefaultCity(page);
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  // Road + three roadside bus stops, then one route serving them.
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of SIMPLE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
+
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of SIMPLE_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "Save route" }).click();
+
+  // The Save dispatch is asynchronous; wait for the committed route and the
+  // cleared draft before leaving geometry mode.
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return {
+        routes: snapshot.state.transit.routes.length,
+        draftClosed: snapshot.ui.routeDraft === null,
+      };
+    })
+    .toEqual({ routes: 1, draftClosed: true });
+
+  // Saving leaves the Lines panel open; close it so the stop inspector can
+  // render, then select the served stop with the ordinary Inspect tool.
+  await page.getByRole("button", { name: "Close Lines" }).click();
+  await expect(page.getByTestId("command-panel")).toHaveCount(0);
+  await selectTool(page, "select");
+  await clickMapTile(canvas, SIMPLE_ROUTE_STOPS[0]);
+  await expect(page.getByTestId("panel-inspect")).toBeVisible();
+
+  const selected = await runtimeSnapshot(page);
+  expect(selected.ui.selectedId).toBe(
+    `${SIMPLE_ROUTE_STOPS[0].x},${SIMPLE_ROUTE_STOPS[0].y}`,
+  );
+  const stop = selected.state.transit.stops.find(
+    (candidate) =>
+      candidate.status === "present" &&
+      candidate.position.x === SIMPLE_ROUTE_STOPS[0].x &&
+      candidate.position.y === SIMPLE_ROUTE_STOPS[0].y,
+  );
+  if (stop === undefined || stop.platforms.length !== 1) {
+    throw new Error("Selected stop is missing from the runtime snapshot");
+  }
+  const platformId = stop.platforms[0]!.id;
+  const servingRoute = selected.state.transit.routes.find((route) =>
+    route.stopIds.includes(stop.id),
+  );
+  if (servingRoute === undefined) {
+    throw new Error("No committed route serves the selected stop");
+  }
+
+  await expect(page.getByTestId(`platform-queue-${platformId}`)).toHaveText(
+    /^Queue \d+\/\d+$/,
+  );
+  // No simulation time has elapsed, so the serving line's wait row reads zero.
+  await expect(page.getByTestId(`route-wait-${servingRoute.id}`)).toHaveText(
+    "0 waiting · No current wait",
+  );
+
+  // The serving-line chip opens Lines on the same route with no draft.
+  await page.getByTestId(`open-service-${servingRoute.id}`).click();
+  await expect(page.getByTestId("panel-lines")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const ui = (await runtimeSnapshot(page)).ui;
+      return {
+        destination: ui.activeCommandDestination,
+        selectedRouteId: ui.selectedRouteId,
+        draftClosed: ui.routeDraft === null,
+      };
+    })
+    .toEqual({
+      destination: "lines",
+      selectedRouteId: servingRoute.id,
+      draftClosed: true,
+    });
+  await expect(
+    page.getByRole("button", { name: `Select ${servingRoute.name}` }),
+  ).toHaveAttribute("aria-pressed", "true");
+
+  // Closing Lines returns to the same stop inspector.
+  await page.getByRole("button", { name: "Close Lines" }).click();
+  await expect(page.getByTestId("panel-inspect")).toBeVisible();
+  const returned = await runtimeSnapshot(page);
+  expect(returned.ui.selectedId).toBe(
+    `${SIMPLE_ROUTE_STOPS[0].x},${SIMPLE_ROUTE_STOPS[0].y}`,
+  );
+  expect(returned.ui.selectedNodeKind).toBe("stop");
+  expect(returned.ui.activeCommandDestination).toBeNull();
+});
+
 test("reroutes when possible, then preserves a dotted last-valid leg until repair", async ({
   page,
 }) => {
