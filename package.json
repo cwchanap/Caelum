@@ -32,7 +32,7 @@
     "wasm:build": "wasm-pack build crates/caelum-wasm --target web --out-dir ../../src/generated/caelum_wasm --out-name caelum_wasm --dev",
     "wasm:build:release": "wasm-pack build crates/caelum-wasm --target web --out-dir ../../src/generated/caelum_wasm --out-name caelum_wasm --release",
     "tauri": "tauri",
-    "tauri:dev": "tauri dev",
+    "tauri:dev": "tauri dev -c src-tauri/tauri.dev.conf.json",
     "tauri:build": "tauri build"
   },
   "dependencies": {
