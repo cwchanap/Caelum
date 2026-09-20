@@ -282,7 +282,11 @@ pub fn run() {
     }));
 
     #[cfg(feature = "mcp-bridge")]
-    let builder = builder.plugin(tauri_plugin_mcp_bridge::init());
+    let builder = builder.plugin(
+        tauri_plugin_mcp_bridge::Builder::new()
+            .bind_address("127.0.0.1")
+            .build(),
+    );
 
     with_commands(builder)
         .setup(|app| {
