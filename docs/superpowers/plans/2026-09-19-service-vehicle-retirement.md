@@ -66,9 +66,9 @@ Rules:
 - require matching `line_id`, matching mode, and empty `passenger_ids`;
 - return the first matching vehicle ID.
 
-Use this helper as the single ownership point for both availability and mutation.
+Use this helper only for dispatch-time concrete vehicle selection.
 
-Do not generalize this into a fleet repository or vehicle-query abstraction.
+Do not generalize this into a fleet repository or vehicle-query abstraction. Availability is a separate slow-state predicate so presentation never scans occupancy.
 
 ### 1.3 Implement `retire_service_vehicle`
 
@@ -79,13 +79,13 @@ Authoritative order:
 3. if fleet <= 1, return `CostedMutation::free(state.clone())`;
 4. validate active route; otherwise `InactiveRoute`;
 5. validate current operational legs with existing `is_route_operational`; otherwise `DisconnectedLeg`;
-6. resolve the empty candidate; if none exists, return the same free no-op;
+6. resolve the empty candidate; if none exists, return `VehiclesOccupied`;
 7. clone snapshot;
 8. remove candidate ID from the route/line `vehicle_ids`;
 9. remove that vehicle from `transit.vehicles`;
 10. return a free mutation with budget unchanged.
 
-The empty-candidate check is a live safety check, not a substitute for service-state validation. An inactive/disconnected line with two occupied vehicles must still follow the service-state rejection contract rather than silently no-op.
+The empty-candidate check is a live safety check, not a substitute for service-state validation. An inactive/disconnected line with two occupied vehicles must still follow the service-state rejection contract, and an active line whose removable vehicles all carry riders returns an explicit gameplay rejection rather than a silent unchanged snapshot.
 
 The candidate must be checked before cloning/mutation.
 
@@ -97,11 +97,15 @@ Add `can_retire_vehicle: bool` to Rust `ServiceMetrics`.
 
 Update the model-wire expectation to pin `canRetireVehicle`.
 
-In `service_metrics_by_line`, derive the availability bit from current authoritative state using the same candidate helper plus the same active/operational line rule. Pass the resulting bool into the existing metric constructor.
+Add a small `retire_vehicle_offer(active, legs, assigned_fleet)` sibling of `add_vehicle_offer` and publish `canRetireVehicle` from only:
 
-Do **not** include `snapshot.paused` in the offer predicate. Global simulation pause freezes boarding/movement but remains a valid planning state for Add/Retire; only route/line inactivity suppresses the offer.
+- active line;
+- operational legs;
+- assigned fleet >= 2.
 
-Do not expose candidate ID or passenger counts.
+Do **not** scan `passenger_ids` in `service_metrics_by_line` / `metrics`, and do **not** include `snapshot.paused`. Global simulation pause freezes boarding/movement but remains a valid planning state for Add/Retire; only route/line inactivity suppresses the offer.
+
+The authoritative mutation still reverse-scans occupancy at dispatch. Do not expose candidate ID or passenger counts.
 
 ### 1.5 Rust behavior tests
 
@@ -112,16 +116,14 @@ Required tests:
 - Bus: reverse-order selection removes newest assigned empty vehicle.
 - Metro: same line-ID contract and removal semantics.
 - Occupied newest vehicle is skipped in favor of an earlier empty vehicle.
-- All removable vehicles occupied => no-op.
+- All removable vehicles occupied => `VehiclesOccupied` rejection.
 - One vehicle => no-op.
 - Inactive line with an otherwise eligible candidate => `InactiveRoute`.
 - Disconnected line with an otherwise eligible candidate => `DisconnectedLeg`.
-- Global simulation pause: `canRetireVehicle === true`, dispatch applies, and budget is unchanged.
+- Global simulation pause: `canRetireVehicle === true`, dispatch applies when an empty candidate exists, and budget is unchanged.
 - Retirement may make `assignedFleet < requiredFleet`.
-- Budget does not change.
-- Surviving vehicles compare equal before/after, including passenger IDs/cursors/parked positions.
-- Active trips, target, geometry, revision, and wait evidence are unchanged by the mutation itself.
-- Refreshed metrics show the smaller fleet, larger nominal interval, lower running daily cost, unchanged recommendation, and recomputed retirement availability.
+- One **authoritative snapshot surgical-equality** test: start from a snapshot whose derived `service_metrics` are not authoritative, clone it into `expected`, remove only the chosen vehicle ID from the line and the matching `Vehicle`, then assert the complete resulting snapshot equals `expected`. This replaces field-by-field preservation assertions and automatically covers budget, trips, target, geometry/revision, surviving vehicle fields, and future fields.
+- Keep one separate output-metrics test for the intentionally changed derived values: smaller fleet, larger nominal interval, lower running daily cost, unchanged recommendation/add semantics, wait health, and recomputed retirement availability.
 
 ### Task 1 gate
 
@@ -194,8 +196,9 @@ Update fixture service metrics once in shared helpers rather than scattering ad-
 Pin:
 
 - selector forwarding true/false;
-- runtime sends the exact command;
-- no TypeScript retirement eligibility calculation exists.
+- runtime sends the exact command.
+
+The "no TypeScript retirement eligibility formula" rule is verified by the concrete selector/UI behavior plus the final source scan; do not invent a Vitest assertion for absence of code.
 
 ### Task 2 gate
 
@@ -263,7 +266,7 @@ Pass it to `LinesPanel`.
 Pin:
 
 - below-recommendation fixture: `canRetireVehicle: true` with `assignedFleet < requiredFleet` still renders Retire with the no-refund copy;
-- occupied-surplus fixture: `assignedFleet >= 2` with `canRetireVehicle: false` does not render Retire, proving the panel does not substitute fleet count/recommendation logic for Rust's bit;
+- `canRetireVehicle: false` hides the control even if the fixture has multiple assigned vehicles, proving the panel does not substitute fleet-count/recommendation logic for Rust's bit;
 - Bus/Metro copy;
 - click invokes the callback with the line ID;
 - App forwards to runtime once.
@@ -293,28 +296,21 @@ bun run build
 
 ### Browser journey
 
-Reuse the existing deployed Bus service setup rather than creating a new scenario framework.
+Extend the existing `tests/e2e/routes.spec.ts` test **"tunes a deployed bus service from its line summary"** in place. Do not create another setup journey.
 
-1. Build/configure an active Bus line with a deployed fleet.
-2. Globally pause simulation before the add/retire pair. HPA-48 already allows Add while globally paused, and HPA-368 must explicitly preserve the same rule for Retire. This guarantees the newly added vehicle remains empty.
-3. Record:
-   - current fleet count;
-   - current daily operating cost;
-   - current budget.
-4. Click existing Add bus.
-5. Assert:
-   - fleet increases by one;
-   - budget decreases by the existing purchase cost;
-   - `serviceMetrics.canRetireVehicle` becomes true while the simulation remains globally paused;
-   - retirement becomes available.
-6. Click `Retire bus · no refund`.
-7. Assert:
-   - fleet returns to the prior count;
-   - daily operating cost returns to the prior value;
-   - budget stays at the post-purchase value;
-   - line remains selected/operational and no route draft opens.
+That test already owns the exact prerequisites and values HPA-368 needs: deployed Bus line, selected route, paused/no-elapsed-time state, `baselineAssigned`, `baselineBudget`, `baselineDailyCost`, `nextVehicleCost`, `originalVehicleIds`, and the existing Add assertion.
 
-Do not add a second Metro E2E. Rust tests own mode parity.
+Immediately after the current post-Add assertions:
+
+1. assert `serviceMetrics.canRetireVehicle === true`;
+2. click `Retire bus · no refund`;
+3. poll until `vehicleIds.length === baselineAssigned`;
+4. assert `dailyOperatingCost === baselineDailyCost`;
+5. assert budget remains `baselineBudget - nextVehicleCost` (no refund);
+6. assert all original vehicle IDs remain and the added ID disappeared;
+7. retain the existing final proof that route selection survives and no route draft opens.
+
+Do not add a new pause step or duplicate road/stop/route/deploy setup. Do not add a second Metro E2E; Rust tests own mode parity.
 
 Rebuild WASM before Playwright so the browser does not exercise a stale Rust artifact.
 
@@ -328,12 +324,20 @@ bun run test:e2e
 
 ---
 
+## Risks / accepted tradeoffs
+
+- **Live occupancy race:** the button is intentionally stable and does not promise an empty vehicle still exists at dispatch. If every removable vehicle has riders by the time Rust executes the command, `VehiclesOccupied` is the explicit recoverable result. Never solve this with a tick-rate occupancy button or deferred-retirement state.
+- **Physical spacing after non-immediate retirement:** removing the newest just-added vehicle exactly restores the pre-purchase spacing because Add inserted it into the largest gap. Retiring some older empty vehicle after service has churned can leave a larger physical gap while nominal headway still reports `roundTrip / fleet`. Accept that approximation in HPA-368; do not add fleet re-spacing unless later playtesting justifies it.
+
+---
+
 ## Task 5 — Final cleanup and whole-branch verification
 
 ### Scope scan
 
 Confirm the PR did **not** introduce:
 
+- passenger occupancy scans in the retirement offer/metrics path;
 - refund/resale fields or cost policy;
 - deferred retirement state;
 - passenger ejection/requeue code;
@@ -348,7 +352,7 @@ Confirm the PR did **not** introduce:
 Useful searches:
 
 ```bash
-rg "RetireServiceVehicle|retireServiceVehicle|canRetireVehicle" crates src tests
+rg "RetireServiceVehicle|retireServiceVehicle|canRetireVehicle|VehiclesOccupied" crates src tests
 rg "refund|resale|depreciat|retire.*when.*empty|vehicle picker" crates src tests
 ```
 
