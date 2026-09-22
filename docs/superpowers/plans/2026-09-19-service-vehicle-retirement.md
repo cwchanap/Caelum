@@ -33,6 +33,7 @@ The new work is one inverse fleet mutation plus one availability bit.
 - `crates/caelum-core/src/intent.rs`
 - `crates/caelum-core/src/engine.rs`
 - `crates/caelum-core/src/model.rs`
+- `crates/caelum-core/src/rejection.rs`
 - `crates/caelum-core/src/service_control.rs`
 - `crates/caelum-core/tests/model_wire_format.rs`
 - `crates/caelum-core/tests/service_control.rs`
@@ -70,7 +71,9 @@ Use this helper only for dispatch-time concrete vehicle selection.
 
 Do not generalize this into a fleet repository or vehicle-query abstraction. Availability is a separate slow-state predicate so presentation never scans occupancy.
 
-### 1.3 Implement `retire_service_vehicle`
+### 1.3 Add the occupied-fleet rejection and implement `retire_service_vehicle`
+
+Add `RejectionCode::VehiclesOccupied` to the Rust rejection enum. It carries the existing route context only; do not add passenger/vehicle IDs to the rejection.
 
 Authoritative order:
 
@@ -122,7 +125,7 @@ Required tests:
 - Disconnected line with an otherwise eligible candidate => `DisconnectedLeg`.
 - Global simulation pause: `canRetireVehicle === true`, dispatch applies when an empty candidate exists, and budget is unchanged.
 - Retirement may make `assignedFleet < requiredFleet`.
-- One **authoritative snapshot surgical-equality** test: start from a snapshot whose derived `service_metrics` are not authoritative, clone it into `expected`, remove only the chosen vehicle ID from the line and the matching `Vehicle`, then assert the complete resulting snapshot equals `expected`. This replaces field-by-field preservation assertions and automatically covers budget, trips, target, geometry/revision, surviving vehicle fields, and future fields.
+- One **authoritative snapshot surgical-equality** test in the internal `service_control.rs` test module: call the retirement mutation directly on a snapshot whose derived `service_metrics` are not authoritative, clone the before-state into `expected`, remove only the chosen vehicle ID from the line and the matching `Vehicle`, then assert the complete resulting snapshot equals `expected`. This replaces field-by-field preservation assertions and automatically covers budget, trips, target, geometry/revision, surviving vehicle fields, and future fields.
 - Keep one separate output-metrics test for the intentionally changed derived values: smaller fleet, larger nominal interval, lower running daily cost, unchanged recommendation/add semantics, wait health, and recomputed retirement availability.
 
 ### Task 1 gate
@@ -150,7 +153,8 @@ Do not continue with frontend wiring until the authoritative Rust contract is gr
 - `src/runtime/types.ts`
 - `src/runtime/createGameRuntime.ts`
 - `src/runtime/runtimeSelectors.ts`
-- focused runtime/selector tests
+- `src/runtime/rejectionMessages.ts`
+- focused runtime/selector/rejection-message tests
 
 ### 2.1 Mirror the derived metric
 
@@ -189,14 +193,25 @@ Implement it in `createGameRuntime` exactly like `addServiceVehicle`:
 - dead runtime => current snapshot;
 - otherwise `enqueueDispatch({ type: "retireServiceVehicle", lineId })`.
 
-### 2.3 Focused TypeScript tests
+### 2.3 Add rejection copy
+
+Extend the TypeScript `RejectionCode` union with `"vehiclesOccupied"` and handle it exhaustively in `rejectionMessages.ts` with mode-neutral copy:
+
+```text
+Every removable vehicle on this line has riders.
+```
+
+Do not derive the line mode for this message.
+
+### 2.4 Focused TypeScript tests
 
 Update fixture service metrics once in shared helpers rather than scattering ad-hoc defaults.
 
 Pin:
 
 - selector forwarding true/false;
-- runtime sends the exact command.
+- runtime sends the exact command;
+- `vehiclesOccupied` maps to the new player-facing rejection message and remains covered by the exhaustive rejection switch.
 
 The "no TypeScript retirement eligibility formula" rule is verified by the concrete selector/UI behavior plus the final source scan; do not invent a Vitest assertion for absence of code.
 
