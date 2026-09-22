@@ -50,6 +50,8 @@ Add a failing wire-format test for:
 
 Add `RetireServiceVehicle { line_id: String }` to `GameIntent` and dispatch it through `service_control::retire_service_vehicle`.
 
+Update the existing exhaustive `expected_type_tag` / GameIntent type-tag table in `model_wire_format.rs` with the new variant. The dedicated JSON test and exhaustive tag table must both go green in this task.
+
 Do not add a mode or vehicle ID to the public command.
 
 ### 1.2 Add one shared candidate helper
@@ -75,13 +77,15 @@ Authoritative order:
 1. resolve Bus/Metro with existing `service_mode`; unknown ID returns `RouteNotFound`;
 2. read active flag, legs, and ordered `vehicle_ids`;
 3. if fleet <= 1, return `CostedMutation::free(state.clone())`;
-4. resolve the empty candidate; if none exists, return the same free no-op;
-5. validate active route; otherwise `InactiveRoute`;
-6. validate current operational legs with existing `is_route_operational`; otherwise `DisconnectedLeg`;
+4. validate active route; otherwise `InactiveRoute`;
+5. validate current operational legs with existing `is_route_operational`; otherwise `DisconnectedLeg`;
+6. resolve the empty candidate; if none exists, return the same free no-op;
 7. clone snapshot;
 8. remove candidate ID from the route/line `vehicle_ids`;
 9. remove that vehicle from `transit.vehicles`;
 10. return a free mutation with budget unchanged.
+
+The empty-candidate check is a live safety check, not a substitute for service-state validation. An inactive/disconnected line with two occupied vehicles must still follow the service-state rejection contract rather than silently no-op.
 
 The candidate must be checked before cloning/mutation.
 
@@ -94,6 +98,8 @@ Add `can_retire_vehicle: bool` to Rust `ServiceMetrics`.
 Update the model-wire expectation to pin `canRetireVehicle`.
 
 In `service_metrics_by_line`, derive the availability bit from current authoritative state using the same candidate helper plus the same active/operational line rule. Pass the resulting bool into the existing metric constructor.
+
+Do **not** include `snapshot.paused` in the offer predicate. Global simulation pause freezes boarding/movement but remains a valid planning state for Add/Retire; only route/line inactivity suppresses the offer.
 
 Do not expose candidate ID or passenger counts.
 
@@ -110,6 +116,7 @@ Required tests:
 - One vehicle => no-op.
 - Inactive line with an otherwise eligible candidate => `InactiveRoute`.
 - Disconnected line with an otherwise eligible candidate => `DisconnectedLeg`.
+- Global simulation pause: `canRetireVehicle === true`, dispatch applies, and budget is unchanged.
 - Retirement may make `assignedFleet < requiredFleet`.
 - Budget does not change.
 - Surviving vehicles compare equal before/after, including passenger IDs/cursors/parked positions.
@@ -255,12 +262,13 @@ Pass it to `LinesPanel`.
 
 Pin:
 
-- button absent when `canRetireVehicle === false`;
+- below-recommendation fixture: `canRetireVehicle: true` with `assignedFleet < requiredFleet` still renders Retire with the no-refund copy;
+- occupied-surplus fixture: `assignedFleet >= 2` with `canRetireVehicle: false` does not render Retire, proving the panel does not substitute fleet count/recommendation logic for Rust's bit;
 - Bus/Metro copy;
 - click invokes the callback with the line ID;
 - App forwards to runtime once.
 
-Do not test Rust eligibility rules again in Svelte.
+Do not test the underlying Rust occupancy algorithm again in Svelte; these assertions only lock that the UI obeys the Rust-owned bit.
 
 ### Task 3 gate
 
@@ -288,7 +296,7 @@ bun run build
 Reuse the existing deployed Bus service setup rather than creating a new scenario framework.
 
 1. Build/configure an active Bus line with a deployed fleet.
-2. Globally pause simulation before the add/retire pair. HPA-48 already allows Add while globally paused, and this guarantees the newly added vehicle remains empty.
+2. Globally pause simulation before the add/retire pair. HPA-48 already allows Add while globally paused, and HPA-368 must explicitly preserve the same rule for Retire. This guarantees the newly added vehicle remains empty.
 3. Record:
    - current fleet count;
    - current daily operating cost;
@@ -297,6 +305,7 @@ Reuse the existing deployed Bus service setup rather than creating a new scenari
 5. Assert:
    - fleet increases by one;
    - budget decreases by the existing purchase cost;
+   - `serviceMetrics.canRetireVehicle` becomes true while the simulation remains globally paused;
    - retirement becomes available.
 6. Click `Retire bus · no refund`.
 7. Assert:
