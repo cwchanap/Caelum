@@ -57,12 +57,13 @@ Rust remains authoritative for mode, eligibility, and concrete vehicle selection
 
 ## Eligibility
 
-A retirement is offered only when all of these are true:
+The retirement control is offered from **slow service state only** when all of these are true:
 
 1. the line is active;
-2. the line is operational under the existing connected-leg rule;
-3. at least two vehicles are assigned; and
-4. at least one assigned vehicle is currently empty.
+2. the line is operational under the existing connected-leg rule; and
+3. at least two vehicles are assigned.
+
+Do not scan live passenger occupancy to decide whether the button exists. Boarding/alighting changes `passenger_ids` during ticks, so an occupancy-backed offer would flicker with live service and could disappear between pointer-down and dispatch.
 
 Global simulation pause is explicitly **not** an eligibility gate. Here "active" means the line's own `route.active` / `line.active` flag. A player may globally pause the simulation, add capacity, and retire an empty vehicle while time is frozen; this is the safe HPA-48 over-purchase undo path.
 
@@ -70,18 +71,19 @@ The last vehicle is never removable in this slice. A zero-fleet transition alrea
 
 The target headway is not an eligibility floor. A player may retire below `requiredFleet`, down to one vehicle. Recommendation remains guidance, symmetric with HPA-48 allowing purchases above recommendation.
 
-No new rejection code is needed. Dispatch uses this order:
+Dispatch uses this order:
 
 1. unknown line: existing `RouteNotFound`;
 2. one remaining vehicle: unchanged-state no-op because there is no downsize to perform;
 3. inactive line: existing `InactiveRoute`;
 4. disconnected line: existing `DisconnectedLeg`;
-5. no empty candidate: unchanged-state no-op;
-6. otherwise remove exactly one empty vehicle.
+5. reverse scan for an empty vehicle;
+6. if every removable vehicle is occupied: reject with new `VehiclesOccupied`;
+7. otherwise remove exactly one empty vehicle.
 
-This matches the existing service-control shape: service-state rejection is authoritative once a real downsize is possible, while occupancy remains a live safety check. An inactive/disconnected line does not silently become valid merely because every candidate happens to be occupied.
+This keeps service-state rejection authoritative and treats occupancy as the live safety check it actually is. A stale click never ejects a rider, but it also does not fail silently: the player receives a normal gameplay rejection.
 
-The live empty-candidate check is repeated at dispatch. If a rendered retire button becomes stale because the candidate boards a rider before the queued command executes, the command is a harmless no-op rather than ejecting that rider.
+Add the TypeScript rejection union/message exhaustively. Use mode-neutral player copy such as **"Every removable vehicle on this line has riders."** so the frontend does not derive Bus vs Metro merely to format the error.
 
 ## Deterministic vehicle choice
 
@@ -104,6 +106,10 @@ Do not add:
 - a separate fleet ordering field.
 
 The durable entity membership validation already protects normal snapshots from mismatched line/vehicle ownership. The retirement predicate should still match line and mode rather than trusting only an ID lookup.
+
+For the headline over-purchase undo, reverse order has an additional useful property: `AddServiceVehicle` placed the newest vehicle at the midpoint of the largest cycle gap. Immediately retiring that same newest empty vehicle restores the exact pre-purchase fleet spacing without any re-spacing mutation.
+
+Accepted tradeoff: if fleet occupancy/churn causes retirement to remove an older middle vehicle instead, the remaining fleet can keep a larger physical gap while `nominalHeadwaySeconds` still reports `roundTrip / fleet`. This slice accepts that optimistic nominal interval rather than adding fleet re-spacing; a later measured need can address it in the existing service-control timing seam.
 
 ## Mutation
 
@@ -166,14 +172,14 @@ canRetireVehicle: boolean
 
 This is the only new presentation value.
 
-The helper that finds the authoritative candidate should be shared by:
+Use two deliberately separate helpers:
 
-- metric eligibility; and
-- `retire_service_vehicle`.
+- `retire_vehicle_offer(active, legs, assigned_fleet)` — a small sibling of `add_vehicle_offer`, based only on active/operational service and fleet ≥ 2;
+- one empty-candidate helper — reverse-scans authoritative line vehicles and is consumed only by `retire_service_vehicle`.
 
-Do not duplicate the selection rule in TypeScript.
+Do not duplicate either rule in TypeScript.
 
-`service_metrics_by_line` can calculate the bit while it already has the current snapshot and line rows. Passing one boolean into the generic metric constructor is enough; do not add a new fleet read model or scan in Svelte.
+`metrics(...)` receives the stable offer bit/count inputs and does **not** scan `Vehicle.passenger_ids`. This keeps the hot presentation path independent of live occupancy and prevents the button from blinking at tick cadence.
 
 When retirement succeeds, the existing derived values naturally refresh:
 
@@ -210,6 +216,8 @@ This adds:
 - one new command variant;
 - one derived `ServiceMetrics` field.
 
+The reason is structural: route/metro `service_metrics` is already runtime-derived and marked `skip_deserializing` with a default, so incoming saves never make any `ServiceMetrics` field authoritative. Adding `canRetireVehicle` therefore changes presentation output, not the durable load contract.
+
 It adds no durable field. Existing development compatibility policy remains unchanged; no migration, alias, fallback parser, or compatibility wrapper is added.
 
 ## Focused verification
@@ -222,14 +230,13 @@ Required proofs:
 
 1. reverse-order choice removes the newest assigned empty vehicle;
 2. occupied vehicles are skipped;
-3. if every removable candidate is occupied, dispatch is an unchanged-state no-op;
+3. if every removable candidate is occupied, dispatch rejects with `VehiclesOccupied`;
 4. a one-vehicle fleet is an unchanged-state no-op;
 5. inactive and disconnected lines keep the existing service-control rejections when a downsize is otherwise possible;
-6. global simulation pause keeps `canRetireVehicle == true`, retirement dispatch applies, and budget remains unchanged;
+6. global simulation pause keeps `canRetireVehicle == true`, retirement dispatch applies when an empty candidate exists, and budget remains unchanged;
 7. retirement below `requiredFleet` is allowed;
-8. Standard budget is unchanged;
-9. target, route geometry/revision, active trips, and every surviving vehicle field are unchanged;
-10. metrics refresh fleet, interval, daily cost, add offer, wait health, and retirement availability.
+8. one authoritative-snapshot equality test proves the mutation changes only the selected line's `vehicle_ids` plus `transit.vehicles` removal; build expected state from the before snapshot and compare the whole snapshot rather than mirroring every surviving field;
+9. a separate output-metrics test proves fleet, interval, daily cost, add offer, wait health, and retirement availability refresh.
 
 ### Wire/runtime/UI tests
 
@@ -240,7 +247,7 @@ Pin:
 - backend/runtime forwarding of `{ type: "retireServiceVehicle", lineId }`;
 - selector forwarding with no TypeScript eligibility formula;
 - Lines retirement stays visible when `canRetireVehicle === true` even if `assignedFleet < requiredFleet`;
-- an occupied surplus fleet with `canRetireVehicle === false` does not render Retire;
+- `VehiclesOccupied` has exhaustive TypeScript rejection copy;
 - Bus/Metro no-refund copy/callback;
 - App handler wiring.
 
