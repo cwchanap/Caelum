@@ -64,16 +64,22 @@ A retirement is offered only when all of these are true:
 3. at least two vehicles are assigned; and
 4. at least one assigned vehicle is currently empty.
 
+Global simulation pause is explicitly **not** an eligibility gate. Here "active" means the line's own `route.active` / `line.active` flag. A player may globally pause the simulation, add capacity, and retire an empty vehicle while time is frozen; this is the safe HPA-48 over-purchase undo path.
+
 The last vehicle is never removable in this slice. A zero-fleet transition already has separate initial-deployment semantics, and service shutdown is not the problem being solved.
 
 The target headway is not an eligibility floor. A player may retire below `requiredFleet`, down to one vehicle. Recommendation remains guidance, symmetric with HPA-48 allowing purchases above recommendation.
 
-No new rejection code is needed:
+No new rejection code is needed. Dispatch uses this order:
 
-- unknown line: existing `RouteNotFound`;
-- inactive line: existing `InactiveRoute`;
-- disconnected line: existing `DisconnectedLeg`;
-- one remaining vehicle or no empty candidate: unchanged-state no-op.
+1. unknown line: existing `RouteNotFound`;
+2. one remaining vehicle: unchanged-state no-op because there is no downsize to perform;
+3. inactive line: existing `InactiveRoute`;
+4. disconnected line: existing `DisconnectedLeg`;
+5. no empty candidate: unchanged-state no-op;
+6. otherwise remove exactly one empty vehicle.
+
+This matches the existing service-control shape: service-state rejection is authoritative once a real downsize is possible, while occupancy remains a live safety check. An inactive/disconnected line does not silently become valid merely because every candidate happens to be occupied.
 
 The live empty-candidate check is repeated at dispatch. If a rendered retire button becomes stale because the candidate boards a rider before the queued command executes, the command is a harmless no-op rather than ejecting that rider.
 
@@ -131,7 +137,9 @@ The budget is unchanged in both Standard and Creative.
 Do not call `CostPolicy`, calculate depreciation, or add a refund field. The existing `operating_cost` rules already derive current daily liability from deployed fleet count, so the financial consequence appears automatically after the mutation:
 
 - active/operational line: daily cost drops by one existing per-mode vehicle cost;
-- paused/broken line: the retirement action is not offered by this slice.
+- route-inactive/broken line: the retirement action is not offered by this slice.
+
+Global simulation pause does not suppress retirement availability or dispatch; only the line's own inactive/broken service state does.
 
 The purchase price already paid is sunk.
 
@@ -216,21 +224,24 @@ Required proofs:
 2. occupied vehicles are skipped;
 3. if every removable candidate is occupied, dispatch is an unchanged-state no-op;
 4. a one-vehicle fleet is an unchanged-state no-op;
-5. inactive and disconnected lines keep the existing service-control rejections when an otherwise removable candidate exists;
-6. retirement below `requiredFleet` is allowed;
-7. Standard budget is unchanged;
-8. target, route geometry/revision, active trips, and every surviving vehicle field are unchanged;
-9. metrics refresh fleet, interval, daily cost, add offer, wait health, and retirement availability.
+5. inactive and disconnected lines keep the existing service-control rejections when a downsize is otherwise possible;
+6. global simulation pause keeps `canRetireVehicle == true`, retirement dispatch applies, and budget remains unchanged;
+7. retirement below `requiredFleet` is allowed;
+8. Standard budget is unchanged;
+9. target, route geometry/revision, active trips, and every surviving vehicle field are unchanged;
+10. metrics refresh fleet, interval, daily cost, add offer, wait health, and retirement availability.
 
 ### Wire/runtime/UI tests
 
 Pin:
 
-- Rust JSON spelling for `RetireServiceVehicle`;
+- Rust JSON spelling for `RetireServiceVehicle` and the exhaustive `GameIntent` type-tag table;
 - `ServiceMetrics.canRetireVehicle`;
 - backend/runtime forwarding of `{ type: "retireServiceVehicle", lineId }`;
 - selector forwarding with no TypeScript eligibility formula;
-- Lines button visibility/copy/callback;
+- Lines retirement stays visible when `canRetireVehicle === true` even if `assignedFleet < requiredFleet`;
+- an occupied surplus fleet with `canRetireVehicle === false` does not render Retire;
+- Bus/Metro no-refund copy/callback;
 - App handler wiring.
 
 ### Browser/WASM proof
