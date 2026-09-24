@@ -15,6 +15,7 @@ import {
   addTestMetroStation,
   assignTestVehicle,
   createTestGameState,
+  createTestServiceMetrics,
 } from "../helpers/gameState";
 import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 import { createDraft } from "../../src/ui/routeDraft";
@@ -1098,37 +1099,21 @@ describe("App command shell", () => {
         ...state.transit,
         routes: state.transit.routes.map((route) => ({
           ...route,
-          serviceMetrics: {
-            roundTripSeconds: 600,
+          serviceMetrics: createTestServiceMetrics({
             assignedFleet: 1,
             requiredFleet: 1,
-            estimatedDeploymentCost: null,
             dailyOperatingCost: 400,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 600,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
-          serviceMetrics: {
-            roundTripSeconds: 600,
+          serviceMetrics: createTestServiceMetrics({
             assignedFleet: 1,
             requiredFleet: 1,
-            estimatedDeploymentCost: null,
             dailyOperatingCost: 2_500,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 600,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
       },
     };
@@ -1192,20 +1177,11 @@ describe("App command shell", () => {
         routes: state.transit.routes.map((route) => ({
           ...route,
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
       },
     };
@@ -1240,20 +1216,13 @@ describe("App command shell", () => {
           ...route,
           vehicleIds: ["vehicle-001", "vehicle-002"],
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
             assignedFleet: 2,
             requiredFleet: 4,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
             nextVehicleCost: 12_500,
             nominalHeadwaySeconds: 450,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
       },
     };
@@ -1283,20 +1252,14 @@ describe("App command shell", () => {
           ...route,
           vehicleIds: ["vehicle-001"],
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
             assignedFleet: 1,
             requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 2,
             longestWaitSeconds: 192,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
       },
       waitingLocations: [
@@ -1367,20 +1330,11 @@ describe("App command shell", () => {
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
           targetHeadwaySeconds: 300,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 2,
             estimatedDeploymentCost: 240_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
       },
     };
@@ -1429,20 +1383,10 @@ describe("App command shell", () => {
           ...route,
           active: false,
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-
-            canRetireVehicle: false,
-          },
+          }),
         })),
       },
     };
