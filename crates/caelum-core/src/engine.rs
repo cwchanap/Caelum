@@ -482,6 +482,10 @@ impl GameEngine {
             GameIntent::AddServiceVehicle { line_id } => self.commit_result(
                 crate::service_control::add_service_vehicle(&self.snapshot, &line_id),
             ),
+            GameIntent::RetireServiceVehicle { line_id } => self.commit_result(
+                crate::service_control::retire_service_vehicle(&self.snapshot, &line_id)
+                    .map(CostedMutation::free),
+            ),
             GameIntent::LayRoad { point } => self.commit_network_mutation(
                 road::apply_road_mutation(&self.snapshot, &RoadMutation::LayRoad { point })
                     .map(NetworkCandidate::from_road),

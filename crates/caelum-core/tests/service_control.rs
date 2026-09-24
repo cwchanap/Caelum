@@ -2120,6 +2120,7 @@ fn incoming_service_metrics_never_become_authority() {
         nominal_headway_seconds: Some(1.0),
         waiting_at_risk_count: 0,
         longest_wait_seconds: None,
+        can_retire_vehicle: false,
     });
     let restored = GameEngine::from_snapshot(forged).expect("forged state loads");
     let save = restored.snapshot_for_save();
@@ -2132,4 +2133,406 @@ fn incoming_service_metrics_never_become_authority() {
         .clone()
         .expect("snapshot() re-derives real metrics");
     assert_eq!(republished.assigned_fleet, 1);
+}
+
+fn two_vehicle_bus_engine() -> GameEngine {
+    let mut engine = one_bus_service_engine();
+    engine.set_budget_for_test(BUS_COST);
+    let added = engine.dispatch(GameIntent::AddServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(added.applied, "second bus should apply: {added:?}");
+    assert_eq!(engine.snapshot().transit.routes[0].vehicle_ids.len(), 2);
+    engine
+}
+
+fn two_vehicle_metro_engine() -> GameEngine {
+    let mut engine = metro_line_engine();
+    engine.set_budget_for_test(10 * METRO_COST);
+    assert!(
+        engine
+            .dispatch(GameIntent::SetServiceTargetHeadway {
+                line_id: "metro-001".into(),
+                target_headway_seconds: 3_600,
+            })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::DeployInitialFleet {
+                line_id: "metro-001".into(),
+            })
+            .applied
+    );
+    let added = engine.dispatch(GameIntent::AddServiceVehicle {
+        line_id: "metro-001".into(),
+    });
+    assert!(
+        added.applied,
+        "second metro vehicle should apply: {added:?}"
+    );
+    assert_eq!(
+        engine.snapshot().transit.metro_lines[0].vehicle_ids.len(),
+        2
+    );
+    engine
+}
+
+fn line_vehicle_ids(snapshot: &caelum_core::model::GameSnapshot, mode: TransitMode) -> Vec<String> {
+    match mode {
+        TransitMode::Bus => snapshot.transit.routes[0].vehicle_ids.clone(),
+        TransitMode::Metro => snapshot.transit.metro_lines[0].vehicle_ids.clone(),
+        TransitMode::Walk => unreachable!("fixture uses bus or metro"),
+    }
+}
+
+fn riding_trip_on_line(line_id: &str, trip_id: &str, sim_id: &str) -> ActiveTrip {
+    ActiveTrip {
+        id: trip_id.into(),
+        sim_id: sim_id.into(),
+        purpose: TripPurpose::CommuteOutbound,
+        origin: Point { x: 2, y: 4 },
+        destination: Point { x: 27, y: 4 },
+        position: TripPosition { x: 4.0, y: 5.0 },
+        status: TripStatus::Riding,
+        deadline: 100.0,
+        route_plan: Some(RoutePlan {
+            legs: vec![RouteLeg {
+                mode: TransitMode::Bus,
+                from: Point { x: 2, y: 4 },
+                to: Point { x: 27, y: 4 },
+                line_id: Some(line_id.into()),
+                service_direction: Some(ServiceDirection::Loop),
+                board_itinerary_index: Some(0),
+                alight_itinerary_index: Some(0),
+            }],
+            estimated_seconds: 10.0,
+        }),
+        current_leg_index: 0,
+        patience_remaining: 240.0,
+        current_leg_wait_seconds: 0.0,
+        private_car_trip: None,
+    }
+}
+
+fn occupy_vehicle(
+    state: &mut caelum_core::model::GameSnapshot,
+    vehicle_id: &str,
+    trip: ActiveTrip,
+) {
+    let index = state
+        .transit
+        .vehicles
+        .iter()
+        .position(|vehicle| vehicle.id == vehicle_id)
+        .expect("vehicle exists");
+    state.transit.vehicles[index].passenger_ids = vec![trip.id.clone()];
+    if !state.sims.iter().any(|sim| sim.id == trip.sim_id) {
+        state.sims.push(Sim {
+            id: trip.sim_id.clone(),
+            home: trip.origin,
+            position: trip.origin,
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace: None,
+            },
+            next_activity: None,
+        });
+    }
+    state.active_trips.push(trip);
+}
+
+fn assert_retire_removes_newest_empty(line_id: &str, engine: &mut GameEngine, mode: TransitMode) {
+    let before = engine.snapshot();
+    let removed_id = line_vehicle_ids(&before, mode)
+        .last()
+        .expect("two vehicles")
+        .clone();
+    let budget = before.budget;
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: line_id.to_string(),
+    });
+    assert!(
+        result.applied,
+        "retire should apply for {mode:?}: {result:?}"
+    );
+    let after = engine.snapshot();
+    assert_eq!(after.budget, budget, "retirement is free");
+    assert_eq!(line_vehicle_ids(&after, mode).len(), 1);
+    assert!(
+        !after
+            .transit
+            .vehicles
+            .iter()
+            .any(|vehicle| vehicle.id == removed_id),
+        "newest empty vehicle must be removed"
+    );
+}
+
+#[test]
+fn retire_service_vehicle_removes_newest_empty_bus_vehicle() {
+    let mut engine = two_vehicle_bus_engine();
+    assert_retire_removes_newest_empty("route-001", &mut engine, TransitMode::Bus);
+}
+
+#[test]
+fn retire_service_vehicle_removes_newest_empty_metro_vehicle() {
+    let mut engine = two_vehicle_metro_engine();
+    assert_retire_removes_newest_empty("metro-001", &mut engine, TransitMode::Metro);
+}
+
+#[test]
+fn retire_service_vehicle_skips_occupied_newest_for_earlier_empty() {
+    let mut state = two_vehicle_bus_engine().snapshot_for_save();
+    let newest = state.transit.routes[0]
+        .vehicle_ids
+        .last()
+        .expect("newest vehicle")
+        .clone();
+    let fallback = state.transit.routes[0].vehicle_ids[0].clone();
+    occupy_vehicle(
+        &mut state,
+        &newest,
+        riding_trip_on_line("route-001", "trip-002", "sim-002"),
+    );
+    let mut engine = GameEngine::from_snapshot(state).expect("occupied-newest fixture loads");
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(
+        result.applied,
+        "retire should skip occupied newest: {result:?}"
+    );
+    let after = engine.snapshot();
+    assert!(
+        after
+            .transit
+            .vehicles
+            .iter()
+            .any(|vehicle| vehicle.id == newest),
+        "occupied newest vehicle must remain"
+    );
+    assert!(
+        !after
+            .transit
+            .vehicles
+            .iter()
+            .any(|vehicle| vehicle.id == fallback),
+        "earlier empty vehicle must be removed"
+    );
+}
+
+#[test]
+fn retire_service_vehicle_rejects_when_every_removable_vehicle_is_occupied() {
+    let mut state = two_vehicle_bus_engine().snapshot_for_save();
+    let vehicle_ids = state.transit.routes[0].vehicle_ids.clone();
+    for (index, vehicle_id) in vehicle_ids.iter().enumerate() {
+        let trip_id = format!("trip-{:03}", index + 1);
+        let sim_id = format!("sim-{:03}", index + 1);
+        occupy_vehicle(
+            &mut state,
+            vehicle_id,
+            riding_trip_on_line("route-001", &trip_id, &sim_id),
+        );
+    }
+    let mut engine = GameEngine::from_snapshot(state).expect("fully occupied fixture loads");
+    let before = engine.snapshot();
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert_eq!(
+        result.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::VehiclesOccupied)
+    );
+    assert_eq!(engine.snapshot(), before);
+}
+
+#[test]
+fn retire_service_vehicle_is_free_no_op_with_one_vehicle() {
+    let mut engine = one_bus_service_engine();
+    let before = engine.snapshot();
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(!result.applied);
+    assert!(result.rejection.is_none());
+    assert_eq!(engine.snapshot(), before);
+}
+
+#[test]
+fn retire_service_vehicle_validates_service_state_before_occupancy() {
+    let mut inactive = two_vehicle_bus_engine();
+    assert!(
+        inactive
+            .dispatch(GameIntent::SetRouteActive {
+                route_id: "route-001".into(),
+                active: false,
+            })
+            .applied
+    );
+    let inactive_result = inactive.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert_eq!(
+        inactive_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::InactiveRoute)
+    );
+
+    let mut disconnected = two_vehicle_bus_engine();
+    assert!(
+        disconnected
+            .dispatch(GameIntent::RemoveAtTile {
+                point: Point { x: 6, y: 5 },
+            })
+            .applied
+    );
+    let disconnected_result = disconnected.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert_eq!(
+        disconnected_result
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::DisconnectedLeg)
+    );
+}
+
+#[test]
+fn globally_paused_active_service_still_publishes_and_accepts_one_retire() {
+    let mut engine = two_vehicle_bus_engine();
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: false })
+            .applied
+    );
+    assert!(
+        engine
+            .dispatch(GameIntent::SetPaused { paused: true })
+            .applied
+    );
+    let before = engine.snapshot();
+    assert!(
+        before.transit.routes[0]
+            .service_metrics
+            .as_ref()
+            .expect("paused route has metrics")
+            .can_retire_vehicle,
+        "global pause must not hide the retire offer"
+    );
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(
+        result.applied,
+        "retire should apply while paused: {result:?}"
+    );
+    assert_eq!(engine.snapshot().budget, before.budget);
+    assert_eq!(
+        engine.snapshot().transit.routes[0].vehicle_ids.len(),
+        before.transit.routes[0].vehicle_ids.len() - 1
+    );
+}
+
+#[test]
+fn retire_service_vehicle_may_drop_assigned_fleet_below_required_fleet() {
+    let mut engine = shortfall_bus_engine();
+    engine.set_budget_for_test(10 * BUS_COST);
+    loop {
+        let snapshot = engine.snapshot();
+        let metrics = snapshot.transit.routes[0]
+            .service_metrics
+            .as_ref()
+            .expect("shortfall route has metrics");
+        let required = metrics.required_fleet.expect("target is set");
+        if metrics.assigned_fleet >= required {
+            break;
+        }
+        assert!(
+            engine
+                .dispatch(GameIntent::AddServiceVehicle {
+                    line_id: "route-001".into(),
+                })
+                .applied
+        );
+    }
+    let before = engine.snapshot();
+    let metrics = before.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("shortfall route has metrics");
+    assert!(
+        metrics.can_retire_vehicle,
+        "shortfall fixture must still allow retirement"
+    );
+    assert!(
+        metrics.assigned_fleet >= metrics.required_fleet.expect("target is set"),
+        "fixture must reach the recommendation before retiring: {metrics:?}"
+    );
+    assert!(
+        metrics.assigned_fleet >= 2,
+        "fixture must keep a removable vehicle"
+    );
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(result.applied, "retire should apply: {result:?}");
+    let snapshot = engine.snapshot();
+    let after = snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("metrics after retire");
+    assert!(
+        after.assigned_fleet < after.required_fleet.expect("target is set"),
+        "retirement may leave the line below recommendation"
+    );
+}
+
+#[test]
+fn retire_service_vehicle_updates_derived_metrics_without_changing_add_offer() {
+    let mut engine = two_vehicle_bus_engine();
+    let before = engine.snapshot();
+    let before_metrics = before.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("two-vehicle route has metrics");
+    assert!(before_metrics.can_retire_vehicle);
+    let assigned_before = before_metrics.assigned_fleet;
+    let nominal_before = before_metrics
+        .nominal_headway_seconds
+        .expect("two vehicles publish nominal headway");
+    let daily_before = before_metrics.daily_operating_cost;
+    let next_vehicle_cost_before = before_metrics.next_vehicle_cost;
+    let waiting_before = before_metrics.waiting_at_risk_count;
+    let longest_before = before_metrics.longest_wait_seconds;
+
+    let result = engine.dispatch(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".into(),
+    });
+    assert!(result.applied, "retire should apply: {result:?}");
+
+    let snapshot = engine.snapshot();
+    let after_metrics = snapshot.transit.routes[0]
+        .service_metrics
+        .as_ref()
+        .expect("metrics after retire");
+    assert_eq!(after_metrics.assigned_fleet, assigned_before - 1);
+    assert!(
+        after_metrics
+            .nominal_headway_seconds
+            .expect("nominal headway")
+            > nominal_before,
+        "smaller fleet should widen nominal headway"
+    );
+    assert!(after_metrics.daily_operating_cost < daily_before);
+    assert_eq!(after_metrics.next_vehicle_cost, next_vehicle_cost_before);
+    assert_eq!(after_metrics.waiting_at_risk_count, waiting_before);
+    assert_eq!(after_metrics.longest_wait_seconds, longest_before);
+    assert!(
+        !after_metrics.can_retire_vehicle,
+        "one remaining vehicle must not offer retirement"
+    );
 }

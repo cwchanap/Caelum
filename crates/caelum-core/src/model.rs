@@ -897,6 +897,7 @@ pub struct ServiceMetrics {
     pub nominal_headway_seconds: Option<f64>,
     pub waiting_at_risk_count: usize,
     pub longest_wait_seconds: Option<f64>,
+    pub can_retire_vehicle: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
