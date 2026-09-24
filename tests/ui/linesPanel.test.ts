@@ -40,6 +40,7 @@ function callbacks() {
     onSetServiceTargetHeadway: vi.fn(),
     onDeployInitialFleet: vi.fn(),
     onAddServiceVehicle: vi.fn(),
+    onRetireServiceVehicle: vi.fn(),
   };
 }
 
@@ -857,6 +858,137 @@ describe("LinesPanel line workspace", () => {
     expect(health).not.toHaveTextContent("recover");
     expect(
       screen.getByRole("button", { name: "Add train · $80,000" }),
+    ).toBeVisible();
+  });
+
+  it("offers retire below recommendation when Rust sets canRetireVehicle", async () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-below-rec",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 1,
+            requiredFleet: 4,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 500,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 900,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+            canRetireVehicle: true,
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-below-rec");
+    expect(serviceValue(service, "Fleet")).toBe("1");
+    expect(serviceValue(service, "Recommended")).toBe("4 buses");
+    expect(
+      screen.getByRole("button", { name: "Add bus · $12,500" }),
+    ).toBeVisible();
+    const retire = screen.getByRole("button", {
+      name: "Retire bus · no refund",
+    });
+    expect(retire).toBeVisible();
+
+    await fireEvent.click(retire);
+    expect(props.onRetireServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(props.onRetireServiceVehicle).toHaveBeenCalledWith(
+      "route-bus-below-rec",
+    );
+  });
+
+  it("hides retire when canRetireVehicle is false even with multiple vehicles", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-no-retire",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: 900,
+            assignedFleet: 3,
+            requiredFleet: 2,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 300,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+            canRetireVehicle: false,
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.queryByTestId("route-retire-vehicle-route-bus-no-retire"),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", { name: "Retire bus · no refund" }),
+    ).toBeNull();
+    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
+  });
+
+  it("labels Metro retire as a train", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "line-metro-retire",
+          name: "North Metro",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "metro",
+          stopCount: 4,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 300,
+            roundTripSeconds: 720,
+            assignedFleet: 2,
+            requiredFleet: 3,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: 360,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+            canRetireVehicle: true,
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.getByRole("button", { name: "Retire train · no refund" }),
     ).toBeVisible();
   });
 

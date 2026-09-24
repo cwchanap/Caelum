@@ -42,7 +42,10 @@ import {
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
-import { createTestGameState, createTestServiceMetrics } from "../helpers/gameState";
+import {
+  createTestGameState,
+  createTestServiceMetrics,
+} from "../helpers/gameState";
 import { createDelayedCitySaveStore } from "./delayedCitySaveStore";
 
 const TEST_REJECTION: GameplayRejection = {
