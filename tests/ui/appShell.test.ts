@@ -198,6 +198,7 @@ function createRuntimeHarness(
     setServiceTargetHeadway: vi.fn(async () => publish()),
     deployInitialFleet: vi.fn(async () => publish()),
     addServiceVehicle: vi.fn(async () => publish()),
+    retireServiceVehicle: vi.fn(async () => publish()),
     toggleRouteActive: vi.fn(async () => publish()),
     deleteRoute: vi.fn(async () => publish()),
     selectRoute: vi.fn(() => publish()),
@@ -1108,6 +1109,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: 600,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
         metroLines: state.transit.metroLines.map((line) => ({
@@ -1123,6 +1126,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: 600,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1198,6 +1203,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1244,6 +1251,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1285,6 +1294,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 2,
             longestWaitSeconds: 192,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1367,6 +1378,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1427,6 +1440,8 @@ describe("App command shell", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },

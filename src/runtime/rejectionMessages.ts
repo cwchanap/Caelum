@@ -88,6 +88,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "Set a target headway before deploying buses.";
     case "fleetAlreadyAssigned":
       return "This route already has a bus fleet.";
+    case "vehiclesOccupied":
+      return "Every removable vehicle on this line has riders.";
     default:
       return assertNever(code, "rejection code");
   }

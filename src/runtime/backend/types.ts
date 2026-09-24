@@ -213,6 +213,7 @@ export type GameIntent =
     }
   | { type: "deployInitialFleet"; lineId: string }
   | { type: "addServiceVehicle"; lineId: string }
+  | { type: "retireServiceVehicle"; lineId: string }
   | {
       type: "assignRouteToPlatform";
       nodeId: string;

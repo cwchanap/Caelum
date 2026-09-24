@@ -9,6 +9,17 @@ import type { GameplayRejection } from "../../src/domain/types";
 import type { GameplayWarning } from "../../src/runtime/backend/types";
 
 describe("rejectionMessage", () => {
+  it("maps vehiclesOccupied with mode-neutral copy", () => {
+    const rejection = {
+      code: "vehiclesOccupied",
+      context: gameplayRejectionContext(),
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(
+      "Every removable vehicle on this line has riders.",
+    );
+  });
+
   it("maps oneWayParallelTooClose", () => {
     const rejection = {
       code: "oneWayParallelTooClose",

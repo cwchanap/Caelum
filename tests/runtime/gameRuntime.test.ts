@@ -653,6 +653,8 @@ function applyIntent(
       nominalHeadwaySeconds: 300,
       waitingAtRiskCount: 0,
       longestWaitSeconds: null,
+
+      canRetireVehicle: false,
     };
     return {
       ...snapshot,
@@ -4782,6 +4784,8 @@ describe("route creation and management", () => {
       nominalHeadwaySeconds: 300,
       waitingAtRiskCount: 0,
       longestWaitSeconds: null,
+
+      canRetireVehicle: false,
     });
   });
 
@@ -4843,6 +4847,33 @@ describe("route creation and management", () => {
 
     expect(dispatch).toHaveBeenCalledWith({
       type: "addServiceVehicle",
+      lineId: "metro-001",
+    });
+    const intent = dispatch.mock.calls[0]?.[0];
+    expect(intent).not.toHaveProperty("mode");
+  });
+
+  it("dispatches a line-only retire service vehicle intent", async () => {
+    const initial = snapshotWithMetroLine();
+    const backend = backendSpy(initial);
+    const dispatch = vi.fn(
+      async (_intent: GameIntent): Promise<GameplayUpdateResult> => ({
+        update: createPresentationUpdate(initial, false),
+        applied: false,
+        rejection: null,
+      }),
+    );
+    backend.dispatch = dispatch;
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    await runtime.retireServiceVehicle("metro-001");
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "retireServiceVehicle",
       lineId: "metro-001",
     });
     const intent = dispatch.mock.calls[0]?.[0];
