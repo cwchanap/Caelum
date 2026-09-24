@@ -158,6 +158,32 @@ fn add_vehicle_offer(
         .then(|| vehicle_cost(mode))
 }
 
+fn retire_vehicle_offer(active: bool, legs: &[RouteLegPath], assigned_fleet: usize) -> bool {
+    active && is_route_operational(active, legs) && assigned_fleet >= 2
+}
+
+fn empty_retire_candidate(
+    snapshot: &GameSnapshot,
+    line_id: &str,
+    mode: TransitMode,
+    vehicle_ids: &[String],
+) -> Option<String> {
+    if vehicle_ids.len() <= 1 {
+        return None;
+    }
+    for vehicle_id in vehicle_ids.iter().rev() {
+        let vehicle = snapshot
+            .transit
+            .vehicles
+            .iter()
+            .find(|vehicle| vehicle.id == *vehicle_id)?;
+        if vehicle.line_id == line_id && vehicle.mode == mode && vehicle.passenger_ids.is_empty() {
+            return Some(vehicle_id.clone());
+        }
+    }
+    None
+}
+
 /// Set the persistent planning target headway for a transit line — valid
 /// before and after deployment — without changing its structural revision,
 /// fleet, or any live vehicle/passenger state. Deriving required fleet from
@@ -378,6 +404,76 @@ pub(crate) fn add_service_vehicle(
     append_vehicle_costed(state, vehicle)
 }
 
+/// Retire one empty vehicle from an already deployed service. Never removes
+/// the last vehicle; occupancy is checked live at dispatch.
+pub(crate) fn retire_service_vehicle(
+    state: &GameSnapshot,
+    line_id: &str,
+) -> GameplayResult<GameSnapshot> {
+    let mode = service_mode(state, line_id)
+        .ok_or_else(|| route_rejection(RejectionCode::RouteNotFound, line_id))?;
+    let (active, legs, vehicle_ids) = if mode == TransitMode::Bus {
+        let route = state
+            .transit
+            .routes
+            .iter()
+            .find(|route| route.id == line_id)
+            .expect("route was found before service-mode lookup");
+        (
+            route.active,
+            route.legs.as_slice(),
+            route.vehicle_ids.as_slice(),
+        )
+    } else {
+        let line = state
+            .transit
+            .metro_lines
+            .iter()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before service-mode lookup");
+        (
+            line.active,
+            line.legs.as_slice(),
+            line.vehicle_ids.as_slice(),
+        )
+    };
+
+    if vehicle_ids.len() <= 1 {
+        return Ok(state.clone());
+    }
+    if !active {
+        return Err(route_rejection(RejectionCode::InactiveRoute, line_id));
+    }
+    if !is_route_operational(active, legs) {
+        return Err(route_rejection(RejectionCode::DisconnectedLeg, line_id));
+    }
+    let candidate = empty_retire_candidate(state, line_id, mode, vehicle_ids)
+        .ok_or_else(|| route_rejection(RejectionCode::VehiclesOccupied, line_id))?;
+
+    let mut next = state.clone();
+    if mode == TransitMode::Bus {
+        next.transit
+            .routes
+            .iter_mut()
+            .find(|route| route.id == line_id)
+            .expect("route was found before candidate construction")
+            .vehicle_ids
+            .retain(|vehicle_id| vehicle_id != &candidate);
+    } else {
+        next.transit
+            .metro_lines
+            .iter_mut()
+            .find(|line| line.id == line_id)
+            .expect("metro line was found before candidate construction")
+            .vehicle_ids
+            .retain(|vehicle_id| vehicle_id != &candidate);
+    }
+    next.transit
+        .vehicles
+        .retain(|vehicle| vehicle.id != candidate);
+    Ok(next)
+}
+
 /// Derive service metrics for either transit mode. Returns `None` when no
 /// positive cycle time is derivable (any leg missing `current_path`, or a
 /// walk that sums to zero).
@@ -414,6 +510,7 @@ fn metrics(
         assigned_fleet,
         target_headway_seconds.is_some(),
     );
+    let can_retire_vehicle = retire_vehicle_offer(route_active, legs, assigned_fleet);
     Some(ServiceMetrics {
         round_trip_seconds,
         assigned_fleet,
@@ -427,6 +524,7 @@ fn metrics(
             .then(|| round_trip_seconds / assigned_fleet as f64),
         waiting_at_risk_count: waiting_health.waiting_at_risk_count,
         longest_wait_seconds: waiting_health.longest_wait_seconds,
+        can_retire_vehicle,
     })
 }
 
@@ -655,8 +753,8 @@ mod tests {
     use crate::model::{
         ActiveTrip, BusStopKind, Heading, MovementKind, PathGeometry, Platform, Point,
         RoadPathStep, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan,
-        ServiceDirection, ServicePattern, Stop, TrackPathStep, TransitMode, TransitNodeStatus,
-        TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
+        ServiceDirection, ServiceMetrics, ServicePattern, Stop, TrackPathStep, TransitMode,
+        TransitNodeStatus, TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
     };
     use crate::traffic::RoadFlow;
     use crate::transit::{BUS_COST, METRO_COST};
@@ -1357,6 +1455,83 @@ mod tests {
             super::add_vehicle_offer(true, &broken, TransitMode::Bus, 1, true),
             None
         );
+    }
+
+    #[test]
+    fn retire_vehicle_offer_requires_an_operational_fleet_of_at_least_two() {
+        let route = route_with_legs(vec![leg(
+            RouteLegKind::Service,
+            ServiceDirection::Outbound,
+            "stop-001",
+            "stop-002",
+            road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
+        )]);
+        assert!(super::retire_vehicle_offer(true, &route.legs, 2));
+        assert!(!super::retire_vehicle_offer(true, &route.legs, 1));
+        assert!(!super::retire_vehicle_offer(false, &route.legs, 2));
+        let mut broken = route.legs.clone();
+        broken[0].status = RouteLegStatus::NetworkDisconnected;
+        assert!(!super::retire_vehicle_offer(true, &broken, 2));
+    }
+
+    #[test]
+    fn retire_service_vehicle_preserves_snapshot_except_chosen_vehicle() {
+        let mut route = route_with_legs(vec![leg(
+            RouteLegKind::Service,
+            ServiceDirection::Outbound,
+            "stop-001",
+            "stop-002",
+            road_path(vec![step((2, 5), MovementKind::Straight, 100.0)], 100.0),
+        )]);
+        route.vehicle_ids = vec!["vehicle-001".into(), "vehicle-002".into()];
+        route.target_headway_seconds = Some(300);
+
+        let mut snapshot = crate::state::create_initial_snapshot();
+        snapshot.transit.routes = vec![route];
+        snapshot.transit.vehicles = vec![
+            test_vehicle_with_id("vehicle-001", 0, 0),
+            test_vehicle_with_id("vehicle-002", 1, 0),
+        ];
+        snapshot.transit.routes[0].service_metrics = Some(ServiceMetrics {
+            round_trip_seconds: 1.0,
+            assigned_fleet: 99,
+            required_fleet: Some(99),
+            estimated_deployment_cost: None,
+            daily_operating_cost: 0,
+            estimated_daily_operating_cost: None,
+            next_vehicle_cost: Some(99),
+            nominal_headway_seconds: Some(1.0),
+            waiting_at_risk_count: 0,
+            longest_wait_seconds: None,
+            can_retire_vehicle: true,
+        });
+
+        let mut expected = snapshot.clone();
+        expected.transit.routes[0]
+            .vehicle_ids
+            .retain(|vehicle_id| vehicle_id != "vehicle-002");
+        expected
+            .transit
+            .vehicles
+            .retain(|vehicle| vehicle.id != "vehicle-002");
+
+        let next =
+            super::retire_service_vehicle(&snapshot, "route-001").expect("retire should apply");
+        assert_eq!(next, expected);
+    }
+
+    fn test_vehicle_with_id(id: &str, itinerary_index: usize, path_step_index: usize) -> Vehicle {
+        Vehicle {
+            id: id.to_string(),
+            mode: TransitMode::Bus,
+            line_id: "route-001".to_string(),
+            capacity: 18,
+            passenger_ids: Vec::new(),
+            itinerary_index,
+            path_step_index,
+            step_progress: 0.0,
+            parked_position: None,
+        }
     }
 
     /// Shared shuttle vector: the same cyclic walk covers loop and shuttle

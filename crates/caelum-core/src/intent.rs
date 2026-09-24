@@ -39,6 +39,9 @@ pub enum GameIntent {
     AddServiceVehicle {
         line_id: String,
     },
+    RetireServiceVehicle {
+        line_id: String,
+    },
     LayRoad {
         point: Point,
     },

@@ -383,6 +383,7 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
         nominal_headway_seconds: Some(300.0),
         waiting_at_risk_count: 0,
         longest_wait_seconds: None,
+        can_retire_vehicle: true,
     });
     let value = serde_json::to_value(&derived).unwrap();
     assert_eq!(
@@ -397,9 +398,26 @@ fn bus_route_service_metrics_are_derived_output_never_incoming_authority() {
             "nextVehicleCost": null,
             "nominalHeadwaySeconds": 300.0,
             "waitingAtRiskCount": 0,
-            "longestWaitSeconds": null
+            "longestWaitSeconds": null,
+            "canRetireVehicle": true
         })
     );
+}
+
+#[test]
+fn retire_service_vehicle_intent_is_line_id_only() {
+    let value = serde_json::to_value(GameIntent::RetireServiceVehicle {
+        line_id: "route-001".to_string(),
+    })
+    .expect("retire intent serializes");
+    assert_eq!(
+        value,
+        json!({
+            "type": "retireServiceVehicle",
+            "lineId": "route-001"
+        })
+    );
+    assert!(value.get("mode").is_none());
 }
 
 #[test]
@@ -1134,6 +1152,13 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             vec![("lineId", json!("route-001"))],
         ),
         (
+            GameIntent::RetireServiceVehicle {
+                line_id: "route-001".to_string(),
+            },
+            "retireServiceVehicle",
+            vec![("lineId", json!("route-001"))],
+        ),
+        (
             GameIntent::LayRoad { point: p(1, 2) },
             "layRoad",
             vec![("point", json!({ "x": 1, "y": 2 }))],
@@ -1318,6 +1343,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::SetServiceTargetHeadway { .. } => "setServiceTargetHeadway",
             GameIntent::DeployInitialFleet { .. } => "deployInitialFleet",
             GameIntent::AddServiceVehicle { .. } => "addServiceVehicle",
+            GameIntent::RetireServiceVehicle { .. } => "retireServiceVehicle",
             GameIntent::LayRoad { .. } => "layRoad",
             GameIntent::LayRoadLine { .. } => "layRoadLine",
             GameIntent::CycleRoadDirection { .. } => "cycleRoadDirection",
@@ -1840,6 +1866,7 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
             RejectionCode::RouteRevisionExhausted => "routeRevisionExhausted",
             RejectionCode::RouteNotFound => "routeNotFound",
             RejectionCode::InactiveRoute => "inactiveRoute",
+            RejectionCode::VehiclesOccupied => "vehiclesOccupied",
             RejectionCode::StructureNotFound => "structureNotFound",
             RejectionCode::InvalidPlatform => "invalidPlatform",
             RejectionCode::InvalidBuildingPlacement => "invalidBuildingPlacement",
@@ -1873,6 +1900,7 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
         RejectionCode::RouteRevisionExhausted,
         RejectionCode::RouteNotFound,
         RejectionCode::InactiveRoute,
+        RejectionCode::VehiclesOccupied,
         RejectionCode::StructureNotFound,
         RejectionCode::InvalidPlatform,
         RejectionCode::InvalidBuildingPlacement,
