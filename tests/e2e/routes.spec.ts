@@ -1104,7 +1104,10 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
   const postRetireRoute = postRetireSnapshot.state.transit.routes.find(
     (candidate) => candidate.id === "route-001",
   );
-  if (postRetireRoute === undefined || postRetireRoute.serviceMetrics === null) {
+  if (
+    postRetireRoute === undefined ||
+    postRetireRoute.serviceMetrics === null
+  ) {
     throw new Error("Post-retire service metrics are missing from the runtime");
   }
   expect(postRetireRoute.serviceMetrics.dailyOperatingCost).toBe(
