@@ -47,6 +47,7 @@
     ) => void;
     onDeployInitialFleet: (routeId: string) => void;
     onAddServiceVehicle: (routeId: string) => void;
+    onRetireServiceVehicle: (routeId: string) => void;
   }
 
   let {
@@ -76,6 +77,7 @@
     onSetServiceTargetHeadway,
     onDeployInitialFleet,
     onAddServiceVehicle,
+    onRetireServiceVehicle,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
@@ -506,6 +508,16 @@
                     onclick={() => onAddServiceVehicle(route.id)}
                   >
                     {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
+                  </button>
+                {/if}
+                {#if route.service.canRetireVehicle}
+                  <button
+                    type="button"
+                    class="route-toggle"
+                    data-testid={`route-retire-vehicle-${route.id}`}
+                    onclick={() => onRetireServiceVehicle(route.id)}
+                  >
+                    {`Retire ${route.mode === "metro" ? "train" : "bus"} · no refund`}
                   </button>
                 {/if}
                 <div class="route-item-controls">

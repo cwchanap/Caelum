@@ -1204,12 +1204,12 @@ describe("route selectors", () => {
     );
     state = assignTestVehicle(state, "bus", "route-001");
 
-    expect(selectShellState(state, createUiState()).routes[0]?.service).toMatchObject(
-      {
-        assignedFleet: 1,
-        canRetireVehicle: true,
-      },
-    );
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      assignedFleet: 1,
+      canRetireVehicle: true,
+    });
   });
 
   it("forwards canRetireVehicle false from service metrics even with multiple vehicles", () => {
@@ -1223,22 +1223,22 @@ describe("route selectors", () => {
     state = assignTestVehicle(state, "bus", "route-001");
     state = assignTestVehicle(state, "bus", "route-001");
 
-    expect(selectShellState(state, createUiState()).routes[0]?.service).toMatchObject(
-      {
-        assignedFleet: 2,
-        canRetireVehicle: false,
-      },
-    );
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      assignedFleet: 2,
+      canRetireVehicle: false,
+    });
   });
 
   it("defaults canRetireVehicle to false when service metrics are unavailable", () => {
     const state = busRouteWithMetrics(null);
 
-    expect(selectShellState(state, createUiState()).routes[0]?.service).toMatchObject(
-      {
-        canRetireVehicle: false,
-      },
-    );
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      canRetireVehicle: false,
+    });
   });
 
   it("exposes target headway and required fleet before deployment", () => {

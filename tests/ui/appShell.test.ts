@@ -1238,6 +1238,43 @@ describe("App command shell", () => {
     expect(runtime.addServiceVehicle).toHaveBeenCalledWith("route-001");
   });
 
+  it("retires a service vehicle from the Rust-offered Lines control", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          vehicleIds: ["vehicle-001", "vehicle-002"],
+          targetHeadwaySeconds: 360,
+          serviceMetrics: createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Retire bus · no refund" }),
+    );
+
+    expect(runtime.retireServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(runtime.retireServiceVehicle).toHaveBeenCalledWith("route-001");
+  });
+
   it("round-trips a wait location to the inspector and back to service controls", async () => {
     let state = createTestGameState();
     state = withRoads(state, [{ x: 7, y: 7 }]);
