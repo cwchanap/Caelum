@@ -14,6 +14,7 @@ import type {
   Point,
   Route,
   RouteLegPath,
+  ServiceMetrics,
   Station,
   Stop,
   StopKind,
@@ -42,6 +43,26 @@ function createEmptyMap(width = MAP_WIDTH, height = MAP_HEIGHT): GameMap {
     }
   }
   return { width, height, tiles, roadStructures: [] };
+}
+
+/** Shared defaults for derived service metrics in runtime/selector tests. */
+export function createTestServiceMetrics(
+  overrides: Partial<ServiceMetrics> = {},
+): ServiceMetrics {
+  return {
+    roundTripSeconds: 600,
+    assignedFleet: 0,
+    requiredFleet: null,
+    estimatedDeploymentCost: null,
+    dailyOperatingCost: 0,
+    estimatedDailyOperatingCost: null,
+    nextVehicleCost: null,
+    nominalHeadwaySeconds: null,
+    waitingAtRiskCount: 0,
+    longestWaitSeconds: null,
+    canRetireVehicle: false,
+    ...overrides,
+  };
 }
 
 function busPlatforms(id: string, kind: StopKind) {

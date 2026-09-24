@@ -1000,6 +1000,8 @@ describe("route selectors", () => {
           nominalHeadwaySeconds: null,
           waitingAtRiskCount: 0,
           longestWaitSeconds: null,
+
+          canRetireVehicle: false,
         },
         waitLocations: [],
         failures: [],
@@ -1025,6 +1027,8 @@ describe("route selectors", () => {
           nominalHeadwaySeconds: null,
           waitingAtRiskCount: 0,
           longestWaitSeconds: null,
+
+          canRetireVehicle: false,
         },
         waitLocations: [],
         failures: [],
@@ -1065,6 +1069,8 @@ describe("route selectors", () => {
                   nominalHeadwaySeconds: null,
                   waitingAtRiskCount: 0,
                   longestWaitSeconds: null,
+
+                  canRetireVehicle: false,
                 },
               }
             : {
@@ -1080,6 +1086,8 @@ describe("route selectors", () => {
                   nominalHeadwaySeconds: 600,
                   waitingAtRiskCount: 0,
                   longestWaitSeconds: null,
+
+                  canRetireVehicle: false,
                 },
               },
         ),
@@ -1096,6 +1104,8 @@ describe("route selectors", () => {
             nominalHeadwaySeconds: 600,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1150,6 +1160,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1169,6 +1181,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1204,6 +1218,65 @@ describe("route selectors", () => {
     });
   });
 
+  it("forwards canRetireVehicle true from service metrics without deriving from vehicle IDs", () => {
+    let state = busRouteWithMetrics({
+      roundTripSeconds: 600,
+      assignedFleet: 2,
+      requiredFleet: 2,
+      estimatedDeploymentCost: null,
+      dailyOperatingCost: 0,
+      estimatedDailyOperatingCost: null,
+      nextVehicleCost: null,
+      nominalHeadwaySeconds: 300,
+      waitingAtRiskCount: 0,
+      longestWaitSeconds: null,
+      canRetireVehicle: true,
+    });
+    state = assignTestVehicle(state, "bus", "route-001");
+
+    expect(selectShellState(state, createUiState()).routes[0]?.service).toMatchObject(
+      {
+        assignedFleet: 1,
+        canRetireVehicle: true,
+      },
+    );
+  });
+
+  it("forwards canRetireVehicle false from service metrics even with multiple vehicles", () => {
+    let state = busRouteWithMetrics({
+      roundTripSeconds: 600,
+      assignedFleet: 2,
+      requiredFleet: 2,
+      estimatedDeploymentCost: null,
+      dailyOperatingCost: 0,
+      estimatedDailyOperatingCost: null,
+      nextVehicleCost: null,
+      nominalHeadwaySeconds: 300,
+      waitingAtRiskCount: 0,
+      longestWaitSeconds: null,
+      canRetireVehicle: false,
+    });
+    state = assignTestVehicle(state, "bus", "route-001");
+    state = assignTestVehicle(state, "bus", "route-001");
+
+    expect(selectShellState(state, createUiState()).routes[0]?.service).toMatchObject(
+      {
+        assignedFleet: 2,
+        canRetireVehicle: false,
+      },
+    );
+  });
+
+  it("defaults canRetireVehicle to false when service metrics are unavailable", () => {
+    const state = busRouteWithMetrics(null);
+
+    expect(selectShellState(state, createUiState()).routes[0]?.service).toMatchObject(
+      {
+        canRetireVehicle: false,
+      },
+    );
+  });
+
   it("exposes target headway and required fleet before deployment", () => {
     const state = busRouteWithMetrics(
       {
@@ -1217,6 +1290,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
       300,
     );
@@ -1234,6 +1309,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1251,6 +1328,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: 300,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
       300,
     );
@@ -1268,6 +1347,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: 300,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1288,6 +1369,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1313,6 +1396,8 @@ describe("route selectors", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1333,6 +1418,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1358,6 +1445,8 @@ describe("route selectors", () => {
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1378,6 +1467,8 @@ describe("route selectors", () => {
         nextVehicleCost: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1409,6 +1500,8 @@ describe("route selectors", () => {
             nominalHeadwaySeconds: 600,
             waitingAtRiskCount: 2,
             longestWaitSeconds: 95,
+
+            canRetireVehicle: false,
           },
         })),
       },
@@ -1426,6 +1519,8 @@ describe("route selectors", () => {
       nominalHeadwaySeconds: 600,
       waitingAtRiskCount: 2,
       longestWaitSeconds: 95,
+
+      canRetireVehicle: false,
     });
     expect(service.waitingAtRiskCount).toBe(2);
     expect(service.longestWaitSeconds).toBe(95);
@@ -1457,6 +1552,8 @@ describe("route selectors", () => {
                   nominalHeadwaySeconds: 600,
                   waitingAtRiskCount: 4,
                   longestWaitSeconds: 190,
+
+                  canRetireVehicle: false,
                 },
               }
             : route,
@@ -1782,6 +1879,10 @@ describe("action feedback selector", () => {
     [
       { code: "fleetAlreadyAssigned" as const, context: {} },
       "This route already has a bus fleet.",
+    ],
+    [
+      { code: "vehiclesOccupied" as const, context: {} },
+      "Every removable vehicle on this line has riders.",
     ],
   ])("maps bus service rejection %s to player copy", (rejection, message) => {
     const shell = selectShellState(

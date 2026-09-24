@@ -164,6 +164,7 @@ export interface ShellServiceState {
   nominalHeadwaySeconds: number | null;
   waitingAtRiskCount: number;
   longestWaitSeconds: number | null;
+  canRetireVehicle: boolean;
 }
 
 export interface RouteFailureRow {
@@ -318,6 +319,7 @@ export interface RuntimeController {
   ) => RuntimeCommandResult;
   deployInitialFleet: (lineId: string) => RuntimeCommandResult;
   addServiceVehicle: (lineId: string) => RuntimeCommandResult;
+  retireServiceVehicle: (lineId: string) => RuntimeCommandResult;
   toggleRouteActive: (routeId: string) => RuntimeCommandResult;
   deleteRoute: (routeId: string) => RuntimeCommandResult;
   selectRoute: (routeId: string | null) => RuntimeSnapshot;

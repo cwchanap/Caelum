@@ -1749,6 +1749,10 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "addServiceVehicle", lineId });
     },
+    retireServiceVehicle(lineId) {
+      if (dead) return Promise.resolve(getSnapshot());
+      return enqueueDispatch({ type: "retireServiceVehicle", lineId });
+    },
     toggleRouteActive(routeId) {
       if (dead) return Promise.resolve(getSnapshot());
       const route =

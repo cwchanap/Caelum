@@ -66,6 +66,8 @@ function routeFixtures(): ShellRouteListState {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
       waitLocations: [],
       failures: [],
@@ -91,6 +93,8 @@ function routeFixtures(): ShellRouteListState {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
       waitLocations: [],
       failures: [
@@ -293,6 +297,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -361,6 +367,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -420,6 +428,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 1,
             longestWaitSeconds: 150,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -445,6 +455,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: null,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -488,6 +500,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 900,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -513,6 +527,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 900,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -556,6 +572,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 348,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -581,6 +599,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -647,6 +667,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
             longestWaitSeconds: 150,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -686,6 +708,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
             longestWaitSeconds: 0,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -723,6 +747,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 300,
             waitingAtRiskCount: 0,
             longestWaitSeconds: null,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -764,6 +790,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 2,
             longestWaitSeconds: 192,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -814,6 +842,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 720,
             waitingAtRiskCount: 1,
             longestWaitSeconds: 150,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -854,6 +884,8 @@ describe("LinesPanel line workspace", () => {
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 1,
             longestWaitSeconds: 150,
+
+            canRetireVehicle: false,
           },
           waitLocations: [],
           failures: [],
@@ -917,6 +949,8 @@ describe("LinesPanel wait locations", () => {
         nominalHeadwaySeconds: 348,
         waitingAtRiskCount: 1,
         longestWaitSeconds: 192,
+
+        canRetireVehicle: false,
       },
       waitLocations: [
         {
