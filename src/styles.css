@@ -1302,8 +1302,13 @@ body {
     color 0.12s ease;
 }
 
-.route-toggle:hover {
+.route-toggle:hover:not(:disabled) {
   border-color: var(--cyan);
+}
+
+.route-toggle:disabled {
+  cursor: default;
+  opacity: 0.55;
 }
 
 .route-colors {

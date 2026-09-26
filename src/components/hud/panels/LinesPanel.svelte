@@ -85,6 +85,15 @@
   let headwayMinuteDrafts = $state<Record<string, string>>({});
   let listRegion: HTMLElement | null = $state(null);
   let previousDraftActive = $state<boolean | null>(null);
+  // One in-flight Add/Retire per route: a second click before the dispatch
+  // republishes would queue a second fleet mutation. Every publish builds a
+  // fresh `routes` array, which clears the guard on the new state.
+  let pendingServiceActionId = $state<string | null>(null);
+
+  $effect(() => {
+    void routes;
+    pendingServiceActionId = null;
+  });
 
   // Rust stores target_headway_seconds as u32; minutes * 60 must not overflow it.
   const MAX_HEADWAY_MINUTES = Math.floor(0xffff_ffff / 60);
@@ -505,7 +514,12 @@
                     type="button"
                     class="route-toggle"
                     data-testid={`route-add-vehicle-${route.id}`}
-                    onclick={() => onAddServiceVehicle(route.id)}
+                    disabled={pendingServiceActionId === route.id}
+                    aria-label={`Add ${route.mode === "metro" ? "train" : "bus"} on ${route.name} · ${formatBudget(route.service.nextVehicleCost)}`}
+                    onclick={() => {
+                      pendingServiceActionId = route.id;
+                      onAddServiceVehicle(route.id);
+                    }}
                   >
                     {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
                   </button>
@@ -515,7 +529,12 @@
                     type="button"
                     class="route-toggle"
                     data-testid={`route-retire-vehicle-${route.id}`}
-                    onclick={() => onRetireServiceVehicle(route.id)}
+                    disabled={pendingServiceActionId === route.id}
+                    aria-label={`Retire ${route.mode === "metro" ? "train" : "bus"} on ${route.name} · no refund`}
+                    onclick={() => {
+                      pendingServiceActionId = route.id;
+                      onRetireServiceVehicle(route.id);
+                    }}
                   >
                     {`Retire ${route.mode === "metro" ? "train" : "bus"} · no refund`}
                   </button>

@@ -1017,6 +1017,9 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
   if (nextVehicleCost === null) {
     throw new Error("Rust did not publish an Add price for the deployed fleet");
   }
+  // The journey must stay paused (design step 2): no sim time passes, so the
+  // added vehicle cannot board riders before it is retired.
+  expect((await runtimeSnapshot(page)).state.paused).toBe(true);
   const addBus = page.getByTestId("route-add-vehicle-route-001");
   await expect(addBus).toBeVisible();
 
@@ -1091,7 +1094,9 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
     throw new Error("Post-add route is missing the newly added vehicle id");
   }
   expect(postAddRoute.serviceMetrics.canRetireVehicle).toBe(true);
-  await page.getByRole("button", { name: "Retire bus · no refund" }).click();
+  await page
+    .getByRole("button", { name: "Retire bus on Bus 1 · no refund" })
+    .click();
   await expect
     .poll(async () => {
       const route = (await runtimeSnapshot(page)).state.transit.routes.find(

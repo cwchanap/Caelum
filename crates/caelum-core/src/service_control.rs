@@ -154,29 +154,32 @@ fn add_vehicle_offer(
     assigned_fleet: usize,
     has_target: bool,
 ) -> Option<i32> {
-    (active && is_route_operational(active, legs) && assigned_fleet > 0 && has_target)
+    (is_route_operational(active, legs) && assigned_fleet > 0 && has_target)
         .then(|| vehicle_cost(mode))
 }
 
 fn retire_vehicle_offer(active: bool, legs: &[RouteLegPath], assigned_fleet: usize) -> bool {
-    active && is_route_operational(active, legs) && assigned_fleet >= 2
+    is_route_operational(active, legs) && assigned_fleet >= 2
 }
 
+/// Return the newest empty vehicle id on the line. Callers gate fleet size
+/// (never the last vehicle); ids with no matching vehicle are skipped like
+/// tombstones rather than aborting the search.
 fn empty_retire_candidate(
     snapshot: &GameSnapshot,
     line_id: &str,
     mode: TransitMode,
     vehicle_ids: &[String],
 ) -> Option<String> {
-    if vehicle_ids.len() <= 1 {
-        return None;
-    }
     for vehicle_id in vehicle_ids.iter().rev() {
-        let vehicle = snapshot
+        let Some(vehicle) = snapshot
             .transit
             .vehicles
             .iter()
-            .find(|vehicle| vehicle.id == *vehicle_id)?;
+            .find(|vehicle| vehicle.id == *vehicle_id)
+        else {
+            continue;
+        };
         if vehicle.line_id == line_id && vehicle.mode == mode && vehicle.passenger_ids.is_empty() {
             return Some(vehicle_id.clone());
         }
@@ -1521,17 +1524,9 @@ mod tests {
     }
 
     fn test_vehicle_with_id(id: &str, itinerary_index: usize, path_step_index: usize) -> Vehicle {
-        Vehicle {
-            id: id.to_string(),
-            mode: TransitMode::Bus,
-            line_id: "route-001".to_string(),
-            capacity: 18,
-            passenger_ids: Vec::new(),
-            itinerary_index,
-            path_step_index,
-            step_progress: 0.0,
-            parked_position: None,
-        }
+        let mut vehicle = test_vehicle(itinerary_index, path_step_index);
+        vehicle.id = id.to_string();
+        vehicle
     }
 
     /// Shared shuttle vector: the same cyclic walk covers loop and shuttle

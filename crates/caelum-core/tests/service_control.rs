@@ -2187,32 +2187,19 @@ fn line_vehicle_ids(snapshot: &caelum_core::model::GameSnapshot, mode: TransitMo
 }
 
 fn riding_trip_on_line(line_id: &str, trip_id: &str, sim_id: &str) -> ActiveTrip {
-    ActiveTrip {
-        id: trip_id.into(),
-        sim_id: sim_id.into(),
-        purpose: TripPurpose::CommuteOutbound,
-        origin: Point { x: 2, y: 4 },
-        destination: Point { x: 27, y: 4 },
-        position: TripPosition { x: 4.0, y: 5.0 },
-        status: TripStatus::Riding,
-        deadline: 100.0,
-        route_plan: Some(RoutePlan {
-            legs: vec![RouteLeg {
-                mode: TransitMode::Bus,
-                from: Point { x: 2, y: 4 },
-                to: Point { x: 27, y: 4 },
-                line_id: Some(line_id.into()),
-                service_direction: Some(ServiceDirection::Loop),
-                board_itinerary_index: Some(0),
-                alight_itinerary_index: Some(0),
-            }],
-            estimated_seconds: 10.0,
-        }),
-        current_leg_index: 0,
-        patience_remaining: 240.0,
-        current_leg_wait_seconds: 0.0,
-        private_car_trip: None,
-    }
+    let mut trip = waiting_transit_trip(
+        trip_id,
+        sim_id,
+        line_id,
+        TransitMode::Bus,
+        Point { x: 2, y: 4 },
+        Point { x: 27, y: 4 },
+        240.0,
+    );
+    trip.status = TripStatus::Riding;
+    trip.position = TripPosition { x: 4.0, y: 5.0 };
+    trip.deadline = 100.0;
+    trip
 }
 
 fn occupy_vehicle(
@@ -2228,16 +2215,8 @@ fn occupy_vehicle(
         .expect("vehicle exists");
     state.transit.vehicles[index].passenger_ids = vec![trip.id.clone()];
     if !state.sims.iter().any(|sim| sim.id == trip.sim_id) {
-        state.sims.push(Sim {
-            id: trip.sim_id.clone(),
-            home: trip.origin,
-            position: trip.origin,
-            routine: CitizenRoutine::Worker {
-                shift_template: "standard".to_string(),
-                workplace: None,
-            },
-            next_activity: None,
-        });
+        let sim = waiting_sim(&trip.sim_id, trip.origin);
+        state.sims.push(sim);
     }
     state.active_trips.push(trip);
 }
@@ -2361,16 +2340,37 @@ fn retire_service_vehicle_is_free_no_op_with_one_vehicle() {
 
 #[test]
 fn retire_service_vehicle_validates_service_state_before_occupancy() {
-    let mut inactive = two_vehicle_bus_engine();
-    assert!(
-        inactive
-            .dispatch(GameIntent::SetRouteActive {
-                route_id: "route-001".into(),
-                active: false,
-            })
-            .applied
-    );
-    let inactive_result = inactive.dispatch(GameIntent::RetireServiceVehicle {
+    // Every vehicle is occupied, so a retire that checked occupancy first
+    // would reject with VehiclesOccupied; the asserted codes prove service
+    // state is validated before occupancy.
+    let mut occupied_inactive = {
+        let mut engine = two_vehicle_bus_engine();
+        assert!(
+            engine
+                .dispatch(GameIntent::SetRouteActive {
+                    route_id: "route-001".into(),
+                    active: false,
+                })
+                .applied
+        );
+        let mut state = engine.snapshot_for_save();
+        for (index, vehicle_id) in state.transit.routes[0]
+            .vehicle_ids
+            .clone()
+            .iter()
+            .enumerate()
+        {
+            let trip_id = format!("trip-{:03}", index + 1);
+            let sim_id = format!("sim-{:03}", index + 1);
+            occupy_vehicle(
+                &mut state,
+                vehicle_id,
+                riding_trip_on_line("route-001", &trip_id, &sim_id),
+            );
+        }
+        GameEngine::from_snapshot(state).expect("occupied inactive fixture loads")
+    };
+    let inactive_result = occupied_inactive.dispatch(GameIntent::RetireServiceVehicle {
         line_id: "route-001".into(),
     });
     assert_eq!(
@@ -2381,15 +2381,33 @@ fn retire_service_vehicle_validates_service_state_before_occupancy() {
         Some(&RejectionCode::InactiveRoute)
     );
 
-    let mut disconnected = two_vehicle_bus_engine();
-    assert!(
-        disconnected
-            .dispatch(GameIntent::RemoveAtTile {
-                point: Point { x: 6, y: 5 },
-            })
-            .applied
-    );
-    let disconnected_result = disconnected.dispatch(GameIntent::RetireServiceVehicle {
+    let mut occupied_disconnected = {
+        let mut engine = two_vehicle_bus_engine();
+        assert!(
+            engine
+                .dispatch(GameIntent::RemoveAtTile {
+                    point: Point { x: 6, y: 5 },
+                })
+                .applied
+        );
+        let mut state = engine.snapshot_for_save();
+        for (index, vehicle_id) in state.transit.routes[0]
+            .vehicle_ids
+            .clone()
+            .iter()
+            .enumerate()
+        {
+            let trip_id = format!("trip-{:03}", index + 1);
+            let sim_id = format!("sim-{:03}", index + 1);
+            occupy_vehicle(
+                &mut state,
+                vehicle_id,
+                riding_trip_on_line("route-001", &trip_id, &sim_id),
+            );
+        }
+        GameEngine::from_snapshot(state).expect("occupied disconnected fixture loads")
+    };
+    let disconnected_result = occupied_disconnected.dispatch(GameIntent::RetireServiceVehicle {
         line_id: "route-001".into(),
     });
     assert_eq!(
