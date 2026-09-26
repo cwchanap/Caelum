@@ -884,11 +884,11 @@ describe("LinesPanel line workspace", () => {
         ? firstCommand
         : Promise.resolve(),
     );
-    render(LinesPanel, { props });
+    const { rerender } = render(LinesPanel, { props });
 
-    const addA = screen.getByTestId("route-add-vehicle-route-bus-a");
-    const retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
-    const addB = screen.getByTestId("route-add-vehicle-route-bus-b");
+    let addA = screen.getByTestId("route-add-vehicle-route-bus-a");
+    let retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
+    let addB = screen.getByTestId("route-add-vehicle-route-bus-b");
 
     // First activation on route A latches only route A's buttons.
     await fireEvent.click(addA);
@@ -903,6 +903,21 @@ describe("LinesPanel line workspace", () => {
     await fireEvent.click(retireA);
     expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
     expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
+
+    // A fresh routes publish (tick or hover) while route A's command is
+    // still in flight must not clear the latch.
+    const freshRoutes = routes.map((route) => ({
+      ...route,
+      service: { ...route.service },
+    }));
+    await rerender({ ...props, routes: freshRoutes });
+    addA = screen.getByTestId("route-add-vehicle-route-bus-a");
+    retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
+    addB = screen.getByTestId("route-add-vehicle-route-bus-b");
+    expect(addA).toBeDisabled();
+    expect(retireA).toBeDisabled();
+    await fireEvent.click(addA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
 
     // Route B keeps an independent guard.
     await fireEvent.click(addB);

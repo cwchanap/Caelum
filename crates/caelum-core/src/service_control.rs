@@ -163,8 +163,9 @@ fn retire_vehicle_offer(active: bool, legs: &[RouteLegPath], assigned_fleet: usi
 }
 
 /// Return the newest empty vehicle id on the line. Callers gate fleet size
-/// (never the last vehicle); ids with no matching vehicle are skipped like
-/// tombstones rather than aborting the search.
+/// (never the last vehicle); an id with no matching vehicle is a dangling
+/// reference validated snapshots do not contain, so the search skips it
+/// rather than aborting.
 fn empty_retire_candidate(
     snapshot: &GameSnapshot,
     line_id: &str,
