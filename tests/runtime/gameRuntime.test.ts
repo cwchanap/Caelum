@@ -650,6 +650,7 @@ function applyIntent(
       requiredFleet: 2,
       dailyOperatingCost,
       nominalHeadwaySeconds: 300,
+      canRetireVehicle: true,
     });
     return {
       ...snapshot,
@@ -4774,6 +4775,7 @@ describe("route creation and management", () => {
         requiredFleet: 2,
         dailyOperatingCost: 800,
         nominalHeadwaySeconds: 300,
+        canRetireVehicle: true,
       }),
     );
   });

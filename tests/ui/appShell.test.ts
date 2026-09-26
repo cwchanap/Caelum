@@ -1231,7 +1231,9 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByTestId("command-destination-lines"));
     await fireEvent.click(
-      screen.getByRole("button", { name: "Add bus · $12,500" }),
+      screen.getByRole("button", {
+        name: "Add bus on Bus 1 · $12,500",
+      }),
     );
 
     expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(1);
@@ -1268,7 +1270,9 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByTestId("command-destination-lines"));
     await fireEvent.click(
-      screen.getByRole("button", { name: "Retire bus · no refund" }),
+      screen.getByRole("button", {
+        name: "Retire bus on Bus 1 · no refund",
+      }),
     );
 
     expect(runtime.retireServiceVehicle).toHaveBeenCalledTimes(1);

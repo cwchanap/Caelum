@@ -991,18 +991,8 @@ describe("route selectors", () => {
         status: { primary: "noFleet", pausedAfterRepair: false },
         service: {
           targetHeadwaySeconds: null,
+          ...createTestServiceMetrics(),
           roundTripSeconds: null,
-          assignedFleet: 0,
-          requiredFleet: null,
-          estimatedDeploymentCost: null,
-          dailyOperatingCost: 0,
-          estimatedDailyOperatingCost: null,
-          nextVehicleCost: null,
-          nominalHeadwaySeconds: null,
-          waitingAtRiskCount: 0,
-          longestWaitSeconds: null,
-
-          canRetireVehicle: false,
         },
         waitLocations: [],
         failures: [],
@@ -1018,18 +1008,8 @@ describe("route selectors", () => {
         status: { primary: "noFleet", pausedAfterRepair: false },
         service: {
           targetHeadwaySeconds: null,
+          ...createTestServiceMetrics(),
           roundTripSeconds: null,
-          assignedFleet: 0,
-          requiredFleet: null,
-          estimatedDeploymentCost: null,
-          dailyOperatingCost: 0,
-          estimatedDailyOperatingCost: null,
-          nextVehicleCost: null,
-          nominalHeadwaySeconds: null,
-          waitingAtRiskCount: 0,
-          longestWaitSeconds: null,
-
-          canRetireVehicle: false,
         },
         waitLocations: [],
         failures: [],
@@ -1127,16 +1107,8 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: null,
+        ...createTestServiceMetrics(),
         roundTripSeconds: null,
-        assignedFleet: 0,
-        requiredFleet: null,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-
-        canRetireVehicle: false,
       },
     });
   });
@@ -1252,18 +1224,7 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 300,
-        roundTripSeconds: 600,
-        assignedFleet: 0,
-        requiredFleet: 2,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-
-        canRetireVehicle: false,
+        ...createTestServiceMetrics({ requiredFleet: 2 }),
       },
     });
   });
@@ -1283,16 +1244,11 @@ describe("route selectors", () => {
       status: { primary: "running", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 300,
-        roundTripSeconds: 600,
-        assignedFleet: 2,
-        requiredFleet: 2,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: 300,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-
-        canRetireVehicle: false,
+        ...createTestServiceMetrics({
+          assignedFleet: 2,
+          requiredFleet: 2,
+          nominalHeadwaySeconds: 300,
+        }),
       },
     });
   });
@@ -1305,16 +1261,8 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: null,
+        ...createTestServiceMetrics(),
         roundTripSeconds: null,
-        assignedFleet: 0,
-        requiredFleet: null,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-
-        canRetireVehicle: false,
       },
     });
   });
@@ -1343,18 +1291,11 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 300,
-        roundTripSeconds: 900,
-        assignedFleet: 0,
-        requiredFleet: 3,
-        estimatedDeploymentCost: 150_000,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-
-        canRetireVehicle: false,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          requiredFleet: 3,
+          estimatedDeploymentCost: 150_000,
+        }),
       },
     });
   });
@@ -1395,7 +1336,6 @@ describe("route selectors", () => {
         nextVehicleCost: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
-
         canRetireVehicle: false,
       },
     });
