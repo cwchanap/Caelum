@@ -2275,6 +2275,7 @@ fn retire_service_vehicle_skips_occupied_newest_for_earlier_empty() {
         riding_trip_on_line("route-001", "trip-002", "sim-002"),
     );
     let mut engine = GameEngine::from_snapshot(state).expect("occupied-newest fixture loads");
+    let before = engine.snapshot();
     let result = engine.dispatch(GameIntent::RetireServiceVehicle {
         line_id: "route-001".into(),
     });
@@ -2283,6 +2284,36 @@ fn retire_service_vehicle_skips_occupied_newest_for_earlier_empty() {
         "retire should skip occupied newest: {result:?}"
     );
     let after = engine.snapshot();
+    let kept = after
+        .transit
+        .vehicles
+        .iter()
+        .find(|vehicle| vehicle.id == newest)
+        .expect("occupied newest vehicle remains");
+    let kept_before = before
+        .transit
+        .vehicles
+        .iter()
+        .find(|vehicle| vehicle.id == newest)
+        .expect("occupied newest vehicle present before");
+    assert_eq!(
+        kept.passenger_ids, kept_before.passenger_ids,
+        "retiring an empty sibling must not drop the kept vehicle's riders"
+    );
+    let trip_after = after
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == "trip-002")
+        .expect("riding trip survives");
+    let trip_before = before
+        .active_trips
+        .iter()
+        .find(|trip| trip.id == "trip-002")
+        .expect("riding trip present before");
+    assert_eq!(
+        trip_after, trip_before,
+        "retiring an empty sibling must leave the riding trip untouched"
+    );
     assert!(
         after
             .transit
@@ -2316,6 +2347,15 @@ fn retire_service_vehicle_rejects_when_every_removable_vehicle_is_occupied() {
     }
     let mut engine = GameEngine::from_snapshot(state).expect("fully occupied fixture loads");
     let before = engine.snapshot();
+    assert!(
+        before.transit.routes[0]
+            .service_metrics
+            .as_ref()
+            .expect("fully occupied route has metrics")
+            .can_retire_vehicle,
+        "a fully occupied fleet must still offer retire; otherwise this \
+         snapshot-equality test would pass vacuously"
+    );
     let result = engine.dispatch(GameIntent::RetireServiceVehicle {
         line_id: "route-001".into(),
     });

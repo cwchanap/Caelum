@@ -40,8 +40,8 @@ function callbacks() {
     onFocusWaitLocation: vi.fn(),
     onSetServiceTargetHeadway: vi.fn(),
     onDeployInitialFleet: vi.fn(),
-    onAddServiceVehicle: vi.fn(),
-    onRetireServiceVehicle: vi.fn(),
+    onAddServiceVehicle: vi.fn(() => Promise.resolve()),
+    onRetireServiceVehicle: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -822,6 +822,98 @@ describe("LinesPanel line workspace", () => {
     expect(props.onRetireServiceVehicle).toHaveBeenCalledWith(
       "route-bus-below-rec",
     );
+  });
+
+  it("holds the Add/Retire guard per route until that route's command settles", async () => {
+    let releaseFirst!: () => void;
+    const firstCommand = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const routes = [
+      {
+        id: "route-bus-a",
+        name: "Route A",
+        color: ROUTE_COLOR_PALETTE[0],
+        mode: "bus" as const,
+        stopCount: 3,
+        active: true,
+        selected: false,
+        status: { primary: "running" as const, pausedAfterRepair: false },
+        service: {
+          targetHeadwaySeconds: 360,
+          ...createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        },
+        waitLocations: [],
+        failures: [],
+      },
+      {
+        id: "route-bus-b",
+        name: "Route B",
+        color: ROUTE_COLOR_PALETTE[1],
+        mode: "bus" as const,
+        stopCount: 3,
+        active: true,
+        selected: false,
+        status: { primary: "running" as const, pausedAfterRepair: false },
+        service: {
+          targetHeadwaySeconds: 360,
+          ...createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        },
+        waitLocations: [],
+        failures: [],
+      },
+    ];
+    let calls = 0;
+    const props = panelProps({ routes });
+    props.onAddServiceVehicle = vi.fn((routeId: string) =>
+      routeId === "route-bus-a" && ++calls === 1
+        ? firstCommand
+        : Promise.resolve(),
+    );
+    render(LinesPanel, { props });
+
+    const addA = screen.getByTestId("route-add-vehicle-route-bus-a");
+    const retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
+    const addB = screen.getByTestId("route-add-vehicle-route-bus-b");
+
+    // First activation on route A latches only route A's buttons.
+    await fireEvent.click(addA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(addA).toBeDisabled();
+    expect(retireA).toBeDisabled();
+    expect(addB).toBeEnabled();
+
+    // A second activation on route A while its command is in flight is
+    // ignored, even if the click event reaches the handler.
+    await fireEvent.click(addA);
+    await fireEvent.click(retireA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
+
+    // Route B keeps an independent guard.
+    await fireEvent.click(addB);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(2);
+
+    // Settling route A's own command re-enables its buttons.
+    releaseFirst();
+    await waitFor(() => expect(addA).toBeEnabled());
+    await waitFor(() => expect(retireA).toBeEnabled());
+    await fireEvent.click(addA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(3);
   });
 
   it("hides retire when canRetireVehicle is false even with multiple vehicles", () => {
