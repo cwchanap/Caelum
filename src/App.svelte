@@ -394,16 +394,16 @@
     }
   }
 
-  function handleAddServiceVehicle(lineId: string): void {
-    if (runtime !== null) {
-      void applyRuntimeResult(() => runtime.addServiceVehicle(lineId));
-    }
+  function handleAddServiceVehicle(lineId: string): Promise<void> {
+    return runtime !== null
+      ? applyRuntimeResult(() => runtime.addServiceVehicle(lineId))
+      : Promise.resolve();
   }
 
-  function handleRetireServiceVehicle(lineId: string): void {
-    if (runtime !== null) {
-      void applyRuntimeResult(() => runtime.retireServiceVehicle(lineId));
-    }
+  function handleRetireServiceVehicle(lineId: string): Promise<void> {
+    return runtime !== null
+      ? applyRuntimeResult(() => runtime.retireServiceVehicle(lineId))
+      : Promise.resolve();
   }
 
   function handleDeleteRoute(routeId: string): void {
