@@ -14,6 +14,7 @@ import type {
   ShellRouteListState,
 } from "../../src/runtime/types";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
+import { createTestServiceMetrics } from "../helpers/gameState";
 import { createDraftView } from "../helpers/routeEditor";
 
 function callbacks() {
@@ -39,7 +40,8 @@ function callbacks() {
     onFocusWaitLocation: vi.fn(),
     onSetServiceTargetHeadway: vi.fn(),
     onDeployInitialFleet: vi.fn(),
-    onAddServiceVehicle: vi.fn(),
+    onAddServiceVehicle: vi.fn(() => Promise.resolve()),
+    onRetireServiceVehicle: vi.fn(() => Promise.resolve()),
   };
 }
 
@@ -56,16 +58,8 @@ function routeFixtures(): ShellRouteListState {
       status: { primary: "running", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: null,
+        ...createTestServiceMetrics(),
         roundTripSeconds: null,
-        assignedFleet: 0,
-        requiredFleet: null,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
       },
       waitLocations: [],
       failures: [],
@@ -81,16 +75,8 @@ function routeFixtures(): ShellRouteListState {
       status: { primary: "broken", pausedAfterRepair: true },
       service: {
         targetHeadwaySeconds: null,
+        ...createTestServiceMetrics(),
         roundTripSeconds: null,
-        assignedFleet: 0,
-        requiredFleet: null,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
       },
       waitLocations: [],
       failures: [
@@ -283,16 +269,12 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "noFleet", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 0,
-            requiredFleet: 3,
-            estimatedDeploymentCost: 150_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: 1_200,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              requiredFleet: 3,
+              estimatedDeploymentCost: 150_000,
+              estimatedDailyOperatingCost: 1_200,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -351,16 +333,11 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "noFleet", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 300,
-            roundTripSeconds: 900,
-            assignedFleet: 0,
-            requiredFleet: 2,
-            estimatedDeploymentCost: 240_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              requiredFleet: 2,
+              estimatedDeploymentCost: 240_000,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -410,16 +387,12 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "paused", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 0,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 1,
-            longestWaitSeconds: 150,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              requiredFleet: 3,
+              waitingAtRiskCount: 1,
+              longestWaitSeconds: 150,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -435,16 +408,10 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "broken", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 0,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              requiredFleet: 3,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -478,16 +445,12 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "paused", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 1,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 900,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 1,
+              requiredFleet: 3,
+              nominalHeadwaySeconds: 900,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -503,16 +466,12 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "broken", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 1,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 900,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 1,
+              requiredFleet: 3,
+              nominalHeadwaySeconds: 900,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -546,16 +505,13 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "running", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 2,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 800,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 348,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 2,
+              requiredFleet: 3,
+              dailyOperatingCost: 800,
+              nominalHeadwaySeconds: 348,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -571,16 +527,12 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "broken", pausedAfterRepair: true },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 2,
-            requiredFleet: 2,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 300,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 2,
+              requiredFleet: 2,
+              nominalHeadwaySeconds: 300,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -637,16 +589,13 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "paused", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 2,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 300,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: 150,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 2,
+              requiredFleet: 3,
+              nominalHeadwaySeconds: 300,
+              longestWaitSeconds: 150,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -676,16 +625,13 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "running", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 3,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 300,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: 0,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 3,
+              requiredFleet: 3,
+              nominalHeadwaySeconds: 300,
+              longestWaitSeconds: 0,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -713,16 +659,13 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "running", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 4,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: 2_000,
-            nominalHeadwaySeconds: 300,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 4,
+              requiredFleet: 3,
+              nextVehicleCost: 2_000,
+              nominalHeadwaySeconds: 300,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -754,16 +697,15 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "running", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 1,
-            requiredFleet: 99,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: 12_500,
-            nominalHeadwaySeconds: 450,
-            waitingAtRiskCount: 2,
-            longestWaitSeconds: 192,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 1,
+              requiredFleet: 99,
+              nextVehicleCost: 12_500,
+              nominalHeadwaySeconds: 450,
+              waitingAtRiskCount: 2,
+              longestWaitSeconds: 192,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -780,7 +722,7 @@ describe("LinesPanel line workspace", () => {
     expect(health).not.toHaveTextContent("recover");
     expect(health).not.toHaveTextContent("Add bus");
     const add = screen.getByRole("button", {
-      name: "Add bus · $12,500",
+      name: "Add bus on Harbour Bus · $12,500",
     });
     expect(add).toBeVisible();
     expect(serviceValue(service, "Fleet")).toBe("1");
@@ -804,16 +746,15 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "running", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 300,
-            roundTripSeconds: 720,
-            assignedFleet: 1,
-            requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: 80_000,
-            nominalHeadwaySeconds: 720,
-            waitingAtRiskCount: 1,
-            longestWaitSeconds: 150,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 720,
+              assignedFleet: 1,
+              requiredFleet: 3,
+              nextVehicleCost: 80_000,
+              nominalHeadwaySeconds: 720,
+              waitingAtRiskCount: 1,
+              longestWaitSeconds: 150,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -826,7 +767,227 @@ describe("LinesPanel line workspace", () => {
     expect(health).toHaveTextContent("1 rider at risk");
     expect(health).not.toHaveTextContent("recover");
     expect(
-      screen.getByRole("button", { name: "Add train · $80,000" }),
+      screen.getByRole("button", {
+        name: "Add train on North Metro · $80,000",
+      }),
+    ).toBeVisible();
+  });
+
+  it("offers retire below recommendation when Rust sets canRetireVehicle", async () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-below-rec",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 2,
+              requiredFleet: 4,
+              dailyOperatingCost: 500,
+              nextVehicleCost: 12_500,
+              nominalHeadwaySeconds: 450,
+              canRetireVehicle: true,
+            }),
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-below-rec");
+    expect(serviceValue(service, "Fleet")).toBe("2");
+    expect(serviceValue(service, "Recommended")).toBe("4 buses");
+    expect(
+      screen.getByRole("button", {
+        name: "Add bus on Harbour Bus · $12,500",
+      }),
+    ).toBeVisible();
+    const retire = screen.getByRole("button", {
+      name: "Retire bus on Harbour Bus · no refund",
+    });
+    expect(retire).toBeVisible();
+
+    await fireEvent.click(retire);
+    expect(props.onRetireServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(props.onRetireServiceVehicle).toHaveBeenCalledWith(
+      "route-bus-below-rec",
+    );
+  });
+
+  it("holds the Add/Retire guard per route until that route's command settles", async () => {
+    let releaseFirst!: () => void;
+    const firstCommand = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    const routes = [
+      {
+        id: "route-bus-a",
+        name: "Route A",
+        color: ROUTE_COLOR_PALETTE[0],
+        mode: "bus" as const,
+        stopCount: 3,
+        active: true,
+        selected: false,
+        status: { primary: "running" as const, pausedAfterRepair: false },
+        service: {
+          targetHeadwaySeconds: 360,
+          ...createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        },
+        waitLocations: [],
+        failures: [],
+      },
+      {
+        id: "route-bus-b",
+        name: "Route B",
+        color: ROUTE_COLOR_PALETTE[1],
+        mode: "bus" as const,
+        stopCount: 3,
+        active: true,
+        selected: false,
+        status: { primary: "running" as const, pausedAfterRepair: false },
+        service: {
+          targetHeadwaySeconds: 360,
+          ...createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        },
+        waitLocations: [],
+        failures: [],
+      },
+    ];
+    let calls = 0;
+    const props = panelProps({ routes });
+    props.onAddServiceVehicle = vi.fn((routeId: string) =>
+      routeId === "route-bus-a" && ++calls === 1
+        ? firstCommand
+        : Promise.resolve(),
+    );
+    render(LinesPanel, { props });
+
+    const addA = screen.getByTestId("route-add-vehicle-route-bus-a");
+    const retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
+    const addB = screen.getByTestId("route-add-vehicle-route-bus-b");
+
+    // First activation on route A latches only route A's buttons.
+    await fireEvent.click(addA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(addA).toBeDisabled();
+    expect(retireA).toBeDisabled();
+    expect(addB).toBeEnabled();
+
+    // A second activation on route A while its command is in flight is
+    // ignored, even if the click event reaches the handler.
+    await fireEvent.click(addA);
+    await fireEvent.click(retireA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
+
+    // Route B keeps an independent guard.
+    await fireEvent.click(addB);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(2);
+
+    // Settling route A's own command re-enables its buttons.
+    releaseFirst();
+    await waitFor(() => expect(addA).toBeEnabled());
+    await waitFor(() => expect(retireA).toBeEnabled());
+    await fireEvent.click(addA);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(3);
+  });
+
+  it("hides retire when canRetireVehicle is false even with multiple vehicles", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-no-retire",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 3,
+              requiredFleet: 2,
+              nominalHeadwaySeconds: 300,
+            }),
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.queryByTestId("route-retire-vehicle-route-bus-no-retire"),
+    ).toBeNull();
+    expect(
+      screen.queryByRole("button", {
+        name: "Retire bus on Harbour Bus · no refund",
+      }),
+    ).toBeNull();
+    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
+  });
+
+  it("labels Metro retire as a train", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "line-metro-retire",
+          name: "North Metro",
+          color: ROUTE_COLOR_PALETTE[1],
+          mode: "metro",
+          stopCount: 4,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 300,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 720,
+              assignedFleet: 2,
+              requiredFleet: 3,
+              nominalHeadwaySeconds: 360,
+              canRetireVehicle: true,
+            }),
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.getByRole("button", {
+        name: "Retire train on North Metro · no refund",
+      }),
     ).toBeVisible();
   });
 
@@ -844,16 +1005,14 @@ describe("LinesPanel line workspace", () => {
           status: { primary: "running", pausedAfterRepair: false },
           service: {
             targetHeadwaySeconds: 360,
-            roundTripSeconds: 900,
-            assignedFleet: 2,
-            requiredFleet: 99,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: 450,
-            waitingAtRiskCount: 1,
-            longestWaitSeconds: 150,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 2,
+              requiredFleet: 99,
+              nominalHeadwaySeconds: 450,
+              waitingAtRiskCount: 1,
+              longestWaitSeconds: 150,
+            }),
           },
           waitLocations: [],
           failures: [],
@@ -907,16 +1066,14 @@ describe("LinesPanel wait locations", () => {
       status: { primary: "running", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 360,
-        roundTripSeconds: 900,
-        assignedFleet: 2,
-        requiredFleet: 3,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: 348,
-        waitingAtRiskCount: 1,
-        longestWaitSeconds: 192,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          assignedFleet: 2,
+          requiredFleet: 3,
+          nominalHeadwaySeconds: 348,
+          waitingAtRiskCount: 1,
+          longestWaitSeconds: 192,
+        }),
       },
       waitLocations: [
         {

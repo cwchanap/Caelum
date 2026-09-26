@@ -151,7 +151,8 @@ export type RejectionCode =
   | "unsafeRoundaboutPortMapping"
   | "invalidHeadway"
   | "headwayNotSet"
-  | "fleetAlreadyAssigned";
+  | "fleetAlreadyAssigned"
+  | "vehiclesOccupied";
 
 export interface RejectionContext {
   routeId?: string;
@@ -318,6 +319,7 @@ export interface ServiceMetrics {
   nominalHeadwaySeconds: number | null;
   waitingAtRiskCount: number;
   longestWaitSeconds: number | null;
+  canRetireVehicle: boolean;
 }
 
 export interface Route {

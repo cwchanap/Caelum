@@ -1017,6 +1017,9 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
   if (nextVehicleCost === null) {
     throw new Error("Rust did not publish an Add price for the deployed fleet");
   }
+  // The journey must stay paused (design step 2): no sim time passes, so the
+  // added vehicle cannot board riders before it is retired.
+  expect((await runtimeSnapshot(page)).state.paused).toBe(true);
   const addBus = page.getByTestId("route-add-vehicle-route-001");
   await expect(addBus).toBeVisible();
 
@@ -1083,6 +1086,45 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
   expect(postAddMetrics.waitingAtRiskCount ?? 0).toBe(0);
   await expect(service.getByText("Longest wait")).toHaveCount(0);
   await expect(page.getByTestId("route-health-route-001")).toHaveCount(0);
+
+  const addedVehicleId = postAddRoute.vehicleIds.find(
+    (vehicleId) => !originalVehicleIds.includes(vehicleId),
+  );
+  if (addedVehicleId === undefined) {
+    throw new Error("Post-add route is missing the newly added vehicle id");
+  }
+  expect(postAddRoute.serviceMetrics.canRetireVehicle).toBe(true);
+  await page
+    .getByRole("button", { name: "Retire bus on Bus 1 · no refund" })
+    .click();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return route?.vehicleIds.length ?? -1;
+    })
+    .toBe(baselineAssigned);
+  const postRetireSnapshot = await runtimeSnapshot(page);
+  const postRetireRoute = postRetireSnapshot.state.transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  if (
+    postRetireRoute === undefined ||
+    postRetireRoute.serviceMetrics === null
+  ) {
+    throw new Error("Post-retire service metrics are missing from the runtime");
+  }
+  expect(postRetireRoute.serviceMetrics.dailyOperatingCost).toBe(
+    baselineDailyCost,
+  );
+  expect(postRetireSnapshot.state.budget).toBe(
+    baselineBudget - nextVehicleCost,
+  );
+  for (const vehicleId of originalVehicleIds) {
+    expect(postRetireRoute.vehicleIds).toContain(vehicleId);
+  }
+  expect(postRetireRoute.vehicleIds).not.toContain(addedVehicleId);
 
   // The whole journey ran without ever entering geometry edit mode.
   const finalSnapshot = await runtimeSnapshot(page);

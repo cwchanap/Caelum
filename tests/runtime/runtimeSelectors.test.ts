@@ -27,6 +27,7 @@ import {
   addTestMetroLine,
   addTestMetroStation,
   createTestGameState,
+  createTestServiceMetrics,
   placeTestBuilding,
 } from "../helpers/gameState";
 import {
@@ -990,16 +991,8 @@ describe("route selectors", () => {
         status: { primary: "noFleet", pausedAfterRepair: false },
         service: {
           targetHeadwaySeconds: null,
+          ...createTestServiceMetrics(),
           roundTripSeconds: null,
-          assignedFleet: 0,
-          requiredFleet: null,
-          estimatedDeploymentCost: null,
-          dailyOperatingCost: 0,
-          estimatedDailyOperatingCost: null,
-          nextVehicleCost: null,
-          nominalHeadwaySeconds: null,
-          waitingAtRiskCount: 0,
-          longestWaitSeconds: null,
         },
         waitLocations: [],
         failures: [],
@@ -1015,16 +1008,8 @@ describe("route selectors", () => {
         status: { primary: "noFleet", pausedAfterRepair: false },
         service: {
           targetHeadwaySeconds: null,
+          ...createTestServiceMetrics(),
           roundTripSeconds: null,
-          assignedFleet: 0,
-          requiredFleet: null,
-          estimatedDeploymentCost: null,
-          dailyOperatingCost: 0,
-          estimatedDailyOperatingCost: null,
-          nextVehicleCost: null,
-          nominalHeadwaySeconds: null,
-          waitingAtRiskCount: 0,
-          longestWaitSeconds: null,
         },
         waitLocations: [],
         failures: [],
@@ -1054,49 +1039,29 @@ describe("route selectors", () => {
             ? {
                 ...route,
                 id: "setup",
-                serviceMetrics: {
-                  roundTripSeconds: 600,
-                  assignedFleet: 0,
+                serviceMetrics: createTestServiceMetrics({
                   requiredFleet: 1,
-                  estimatedDeploymentCost: null,
-                  dailyOperatingCost: 0,
                   estimatedDailyOperatingCost: 1_200,
-                  nextVehicleCost: null,
-                  nominalHeadwaySeconds: null,
-                  waitingAtRiskCount: 0,
-                  longestWaitSeconds: null,
-                },
+                }),
               }
             : {
                 ...route,
-                serviceMetrics: {
-                  roundTripSeconds: 600,
+                serviceMetrics: createTestServiceMetrics({
                   assignedFleet: 1,
                   requiredFleet: 1,
-                  estimatedDeploymentCost: null,
                   dailyOperatingCost: 400,
-                  estimatedDailyOperatingCost: null,
-                  nextVehicleCost: null,
                   nominalHeadwaySeconds: 600,
-                  waitingAtRiskCount: 0,
-                  longestWaitSeconds: null,
-                },
+                }),
               },
         ),
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
-          serviceMetrics: {
-            roundTripSeconds: 600,
+          serviceMetrics: createTestServiceMetrics({
             assignedFleet: 1,
             requiredFleet: 1,
-            estimatedDeploymentCost: null,
             dailyOperatingCost: 2_500,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 600,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1142,14 +1107,8 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: null,
+        ...createTestServiceMetrics(),
         roundTripSeconds: null,
-        assignedFleet: 0,
-        requiredFleet: null,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
       },
     });
   });
@@ -1169,6 +1128,8 @@ describe("route selectors", () => {
         nominalHeadwaySeconds: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+
+        canRetireVehicle: false,
       },
     });
   });
@@ -1204,54 +1165,77 @@ describe("route selectors", () => {
     });
   });
 
+  it("forwards canRetireVehicle true from service metrics without deriving from vehicle IDs", () => {
+    let state = busRouteWithMetrics(
+      createTestServiceMetrics({
+        assignedFleet: 2,
+        requiredFleet: 2,
+        nominalHeadwaySeconds: 300,
+        canRetireVehicle: true,
+      }),
+    );
+    state = assignTestVehicle(state, "bus", "route-001");
+
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      assignedFleet: 1,
+      canRetireVehicle: true,
+    });
+  });
+
+  it("forwards canRetireVehicle false from service metrics even with multiple vehicles", () => {
+    let state = busRouteWithMetrics(
+      createTestServiceMetrics({
+        assignedFleet: 2,
+        requiredFleet: 2,
+        nominalHeadwaySeconds: 300,
+      }),
+    );
+    state = assignTestVehicle(state, "bus", "route-001");
+    state = assignTestVehicle(state, "bus", "route-001");
+
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      assignedFleet: 2,
+      canRetireVehicle: false,
+    });
+  });
+
+  it("defaults canRetireVehicle to false when service metrics are unavailable", () => {
+    const state = busRouteWithMetrics(null);
+
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      canRetireVehicle: false,
+    });
+  });
+
   it("exposes target headway and required fleet before deployment", () => {
     const state = busRouteWithMetrics(
-      {
-        roundTripSeconds: 600,
-        assignedFleet: 0,
+      createTestServiceMetrics({
         requiredFleet: 2,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-      },
+      }),
       300,
     );
     expect(selectShellState(state, createUiState()).routes[0]).toMatchObject({
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 300,
-        roundTripSeconds: 600,
-        assignedFleet: 0,
-        requiredFleet: 2,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
+        ...createTestServiceMetrics({ requiredFleet: 2 }),
       },
     });
   });
 
   it("exposes nominal headway and assigned fleet after deployment", () => {
     let state = busRouteWithMetrics(
-      {
-        roundTripSeconds: 600,
+      createTestServiceMetrics({
         assignedFleet: 2,
         requiredFleet: 2,
-        estimatedDeploymentCost: null,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
         nominalHeadwaySeconds: 300,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
-      },
+      }),
       300,
     );
     state = assignTestVehicle(state, "bus", "route-001");
@@ -1260,14 +1244,11 @@ describe("route selectors", () => {
       status: { primary: "running", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 300,
-        roundTripSeconds: 600,
-        assignedFleet: 2,
-        requiredFleet: 2,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: 300,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
+        ...createTestServiceMetrics({
+          assignedFleet: 2,
+          requiredFleet: 2,
+          nominalHeadwaySeconds: 300,
+        }),
       },
     });
   });
@@ -1280,14 +1261,8 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: null,
+        ...createTestServiceMetrics(),
         roundTripSeconds: null,
-        assignedFleet: 0,
-        requiredFleet: null,
-        estimatedDeploymentCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
       },
     });
   });
@@ -1302,18 +1277,11 @@ describe("route selectors", () => {
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
           targetHeadwaySeconds: 300,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1323,16 +1291,11 @@ describe("route selectors", () => {
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
         targetHeadwaySeconds: 300,
-        roundTripSeconds: 900,
-        assignedFleet: 0,
-        requiredFleet: 3,
-        estimatedDeploymentCost: 150_000,
-        dailyOperatingCost: 0,
-        estimatedDailyOperatingCost: null,
-        nextVehicleCost: null,
-        nominalHeadwaySeconds: null,
-        waitingAtRiskCount: 0,
-        longestWaitSeconds: null,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          requiredFleet: 3,
+          estimatedDeploymentCost: 150_000,
+        }),
       },
     });
   });
@@ -1347,18 +1310,13 @@ describe("route selectors", () => {
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
           targetHeadwaySeconds: 300,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
             assignedFleet: 2,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 300,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1378,6 +1336,7 @@ describe("route selectors", () => {
         nextVehicleCost: null,
         waitingAtRiskCount: 0,
         longestWaitSeconds: null,
+        canRetireVehicle: false,
       },
     });
   });
@@ -1398,18 +1357,14 @@ describe("route selectors", () => {
           ...route,
           targetHeadwaySeconds: 120,
           legs: route.legs.map((leg) => ({ ...leg, estimatedSeconds: 1 })),
-          serviceMetrics: {
-            roundTripSeconds: 600,
+          serviceMetrics: createTestServiceMetrics({
             assignedFleet: 1,
             requiredFleet: 5,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
             nextVehicleCost: 42_000,
             nominalHeadwaySeconds: 600,
             waitingAtRiskCount: 2,
             longestWaitSeconds: 95,
-          },
+          }),
         })),
       },
     };
@@ -1426,6 +1381,8 @@ describe("route selectors", () => {
       nominalHeadwaySeconds: 600,
       waitingAtRiskCount: 2,
       longestWaitSeconds: 95,
+
+      canRetireVehicle: false,
     });
     expect(service.waitingAtRiskCount).toBe(2);
     expect(service.longestWaitSeconds).toBe(95);
@@ -1446,18 +1403,13 @@ describe("route selectors", () => {
           route.id === "route-001"
             ? {
                 ...route,
-                serviceMetrics: {
-                  roundTripSeconds: 600,
+                serviceMetrics: createTestServiceMetrics({
                   assignedFleet: 1,
                   requiredFleet: 1,
-                  estimatedDeploymentCost: null,
-                  dailyOperatingCost: 0,
-                  estimatedDailyOperatingCost: null,
-                  nextVehicleCost: null,
                   nominalHeadwaySeconds: 600,
                   waitingAtRiskCount: 4,
                   longestWaitSeconds: 190,
-                },
+                }),
               }
             : route,
         ),
@@ -1782,6 +1734,10 @@ describe("action feedback selector", () => {
     [
       { code: "fleetAlreadyAssigned" as const, context: {} },
       "This route already has a bus fleet.",
+    ],
+    [
+      { code: "vehiclesOccupied" as const, context: {} },
+      "Every removable vehicle on this line has riders.",
     ],
   ])("maps bus service rejection %s to player copy", (rejection, message) => {
     const shell = selectShellState(

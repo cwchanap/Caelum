@@ -31,6 +31,7 @@ pub enum RejectionCode {
     RouteRevisionExhausted,
     RouteNotFound,
     InactiveRoute,
+    VehiclesOccupied,
     StructureNotFound,
     InvalidPlatform,
     InvalidBuildingPlacement,

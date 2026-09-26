@@ -42,7 +42,10 @@ import {
   createRustSnapshot,
   previewBackendStubs,
 } from "../fixtures/rustSnapshot";
-import { createTestGameState } from "../helpers/gameState";
+import {
+  createTestGameState,
+  createTestServiceMetrics,
+} from "../helpers/gameState";
 import { createDelayedCitySaveStore } from "./delayedCitySaveStore";
 
 const TEST_REJECTION: GameplayRejection = {
@@ -642,18 +645,13 @@ function applyIntent(
     // Mirrors `caelum-core::operating_cost::line_daily_operating_cost` for the
     // deployed fleet: per-vehicle daily cost (Bus 400, Metro 2_500) × 2 vehicles.
     const dailyOperatingCost = mode === "bus" ? 800 : 5_000;
-    const serviceMetrics = {
-      roundTripSeconds: 600,
+    const serviceMetrics = createTestServiceMetrics({
       assignedFleet: 2,
       requiredFleet: 2,
-      estimatedDeploymentCost: null,
       dailyOperatingCost,
-      estimatedDailyOperatingCost: null,
-      nextVehicleCost: null,
       nominalHeadwaySeconds: 300,
-      waitingAtRiskCount: 0,
-      longestWaitSeconds: null,
-    };
+      canRetireVehicle: true,
+    });
     return {
       ...snapshot,
       transit: {
@@ -4771,18 +4769,15 @@ describe("route creation and management", () => {
     });
     expect(deployIntent).not.toHaveProperty("mode");
     expect(afterDeploy.state.transit.routes[0].vehicleIds).toHaveLength(2);
-    expect(afterDeploy.state.transit.routes[0].serviceMetrics).toEqual({
-      roundTripSeconds: 600,
-      assignedFleet: 2,
-      requiredFleet: 2,
-      estimatedDeploymentCost: null,
-      dailyOperatingCost: 800,
-      estimatedDailyOperatingCost: null,
-      nextVehicleCost: null,
-      nominalHeadwaySeconds: 300,
-      waitingAtRiskCount: 0,
-      longestWaitSeconds: null,
-    });
+    expect(afterDeploy.state.transit.routes[0].serviceMetrics).toEqual(
+      createTestServiceMetrics({
+        assignedFleet: 2,
+        requiredFleet: 2,
+        dailyOperatingCost: 800,
+        nominalHeadwaySeconds: 300,
+        canRetireVehicle: true,
+      }),
+    );
   });
 
   it("keys Metro service intents by line ID without a mode", async () => {
@@ -4843,6 +4838,33 @@ describe("route creation and management", () => {
 
     expect(dispatch).toHaveBeenCalledWith({
       type: "addServiceVehicle",
+      lineId: "metro-001",
+    });
+    const intent = dispatch.mock.calls[0]?.[0];
+    expect(intent).not.toHaveProperty("mode");
+  });
+
+  it("dispatches a line-only retire service vehicle intent", async () => {
+    const initial = snapshotWithMetroLine();
+    const backend = backendSpy(initial);
+    const dispatch = vi.fn(
+      async (_intent: GameIntent): Promise<GameplayUpdateResult> => ({
+        update: createPresentationUpdate(initial, false),
+        applied: false,
+        rejection: null,
+      }),
+    );
+    backend.dispatch = dispatch;
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    await runtime.retireServiceVehicle("metro-001");
+
+    expect(dispatch).toHaveBeenCalledWith({
+      type: "retireServiceVehicle",
       lineId: "metro-001",
     });
     const intent = dispatch.mock.calls[0]?.[0];

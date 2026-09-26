@@ -566,6 +566,7 @@ function selectServiceState(route: Route | MetroLine): ShellServiceState {
     nominalHeadwaySeconds: route.serviceMetrics?.nominalHeadwaySeconds ?? null,
     waitingAtRiskCount: route.serviceMetrics?.waitingAtRiskCount ?? 0,
     longestWaitSeconds: route.serviceMetrics?.longestWaitSeconds ?? null,
+    canRetireVehicle: route.serviceMetrics?.canRetireVehicle ?? false,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   addTestMetroStation,
   assignTestVehicle,
   createTestGameState,
+  createTestServiceMetrics,
 } from "../helpers/gameState";
 import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 import { createDraft } from "../../src/ui/routeDraft";
@@ -198,6 +199,7 @@ function createRuntimeHarness(
     setServiceTargetHeadway: vi.fn(async () => publish()),
     deployInitialFleet: vi.fn(async () => publish()),
     addServiceVehicle: vi.fn(async () => publish()),
+    retireServiceVehicle: vi.fn(async () => publish()),
     toggleRouteActive: vi.fn(async () => publish()),
     deleteRoute: vi.fn(async () => publish()),
     selectRoute: vi.fn(() => publish()),
@@ -1097,33 +1099,21 @@ describe("App command shell", () => {
         ...state.transit,
         routes: state.transit.routes.map((route) => ({
           ...route,
-          serviceMetrics: {
-            roundTripSeconds: 600,
+          serviceMetrics: createTestServiceMetrics({
             assignedFleet: 1,
             requiredFleet: 1,
-            estimatedDeploymentCost: null,
             dailyOperatingCost: 400,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 600,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
-          serviceMetrics: {
-            roundTripSeconds: 600,
+          serviceMetrics: createTestServiceMetrics({
             assignedFleet: 1,
             requiredFleet: 1,
-            estimatedDeploymentCost: null,
             dailyOperatingCost: 2_500,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 600,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1187,18 +1177,11 @@ describe("App command shell", () => {
         routes: state.transit.routes.map((route) => ({
           ...route,
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 3,
             estimatedDeploymentCost: 150_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1233,18 +1216,13 @@ describe("App command shell", () => {
           ...route,
           vehicleIds: ["vehicle-001", "vehicle-002"],
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
             assignedFleet: 2,
             requiredFleet: 4,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
             nextVehicleCost: 12_500,
             nominalHeadwaySeconds: 450,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1253,11 +1231,52 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByTestId("command-destination-lines"));
     await fireEvent.click(
-      screen.getByRole("button", { name: "Add bus · $12,500" }),
+      screen.getByRole("button", {
+        name: "Add bus on Bus 1 · $12,500",
+      }),
     );
 
     expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(1);
     expect(runtime.addServiceVehicle).toHaveBeenCalledWith("route-001");
+  });
+
+  it("retires a service vehicle from the Rust-offered Lines control", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          vehicleIds: ["vehicle-001", "vehicle-002"],
+          targetHeadwaySeconds: 360,
+          serviceMetrics: createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    await fireEvent.click(
+      screen.getByRole("button", {
+        name: "Retire bus on Bus 1 · no refund",
+      }),
+    );
+
+    expect(runtime.retireServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(runtime.retireServiceVehicle).toHaveBeenCalledWith("route-001");
   });
 
   it("round-trips a wait location to the inspector and back to service controls", async () => {
@@ -1274,18 +1293,14 @@ describe("App command shell", () => {
           ...route,
           vehicleIds: ["vehicle-001"],
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
             assignedFleet: 1,
             requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
             nominalHeadwaySeconds: 450,
             waitingAtRiskCount: 2,
             longestWaitSeconds: 192,
-          },
+          }),
         })),
       },
       waitingLocations: [
@@ -1356,18 +1371,11 @@ describe("App command shell", () => {
         metroLines: state.transit.metroLines.map((line) => ({
           ...line,
           targetHeadwaySeconds: 300,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 2,
             estimatedDeploymentCost: 240_000,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
@@ -1416,18 +1424,10 @@ describe("App command shell", () => {
           ...route,
           active: false,
           targetHeadwaySeconds: 360,
-          serviceMetrics: {
+          serviceMetrics: createTestServiceMetrics({
             roundTripSeconds: 900,
-            assignedFleet: 0,
             requiredFleet: 3,
-            estimatedDeploymentCost: null,
-            dailyOperatingCost: 0,
-            estimatedDailyOperatingCost: null,
-            nextVehicleCost: null,
-            nominalHeadwaySeconds: null,
-            waitingAtRiskCount: 0,
-            longestWaitSeconds: null,
-          },
+          }),
         })),
       },
     };
