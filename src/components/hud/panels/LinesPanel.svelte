@@ -48,6 +48,7 @@
     onDeployInitialFleet: (routeId: string) => void;
     onAddServiceVehicle: (routeId: string) => Promise<void>;
     onRetireServiceVehicle: (routeId: string) => Promise<void>;
+    pendingServiceActions: Record<string, boolean>;
   }
 
   let {
@@ -78,6 +79,7 @@
     onDeployInitialFleet,
     onAddServiceVehicle,
     onRetireServiceVehicle,
+    pendingServiceActions,
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
@@ -85,21 +87,6 @@
   let headwayMinuteDrafts = $state<Record<string, string>>({});
   let listRegion: HTMLElement | null = $state(null);
   let previousDraftActive = $state<boolean | null>(null);
-  // One in-flight Add/Retire per route id. The guard holds until that
-  // route's own command settles — ticks and hover publishes build a fresh
-  // `routes` array on every publish, so the latch must not key off it.
-  let pendingServiceActions = $state<Record<string, boolean>>({});
-
-  function runServiceAction(
-    routeId: string,
-    dispatch: (routeId: string) => Promise<void>,
-  ): void {
-    if (pendingServiceActions[routeId]) return;
-    pendingServiceActions[routeId] = true;
-    void dispatch(routeId).finally(() => {
-      delete pendingServiceActions[routeId];
-    });
-  }
 
   // Rust stores target_headway_seconds as u32; minutes * 60 must not overflow it.
   const MAX_HEADWAY_MINUTES = Math.floor(0xffff_ffff / 60);
@@ -522,8 +509,7 @@
                     data-testid={`route-add-vehicle-${route.id}`}
                     disabled={pendingServiceActions[route.id] === true}
                     aria-label={`Add ${route.mode === "metro" ? "train" : "bus"} on ${route.name} · ${formatBudget(route.service.nextVehicleCost)}`}
-                    onclick={() =>
-                      runServiceAction(route.id, onAddServiceVehicle)}
+                    onclick={() => void onAddServiceVehicle(route.id)}
                   >
                     {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
                   </button>
@@ -535,8 +521,7 @@
                     data-testid={`route-retire-vehicle-${route.id}`}
                     disabled={pendingServiceActions[route.id] === true}
                     aria-label={`Retire ${route.mode === "metro" ? "train" : "bus"} on ${route.name} · no refund`}
-                    onclick={() =>
-                      runServiceAction(route.id, onRetireServiceVehicle)}
+                    onclick={() => void onRetireServiceVehicle(route.id)}
                   >
                     {`Retire ${route.mode === "metro" ? "train" : "bus"} · no refund`}
                   </button>
