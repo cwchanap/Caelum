@@ -394,16 +394,38 @@
     }
   }
 
+  // One in-flight Add/Retire per route id. The guard lives in the shell —
+  // a latch inside LinesPanel would reset when switching command
+  // destinations unmounts the panel mid-flight — and it holds until that
+  // route's own command settles: ticks and hover publishes rebuild `routes`
+  // on every publish, so the guard must not key off it.
+  let pendingServiceActions = $state<Record<string, boolean>>({});
+
+  function runServiceAction(
+    routeId: string,
+    dispatch: (routeId: string) => Promise<void>,
+  ): Promise<void> {
+    if (pendingServiceActions[routeId]) return Promise.resolve();
+    pendingServiceActions[routeId] = true;
+    return dispatch(routeId).finally(() => {
+      delete pendingServiceActions[routeId];
+    });
+  }
+
   function handleAddServiceVehicle(lineId: string): Promise<void> {
-    return runtime !== null
-      ? applyRuntimeResult(() => runtime.addServiceVehicle(lineId))
-      : Promise.resolve();
+    return runServiceAction(lineId, (id) =>
+      runtime !== null
+        ? applyRuntimeResult(() => runtime.addServiceVehicle(id))
+        : Promise.resolve(),
+    );
   }
 
   function handleRetireServiceVehicle(lineId: string): Promise<void> {
-    return runtime !== null
-      ? applyRuntimeResult(() => runtime.retireServiceVehicle(lineId))
-      : Promise.resolve();
+    return runServiceAction(lineId, (id) =>
+      runtime !== null
+        ? applyRuntimeResult(() => runtime.retireServiceVehicle(id))
+        : Promise.resolve(),
+    );
   }
 
   function handleDeleteRoute(routeId: string): void {
@@ -739,6 +761,7 @@
             onDeployInitialFleet={handleDeployInitialFleet}
             onAddServiceVehicle={handleAddServiceVehicle}
             onRetireServiceVehicle={handleRetireServiceVehicle}
+            {pendingServiceActions}
           />
         </CommandPanel>
       {:else if snapshot.ui.activeCommandDestination === "data"}

@@ -1279,6 +1279,70 @@ describe("App command shell", () => {
     expect(runtime.retireServiceVehicle).toHaveBeenCalledWith("route-001");
   });
 
+  it("keeps the per-route fleet guard across a Lines close and reopen", async () => {
+    let state = createTestGameState();
+    state = withRoads(state, [{ x: 7, y: 7 }]);
+    state = addTestBusStop(state, { x: 7, y: 7 }, "busTerminal");
+    const stopId = state.transit.stops[0].id;
+    state = addTestBusRoute(state, [stopId]);
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          vehicleIds: ["vehicle-001", "vehicle-002"],
+          targetHeadwaySeconds: 360,
+          serviceMetrics: createTestServiceMetrics({
+            roundTripSeconds: 900,
+            assignedFleet: 2,
+            requiredFleet: 4,
+            nextVehicleCost: 12_500,
+            nominalHeadwaySeconds: 450,
+            canRetireVehicle: true,
+          }),
+        })),
+      },
+    };
+    const { runtime } = createRuntimeHarness({ state });
+    let releaseAdd!: () => void;
+    const inFlight = new Promise<RuntimeSnapshot>((resolve) => {
+      releaseAdd = () => resolve(runtime.getSnapshot());
+    });
+    vi.mocked(runtime.addServiceVehicle).mockImplementationOnce(() => inFlight);
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    const add = screen.getByTestId("route-add-vehicle-route-001");
+    const retire = screen.getByTestId("route-retire-vehicle-route-001");
+    await fireEvent.click(add);
+    expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(add).toBeDisabled();
+    expect(retire).toBeDisabled();
+
+    // Closing Lines unmounts the panel; the shell-held latch must survive so
+    // a reopened panel cannot queue a duplicate command for the same route.
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    expect(screen.queryByTestId("panel-lines")).toBeNull();
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+
+    const reopenedAdd = screen.getByTestId("route-add-vehicle-route-001");
+    const reopenedRetire = screen.getByTestId("route-retire-vehicle-route-001");
+    expect(reopenedAdd).toBeDisabled();
+    expect(reopenedRetire).toBeDisabled();
+    await fireEvent.click(reopenedAdd);
+    await fireEvent.click(reopenedRetire);
+    expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(1);
+    expect(runtime.retireServiceVehicle).not.toHaveBeenCalled();
+
+    // Settling the route's own command re-enables its controls.
+    releaseAdd();
+    await waitFor(() => expect(reopenedAdd).toBeEnabled());
+    await waitFor(() => expect(reopenedRetire).toBeEnabled());
+    await fireEvent.click(reopenedAdd);
+    expect(runtime.addServiceVehicle).toHaveBeenCalledTimes(2);
+  });
+
   it("round-trips a wait location to the inspector and back to service controls", async () => {
     let state = createTestGameState();
     state = withRoads(state, [{ x: 7, y: 7 }]);

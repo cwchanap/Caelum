@@ -118,6 +118,7 @@ function panelProps(
     selectedBuilding: null,
     routeDraft: null,
     routes: routeFixtures(),
+    pendingServiceActions: {},
     ...callbacks(),
     ...overrides,
   };
@@ -824,11 +825,7 @@ describe("LinesPanel line workspace", () => {
     );
   });
 
-  it("holds the Add/Retire guard per route until that route's command settles", async () => {
-    let releaseFirst!: () => void;
-    const firstCommand = new Promise<void>((resolve) => {
-      releaseFirst = resolve;
-    });
+  it("disables a route's Add/Retire controls while its service action is pending", async () => {
     const routes = [
       {
         id: "route-bus-a",
@@ -877,58 +874,20 @@ describe("LinesPanel line workspace", () => {
         failures: [],
       },
     ];
-    let calls = 0;
     const props = panelProps({ routes });
-    props.onAddServiceVehicle = vi.fn((routeId: string) =>
-      routeId === "route-bus-a" && ++calls === 1
-        ? firstCommand
-        : Promise.resolve(),
-    );
-    const { rerender } = render(LinesPanel, { props });
+    props.pendingServiceActions = { "route-bus-a": true };
+    render(LinesPanel, { props });
 
-    let addA = screen.getByTestId("route-add-vehicle-route-bus-a");
-    let retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
-    let addB = screen.getByTestId("route-add-vehicle-route-bus-b");
-
-    // First activation on route A latches only route A's buttons.
-    await fireEvent.click(addA);
-    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
-    expect(addA).toBeDisabled();
-    expect(retireA).toBeDisabled();
+    // The latch is per route: only route A's controls are disabled.
+    expect(screen.getByTestId("route-add-vehicle-route-bus-a")).toBeDisabled();
+    expect(
+      screen.getByTestId("route-retire-vehicle-route-bus-a"),
+    ).toBeDisabled();
+    const addB = screen.getByTestId("route-add-vehicle-route-bus-b");
     expect(addB).toBeEnabled();
 
-    // A second activation on route A while its command is in flight is
-    // ignored, even if the click event reaches the handler.
-    await fireEvent.click(addA);
-    await fireEvent.click(retireA);
-    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
-    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
-
-    // A fresh routes publish (tick or hover) while route A's command is
-    // still in flight must not clear the latch.
-    const freshRoutes = routes.map((route) => ({
-      ...route,
-      service: { ...route.service },
-    }));
-    await rerender({ ...props, routes: freshRoutes });
-    addA = screen.getByTestId("route-add-vehicle-route-bus-a");
-    retireA = screen.getByTestId("route-retire-vehicle-route-bus-a");
-    addB = screen.getByTestId("route-add-vehicle-route-bus-b");
-    expect(addA).toBeDisabled();
-    expect(retireA).toBeDisabled();
-    await fireEvent.click(addA);
-    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(1);
-
-    // Route B keeps an independent guard.
     await fireEvent.click(addB);
-    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(2);
-
-    // Settling route A's own command re-enables its buttons.
-    releaseFirst();
-    await waitFor(() => expect(addA).toBeEnabled());
-    await waitFor(() => expect(retireA).toBeEnabled());
-    await fireEvent.click(addA);
-    expect(props.onAddServiceVehicle).toHaveBeenCalledTimes(3);
+    expect(props.onAddServiceVehicle).toHaveBeenCalledWith("route-bus-b");
   });
 
   it("hides retire when canRetireVehicle is false even with multiple vehicles", () => {
