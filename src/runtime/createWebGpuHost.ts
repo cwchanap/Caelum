@@ -140,6 +140,9 @@ export function createWebGpuHostWithRenderer(
   let boardCssHeight = 0;
   let resizeObserver: ResizeObserver | null = null;
   let activeDetach: (() => void) | null = null;
+  // Re-aims the hover at the tile under the last on-board pointer position,
+  // for camera moves that have no pointer event of their own (keys, buttons).
+  let retrackPointer: (() => void) | null = null;
 
   // 10 Hz one-in-flight tick admission.
   let accumulatedMs = 0;
@@ -538,6 +541,7 @@ export function createWebGpuHostWithRenderer(
         action,
       ),
     );
+    retrackPointer?.();
   };
 
   const mount = (host: HTMLElement): (() => void) => {
@@ -584,6 +588,7 @@ export function createWebGpuHostWithRenderer(
     } | null = null;
     let suppressClick = false;
     let spaceHeld = false;
+    let lastPointer: { clientX: number; clientY: number } | null = null;
 
     const boardRect = (): DOMRect => nextCanvas.getBoundingClientRect();
 
@@ -614,6 +619,7 @@ export function createWebGpuHostWithRenderer(
     // camera moved beneath it. A live drag tracks its own `current`; otherwise
     // the hover tile (badge / building preview / hover highlight) follows.
     const trackPointer = (clientX: number, clientY: number): void => {
+      lastPointer = { clientX, clientY };
       const point = canvasToTile(
         nextCanvas,
         clientX,
@@ -829,6 +835,7 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerLeave = (): void => {
+      lastPointer = null;
       if (pan !== null) {
         // A captured pan keeps tracking past the edge; an uncaptured press
         // that leaves never became a pan.
@@ -847,6 +854,7 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerCancel = (event: PointerEvent): void => {
+      lastPointer = null;
       if (pan !== null && event.pointerId === pan.pointerId) {
         endPan(event.pointerId);
         return;
@@ -966,6 +974,7 @@ export function createWebGpuHostWithRenderer(
       canvas = null;
       surfaceHost = null;
       activeDetach = null;
+      retrackPointer = null;
     }
 
     function teardown(): void {
@@ -977,6 +986,11 @@ export function createWebGpuHostWithRenderer(
       device?.destroy();
     }
 
+    retrackPointer = () => {
+      if (lastPointer !== null) {
+        trackPointer(lastPointer.clientX, lastPointer.clientY);
+      }
+    };
     activeDetach = detach;
     return teardown;
   };
