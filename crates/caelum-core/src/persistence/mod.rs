@@ -7,7 +7,7 @@ pub use error::SnapshotLoadError;
 pub(crate) use error::{
     AssignmentError, DerivedStateError, EntityError, EntityKind, EntityRef, MapSize, ModeError,
     NumericError, OwnershipError, PersistenceError, PersistenceResult, RoadStructureError,
-    ScenarioError, SnapshotField, TileError,
+    SnapshotField, TileError,
 };
 
 use crate::model::{GameSnapshot, SnapshotSchemaProbe, SNAPSHOT_SCHEMA_VERSION};

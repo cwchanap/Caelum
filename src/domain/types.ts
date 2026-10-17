@@ -1,5 +1,5 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 12 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 13 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
@@ -437,23 +437,6 @@ export interface RouteLeg {
 export interface RoutePlan {
   legs: RouteLeg[];
   estimatedSeconds: number;
-}
-
-export type GrowthAction =
-  | { type: "paintAreaRectangle"; area: AreaKind; start: Point; end: Point }
-  | {
-      type: "placeBuilding";
-      buildingType: BuildingType;
-      origin: Point;
-      rotation: BuildingRotation;
-    };
-
-export interface GrowthWave {
-  id: string;
-  triggerTime: number;
-  message: string;
-  applied: boolean;
-  actions: GrowthAction[];
 }
 
 export type TripOutcomeKind = "arrived" | "late" | "unserved";

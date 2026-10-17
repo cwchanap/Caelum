@@ -298,7 +298,7 @@ fn sandbox_and_objective_less_campaign_use_default_retention() {
         objectives::ROLLING_WINDOW_SECONDS
     );
 
-    let (rules, mut scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    let (rules, mut scenario) = growing_suburb_campaign(growing_suburb_objectives());
     scenario.objectives = None;
     sandbox.rules = rules;
     sandbox.scenario = scenario;

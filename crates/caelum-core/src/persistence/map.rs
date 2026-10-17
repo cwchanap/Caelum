@@ -1,14 +1,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::building_catalog::building_definition;
 use crate::clock::{self, GAME_DAY_SECONDS};
 use crate::heading::{heading_rank, offset, opposite};
-use crate::model::{GameSnapshot, GrowthAction, Heading, Point, RoadStructure};
+use crate::model::{GameSnapshot, Heading, Point, RoadStructure};
 use crate::road_topology::RoadTopology;
 
 use super::{
     MapSize, ModeError, NumericError, PersistenceError, PersistenceResult, RoadStructureError,
-    ScenarioError, SnapshotField, TileError,
+    SnapshotField, TileError,
 };
 
 pub(super) fn validate_shell_rules_map_and_compile(
@@ -84,89 +83,6 @@ fn validate_rules_and_scenario(snapshot: &GameSnapshot) -> PersistenceResult<()>
         });
     }
 
-    for wave in &snapshot.scenario.growth_waves {
-        super::finite_non_negative(
-            None,
-            SnapshotField::GrowthWaveTriggerTime,
-            wave.trigger_time,
-        )?;
-        for (action_index, action) in wave.actions.iter().enumerate() {
-            validate_growth_action(snapshot, &wave.id, action_index, action)?;
-        }
-    }
-    Ok(())
-}
-
-fn validate_growth_action(
-    snapshot: &GameSnapshot,
-    wave_id: &str,
-    action_index: usize,
-    action: &GrowthAction,
-) -> PersistenceResult<()> {
-    let action_index = u32::try_from(action_index).unwrap_or(u32::MAX);
-    match action {
-        GrowthAction::PaintAreaRectangle { start, end, .. } => {
-            for point in [*start, *end] {
-                if snapshot.map.tile(point).is_none() {
-                    return Err(PersistenceError::InvalidScenario {
-                        field: SnapshotField::GrowthWaveActions,
-                        reason: ScenarioError::ActionOutOfBounds {
-                            wave_id: wave_id.to_string(),
-                            action_index,
-                            point,
-                        },
-                    });
-                }
-            }
-        }
-        GrowthAction::PlaceBuilding {
-            building_type,
-            origin,
-            rotation,
-        } => {
-            let Some(definition) = building_definition(building_type) else {
-                return Err(PersistenceError::InvalidScenario {
-                    field: SnapshotField::GrowthWaveActions,
-                    reason: ScenarioError::UnknownBuildingType {
-                        wave_id: wave_id.to_string(),
-                        action_index,
-                    },
-                });
-            };
-            if !matches!(rotation, 0 | 90 | 180 | 270) {
-                return Err(PersistenceError::InvalidScenario {
-                    field: SnapshotField::GrowthWaveActions,
-                    reason: ScenarioError::InvalidBuildingRotation {
-                        wave_id: wave_id.to_string(),
-                        action_index,
-                    },
-                });
-            }
-            let Some(footprint) = crate::buildings::footprint(definition, origin, *rotation) else {
-                return Err(PersistenceError::InvalidScenario {
-                    field: SnapshotField::GrowthWaveActions,
-                    reason: ScenarioError::ActionOutOfBounds {
-                        wave_id: wave_id.to_string(),
-                        action_index,
-                        point: *origin,
-                    },
-                });
-            };
-            if let Some(point) = footprint
-                .into_iter()
-                .find(|point| snapshot.map.tile(*point).is_none())
-            {
-                return Err(PersistenceError::InvalidScenario {
-                    field: SnapshotField::GrowthWaveActions,
-                    reason: ScenarioError::ActionOutOfBounds {
-                        wave_id: wave_id.to_string(),
-                        action_index,
-                        point,
-                    },
-                });
-            }
-        }
-    }
     Ok(())
 }
 

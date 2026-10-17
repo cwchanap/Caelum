@@ -62,10 +62,6 @@ pub enum PersistenceError {
         field: SnapshotField,
         reason: ModeError,
     },
-    InvalidScenario {
-        field: SnapshotField,
-        reason: ScenarioError,
-    },
     InvalidMapDimensions {
         expected: MapSize,
         actual: MapSize,
@@ -154,11 +150,7 @@ pub enum SnapshotField {
     StartingCapital,
     DemandMultiplier,
     ScenarioObjectives,
-    ScenarioGrowthWaves,
     ObjectiveThresholds,
-    GrowthWaveId,
-    GrowthWaveTriggerTime,
-    GrowthWaveActions,
     MapWidth,
     MapHeight,
     TileCount,
@@ -260,44 +252,8 @@ pub enum ModeError {
     UnsupportedSpeed,
     InvalidEconomyForMode,
     SandboxObjectivesPresent,
-    SandboxGrowthWavesPresent,
     SandboxTerminalState,
     CampaignTerminalWithoutObjectives,
-}
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "kind",
-    content = "details",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase",
-    deny_unknown_fields
-)]
-pub enum ScenarioError {
-    DuplicateGrowthWaveId {
-        wave_id: String,
-    },
-    TriggerTimesOutOfOrder {
-        previous_wave_id: String,
-        wave_id: String,
-    },
-    AppliedAfterUnapplied {
-        first_unapplied_wave_id: String,
-        later_applied_wave_id: String,
-    },
-    ActionOutOfBounds {
-        wave_id: String,
-        action_index: u32,
-        point: Point,
-    },
-    UnknownBuildingType {
-        wave_id: String,
-        action_index: u32,
-    },
-    InvalidBuildingRotation {
-        wave_id: String,
-        action_index: u32,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

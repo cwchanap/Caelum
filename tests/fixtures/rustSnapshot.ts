@@ -89,7 +89,6 @@ export function createRustSnapshot(
     scenario: {
       name: "Crossroads",
       objectives: null,
-      growthWaves: [],
     },
     ...overrides,
   };

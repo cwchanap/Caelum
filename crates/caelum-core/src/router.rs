@@ -19,6 +19,13 @@ pub(crate) struct TransitService {
     ride_edges: Vec<RideEdge>,
 }
 
+impl TransitService {
+    /// Ids of the present stops or stations this service calls at.
+    pub(crate) fn node_ids(&self) -> impl Iterator<Item = &str> {
+        self.waypoint_positions.keys().map(String::as_str)
+    }
+}
+
 /// OD-independent identity key of one candidate route: transit legs by line
 /// id, then board / alight itinerary indexes. Precomputed per route shape so
 /// equal-time tie-breaking never allocates during scoring. The empty key (the

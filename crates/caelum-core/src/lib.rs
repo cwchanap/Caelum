@@ -30,7 +30,7 @@ pub mod clock;
 pub mod commute;
 pub(crate) mod cost_policy;
 pub mod engine;
-pub mod growth;
+pub(crate) mod growth;
 pub mod heading;
 pub mod ids;
 pub mod intent;

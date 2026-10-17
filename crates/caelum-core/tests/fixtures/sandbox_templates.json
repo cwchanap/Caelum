@@ -17,7 +17,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 12,
+      "schemaVersion": 13,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
@@ -555,7 +555,6 @@
       }
     },
     "scenario": {
-      "growthWaves": [],
       "name": "Blank Grid",
       "objectives": null
     }
@@ -578,7 +577,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 12,
+      "schemaVersion": 13,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
@@ -2174,7 +2173,6 @@
       }
     },
     "scenario": {
-      "growthWaves": [],
       "name": "Crossroads",
       "objectives": null
     }
@@ -2197,7 +2195,7 @@
       },
       "nextTripSequence": 1,
       "paused": true,
-      "schemaVersion": 12,
+      "schemaVersion": 13,
       "speed": 1,
       "time": 0.0,
       "tripSequenceDay": 0
@@ -3361,7 +3359,6 @@
       }
     },
     "scenario": {
-      "growthWaves": [],
       "name": "Small Town",
       "objectives": null
     }

@@ -60,7 +60,6 @@ fn blank_grid_contains_only_canonical_empty_tiles() {
     assert!(snapshot.transit.vehicles.is_empty());
     assert_eq!(snapshot.scenario.name, "Blank Grid");
     assert!(snapshot.scenario.objectives.is_none());
-    assert!(snapshot.scenario.growth_waves.is_empty());
 }
 
 #[test]
@@ -409,7 +408,6 @@ fn small_town_has_authored_structure_and_connected_building_access() {
     assert!(snapshot.transit.metro_lines.is_empty());
     assert!(snapshot.transit.vehicles.is_empty());
     assert!(snapshot.scenario.objectives.is_none());
-    assert!(snapshot.scenario.growth_waves.is_empty());
 
     let flow = RoadFlow::new();
     for (home, work) in [

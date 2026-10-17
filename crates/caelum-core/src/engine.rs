@@ -237,7 +237,7 @@ impl GameEngine {
         Ok(Self::from_parts(snapshot, road_topology))
     }
 
-    /// Construct an engine from a schema-v12 snapshot, normalizing
+    /// Construct an engine from a schema-v13 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived
@@ -295,16 +295,15 @@ impl GameEngine {
     }
 
     /// Release scale-harness seam (`examples/presentation_scale.rs`): advance
-    /// the shell clock by the scaled delta, run the due population scheduler
-    /// (growth-wave reconciliation included), and drain its trip demands
-    /// without routing them. The ordinary tick routes drained demands inline;
+    /// the shell clock by the scaled delta, run the due population scheduler,
+    /// and drain its trip demands without routing them. The ordinary tick routes drained demands inline;
     /// the harness times scheduler emission and route spawning separately.
     /// Evidence tooling — not part of the gameplay contract.
     pub fn run_due_and_drain_for_scale_harness(&mut self, delta_seconds: f64) -> Vec<TripDemand> {
         self.snapshot.time += clock::scaled_delta(delta_seconds, self.snapshot.speed);
         trips::sync_clock(&mut self.snapshot);
         trips::apply_due_world_events(
-            &mut self.snapshot,
+            &self.snapshot,
             &mut self.world,
             &mut self.population_schedule,
         );
@@ -395,16 +394,16 @@ impl GameEngine {
     }
 
     /// Advance the simulation by `delta_seconds` of game time (scaled by the current
-    /// speed) and run objective evaluation. Tick results are frame-only. `applied`
+    /// speed) and run objective evaluation. Tick results are frame-only unless city
+    /// growth changed the buildings, which carries the scene. `applied`
     /// is `shell_changed || population_changed` — ECS population work applies even
     /// when the shell compared equal, and is always retained.
     pub fn tick(&mut self, delta_seconds: f64) -> GameplayUpdateResult {
         // Topology invariant: `tick` never recompiles `self.road_topology`
-        // because the tick pipeline (trips + growth waves) never modifies road
-        // fields. Growth waves only paint areas and place buildings
-        // (`growth::apply_due_growth_waves`); neither action touches
-        // `road_connections`, `one_way`, `road_structure_id`, or
-        // `road_structures`. If a future tick-time mutation touches any road
+        // because the tick pipeline (trips + city growth) never modifies road
+        // fields. Growth only places buildings on empty zoned land
+        // (`growth::grow_city`), which touches no `road_connections`,
+        // `one_way`, `road_structure_id`, or `road_structures`. If a future tick-time mutation touches any road
         // field, the topology must be recompiled here — the debug_assert below
         // catches that regression by flagging a stale topology.
         let TickAdvance {
@@ -433,10 +432,15 @@ impl GameEngine {
             "tick modified road fields without recompiling topology"
         );
         let shell_changed = next != self.snapshot;
+        // City growth adds buildings mid-tick; carry the scene so they appear.
+        let scene_changed = next.buildings != self.snapshot.buildings;
         self.snapshot = next;
         let applied = shell_changed || population_changed;
-        let update =
-            presentation::project_update(&self.snapshot, &self.population_aggregates(), false);
+        let update = presentation::project_update(
+            &self.snapshot,
+            &self.population_aggregates(),
+            scene_changed,
+        );
         GameplayUpdateResult::frame_only(update, applied)
     }
 

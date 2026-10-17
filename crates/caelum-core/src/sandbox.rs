@@ -538,7 +538,6 @@ fn snapshot_shell(
         scenario: ScenarioConfig {
             name: name.to_string(),
             objectives: None,
-            growth_waves: Vec::new(),
         },
     }
 }

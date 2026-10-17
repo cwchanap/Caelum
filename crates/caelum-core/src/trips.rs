@@ -106,24 +106,14 @@ pub(crate) fn tick_trips_with_objectives(
     )
 }
 
-/// Apply due growth waves (reconciling the ECS population with any placed
-/// buildings) and run the exact-time population scheduler up to `state.time`.
-/// Returns whether ECS population state changed.
+/// Run the exact-time population scheduler up to `state.time`. Returns whether
+/// ECS population state changed.
 pub(crate) fn apply_due_world_events(
-    state: &mut GameSnapshot,
+    state: &GameSnapshot,
     world: &mut World,
     population_schedule: &mut Schedule,
 ) -> bool {
-    let mut population_changed =
-        population::run_due(world, population_schedule, state.time).changed;
-    if crate::growth::has_due_growth_waves(state) {
-        let before = state.clone();
-        crate::growth::apply_due_growth_waves(state);
-        if state != &before {
-            population_changed |= population::reconcile_buildings(world, &before, state).changed;
-        }
-    }
-    population_changed
+    population::run_due(world, population_schedule, state.time).changed
 }
 
 /// Drain every pending ECS trip demand into one freshly derived road flow so
@@ -242,10 +232,10 @@ fn tick_trips_substepped(
     // already above the loss threshold) must be detected at its current
     // timestamp, not at the next boundary — otherwise coarse and fine ticks
     // produce different terminal timestamps, breaking the granularity-
-    // independence invariant. Process due events (growth waves, population
-    // wakes, demand spawning) first so the evaluation sees the correct state
+    // independence invariant. Process due events (population wakes, demand
+    // spawning) first so the evaluation sees the correct state
     // at the current time, then evaluate. If terminal, return immediately.
-    let mut population_changed = apply_due_world_events(&mut next, world, population_schedule);
+    let mut population_changed = apply_due_world_events(&next, world, population_schedule);
     drain_and_spawn(&mut next, road_topology, world);
     if on_substep(&mut next) {
         return TickAdvance {
@@ -257,8 +247,8 @@ fn tick_trips_substepped(
     let mut early_termination = false;
     let mut steps = 0;
     // The substep budget covers the scheduler's current due-time keys plus the
-    // shell-derived bounds, but growth waves applied inside the loop can add
-    // population scheduler keys (housing move-ins), and each substep appends
+    // shell-derived bounds, but city growth inside the loop can add population
+    // scheduler keys (housing move-ins), and each substep appends
     // new `TripOutcome`s whose expiry boundaries weren't counted. Widen the
     // cap after every population pass via the scheduler's boundary generation,
     // and after every substep for outcome expiry, so the tick cannot be
@@ -278,7 +268,7 @@ fn tick_trips_substepped(
             break;
         }
 
-        population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+        population_changed |= apply_due_world_events(&next, world, population_schedule);
         widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
         if campaign_mode {
             let outcome_count = next.metrics.trip_outcomes.len();
@@ -303,13 +293,9 @@ fn tick_trips_substepped(
         next = advanced;
         population_changed |= resolution_changed;
         steps += 1;
-        // Apply growth waves whose trigger time was reached by this substep
-        // before evaluating objectives. Without this, a wave due at the same
-        // timestamp as a terminal objective would never fire: `on_substep` would
-        // break the loop, and the wave would remain permanently unapplied in the
-        // terminal snapshot (growth is otherwise applied only at the top of the
-        // next iteration, which never runs).
-        population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+        // Run population wakes reached by this substep before evaluating
+        // objectives, so a terminal substep still returns them applied.
+        population_changed |= apply_due_world_events(&next, world, population_schedule);
         if on_substep(&mut next) {
             early_termination = true;
             break;
@@ -333,7 +319,7 @@ fn tick_trips_substepped(
         );
 
         while final_time - next.time > EPSILON {
-            population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+            population_changed |= apply_due_world_events(&next, world, population_schedule);
             widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
             let road_flow = drain_and_spawn(&mut next, road_topology, world);
 
@@ -354,9 +340,8 @@ fn tick_trips_substepped(
                 advance_tick_substep(&next, &road_flow, substep_delta, world);
             next = advanced;
             population_changed |= resolution_changed;
-            // Same post-substep growth application as the main loop — see the
-            // comment there for why this must precede `on_substep`.
-            population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+            // Same post-substep population pass as the main loop.
+            population_changed |= apply_due_world_events(&next, world, population_schedule);
             if on_substep(&mut next) {
                 early_termination = true;
                 break;
@@ -364,7 +349,7 @@ fn tick_trips_substepped(
         }
 
         if !early_termination {
-            population_changed |= apply_due_world_events(&mut next, world, population_schedule);
+            population_changed |= apply_due_world_events(&next, world, population_schedule);
             drain_and_spawn(&mut next, road_topology, world);
         }
     }
@@ -380,8 +365,8 @@ fn tick_trips_substepped(
 /// A tick from `state.time` to `final_time` is broken at every meaningful boundary
 /// (day rollover, each ECS population scheduler due-time key, each active trip's
 /// next walk/patience/deadline event, each transit vehicle's next stop arrival, and
-/// each unapplied growth wave's trigger time) so spawn, boarding, growth, and
-/// day-rollover logic fire at exactly the right instant. Population scheduler
+/// each Sandbox city-growth time) so spawn, boarding, growth, and day-rollover
+/// logic fire at exactly the right instant. Population scheduler
 /// boundaries are covered by the `scheduler_due_key_count` term added at the
 /// call site (plus generation-based widening inside `tick_trips_substepped`).
 /// The cap computed here is the sum of independent upper bounds on the number
@@ -395,8 +380,8 @@ fn tick_trips_substepped(
 ///   upper-bounds bus arrivals too. Each vehicle contributes independently, so the
 ///   union of arrival events over the tick is at most
 ///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
-/// - campaign `growth_waves.len()` — one boundary per unapplied growth wave, since each wave
-///   fires at its own `trigger_time` (see `next_boundary_after` and `crate::growth`); and
+/// - Sandbox `growth_count * 2` — every city-growth time the tick spans (see
+///   `crate::growth`), doubled like the day boundary; and
 /// - campaign `trip_outcomes.len()` — one boundary per in-window outcome expiry, since
 ///   `next_boundary_after` breaks at the instant each outcome falls out of the rolling
 ///   evaluation window so a coarse tick samples the loss gates there (see
@@ -418,8 +403,10 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let vehicle_bound =
         (duration * transit::METRO_TILES_PER_SECOND * state.transit.vehicles.len() as f64).ceil()
             as usize;
-    let growth_wave_bound = if state.rules.game_mode == GameMode::Campaign {
-        state.scenario.growth_waves.len()
+    let growth_bound = if state.rules.game_mode == GameMode::Sandbox {
+        ((duration / crate::growth::GROWTH_INTERVAL_SECONDS).ceil() as usize)
+            .saturating_add(1)
+            .saturating_mul(2)
     } else {
         0
     };
@@ -433,7 +420,7 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
         .saturating_mul(2)
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
-        .saturating_add(growth_wave_bound)
+        .saturating_add(growth_bound)
         .saturating_add(outcome_expiry_bound)
         .saturating_add(1)
 }
@@ -452,13 +439,17 @@ fn advance_tick_substep(
 
     let vehicle_state = transit::tick_vehicles(&next, flow, delta_seconds);
     let just_disembarked_trip_ids = just_disembarked_trip_ids(&next, &vehicle_state);
-    advance_active_trips_with_zero_delta_ids(
+    let (mut advanced, mut population_changed) = advance_active_trips_with_zero_delta_ids(
         &vehicle_state,
         flow,
         delta_seconds,
         &just_disembarked_trip_ids,
         world,
-    )
+    );
+    if let Some(growth_time) = crate::growth::crossed_growth_time(state.time, advanced.time) {
+        population_changed |= crate::growth::grow_city(&mut advanced, world, growth_time);
+    }
+    (advanced, population_changed)
 }
 
 pub(crate) fn sync_clock(state: &mut GameSnapshot) {
@@ -661,12 +652,12 @@ fn next_boundary_after(
         }
     }
 
-    if state.rules.game_mode == GameMode::Campaign {
-        for wave in &state.scenario.growth_waves {
-            if !wave.applied {
-                track_next_boundary(&mut next, wave.trigger_time, state.time);
-            }
-        }
+    if state.rules.game_mode == GameMode::Sandbox {
+        track_next_boundary(
+            &mut next,
+            crate::growth::next_growth_time(state.time),
+            state.time,
+        );
     }
 
     // Track the instant each in-window trip outcome falls out of the rolling
@@ -883,19 +874,19 @@ fn seconds_to_next_walk_boundary(position: &TripPosition, target: &Point) -> Opt
 
 fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) {
     // A candidate at or before `state_time` is already due and was (or should
-    // have been) processed during current-time pre-processing (growth waves,
+    // have been) processed during current-time pre-processing (population wakes,
     // commute spawning). Reject it so the substep doesn't revisit the current
     // instant.
     if candidate <= state_time {
         return;
     }
     // A candidate in `(state_time, state_time + EPSILON]` is not yet due (the
-    // pre-processing checks `trigger_time <= state.time`) but would be
+    // pre-processing checks `due_time <= state.time`) but would be
     // discarded by a strict `> after` filter — lost between the current-time
     // pre-processing and the next-boundary schedule. Promote it to a strictly
     // forward sample so the substep machinery breaks here, applies the event,
     // and re-evaluates objectives at a deterministic timestamp regardless of
-    // tick granularity. Without this, a survival objective or growth wave at
+    // tick granularity. Without this, a survival objective at
     // `state.time + EPSILON/2` is skipped until the next unrelated boundary,
     // and coarse vs fine ticks terminate at different timestamps.
     let after = state_time + EPSILON;
@@ -1377,24 +1368,21 @@ mod tests {
     use crate::engine::GameEngine;
     use crate::intent::GameIntent;
     use crate::model::{
-        ActiveTrip, EconomyPreset, GrowthAction, GrowthWave, MaxAverageWaitSeconds, MaxLateRatio,
-        MaxUnservedRatio, MetricsState, ObjectiveThresholds, PlacedBuilding, Point, PrivateCarTrip,
+        ActiveTrip, EconomyPreset, MaxAverageWaitSeconds, MaxLateRatio, MaxUnservedRatio,
+        MetricsState, ObjectiveThresholds, PlacedBuilding, Point, PrivateCarTrip,
         RollingWindowSeconds, RouteLeg, RoutePlan, ServiceDirection, ServicePattern,
         SurvivalTimeSeconds, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
         TripPurpose, TripStatus,
     };
     use crate::road_topology::RoadTopology;
-    use crate::scenario::{growing_suburb_campaign, growing_suburb_growth_waves};
+    use crate::scenario::growing_suburb_campaign;
     use crate::state::create_initial_snapshot;
     use crate::SandboxCreationRequest;
 
     /// Build a campaign snapshot with custom objectives, paused=false, speed=1.
-    fn campaign_snapshot(
-        objectives: ObjectiveThresholds,
-        growth_waves: Vec<GrowthWave>,
-    ) -> GameSnapshot {
+    fn campaign_snapshot(objectives: ObjectiveThresholds) -> GameSnapshot {
         let mut state = create_initial_snapshot();
-        let (rules, scenario) = growing_suburb_campaign(objectives, growth_waves);
+        let (rules, scenario) = growing_suburb_campaign(objectives);
         state.rules = rules;
         state.scenario = scenario;
         state.paused = false;
@@ -1413,16 +1401,6 @@ mod tests {
             survival_time: SurvivalTimeSeconds::new(survival_time)
                 .expect("valid SurvivalTimeSeconds"),
         }
-    }
-
-    fn tick_for_test(
-        state: &GameSnapshot,
-        topology: &RoadTopology,
-        delta_seconds: f64,
-    ) -> GameSnapshot {
-        // Sandbox fixtures never evaluate objectives, so the objectives
-        // variant is behaviorally the plain tick here.
-        tick_with_objectives_for_test(state, topology, delta_seconds)
     }
 
     fn tick_with_objectives_for_test(
@@ -1906,42 +1884,6 @@ mod tests {
         assert_eq!(production_flow, reference_flow);
     }
 
-    #[test]
-    fn sandbox_mid_tick_growth_wave_does_not_schedule_or_apply_growth() {
-        let mut sandbox_with_wave = create_initial_snapshot();
-        sandbox_with_wave.paused = false;
-        let mut waves = growing_suburb_growth_waves();
-        waves[0].trigger_time = 120.0;
-        sandbox_with_wave.scenario.growth_waves = waves;
-
-        let mut sandbox_without_wave = create_initial_snapshot();
-        sandbox_without_wave.paused = false;
-        let flow = traffic::RoadFlow::new();
-
-        let sandbox_world = crate::population::build_world(&sandbox_with_wave);
-        let baseline_world = crate::population::build_world(&sandbox_without_wave);
-        assert_eq!(
-            next_boundary_after(&sandbox_with_wave, &flow, &sandbox_world),
-            next_boundary_after(&sandbox_without_wave, &flow, &baseline_world),
-            "sandbox waves do not create tick boundaries"
-        );
-        assert_eq!(
-            max_tick_substeps(&sandbox_with_wave, 300.0),
-            max_tick_substeps(&sandbox_without_wave, 300.0),
-            "sandbox waves do not consume the substep budget"
-        );
-
-        let topology =
-            RoadTopology::compile(&sandbox_with_wave.map).expect("fixture topology compiles");
-        let next = tick_for_test(&sandbox_with_wave, &topology, 300.0);
-        let baseline = tick_for_test(&sandbox_without_wave, &topology, 300.0);
-
-        assert_eq!(next.time, baseline.time, "sandbox tick timing is unchanged");
-        assert_eq!(next.buildings, baseline.buildings);
-        assert_eq!(next.sims, baseline.sims);
-        assert!(!next.scenario.growth_waves[0].applied);
-    }
-
     /// Regression test for Finding 1: when `state.time` is exactly at the first
     /// outcome's expiry time, the expiry boundary must still be tracked so a
     /// coarse tick samples the loss gate there. With a single `EPSILON` offset,
@@ -1951,7 +1893,7 @@ mod tests {
     #[test]
     fn outcome_expiry_boundary_at_exact_start_time_is_sampled() {
         let objectives = objectives_with(10.0, 1200.0);
-        let mut state = campaign_snapshot(objectives, Vec::new());
+        let mut state = campaign_snapshot(objectives);
         state.time = 10.0;
         state.day = clock::day_index(state.time);
         state.clock_minutes = clock::clock_minutes(state.time);
@@ -1985,51 +1927,6 @@ mod tests {
         );
     }
 
-    /// Regression test for Finding 2: a growth wave whose `trigger_time` equals
-    /// the survival win time must be applied before the terminal snapshot is
-    /// returned. Without post-substep growth application, `on_substep` terminates
-    /// the loop at the win boundary, and the wave remains permanently unapplied.
-    #[test]
-    fn growth_wave_at_survival_time_is_applied_before_termination() {
-        let objectives = objectives_with(300.0, 100.0);
-        let wave = GrowthWave {
-            id: "wave-at-win".to_string(),
-            trigger_time: 100.0,
-            message: String::new(),
-            applied: false,
-            actions: vec![
-                GrowthAction::PaintAreaRectangle {
-                    area: "residential".to_string(),
-                    start: Point { x: 2, y: 3 },
-                    end: Point { x: 3, y: 3 },
-                },
-                GrowthAction::PlaceBuilding {
-                    building_type: "smallHouse".to_string(),
-                    origin: Point { x: 2, y: 3 },
-                    rotation: 0,
-                },
-            ],
-        };
-        let mut state = campaign_snapshot(objectives, vec![wave]);
-        state.time = 99.0;
-        state.day = clock::day_index(state.time);
-        state.clock_minutes = clock::clock_minutes(state.time);
-        state.metrics.completed_trips = 1;
-
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        let next = tick_with_objectives_for_test(&state, &topology, 2.0);
-
-        assert_eq!(
-            next.metrics.state,
-            MetricsState::Won,
-            "campaign wins at survival time"
-        );
-        assert!(
-            next.scenario.growth_waves[0].applied,
-            "growth wave at survival time must be applied before termination"
-        );
-    }
-
     /// Regression test for Finding 3: a loaded campaign whose `state.time` is
     /// already past `survivalTime` with completed trips must be detected as won
     /// at the current timestamp, without advancing to the next boundary. Without
@@ -2038,7 +1935,7 @@ mod tests {
     #[test]
     fn already_satisfied_survival_objective_detected_at_current_time() {
         let objectives = objectives_with(300.0, 100.0);
-        let mut state = campaign_snapshot(objectives, Vec::new());
+        let mut state = campaign_snapshot(objectives);
         state.time = 100.0;
         state.day = clock::day_index(state.time);
         state.clock_minutes = clock::clock_minutes(state.time);
@@ -2072,7 +1969,7 @@ mod tests {
     fn survival_boundary_in_epsilon_gap_fires_deterministically_across_granularities() {
         let survival_time = 100.0;
         let objectives = objectives_with(300.0, survival_time);
-        let mut state = campaign_snapshot(objectives, Vec::new());
+        let mut state = campaign_snapshot(objectives);
         // Land `state.time` halfway into the epsilon gap below the boundary.
         state.time = survival_time - EPSILON / 2.0;
         state.day = clock::day_index(state.time);
@@ -2105,71 +2002,6 @@ mod tests {
         assert_eq!(
             coarse.time, fine.time,
             "coarse and fine terminate at the same promoted boundary timestamp"
-        );
-    }
-
-    /// Regression test for the near-current boundary gap on growth waves: a
-    /// wave whose `trigger_time` falls in `(state.time, state.time + EPSILON]`
-    /// must still fire at a deterministic substep boundary regardless of tick
-    /// granularity. Without the promotion in `track_next_boundary`, the wave
-    /// was discarded by the `<= after` filter and only applied at the
-    /// post-loop cleanup — at different timestamps for coarse vs fine ticks.
-    /// By aligning the wave's `trigger_time` with the survival win time, the
-    /// terminal timestamp becomes the observable: coarse and fine must both
-    /// terminate at the same promoted boundary with the wave applied.
-    #[test]
-    fn growth_wave_in_epsilon_gap_fires_deterministically_across_granularities() {
-        let trigger_time = 120.0;
-        let mut seed_waves = growing_suburb_growth_waves();
-        seed_waves[0].trigger_time = trigger_time;
-
-        // Survival win coincides with the wave so the terminal timestamp
-        // observes whether the wave boundary was tracked or lost.
-        let objectives = objectives_with(300.0, trigger_time);
-        let mut state = campaign_snapshot(objectives, seed_waves);
-        // Land `state.time` halfway into the epsilon gap below the trigger.
-        state.time = trigger_time - EPSILON / 2.0;
-        state.day = clock::day_index(state.time);
-        state.clock_minutes = clock::clock_minutes(state.time);
-        state.metrics.completed_trips = 1;
-
-        // Coarse: one 300s tick spanning past the trigger.
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        let coarse = tick_with_objectives_for_test(&state, &topology, 300.0);
-
-        // Fine: 300 × 1s ticks; the wave fires inside the first.
-        let mut fine = state.clone();
-        for _ in 0..300 {
-            if fine.metrics.state != MetricsState::Running {
-                break;
-            }
-            fine = tick_with_objectives_for_test(&fine, &topology, 1.0);
-        }
-
-        assert!(
-            coarse.scenario.growth_waves[0].applied,
-            "coarse tick applied the epsilon-gap wave"
-        );
-        assert!(
-            fine.scenario.growth_waves[0].applied,
-            "fine ticks applied the epsilon-gap wave"
-        );
-        assert_eq!(
-            coarse.metrics.state,
-            MetricsState::Won,
-            "coarse tick detects the win at the wave/survival boundary"
-        );
-        assert_eq!(
-            fine.metrics.state,
-            MetricsState::Won,
-            "fine ticks detect the win at the wave/survival boundary"
-        );
-        assert_eq!(coarse.buildings, fine.buildings, "buildings match");
-        assert_eq!(coarse.sims, fine.sims, "spawned sims match");
-        assert_eq!(coarse.map, fine.map, "map/zoning match");
-        assert_eq!(
-            coarse.time, fine.time,
-            "both terminate at the same promoted boundary timestamp"
         );
     }
 }
