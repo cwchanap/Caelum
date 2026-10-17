@@ -6,7 +6,6 @@ import type {
   ServiceMetrics,
   GameMap,
   GameRules,
-  GrowthWave,
   GameplayRejection,
   Heading,
   LegFailureReason,
@@ -144,14 +143,12 @@ export interface RustObjectiveThresholds {
   survivalTime: number;
 }
 
-/// Schema-v8 raw snapshots always include scenario identity, growth waves, and
-/// an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
+/// Raw snapshots always include scenario identity and an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
 /// or present WASM `undefined`; both host encodings of Rust `None` normalize
 /// to canonical `null`. Non-null thresholds remain authoritative core data.
 export interface RustScenarioConfig {
   name: string;
   objectives: RustObjectiveThresholds | null | undefined;
-  growthWaves: GrowthWave[];
 }
 
 export interface RustGameSnapshot {

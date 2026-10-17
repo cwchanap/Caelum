@@ -112,6 +112,16 @@ describe("BuildPanel detail view", () => {
     }
   });
 
+  it("explains in Zones that served land builds up on its own", () => {
+    renderPanel({ activeBuildGroup: "zones" });
+    expect(screen.getByTestId("build-hint")).toHaveTextContent(
+      /near a stop on a running line builds up on its own/,
+    );
+
+    renderPanel({ activeBuildGroup: "roads" });
+    expect(screen.getAllByTestId("build-hint")).toHaveLength(1);
+  });
+
   it("keeps buildings grouped under visible area headings", () => {
     renderPanel({ activeBuildGroup: "buildings" });
     for (const label of [

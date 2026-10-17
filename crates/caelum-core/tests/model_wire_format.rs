@@ -250,11 +250,11 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
-    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 12);
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 13);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(12)
+        json!(13)
     );
 }
 
@@ -424,7 +424,7 @@ fn retire_service_vehicle_intent_is_line_id_only() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(12));
+    assert_eq!(value["schemaVersion"], json!(13));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
@@ -438,7 +438,7 @@ fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     );
     assert!(value["rules"]["sandbox"].get("moveInRate").is_none());
     assert_eq!(value["scenario"]["objectives"], json!(null));
-    assert_eq!(value["scenario"]["growthWaves"], json!([]));
+    assert!(value["scenario"].get("growthWaves").is_none());
 }
 
 #[test]
@@ -515,7 +515,7 @@ fn snapshot_rejects_unknown_rule_enum_values() {
 
 #[test]
 fn campaign_rules_and_scenario_round_trip() {
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives());
 
     assert_eq!(
         serde_json::to_value(&rules).unwrap(),
@@ -552,9 +552,9 @@ fn campaign_rules_and_scenario_round_trip() {
 
 #[test]
 fn snapshot_requires_current_rules_and_scenario_fields() {
-    for field in ["rules", "scenario", "objectives", "growthWaves"] {
+    for field in ["rules", "scenario", "objectives"] {
         let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
-        if matches!(field, "objectives" | "growthWaves") {
+        if field == "objectives" {
             value["scenario"].as_object_mut().unwrap().remove(field);
         } else {
             value.as_object_mut().unwrap().remove(field);
@@ -1693,60 +1693,6 @@ fn gameplay_update_result_round_trips_through_serde_json() {
             .collect(),
         "GameplayUpdateResult must serialize exactly the TS-contract keys"
     );
-}
-
-#[test]
-fn growth_action_serializes_to_ts_parity_tagged_shape() {
-    use caelum_core::model::GrowthAction;
-
-    let place = GrowthAction::PlaceBuilding {
-        building_type: "smallHouse".to_string(),
-        origin: Point { x: 2, y: 3 },
-        rotation: 0,
-    };
-    let value = serde_json::to_value(&place).expect("placeBuilding serializes");
-    assert_eq!(value["type"], json!("placeBuilding"));
-    assert_eq!(value["buildingType"], json!("smallHouse"));
-    assert_eq!(value["origin"], json!({ "x": 2, "y": 3 }));
-    assert_eq!(value["rotation"], json!(0));
-    assert!(
-        value.get("building_type").is_none(),
-        "must not leak snake_case building_type"
-    );
-
-    let paint = GrowthAction::PaintAreaRectangle {
-        area: "residential".to_string(),
-        start: Point { x: 2, y: 3 },
-        end: Point { x: 11, y: 3 },
-    };
-    let value = serde_json::to_value(&paint).expect("paintAreaRectangle serializes");
-    assert_eq!(value["type"], json!("paintAreaRectangle"));
-    assert_eq!(value["area"], json!("residential"));
-    assert_eq!(value["end"], json!({ "x": 11, "y": 3 }));
-}
-
-#[test]
-fn shipped_scenario_growth_waves_serialize_to_empty_list() {
-    use caelum_core::state::create_initial_snapshot;
-
-    let snapshot = create_initial_snapshot();
-    let value = serde_json::to_value(&snapshot.scenario).expect("scenario serializes");
-    assert_eq!(value["growthWaves"], json!([]));
-}
-
-#[test]
-fn scenario_config_rejects_omitted_growth_waves() {
-    let value = json!({
-        "name": "Growing Suburb",
-        "objectives": {
-            "maxLateRatio": 0.1,
-            "maxUnservedRatio": 0.1,
-            "maxAverageWait": 180.0,
-            "rollingWindowSeconds": 300.0,
-            "survivalTime": 600.0
-        }
-    });
-    assert!(serde_json::from_value::<ScenarioConfig>(value).is_err());
 }
 
 #[test]

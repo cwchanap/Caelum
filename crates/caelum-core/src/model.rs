@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 12;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 13;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -301,8 +301,6 @@ pub struct GameSnapshot {
     pub next_citizen_ordinal: usize,
     pub metrics: Metrics,
     /// Static scenario identity plus optional campaign objectives.
-    /// `growth_waves` carries scenario-authored growth; entries' `applied` flag
-    /// mutates as the tick pipeline fires them (see `crate::growth`).
     pub scenario: ScenarioConfig,
 }
 
@@ -431,21 +429,6 @@ pub struct ScenarioConfig {
     pub name: String,
     #[serde(deserialize_with = "deserialize_required_option")]
     pub objectives: Option<ObjectiveThresholds>,
-    pub growth_waves: Vec<GrowthWave>,
-}
-
-/// A batch of scheduled scenario intents applied at `trigger_time` by
-/// `crate::growth::apply_due_growth_waves`. `applied` flips to `true` once the
-/// wave has fired (idempotent). Serialized as the TS `Scenario.growthWaves` wire
-/// shape.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct GrowthWave {
-    pub id: String,
-    pub trigger_time: f64,
-    pub message: String,
-    pub applied: bool,
-    pub actions: Vec<GrowthAction>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -557,27 +540,6 @@ impl RoadStructure {
         keys.sort();
         keys
     }
-}
-
-/// A single growth mutation. Mirrors the corresponding `intent::GameIntent`
-/// variants and their wire spelling so a wave replays the player's own handlers.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(
-    tag = "type",
-    rename_all = "camelCase",
-    rename_all_fields = "camelCase"
-)]
-pub enum GrowthAction {
-    PaintAreaRectangle {
-        area: String,
-        start: Point,
-        end: Point,
-    },
-    PlaceBuilding {
-        building_type: String,
-        origin: Point,
-        rotation: u16,
-    },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

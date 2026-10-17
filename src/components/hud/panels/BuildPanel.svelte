@@ -163,6 +163,10 @@
         </section>
       {/each}
 
+      {#if activeGroup.hint !== undefined}
+        <p class="build-hint" data-testid="build-hint">{activeGroup.hint}</p>
+      {/if}
+
       {#if armedDefinition !== null && armedFactsSummary !== null}
         <div class="armed-facts" data-testid="armed-building-facts">
           <p class="facts-line">{armedFactsSummary}</p>

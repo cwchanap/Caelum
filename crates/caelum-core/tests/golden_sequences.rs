@@ -92,7 +92,7 @@ fn nearby_walker_campaign_engine() -> GameEngine {
     // apply Sandbox move-ins.
     engine.tick(500.0);
     let mut snapshot = engine.snapshot();
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives());
     snapshot.rules = rules;
     snapshot.scenario = scenario;
     common::running_engine_from_fixture(snapshot)

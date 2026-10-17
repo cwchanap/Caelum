@@ -230,7 +230,7 @@ fn wave_snapshot(count: usize) -> GameSnapshot {
 
 /// Wave rows: time the two due-wave phases separately, mirroring the tick's
 /// demand bridge. `schedule_emit_us` covers the exact-time scheduler emission
-/// (`run_due` growth/scheduler pass plus the demand drain) without routing;
+/// (`run_due` scheduler pass plus the demand drain) without routing;
 /// `route_spawn_us` covers `spawn_pending_trip_demands` over the drained
 /// demands (batch road-flow derivation plus route choice and private-car
 /// candidacy per row — the O(due demand) path HPA-348 owns batching for).

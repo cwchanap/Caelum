@@ -18,7 +18,7 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a We
 
 ### Population ownership (ECS)
 
-`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v12 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
+`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v13 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
 
 The crate is deterministic: no `SystemTime`/`Instant`/`rand` in library source (`Instant` exists only in native example tooling, such as `examples/presentation_scale.rs`); HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
@@ -64,19 +64,18 @@ contract is deliberately a shared runtime seam, not a plugin or host-platform
 API. Neither adapter exposes a runtime identity, session object, validation
 operation, or mutating sandbox operation.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 12`. Every snapshot carries
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 13`. Every snapshot carries
 required Rust-owned `GameRules` plus a required `ScenarioConfig`.
 `rules.sandbox.startingCapital` is required and records the exact amount reset
 must restore; it is an integer from `0` through `i32::MAX`.
 `scenario.objectives` is a required-but-nullable wire key: it is an object or
 explicit JSON `null`; a present WASM `undefined` represents Rust `None` and
 the host normalizes it to `null`.
-`scenario.growthWaves` is also required and may be empty. Omitting either key,
-omitting `startingCapital`, omitting a placed building's required `placedAt`,
+Omitting `objectives`, omitting `startingCapital`, omitting a placed building's required `placedAt`,
 omitting a bus route or Metro line's required-nullable `targetHeadwaySeconds`, or
-supplying any other malformed schema-v12 content,
+supplying any other malformed schema-v13 content,
 rejects the snapshot. Hosts reject every snapshot whose schema is not
-12—including every older schema; development saves are disposable and are
+13—including every older schema; development saves are disposable and are
 cleared rather than migrated.
 `Route.serviceMetrics` and `MetroLine.serviceMetrics` are the opposite direction:
 runtime-derived output that Rust may serialize for the Lines panel but never
@@ -330,12 +329,11 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 `Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
 The fresh game is the canonical Standard Crossroads sandbox: `$120,000`
-starting capital, demand multiplier `1.0`, an initially paused snapshot, no campaign
-objectives, and no growth waves.
-Sandbox ticks continue trips and metrics but never newly win, lose, or apply
-authored growth. Explicit campaign snapshots may independently attach
-objective thresholds and ordered growth waves; Rust evaluates and applies
-those features only in campaign mode.
+starting capital, demand multiplier `1.0`, an initially paused snapshot, and no
+campaign objectives.
+Sandbox ticks continue trips and metrics but never newly win or lose. Explicit
+campaign snapshots may attach objective thresholds; Rust evaluates them only in
+campaign mode.
 
 Serialized campaign thresholds are authoritative: hosts display the values
 Rust enforces and do not derive or hard-code a local copy. When an objectives
@@ -353,9 +351,28 @@ because the newtype rejects it at load.
 
 Growing Suburb remains a campaign scenario name, independent from sandbox
 template identity. Its campaign helper currently reuses the canonical
-Crossroads sandbox settings while retaining campaign mode, objectives/growth
+Crossroads sandbox settings while retaining campaign mode, objectives
 ownership, and the `"Growing Suburb"` scenario name. Sandboxes use only the
 `"Blank Grid"` and `"Crossroads"` scenario/template labels.
+
+## City growth
+
+In a Sandbox, zoned land near running transit develops on its own
+(`crates/caelum-core/src/growth.rs`). Every six game hours (00:00, 06:00, 12:00,
+18:00) each served node — a present stop, terminal, or station on an
+operational line with at least one vehicle — develops at most one building
+whose footprint touches the node's Coverage-overlay square (radius 2 for a bus
+stop, 4 for a terminal or station). A Small House grows on residential land
+while total job capacity covers total housing capacity; otherwise a
+Supermarket, Office Tower, or Factory grows on commercial, office, or
+industrial land. Civic and park land never grows. The nearest valid footprint
+wins, growth is free, and residents move in hourly as into placed housing.
+
+Growth times are tick boundaries, and the substep that crosses one runs the
+pass, so coarse and fine ticks grow identically. The pass places through
+`place_building_core`, stamps the exact growth time as `placedAt`, and
+reconciles the ECS population once. A tick whose buildings changed carries
+the scene.
 
 ## UI shell
 
@@ -398,11 +415,11 @@ Host bootstrap failures stay in the shell layer, while gameplay validation remai
 
 1. Svelte components emit user intents to the runtime.
 2. The runtime applies local UI intents directly and sends gameplay intents to the host backend.
-3. The Rust `GameEngine` advances suburb growth, transit movement, and objectives, projecting each result into a `PresentationUpdate`.
+3. The Rust `GameEngine` advances city growth, transit movement, and objectives, projecting each result into a `PresentationUpdate`.
 4. The WebGPU host renders the committed presentation state from runtime-owned batches.
 5. Svelte rerenders from the latest runtime snapshot.
 
 The host-owned `requestAnimationFrame` loop admits simulation ticks to the backend at ≤10 per second while unpaused (one tick in flight, wall-delta clamped) and interpolates vehicle presentation between observed snapshots; the load-bearing standalone Bevy ECS population
 introduced by HPA-347 is live in `caelum-core` (see Population ownership above).
 
-The Growing Suburb scenario remains deterministic for tests: initial state, growth thresholds, generated citizens, identifiers, and objective evaluation stay stable across repeated runs.
+The Growing Suburb scenario remains deterministic for tests: initial state, generated citizens, identifiers, and objective evaluation stay stable across repeated runs.

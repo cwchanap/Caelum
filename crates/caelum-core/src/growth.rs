@@ -1,358 +1,237 @@
-use crate::areas;
-use crate::buildings;
-use crate::model::{GameMode, GameSnapshot, GrowthAction};
+//! Service-driven city growth. In a Sandbox, zoned land near running transit
+//! develops buildings on its own every [`GROWTH_INTERVAL_SECONDS`].
+//!
+//! Each served node (a present stop, terminal, or station on a line that is
+//! operational and has a vehicle) develops at most one building per pass whose
+//! footprint touches the node's coverage square. A house grows while total job
+//! capacity covers total housing capacity; otherwise a workplace grows. Growth
+//! is the world building, not the player spending, so placement is free.
 
-/// Whether any growth wave is due at `state.time`. Cheap pre-check so callers
-/// only pay for snapshot cloning / reconciliation when a wave will actually
-/// apply.
-pub(crate) fn has_due_growth_waves(state: &GameSnapshot) -> bool {
-    state.rules.game_mode == GameMode::Campaign
-        && state
-            .scenario
-            .growth_waves
-            .iter()
-            .any(|wave| !wave.applied && wave.trigger_time <= state.time)
+use std::collections::HashSet;
+
+use bevy_ecs::prelude::World;
+
+use crate::building_catalog::building_definition;
+use crate::buildings;
+use crate::clock::GAME_DAY_SECONDS;
+use crate::model::{GameMode, GameSnapshot, Point};
+use crate::population;
+use crate::router;
+use crate::transit::stop_coverage_radius;
+use crate::transit_nodes::is_present_node;
+use crate::trips::EPSILON;
+
+/// Six game hours: the city grows at 00:00, 06:00, 12:00 and 18:00.
+pub const GROWTH_INTERVAL_SECONDS: f64 = GAME_DAY_SECONDS / 4.0;
+
+/// Metro stations cover the same square the Coverage overlay draws.
+const METRO_STATION_COVERAGE_RADIUS: i32 = 4;
+
+/// Zone and the building it grows, for homes and for workplaces.
+const HOMES: &[(&str, &str)] = &[("residential", "smallHouse")];
+const WORKPLACES: &[(&str, &str)] = &[
+    ("commercial", "supermarket"),
+    ("office", "officeTower"),
+    ("industrial", "factory"),
+];
+
+/// Growth passes run at whole multiples of the interval. The epsilon keeps a
+/// substep that ends a rounding error short of the boundary on its far side,
+/// so coarse and fine ticks credit the same pass.
+fn growth_index(time: f64) -> f64 {
+    ((time + EPSILON) / GROWTH_INTERVAL_SECONDS).floor()
 }
 
-/// Apply every growth wave whose `trigger_time` has arrived, in declared order,
-/// by replaying its actions through the engine's own handlers. Placements are
-/// budget-exempt (`place_building_core`): a wave is the world growing, not the
-/// player spending. Idempotent via each wave's `applied` flag. A wave whose
-/// action is invalid at fire time (e.g. an unzoned placement) skips that action
-/// deterministically, exactly as a player's invalid click is a no-op.
-pub fn apply_due_growth_waves(state: &mut GameSnapshot) {
-    if state.rules.game_mode != GameMode::Campaign {
-        return;
+/// The next growth time strictly after `time`; a tick boundary.
+pub(crate) fn next_growth_time(time: f64) -> f64 {
+    (growth_index(time) + 1.0) * GROWTH_INTERVAL_SECONDS
+}
+
+/// The growth time a substep from `previous` to `now` crossed, if any.
+pub(crate) fn crossed_growth_time(previous: f64, now: f64) -> Option<f64> {
+    let index = growth_index(now);
+    (index > growth_index(previous)).then_some(index * GROWTH_INTERVAL_SECONDS)
+}
+
+struct ServedNode {
+    position: Point,
+    radius: i32,
+}
+
+/// Candidate site ordering: nearest to the node, rotation 0 first, then
+/// top-to-bottom, left-to-right, then zone order.
+#[derive(PartialEq, Eq, PartialOrd, Ord)]
+struct Site {
+    distance: i32,
+    rotation: u16,
+    y: i32,
+    x: i32,
+    kind: usize,
+}
+
+/// Run one growth pass at `at_time` and reconcile the ECS population with the
+/// grown buildings. Returns whether population state changed.
+pub(crate) fn grow_city(state: &mut GameSnapshot, world: &mut World, at_time: f64) -> bool {
+    if state.rules.game_mode != GameMode::Sandbox {
+        return false;
+    }
+    let nodes = served_nodes(state);
+    if nodes.is_empty() {
+        return false;
     }
 
-    let due: Vec<usize> = state
-        .scenario
-        .growth_waves
+    let before = state.clone();
+    let (mut homes, mut jobs) = capacities(state);
+    let mut occupied = occupied_tiles(state);
+    let mut grew = false;
+    for node in &nodes {
+        let kinds = if jobs >= homes { HOMES } else { WORKPLACES };
+        let mut sites = candidate_sites(state, &occupied, node, kinds);
+        sites.sort();
+        for site in sites {
+            let building_type = kinds[site.kind].1;
+            let origin = Point {
+                x: site.x,
+                y: site.y,
+            };
+            let Ok(mut next) =
+                buildings::place_building_core(state, building_type, &origin, site.rotation)
+            else {
+                continue;
+            };
+            let Some(building) = next.buildings.last_mut() else {
+                continue;
+            };
+            building.placed_at = at_time;
+            occupied.extend(building.occupied_tiles.iter().copied());
+            if let Some(definition) = building_definition(building_type) {
+                homes += u32::from(definition.resident_capacity);
+                jobs += u32::from(definition.job_capacity);
+            }
+            *state = next;
+            grew = true;
+            break;
+        }
+    }
+
+    grew && population::reconcile_buildings(world, &before, state).changed
+}
+
+/// Present nodes that passengers can plan on, stops before stations, each in
+/// build order.
+fn served_nodes(state: &GameSnapshot) -> Vec<ServedNode> {
+    let services = router::active_services(state);
+    let served: HashSet<&str> = services
         .iter()
-        .enumerate()
-        .filter(|(_, wave)| !wave.applied && wave.trigger_time <= state.time)
-        .map(|(index, _)| index)
+        .flat_map(router::TransitService::node_ids)
         .collect();
-    if due.is_empty() {
-        return;
-    }
 
-    for index in due {
-        let actions = state.scenario.growth_waves[index].actions.clone();
-        for action in actions {
-            match action {
-                GrowthAction::PaintAreaRectangle { area, start, end } => {
-                    if let Ok(next) = areas::paint_area_rectangle(state, &area, &start, &end) {
-                        *state = next;
+    let stops = state
+        .transit
+        .stops
+        .iter()
+        .filter(|stop| is_present_node(stop.status) && served.contains(stop.id.as_str()))
+        .map(|stop| ServedNode {
+            position: stop.position,
+            radius: i32::from(stop_coverage_radius(stop.kind)),
+        });
+    let stations = state
+        .transit
+        .stations
+        .iter()
+        .filter(|station| is_present_node(station.status) && served.contains(station.id.as_str()))
+        .map(|station| ServedNode {
+            position: station.position,
+            radius: METRO_STATION_COVERAGE_RADIUS,
+        });
+    stops.chain(stations).collect()
+}
+
+fn capacities(state: &GameSnapshot) -> (u32, u32) {
+    state
+        .buildings
+        .iter()
+        .filter_map(|building| building_definition(&building.building_type))
+        .fold((0, 0), |(homes, jobs), definition| {
+            (
+                homes + u32::from(definition.resident_capacity),
+                jobs + u32::from(definition.job_capacity),
+            )
+        })
+}
+
+fn occupied_tiles(state: &GameSnapshot) -> HashSet<Point> {
+    let buildings = state
+        .buildings
+        .iter()
+        .flat_map(|building| building.occupied_tiles.iter().copied());
+    let stops = state
+        .transit
+        .stops
+        .iter()
+        .filter(|stop| is_present_node(stop.status))
+        .map(|stop| stop.position);
+    let stations = state
+        .transit
+        .stations
+        .iter()
+        .filter(|station| is_present_node(station.status))
+        .map(|station| station.position);
+    buildings.chain(stops).chain(stations).collect()
+}
+
+/// Footprints touching the node's coverage square on empty land zoned for the
+/// building. A cheap pre-filter: `place_building_core` stays the authority.
+fn candidate_sites(
+    state: &GameSnapshot,
+    occupied: &HashSet<Point>,
+    node: &ServedNode,
+    kinds: &[(&str, &str)],
+) -> Vec<Site> {
+    let mut sites = Vec::new();
+    for (kind, (area, building_type)) in kinds.iter().enumerate() {
+        let Some(definition) = building_definition(building_type) else {
+            continue;
+        };
+        for rotation in [0, 90] {
+            let (width, height) = if rotation == 90 {
+                (definition.height, definition.width)
+            } else {
+                (definition.width, definition.height)
+            };
+            let Point { x: nx, y: ny } = node.position;
+            for y in (ny - node.radius - (height - 1))..=(ny + node.radius) {
+                for x in (nx - node.radius - (width - 1))..=(nx + node.radius) {
+                    let dx = (x - nx).max(nx - (x + width - 1)).max(0);
+                    let dy = (y - ny).max(ny - (y + height - 1)).max(0);
+                    let distance = dx.max(dy);
+                    if distance > node.radius {
+                        continue;
                     }
-                }
-                GrowthAction::PlaceBuilding {
-                    building_type,
-                    origin,
-                    rotation,
-                } => {
-                    if let Ok(next) =
-                        buildings::place_building_core(state, &building_type, &origin, rotation)
-                    {
-                        *state = next;
+                    let fits = (y..y + height).all(|ty| {
+                        (x..x + width).all(|tx| {
+                            let point = Point { x: tx, y: ty };
+                            !occupied.contains(&point)
+                                && state.map.tile(point).is_some_and(|tile| {
+                                    tile.kind == "empty"
+                                        && !tile.has_track
+                                        && tile.road_structure_id.is_none()
+                                        && tile.area.as_deref() == Some(*area)
+                                })
+                        })
+                    });
+                    if fits {
+                        sites.push(Site {
+                            distance,
+                            rotation,
+                            y,
+                            x,
+                            kind,
+                        });
                     }
                 }
             }
         }
-        state.scenario.growth_waves[index].applied = true;
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use crate::engine::GameEngine;
-    use crate::intent::GameIntent;
-    use crate::model::{GameSnapshot, GrowthAction, GrowthWave, Point};
-    use crate::scenario::{
-        growing_suburb_campaign, growing_suburb_growth_waves, growing_suburb_objectives,
-    };
-    use crate::state::create_initial_snapshot;
-
-    fn campaign_with_waves(waves: Vec<GrowthWave>) -> GameSnapshot {
-        let mut state = create_initial_snapshot();
-        let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), waves);
-        state.rules = rules;
-        state.scenario = scenario;
-        state.paused = false;
-        state
-    }
-
-    /// Build a resumable engine from the prepared campaign/sandbox fixture.
-    /// `from_snapshot` canonicalizes shell fields (paused, clock) and compiles
-    /// the road topology, exactly as the persistence boundary would.
-    fn running_engine(snapshot: GameSnapshot) -> GameEngine {
-        let mut engine =
-            GameEngine::from_snapshot(snapshot).expect("fixture must be persistence-valid");
-        let resumed = engine.dispatch(GameIntent::SetPaused { paused: false });
-        assert!(resumed.applied, "fixture must resume: {resumed:?}");
-        assert!(resumed.rejection.is_none());
-        engine
-    }
-
-    fn seeded() -> GameSnapshot {
-        campaign_with_waves(growing_suburb_growth_waves())
-    }
-
-    #[test]
-    fn sandbox_attached_growth_waves_remain_unapplied() {
-        let mut start = create_initial_snapshot();
-        start.paused = false;
-        start.scenario.growth_waves = growing_suburb_growth_waves();
-
-        let mut engine = running_engine(start);
-        let result = engine.tick(1.0);
-        assert!(result.rejection.is_none());
-        let next = engine.snapshot();
-
-        assert!(next.buildings.is_empty());
-        assert!(next.sims.is_empty());
-        assert!(!next.scenario.growth_waves[0].applied);
-    }
-
-    #[test]
-    fn campaign_without_objectives_still_applies_growth() {
-        let mut start = campaign_with_waves(growing_suburb_growth_waves());
-        start.scenario.objectives = None;
-
-        let mut engine = running_engine(start);
-        let result = engine.tick(1.0);
-        assert!(result.rejection.is_none());
-        let next = engine.snapshot();
-
-        assert_eq!(next.buildings.len(), 5);
-        assert!(next.scenario.growth_waves[0].applied);
-    }
-
-    #[test]
-    fn seed_wave_zones_places_houses_without_immediate_sims() {
-        let start = seeded();
-        let budget_before = start.budget;
-
-        let mut engine = running_engine(start);
-        let result = engine.tick(1.0);
-        assert!(result.rejection.is_none());
-        let next = engine.snapshot();
-
-        assert_eq!(next.buildings.len(), 5, "5 smallHouse units placed");
-        assert_eq!(
-            next.sims.len(),
-            0,
-            "Campaign growth places housing without Sandbox move-ins"
-        );
-        assert!(next.scenario.growth_waves[0].applied);
-        assert_eq!(next.budget, budget_before, "budget-exempt world growth");
-
-        let anchor = next
-            .map
-            .tiles
-            .iter()
-            .find(|tile| tile.x == 2 && tile.y == 3)
-            .expect("anchor tile exists");
-        assert_eq!(anchor.area.as_deref(), Some("residential"));
-    }
-
-    #[test]
-    fn application_is_idempotent() {
-        let mut engine = running_engine(seeded());
-        let result = engine.tick(1.0);
-        assert!(result.rejection.is_none());
-        let once = engine.snapshot();
-        engine.tick(1.0);
-        let twice = engine.snapshot();
-        assert_eq!(twice.buildings.len(), once.buildings.len());
-        assert_eq!(twice.sims.len(), once.sims.len());
-    }
-
-    #[test]
-    fn empty_growth_waves_is_a_noop() {
-        let mut start = create_initial_snapshot();
-        start.paused = false;
-
-        let mut engine = running_engine(start);
-        let result = engine.tick(1.0);
-        assert!(result.rejection.is_none());
-        let next = engine.snapshot();
-        assert!(next.buildings.is_empty());
-        assert!(next.sims.is_empty());
-    }
-
-    #[test]
-    fn coarse_and_fine_ticks_produce_identical_growth() {
-        let mut coarse = running_engine(seeded());
-        coarse.tick(5.0);
-        let coarse_snapshot = coarse.snapshot();
-
-        let mut fine = running_engine(seeded());
-        for _ in 0..5 {
-            fine.tick(1.0);
-        }
-        let fine_snapshot = fine.snapshot();
-
-        assert_eq!(coarse_snapshot.buildings, fine_snapshot.buildings);
-        assert_eq!(coarse_snapshot.sims, fine_snapshot.sims);
-        assert_eq!(coarse_snapshot.map, fine_snapshot.map);
-    }
-
-    #[test]
-    fn placement_without_zoning_is_skipped_but_wave_marked_applied() {
-        let start = campaign_with_waves(vec![GrowthWave {
-            id: "w".to_string(),
-            trigger_time: 0.0,
-            message: String::new(),
-            applied: false,
-            actions: vec![GrowthAction::PlaceBuilding {
-                building_type: "smallHouse".to_string(),
-                origin: Point { x: 2, y: 3 },
-                rotation: 0,
-            }],
-        }]);
-
-        let mut engine = running_engine(start);
-        let result = engine.tick(1.0);
-        assert!(result.rejection.is_none());
-        let next = engine.snapshot();
-        assert!(next.buildings.is_empty(), "unzoned placement skipped");
-        assert!(next.scenario.growth_waves[0].applied);
-    }
-
-    /// Multiple waves can fall due within a single tick — either at distinct
-    /// trigger times or sharing the same trigger time. The cap math
-    /// (`growth_waves.len()` term in `max_tick_substeps`) and the ordered-due
-    /// collection in `apply_due_growth_waves` handle this, but it was previously
-    /// unverified. This test fires three waves (two sharing t=50, one at t=150)
-    /// in one 300s coarse tick and confirms all fire in declared order without
-    /// the substep cap truncating the tick.
-    #[test]
-    fn multiple_waves_in_one_tick_all_fire_in_declared_order() {
-        let start = campaign_with_waves(vec![
-            GrowthWave {
-                id: "wave-a".to_string(),
-                trigger_time: 50.0,
-                message: String::new(),
-                applied: false,
-                actions: vec![
-                    GrowthAction::PaintAreaRectangle {
-                        area: "residential".to_string(),
-                        start: Point { x: 2, y: 3 },
-                        end: Point { x: 3, y: 3 },
-                    },
-                    GrowthAction::PlaceBuilding {
-                        building_type: "smallHouse".to_string(),
-                        origin: Point { x: 2, y: 3 },
-                        rotation: 0,
-                    },
-                ],
-            },
-            GrowthWave {
-                id: "wave-b".to_string(),
-                trigger_time: 50.0,
-                message: String::new(),
-                applied: false,
-                actions: vec![
-                    GrowthAction::PaintAreaRectangle {
-                        area: "residential".to_string(),
-                        start: Point { x: 6, y: 3 },
-                        end: Point { x: 7, y: 3 },
-                    },
-                    GrowthAction::PlaceBuilding {
-                        building_type: "smallHouse".to_string(),
-                        origin: Point { x: 6, y: 3 },
-                        rotation: 0,
-                    },
-                ],
-            },
-            GrowthWave {
-                id: "wave-c".to_string(),
-                trigger_time: 150.0,
-                message: String::new(),
-                applied: false,
-                actions: vec![
-                    GrowthAction::PaintAreaRectangle {
-                        area: "residential".to_string(),
-                        start: Point { x: 2, y: 11 },
-                        end: Point { x: 3, y: 11 },
-                    },
-                    GrowthAction::PlaceBuilding {
-                        building_type: "smallHouse".to_string(),
-                        origin: Point { x: 2, y: 11 },
-                        rotation: 0,
-                    },
-                ],
-            },
-        ]);
-
-        let mut engine = running_engine(start);
-        let result = engine.tick(300.0);
-        assert!(result.rejection.is_none());
-        let next = engine.snapshot();
-
-        // All three waves fired.
-        assert!(next.scenario.growth_waves[0].applied, "wave-a applied");
-        assert!(next.scenario.growth_waves[1].applied, "wave-b applied");
-        assert!(next.scenario.growth_waves[2].applied, "wave-c applied");
-
-        // Three buildings placed; Campaign growth does not run Sandbox move-ins.
-        assert_eq!(next.buildings.len(), 3, "3 smallHouse units placed");
-        assert_eq!(next.sims.len(), 0, "Campaign growth has no immediate sims");
-
-        // The tick was not truncated — reached the full 300s.
-        assert_eq!(
-            next.time, 300.0,
-            "tick reached full duration without cap truncation"
-        );
-    }
-
-    /// A wave whose `trigger_time` falls mid-tick (not at t=0) must fire at
-    /// exactly that instant regardless of tick granularity. This exercises
-    /// Decision B's boundary tracking in `next_boundary_after` — the substep
-    /// machinery breaks at `trigger_time`, applies the wave, then continues —
-    /// which none of the `trigger_time: 0.0` tests above cover.
-    #[test]
-    fn mid_tick_wave_fires_at_boundary_regardless_of_granularity() {
-        // Reuse the seed wave's actions but defer the trigger to t=120 so the
-        // wave fires inside a 300s coarse tick, not at its start.
-        let mut seed_waves = growing_suburb_growth_waves();
-        seed_waves[0].trigger_time = 120.0;
-
-        let start = campaign_with_waves(seed_waves);
-
-        // Coarse: one 300s tick spanning well past the 120s trigger.
-        let mut coarse = running_engine(start.clone());
-        coarse.tick(300.0);
-        let coarse_snapshot = coarse.snapshot();
-
-        // Fine: 300 × 1s ticks; the wave fires on the 120th tick.
-        let mut fine = running_engine(start);
-        for _ in 0..300 {
-            fine.tick(1.0);
-        }
-        let fine_snapshot = fine.snapshot();
-
-        assert!(
-            coarse_snapshot.scenario.growth_waves[0].applied,
-            "coarse tick applied the mid-tick wave"
-        );
-        assert!(
-            fine_snapshot.scenario.growth_waves[0].applied,
-            "fine ticks applied the mid-tick wave"
-        );
-        assert_eq!(
-            coarse_snapshot.buildings, fine_snapshot.buildings,
-            "buildings match"
-        );
-        assert_eq!(
-            coarse_snapshot.sims, fine_snapshot.sims,
-            "spawned sims match"
-        );
-        assert_eq!(coarse_snapshot.map, fine_snapshot.map, "map/zoning match");
-        assert_eq!(
-            coarse_snapshot.time, fine_snapshot.time,
-            "both reach the same simulated time"
-        );
-    }
+    sites
 }

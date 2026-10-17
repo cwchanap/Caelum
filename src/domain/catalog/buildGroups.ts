@@ -34,6 +34,7 @@ export interface BuildMenuGroup {
   id: BuildGroup;
   label: string;
   sections: BuildMenuSection[];
+  hint?: string;
 }
 
 const buildingItem = (building: BuildingType): BuildMenuItem => ({
@@ -126,6 +127,7 @@ export const BUILD_GROUPS: BuildMenuGroup[] = [
         })),
       },
     ],
+    hint: "Residential, commercial, office and industrial land near a stop on a running line builds up on its own every six hours. Homes grow while there are spare jobs, and workplaces while there are spare workers.",
   },
   { id: "buildings", label: "Buildings", sections: areaSections },
 ];

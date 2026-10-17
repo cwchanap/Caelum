@@ -125,25 +125,25 @@ fn travelling_sim_without_next_activity_round_trips_through_save_and_restore() {
 }
 
 #[test]
-fn previous_schema_11_rejects_with_expected_current_actual_11() {
+fn previous_schema_12_rejects_with_expected_current_actual_12() {
     assert_eq!(
-        check_schema_version(11),
+        check_schema_version(12),
         Err(SnapshotLoadError::UnsupportedSchema {
             expected: SNAPSHOT_SCHEMA_VERSION,
-            actual: 11,
+            actual: 12,
         })
     );
 
     let mut snapshot = paused_snapshot();
-    snapshot.schema_version = 11;
+    snapshot.schema_version = 12;
     match GameEngine::from_snapshot(snapshot) {
         Err(SnapshotLoadError::UnsupportedSchema { expected, actual }) => {
             assert_eq!(expected, SNAPSHOT_SCHEMA_VERSION);
-            assert_eq!(expected, 12);
-            assert_eq!(actual, 11);
+            assert_eq!(expected, 13);
+            assert_eq!(actual, 12);
         }
-        Err(error) => panic!("schema 11 must be rejected as unsupported, got {error:?}"),
-        Ok(_) => panic!("schema 11 must be rejected"),
+        Err(error) => panic!("schema 12 must be rejected as unsupported, got {error:?}"),
+        Ok(_) => panic!("schema 12 must be rejected"),
     }
 }
 

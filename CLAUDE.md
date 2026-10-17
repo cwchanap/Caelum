@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 Caelum is a 2D city / public-transport simulation and a **player-authored transport sandbox**: the player builds the city, lightweight city systems generate travel demand, and the core game is operating roads and public transport. Roads, bus stops/routes, metro stations/lines, and buildings are placed in deterministic Blank Grid or Crossroads sandboxes. It ships as both a browser app (Vite dev server) and a macOS desktop app (Tauri 2).
 
-Campaign objectives and automatic growth waves are a **future decision**, not a current feature. Code for them still exists in the core (see "In-flight reductions" below) but no active gameplay consumes it.
+Campaign objectives are a **future decision**, not a current feature. Code for them still exists in the core (see "In-flight reductions" below) but no active gameplay consumes it. Sandbox city growth is current: every six game hours, zoned land near running transit develops homes and workplaces on its own (`crates/caelum-core/src/growth.rs`).
 
 **The authoritative simulation core is the Rust crate `crates/caelum-core`.** It owns the tick pipeline, transit routing, trip/commute lifecycle, metrics, and gameplay mutations, and is gated by CI (fmt/clippy/test/build) and `lint-staged`. **Both hosts execute this same core:** browser/dev runs it as WASM via `crates/caelum-wasm`; the Tauri desktop build runs it natively. Tauri is the intended release path; the browser build is the fast development, UI, and Playwright target. Host wrappers are transport and serialization only — TypeScript contains UI, rendering, host adapters, and read-only helpers. New gameplay logic belongs in `crates/caelum-core`.
 
@@ -95,9 +95,9 @@ scheduled for deletion. Do not extend them, build on them, or preserve their
 invariants in new code. If a task touches one, prefer moving toward the target
 shape.
 
-| Area            | Today                                                                   | Target                                         |
-| --------------- | ----------------------------------------------------------------------- | ---------------------------------------------- |
-| Campaign/growth | `GameMode`, `ScenarioConfig`, objectives, growth waves in the tick path | Removed, once it measurably slows sandbox work |
+| Area     | Today                                                     | Target                                         |
+| -------- | --------------------------------------------------------- | ---------------------------------------------- |
+| Campaign | `GameMode`, `ScenarioConfig`, objectives in the tick path | Removed, once it measurably slows sandbox work |
 
 Durable storage current state:
 
@@ -157,7 +157,7 @@ The central rule: **Rust owns gameplay state; `createGameRuntime()` (`src/runtim
 
 **Intent flow:** a Svelte component calls a `RuntimeController` method (e.g. `setTool`, `handleTileClick`, `togglePause`) → the runtime applies local UI helpers or dispatches a gameplay intent/tick to the active backend → `commit()` swaps in the new snapshot/UI state, re-renders the frame, and publishes a `RuntimeSnapshot` to subscribers. `createWebGpuHost` owns the `requestAnimationFrame` loop and admits ticks to the backend at ≤10 host ticks/sec while unpaused (one in flight, wall-delta clamped), interpolating vehicle presentation between observed snapshots. The load-bearing standalone Bevy ECS population from HPA-347 is live in `caelum-core`.
 
-**Simulation core is Rust (`crates/caelum-core`)**, independent of Svelte and Tauri. `GameEngine` (`engine.rs`) is the facade both hosts drive: `tick(delta_seconds)` advances game time (real seconds scaled by the current speed), and `dispatch(GameIntent)` applies one player action (build / paint area / transit edit / speed / pause). A tick runs `trips::tick_trips_with_objectives`, which **substeps** the delta at growth-wave boundaries — firing due growth waves (`growth::apply_due_growth_waves`) and re-evaluating objectives/metrics after each substep — bounded by a `max_tick_substeps` cap. Every step takes an immutable `GameSnapshot` and returns a new one. `GameEngine` owns shell + topology + ECS world/schedule as one commit unit: the live shell's `sims` are empty (latent citizens live only in the ECS world), the exact-time scheduler wakes only due events, and `applied = shell_changed || population_changed`. The explicit durable snapshot reconstructs schema-v12 sims; one `project_update` consumes `PopulationAggregates` (durable- or ECS-built, parity-tested). HPA-348 owns route-choice batching; HPA-640 delivered the WebGPU renderer/cadence cutover. Browser and Tauri hosts both wrap this same `GameEngine`.
+**Simulation core is Rust (`crates/caelum-core`)**, independent of Svelte and Tauri. `GameEngine` (`engine.rs`) is the facade both hosts drive: `tick(delta_seconds)` advances game time (real seconds scaled by the current speed), and `dispatch(GameIntent)` applies one player action (build / paint area / transit edit / speed / pause). A tick runs `trips::tick_trips_with_objectives`, which **substeps** the delta at every event boundary — day rollovers, population wakes, vehicle stops, and Sandbox city-growth times (`growth::grow_city`, every six game hours) — re-evaluating objectives/metrics after each substep, bounded by a `max_tick_substeps` cap. Ticks are frame-only unless growth changed the buildings, which carries the scene. Every step takes an immutable `GameSnapshot` and returns a new one. `GameEngine` owns shell + topology + ECS world/schedule as one commit unit: the live shell's `sims` are empty (latent citizens live only in the ECS world), the exact-time scheduler wakes only due events, and `applied = shell_changed || population_changed`. The explicit durable snapshot reconstructs schema-v13 sims; one `project_update` consumes `PopulationAggregates` (durable- or ECS-built, parity-tested). HPA-348 owns route-choice batching; HPA-640 delivered the WebGPU renderer/cadence cutover. Browser and Tauri hosts both wrap this same `GameEngine`.
 
 **Layers (`src/`):**
 

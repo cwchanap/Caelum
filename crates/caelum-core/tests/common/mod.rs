@@ -70,7 +70,7 @@ pub fn corridor(state: &mut GameSnapshot, points: &[Point], one_way: Option<Head
 /// that need to exercise the campaign objective/metrics path.
 pub fn campaign_state() -> GameSnapshot {
     let mut state = create_initial_snapshot();
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives(), Vec::new());
+    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives());
     state.rules = rules;
     state.scenario = scenario;
     state
