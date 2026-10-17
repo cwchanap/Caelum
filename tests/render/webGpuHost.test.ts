@@ -430,6 +430,11 @@ describe("createWebGpuHost lifecycle", () => {
       new MouseEvent("click", { clientX: 300, clientY: 300, bubbles: true }),
     );
     expect(callbacks.onTileClick).toHaveBeenCalledTimes(1);
+
+    // A press that leaves the board drops the hover preview.
+    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointerleave", { clientX: 300, clientY: 300 });
+    expect(callbacks.onHoverTile).toHaveBeenLastCalledWith(null);
   });
 
   it("middle-button drag pans without starting a road stroke", () => {

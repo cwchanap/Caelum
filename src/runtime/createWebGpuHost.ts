@@ -825,6 +825,7 @@ export function createWebGpuHostWithRenderer(
         // A captured pan keeps tracking past the edge; an uncaptured press
         // that leaves never became a pan.
         if (!pan.moved) pan = null;
+        ctx.onHoverTile(null);
         return;
       }
       // With pointer capture active the browser suppresses leave mid-drag, so
