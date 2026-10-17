@@ -95,6 +95,13 @@ describe("camera", () => {
     });
 
     expect(zoomOne).toEqual(fitted);
+    // Before the board has a size nothing is culled.
+    expect(visibleWorldRect({ width: 0, height: 0 }, map, null)).toEqual({
+      minX: 0,
+      minY: 0,
+      maxX: map.width * tileSize,
+      maxY: map.height * tileSize,
+    });
     expect(visibleWorldRect(board, map, null)).toEqual({
       minX: 0,
       minY: 0,
