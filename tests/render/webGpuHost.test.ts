@@ -501,6 +501,26 @@ describe("createWebGpuHost lifecycle", () => {
     expect(fitted).toBeNull();
   });
 
+  it("a key pan re-aims the hover at the tile under a still pointer", () => {
+    const { host, canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+      camera: { zoom: 2, center: { x: 14, y: 9 } },
+    });
+
+    // At 64px tiles, (288, 320) is over tile (11, 9).
+    dispatchPointer(canvas, "pointermove", { clientX: 288, clientY: 320 });
+    expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 11, y: 9 });
+    // The view moves 2.8 tiles east beneath the pointer.
+    host.adjustCamera({ kind: "pan", x: 1, y: 0 });
+    expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 14, y: 9 });
+
+    // Once the pointer leaves the board there is nothing to re-aim.
+    dispatchPointer(canvas, "pointerleave", { clientX: 288, clientY: 320 });
+    callbacks.onHoverTile.mockClear();
+    host.adjustCamera({ kind: "pan", x: -1, y: 0 });
+    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+  });
+
   it("Space + drag pans under a drag tool, but not while typing", () => {
     const { canvas, callbacks } = createFixture({
       ui: { activeTool: "road" },
