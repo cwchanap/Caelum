@@ -397,6 +397,7 @@ describe("createWebGpuHost lifecycle", () => {
       new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
     );
     expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+    expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 2, y: 3 });
   });
 
   it("a click-tool drag pans the map and swallows the click", () => {
@@ -421,7 +422,8 @@ describe("createWebGpuHost lifecycle", () => {
       center: { x: 13, y: 9 },
     });
     expect(callbacks.onTileClick).not.toHaveBeenCalled();
-    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+    // The grabbed tile stays under the cursor, and so does the hover preview.
+    expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 11, y: 9 });
 
     // A press that does not travel is still an ordinary click.
     dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
@@ -435,6 +437,21 @@ describe("createWebGpuHost lifecycle", () => {
     dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
     dispatchPointer(canvas, "pointerleave", { clientX: 300, clientY: 300 });
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith(null);
+  });
+
+  it("a pan the camera clamps keeps the hover on the tile under the cursor", () => {
+    // At fit the map cannot move, so the cursor crosses tiles during the pan.
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+    });
+
+    dispatchPointer(canvas, "pointermove", center({ x: 3, y: 3 }));
+    dispatchPointer(canvas, "pointerdown", center({ x: 3, y: 3 }));
+    dispatchPointer(canvas, "pointermove", center({ x: 8, y: 3 }));
+    dispatchPointer(canvas, "pointerup", center({ x: 8, y: 3 }));
+
+    expect(callbacks.onCameraChange).toHaveBeenLastCalledWith(null);
+    expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 8, y: 3 });
   });
 
   it("middle-button drag pans without starting a road stroke", () => {
