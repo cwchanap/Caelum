@@ -458,6 +458,61 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onDragCommit).not.toHaveBeenCalled();
   });
 
+  it("applies button and key camera actions against the board", () => {
+    const { host, callbacks } = createFixture({
+      camera: { zoom: 2, center: { x: 14, y: 9 } },
+    });
+
+    host.adjustCamera({ kind: "zoomIn" });
+    // A pan key moves the view east by a fifth of the board.
+    host.adjustCamera({ kind: "pan", x: 1, y: 0 });
+    host.adjustCamera({ kind: "fit" });
+
+    const [zoomed, panned, fitted] = callbacks.onCameraChange.mock.calls.map(
+      ([camera]) => camera as Camera | null,
+    );
+    expect(zoomed).toEqual({ zoom: 2.5, center: { x: 14, y: 9 } });
+    // At 80px tiles, 0.2 * 896px is 2.24 tiles.
+    expect(panned?.zoom).toBe(2.5);
+    expect(panned?.center.x).toBeCloseTo(16.24);
+    expect(panned?.center.y).toBe(9);
+    expect(fitted).toBeNull();
+  });
+
+  it("Space + drag pans under a drag tool, but not while typing", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+      camera: { zoom: 2, center: { x: 14, y: 9 } },
+    });
+    const space = (target: EventTarget, type: "keydown" | "keyup") => {
+      const event = new KeyboardEvent(type, {
+        key: " ",
+        bubbles: true,
+        cancelable: true,
+      });
+      target.dispatchEvent(event);
+      return event;
+    };
+
+    expect(space(document.body, "keydown").defaultPrevented).toBe(true);
+    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointermove", { clientX: 236, clientY: 300 });
+    dispatchPointer(canvas, "pointerup", { clientX: 236, clientY: 300 });
+    space(document.body, "keyup");
+
+    expect(callbacks.onCameraChange).toHaveBeenLastCalledWith({
+      zoom: 2,
+      center: { x: 15, y: 9 },
+    });
+    expect(callbacks.onDragStart).not.toHaveBeenCalled();
+
+    const field = document.createElement("input");
+    document.body.appendChild(field);
+    expect(space(field, "keydown").defaultPrevented).toBe(false);
+    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
+    expect(callbacks.onDragStart).toHaveBeenCalledTimes(1);
+  });
+
   it("suppresses the browser context menu when route draft undo handles it", () => {
     const { canvas, callbacks } = createFixture({
       ui: { activeTool: "busRoute" },

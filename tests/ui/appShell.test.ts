@@ -1647,6 +1647,39 @@ describe("App command shell", () => {
     expect(runtime.setTool).not.toHaveBeenCalled();
   });
 
+  it("pans with arrows on the map and zooms with +, - and 0", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(document.body, { key: "ArrowRight" });
+    await fireEvent.keyDown(screen.getByTestId("game-canvas-host"), {
+      key: "ArrowUp",
+    });
+    // Arrows stay with focused controls elsewhere in the shell.
+    await fireEvent.keyDown(screen.getByTestId("command-destination-build"), {
+      key: "ArrowDown",
+    });
+    await fireEvent.keyDown(window, { key: "+" });
+    await fireEvent.keyDown(window, { key: "-" });
+    await fireEvent.keyDown(window, { key: "0" });
+
+    expect(vi.mocked(runtime.adjustCamera).mock.calls).toEqual([
+      [{ kind: "pan", x: 1, y: 0 }],
+      [{ kind: "pan", x: 0, y: -1 }],
+      [{ kind: "zoomIn" }],
+      [{ kind: "zoomOut" }],
+      [{ kind: "fit" }],
+    ]);
+
+    vi.mocked(runtime.adjustCamera).mockClear();
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.keyDown(
+      screen.getByRole("textbox", { name: "Rename Harbour City" }),
+      { key: "0" },
+    );
+    expect(runtime.adjustCamera).not.toHaveBeenCalled();
+  });
+
   it("calls runtime Escape once and disposes on unmount", async () => {
     const { runtime } = createRuntimeHarness();
     const view = render(App, { props: { runtime } });
