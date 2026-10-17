@@ -1,6 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
-import { clickMapTile, runtimeSnapshot, selectTool } from "./helpers";
+import {
+  clickMapTile,
+  mapTileViewportPoint,
+  runtimeSnapshot,
+  selectTool,
+} from "./helpers";
 
 interface StoredCityRecord {
   city: { id: string; name: string };
@@ -128,4 +133,56 @@ test("creates Small Town through the real WASM New City flow", async ({
     "Unstaffed",
   );
   await expect(inspector).toContainText("Early / late ·");
+});
+
+test("creates a Large city and pans and zooms the map", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.getByLabel("City name").fill("Large Smoke");
+  await page.getByLabel("Template").selectOption("smallTown");
+  await page.getByLabel("Map size").selectOption("large");
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+
+  const created = await runtimeSnapshot(page);
+  expect(created.state.rules.sandbox.mapSize).toBe("large");
+  expect([created.state.map.width, created.state.map.height]).toEqual([84, 54]);
+  expect(created.camera).toBeNull();
+
+  // Small Town's office tower, centered on the larger map.
+  const office = { x: 21 + 28, y: 6 + 18 };
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectTool(page, "select");
+
+  // Wheel-zoom around the office keeps it under the cursor.
+  const point = await mapTileViewportPoint(canvas, office);
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.wheel(0, -600);
+  // Chrome can deliver one wheel gesture as several events; wait until the
+  // zoom stops changing before measuring from it.
+  await expect
+    .poll(async () => {
+      const first = (await runtimeSnapshot(page)).camera?.zoom ?? 1;
+      await page.waitForTimeout(150);
+      const second = (await runtimeSnapshot(page)).camera?.zoom ?? 1;
+      return first === second ? first : 0;
+    })
+    .toBeGreaterThan(2);
+  await clickMapTile(canvas, office);
+  const inspector = page.getByTestId("panel-inspect");
+  await expect(inspector.getByText("Office Tower")).toBeVisible();
+
+  // A select-tool drag pans the view.
+  const before = (await runtimeSnapshot(page)).camera!;
+  await page.mouse.move(point.x, point.y);
+  await page.mouse.down();
+  await page.mouse.move(point.x + 120, point.y + 60, { steps: 6 });
+  await page.mouse.up();
+  const after = (await runtimeSnapshot(page)).camera!;
+  expect(after.zoom).toBeCloseTo(before.zoom);
+  expect(after.center.x).toBeLessThan(before.center.x);
+  expect(after.center.y).toBeLessThan(before.center.y);
+
+  await page.getByRole("button", { name: "Show whole map" }).click();
+  expect((await runtimeSnapshot(page)).camera).toBeNull();
 });

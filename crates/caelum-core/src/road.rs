@@ -941,7 +941,7 @@ pub(crate) fn reciprocal_connection(map: &GameMap, point: Point, heading: Headin
     })
 }
 
-fn junction_id(footprint: &[Point], port_keys: &[(Point, Heading)]) -> String {
+pub(crate) fn junction_id(footprint: &[Point], port_keys: &[(Point, Heading)]) -> String {
     let mut sorted_footprint = footprint.to_vec();
     sorted_footprint.sort();
     let footprint = sorted_footprint

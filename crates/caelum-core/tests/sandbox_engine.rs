@@ -21,6 +21,7 @@ fn request(
 ) -> SandboxCreationRequest {
     SandboxCreationRequest {
         template_id: template_id.to_string(),
+        map_size: "small".to_string(),
         economy_preset: economy_preset.to_string(),
         starting_capital: Some(starting_capital),
         demand_multiplier: Some(demand_multiplier),
@@ -104,6 +105,25 @@ fn reset_replays_the_complete_original_small_town_request() {
             &population_aggregates_from_snapshot(&expected),
             true
         )
+    );
+    assert_eq!(engine.snapshot(), expected);
+}
+
+#[test]
+fn reset_rebuilds_the_original_map_size() {
+    let mut large_request = request("smallTown", "standard", 42_000.0, 1.0);
+    large_request.map_size = "large".to_string();
+    let expected = create_sandbox_snapshot(large_request.clone()).unwrap();
+    let mut engine = GameEngine::from_sandbox_request(large_request).unwrap();
+
+    let _ = engine.dispatch(GameIntent::LayRoad {
+        point: Point { x: 3, y: 3 },
+    });
+    engine.reset().unwrap();
+
+    assert_eq!(
+        (engine.snapshot().map.width, engine.snapshot().map.height),
+        (84, 54)
     );
     assert_eq!(engine.snapshot(), expected);
 }

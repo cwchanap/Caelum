@@ -1,6 +1,10 @@
 import { expect, type Locator, type Page } from "@playwright/test";
-import { tileSize } from "../../src/render/boardTransform";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
+import {
+  getBoardTransform,
+  tileSize,
+  type BoardTransform,
+  type Camera,
+} from "../../src/render/boardTransform";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import type { SandboxTemplateId } from "../../src/domain/types";
 import type { BuildGroup } from "../../src/domain/catalog/buildGroups";
@@ -92,42 +96,39 @@ export async function selectTool(
   await expect(trigger).toHaveAttribute("aria-pressed", "true");
 }
 
-// Shared sandbox dimensions keep the e2e board transform aligned with both
-// canonical Rust-owned templates without duplicating map geometry constants.
-const mapWidth = MAP_WIDTH;
-const mapHeight = MAP_HEIGHT;
-
-/**
- * Board transform mirroring `getBoardTransform` in src/render/canvas.ts, but
- * operating in CSS pixels (Playwright's `boundingBox`) rather than canvas
- * backing-store pixels. Shared by both click and drag helpers so the tile→pixel
- * mapping stays in sync.
- */
-function boardTransform(box: { width: number; height: number }): {
-  scale: number;
-  offsetX: number;
-  offsetY: number;
-} {
-  const scale = Math.min(
-    box.width / (mapWidth * tileSize),
-    box.height / (mapHeight * tileSize),
-  );
-  return {
-    scale,
-    offsetX: (box.width - mapWidth * tileSize * scale) / 2,
-    offsetY: (box.height - mapHeight * tileSize * scale) / 2,
-  };
+/** The live map size and camera, read from the runtime (not the whole
+ *  snapshot, which is large on bigger maps). */
+async function boardView(
+  page: Page,
+): Promise<{ map: { width: number; height: number }; camera: Camera | null }> {
+  return page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: { getSnapshot: () => RuntimeSnapshot };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    const snapshot = runtime.getSnapshot();
+    return {
+      map: {
+        width: snapshot.state.map.width,
+        height: snapshot.state.map.height,
+      },
+      camera: snapshot.camera,
+    };
+  });
 }
 
-/**
- * Exported for unit-testing against `getBoardTransform` (see
- * tests/runtime/e2eHelpers.test.ts).
- */
-export function _boardTransformForTest(box: {
-  width: number;
-  height: number;
-}): { scale: number; offsetX: number; offsetY: number } {
-  return boardTransform(box);
+/** The board transform the renderer uses for this canvas box (CSS px), with
+ *  the current map size and camera. */
+async function boardTransform(
+  page: Page,
+  box: { width: number; height: number },
+): Promise<BoardTransform> {
+  const view = await boardView(page);
+  return getBoardTransform(box, view.map, view.camera);
 }
 
 export async function mapTileViewportPoint(
@@ -138,7 +139,7 @@ export async function mapTileViewportPoint(
   if (box === null) {
     throw new Error("Game canvas does not have a visible bounding box");
   }
-  const { scale, offsetX, offsetY } = boardTransform(box);
+  const { scale, offsetX, offsetY } = await boardTransform(canvas.page(), box);
   return {
     x: box.x + offsetX + (tile.x + 0.5) * tileSize * scale,
     y: box.y + offsetY + (tile.y + 0.5) * tileSize * scale,
@@ -191,7 +192,7 @@ export async function dragMapTiles(
   if (box === null) {
     throw new Error("Game canvas does not have a visible bounding box");
   }
-  const { scale, offsetX, offsetY } = boardTransform(box);
+  const { scale, offsetX, offsetY } = await boardTransform(page, box);
   // `page.mouse` uses viewport coordinates, so add the canvas's bounding-box
   // origin (box.x/box.y) on top of the element-relative board transform.
   const at = (tile: { x: number; y: number }) => ({
@@ -283,12 +284,24 @@ export async function sampleTilePixels(
   page: Page,
   probes: PixelProbe[],
 ): Promise<Array<[number, number, number] | null>> {
-  // page.evaluate cannot capture Node-scope imports, so pass board constants
-  // in explicitly.
-  const boardWidth = MAP_WIDTH * tileSize;
-  const boardHeight = MAP_HEIGHT * tileSize;
+  // page.evaluate cannot capture Node-scope imports, so resolve the board
+  // transform here and pass it in.
+  const box = await page
+    .locator("canvas[data-runtime-canvas='true']")
+    .boundingBox();
+  if (box === null) {
+    return probes.map(() => null);
+  }
+  const view = await boardView(page);
+  const { scale, offsetX, offsetY } = getBoardTransform(
+    box,
+    view.map,
+    view.camera,
+  );
+  const width = view.map.width * tileSize;
+  const height = view.map.height * tileSize;
   return page.evaluate(
-    async ({ points, size, width, height }) => {
+    async ({ points, size, width, height, scale, offsetX, offsetY }) => {
       const canvas = document.querySelector(
         "canvas[data-runtime-canvas='true']",
       );
@@ -319,9 +332,6 @@ export async function sampleTilePixels(
       if (shot === null || shot.width === 0 || shot.height === 0) {
         return points.map(() => null);
       }
-      const scale = Math.min(rect.width / width, rect.height / height);
-      const offsetX = (rect.width - width * scale) / 2;
-      const offsetY = (rect.height - height * scale) / 2;
       const dpr = shot.width / rect.width;
       return points.map(({ tile, dx, dy }) => {
         const worldX = (tile.x + 0.5) * size + dx;
@@ -344,6 +354,6 @@ export async function sampleTilePixels(
         ] as [number, number, number];
       });
     },
-    { points: probes, size: tileSize, width: boardWidth, height: boardHeight },
+    { points: probes, size: tileSize, width, height, scale, offsetX, offsetY },
   );
 }

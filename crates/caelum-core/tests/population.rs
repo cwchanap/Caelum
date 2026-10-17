@@ -1604,6 +1604,7 @@ fn restore_preserves_partially_occupied_building_without_replaying_filled_slots(
 fn small_town_normal_move_in_staffs_office_supermarket_and_factory() {
     let snapshot = create_sandbox_snapshot(SandboxCreationRequest {
         template_id: "smallTown".to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(f64::from(caelum_core::DEFAULT_STARTING_CAPITAL)),
         demand_multiplier: Some(1.0),

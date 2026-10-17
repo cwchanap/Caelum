@@ -22,14 +22,17 @@ import type {
   TransitPath,
   Vehicle,
 } from "../../src/domain/types";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
+import { MAP_SIZES } from "../../src/scenario/sandbox";
 import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 
 function clonePoint(point: Point): Point {
   return { x: point.x, y: point.y };
 }
 
-function createEmptyMap(width = MAP_WIDTH, height = MAP_HEIGHT): GameMap {
+function createEmptyMap(
+  width = MAP_SIZES.small.width,
+  height = MAP_SIZES.small.height,
+): GameMap {
   const tiles: GameMap["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
     for (let x = 0; x < width; x += 1) {
@@ -285,6 +288,7 @@ export function createTestGameState(
       economyPreset: "standard",
       sandbox: {
         templateId: "crossroads",
+        mapSize: "small",
         startingCapital: 120_000,
         demandMultiplier: 1,
       },

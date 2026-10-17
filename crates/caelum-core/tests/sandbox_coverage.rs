@@ -55,6 +55,7 @@ use caelum_core::{
 fn request(template_id: &str, starting_capital: f64) -> SandboxCreationRequest {
     SandboxCreationRequest {
         template_id: template_id.to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(starting_capital),
         demand_multiplier: Some(1.0),

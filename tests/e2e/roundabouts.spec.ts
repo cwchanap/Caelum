@@ -1,6 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Route, RouteLegPath } from "../../src/domain/types";
-import { MAP_WIDTH } from "../../src/scenario/sandbox";
+import { MAP_SIZES } from "../../src/scenario/sandbox";
 import {
   selectBuildLeaf,
   clickMapTile,
@@ -62,7 +62,7 @@ async function seedRoundaboutApproaches(
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const width = size === "compact2x2" ? 2 : 3;
   const bottom = origin.y + width - 1;
-  const right = Math.min(origin.x + width + 4, MAP_WIDTH - 1);
+  const right = Math.min(origin.x + width + 4, MAP_SIZES.small.width - 1);
   // The compact 2x2 one-way approach must start one tile west of the dual
   // carriageway so its tile under the dual crossing is an interior degree-2
   // segment; otherwise the two-way approach above grafts a perpendicular link

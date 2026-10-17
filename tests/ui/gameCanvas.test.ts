@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import GameCanvas from "../../src/components/GameCanvas.svelte";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
@@ -22,6 +22,7 @@ function snapshotFixture(): RuntimeSnapshot {
     backendError: null,
     rejection: null,
     sandboxResetError: null,
+    camera: null,
   };
 }
 
@@ -34,6 +35,7 @@ describe("GameCanvas", () => {
         host.append(document.createElement("canvas"));
         return detach;
       }),
+      adjustCamera: vi.fn(),
     };
     const onShellError = vi.fn();
 
@@ -54,7 +56,7 @@ describe("GameCanvas", () => {
     );
     expect(surface.querySelector("canvas")).not.toBeNull();
     const description = screen.getByText(
-      "Build and inspect the transport sandbox on the city map.",
+      /Build and inspect the transport sandbox on the city map\./,
     );
     expect(description).toBeInTheDocument();
     expect(description).toBe(board.nextElementSibling);
@@ -71,6 +73,7 @@ describe("GameCanvas", () => {
   it("renders the map text overlay next to the runtime surface", () => {
     const runtime = {
       mountCanvas: vi.fn(() => () => {}),
+      adjustCamera: vi.fn(),
     };
 
     render(GameCanvas, {
@@ -85,11 +88,45 @@ describe("GameCanvas", () => {
     );
   });
 
+  it("zoom buttons ask the runtime to move the camera", async () => {
+    const runtime = {
+      mountCanvas: vi.fn(() => () => {}),
+      adjustCamera: vi.fn(),
+    };
+    const fitted = snapshotFixture();
+    const { rerender } = render(GameCanvas, {
+      props: { runtime, snapshot: fitted, onShellError: vi.fn() },
+    });
+
+    // Nothing to reset while the whole map is already shown.
+    expect(
+      screen.getByRole("button", { name: "Show whole map" }),
+    ).toBeDisabled();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Zoom in" }));
+    await fireEvent.click(screen.getByRole("button", { name: "Zoom out" }));
+    await rerender({
+      runtime,
+      snapshot: { ...fitted, camera: { zoom: 2, center: { x: 5, y: 5 } } },
+      onShellError: vi.fn(),
+    });
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Show whole map" }),
+    );
+
+    expect(runtime.adjustCamera.mock.calls).toEqual([
+      [{ kind: "zoomIn" }],
+      [{ kind: "zoomOut" }],
+      [{ kind: "fit" }],
+    ]);
+  });
+
   it("reports mount errors to the shell", () => {
     const runtime = {
       mountCanvas: vi.fn(() => {
         throw new Error("Canvas 2D context unavailable");
       }),
+      adjustCamera: vi.fn(),
     };
     const onShellError = vi.fn();
 
@@ -105,6 +142,7 @@ describe("GameCanvas", () => {
       mountCanvas: vi.fn(() => {
         throw "raw-string failure";
       }),
+      adjustCamera: vi.fn(),
     };
     const onShellError = vi.fn();
 

@@ -222,6 +222,26 @@ describe("runtime working-save integration", () => {
     expect(runtime.getSnapshot().persistence.activeCity).toEqual(LOADED_CITY);
   });
 
+  it("keeps the camera through UI resets and fits the map again on load", async () => {
+    const store = createMemoryCitySaveStore();
+    await seed(store, record(LOADED_CITY));
+    const runtime = await runtimeWithStore(store);
+    const host = lastFakeHost()!;
+    const zoomed = { zoom: 2, center: { x: 5, y: 5 } };
+
+    runtime.adjustCamera({ kind: "zoomIn" });
+    expect(host.adjustCamera).toHaveBeenCalledWith({ kind: "zoomIn" });
+    host.context.onCameraChange(zoomed);
+    expect(runtime.getSnapshot().camera).toEqual(zoomed);
+
+    runtime.resetUi();
+    runtime.handleEscape();
+    expect(runtime.getSnapshot().camera).toEqual(zoomed);
+
+    await runtime.persistence.load(LOADED_CITY.id);
+    expect(runtime.getSnapshot().camera).toBeNull();
+  });
+
   it("clears active identity after a thrown load restore and will not save the old city", async () => {
     const store = createMemoryCitySaveStore();
     await seed(store, record(ACTIVE_CITY));
@@ -257,6 +277,7 @@ describe("runtime working-save integration", () => {
         name: "New City",
         economyPreset: "standard",
         templateId: "crossroads",
+        mapSize: "small",
       }),
     ).resolves.toEqual({
       ok: true,
@@ -295,6 +316,7 @@ describe("runtime working-save integration", () => {
         name: "New City",
         economyPreset: "standard",
         templateId: "crossroads",
+        mapSize: "small",
       }),
     ).resolves.toMatchObject({
       ok: false,
@@ -323,6 +345,7 @@ describe("runtime working-save integration", () => {
         name: "New City",
         economyPreset: "standard",
         templateId: "crossroads",
+        mapSize: "small",
       }),
     ).resolves.toEqual({
       ok: false,
@@ -348,6 +371,7 @@ describe("runtime working-save integration", () => {
         name: "New City",
         economyPreset: "standard",
         templateId: "crossroads",
+        mapSize: "small",
       }),
     ).resolves.toEqual({
       ok: false,

@@ -20,6 +20,7 @@ export interface FakeGameHost extends GameHost {
   stop: Mock;
   syncAnimationLoop: Mock;
   isRunning: Mock;
+  adjustCamera: Mock;
   captureFrame: Mock;
 }
 
@@ -39,6 +40,7 @@ export const createFakeGameHost: CreateGameHost = async (context) => {
     }),
     syncAnimationLoop: vi.fn(),
     isRunning: vi.fn(() => running),
+    adjustCamera: vi.fn(),
     captureFrame: vi.fn(async () => null),
   };
   created.push(host);

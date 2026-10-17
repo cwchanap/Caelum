@@ -1,7 +1,11 @@
 <script lang="ts">
   import type { GameState } from "../domain/types";
   import type { UiState } from "../ui/uiState";
-  import { getBoardTransform, tileSize } from "../render/boardTransform";
+  import {
+    getBoardTransform,
+    tileSize,
+    type Camera,
+  } from "../render/boardTransform";
   import {
     selectMapTextOverlayItems,
     type MapTextOverlayItem,
@@ -10,11 +14,12 @@
   interface Props {
     state: GameState;
     ui: UiState;
+    camera: Camera | null;
   }
 
   // Renamed to `game` so the local binding does not collide with the
   // `$state` rune.
-  let { state: game, ui }: Props = $props();
+  let { state: game, ui, camera }: Props = $props();
 
   let box = $state<{ width: number; height: number } | null>(null);
 
@@ -42,7 +47,8 @@
   };
 
   const placed = $derived.by(() => {
-    const transform = box === null ? null : getBoardTransform(box, game.map);
+    const transform =
+      box === null ? null : getBoardTransform(box, game.map, camera);
     if (transform === null) {
       return [] as PlacedItem[];
     }
@@ -61,10 +67,11 @@
         };
       }
       // Labels hover above their tile, flipping below the tile on the top
-      // row so they stay fully visible (same rule as the Canvas badge).
+      // visible row so they stay fully visible (same rule as the Canvas badge).
       const tileTop =
         transform.offsetY + item.anchor.y * tileSize * transform.scale;
-      const below = item.anchor.y < 1;
+      const below =
+        tileTop < Math.max(transform.offsetY, 0) + tileSize * transform.scale;
       return {
         ...item,
         left,

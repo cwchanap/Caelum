@@ -5,22 +5,20 @@ use crate::ids::tile_id;
 use crate::intent::RoadPreset;
 use crate::model::{
     DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GameSnapshot, Heading, Metrics,
-    MetricsState, MovementKind, Point, SandboxSettings, SandboxTemplateId, ScenarioConfig,
-    StartingCapital, Tile, TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
+    MetricsState, MovementKind, Point, SandboxMapSize, SandboxSettings, SandboxTemplateId,
+    ScenarioConfig, StartingCapital, Tile, TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
 };
-use crate::road::{author_scenario_road_line, refresh_all_automatic_junctions};
+use crate::road::{author_scenario_road_line, junction_id, refresh_all_automatic_junctions};
 use crate::road_topology::{RoadState, RoadTopology};
 use crate::{areas, buildings};
 
 pub const DEFAULT_STARTING_CAPITAL: i32 = 120_000;
-pub const MAP_WIDTH: u8 = 28;
-pub const MAP_HEIGHT: u8 = 18;
-const CROSSROADS_STRUCTURE_ID: &str = "junction-14,8;14,9;15,8;15,9-14,8:north;14,8:west;14,9:south;14,9:west;15,8:north;15,8:east;15,9:east;15,9:south";
 
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxCreationRequest {
     pub template_id: String,
+    pub map_size: String,
     pub economy_preset: String,
     pub starting_capital: Option<f64>,
     pub demand_multiplier: Option<f64>,
@@ -29,6 +27,7 @@ pub struct SandboxCreationRequest {
 #[derive(Clone, Debug, PartialEq)]
 pub struct ValidatedSandboxCreationRequest {
     pub template_id: SandboxTemplateId,
+    pub map_size: SandboxMapSize,
     pub economy_preset: EconomyPreset,
     pub starting_capital: StartingCapital,
     pub demand_multiplier: DemandMultiplier,
@@ -38,6 +37,7 @@ pub struct ValidatedSandboxCreationRequest {
 #[serde(rename_all = "camelCase")]
 pub enum SandboxCreationErrorCode {
     UnknownTemplateId,
+    UnknownMapSize,
     UnknownEconomyPreset,
     InvalidStartingCapital,
     InvalidDemandMultiplier,
@@ -137,6 +137,7 @@ fn sandbox_reset_error_from_creation_error(
 pub fn canonical_default_request() -> SandboxCreationRequest {
     SandboxCreationRequest {
         template_id: "crossroads".to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(f64::from(DEFAULT_STARTING_CAPITAL)),
         demand_multiplier: Some(1.0),
@@ -153,6 +154,7 @@ pub fn canonical_default_settings() -> SandboxSettings {
 fn sandbox_settings_from_validated(validated: &ValidatedSandboxCreationRequest) -> SandboxSettings {
     SandboxSettings {
         template_id: validated.template_id,
+        map_size: validated.map_size,
         starting_capital: validated.starting_capital,
         demand_multiplier: validated.demand_multiplier,
     }
@@ -162,12 +164,14 @@ pub fn validate_request(
     request: SandboxCreationRequest,
 ) -> Result<ValidatedSandboxCreationRequest, SandboxCreationError> {
     let template_id = parse_template(&request.template_id)?;
+    let map_size = parse_map_size(&request.map_size)?;
     let economy_preset = parse_economy_preset(&request.economy_preset)?;
     let starting_capital = parse_starting_capital(request.starting_capital)?;
     let demand_multiplier = parse_demand_multiplier(request.demand_multiplier)?;
 
     Ok(ValidatedSandboxCreationRequest {
         template_id,
+        map_size,
         economy_preset,
         starting_capital,
         demand_multiplier,
@@ -195,40 +199,42 @@ pub(crate) fn create_sandbox_candidate(
     let validated = validate_request(request)?;
     let (name, map, road_topology) = match validated.template_id {
         SandboxTemplateId::BlankGrid => {
-            let map = blank_map();
+            let map = blank_map(validated.map_size);
             let topology = RoadTopology::compile(&map)
                 .map_err(|_| template_invariant_error(SandboxTemplateId::BlankGrid))?;
             ("Blank Grid", map, topology)
         }
         SandboxTemplateId::Crossroads => {
-            let mut map = blank_map();
+            let mut map = blank_map(validated.map_size);
+            let (width, height) = validated.map_size.dimensions();
+            let center = crossroads_junction_origin(&map);
             author_scenario_road_line(
                 &mut map,
-                &(0..i32::from(MAP_WIDTH))
+                &(0..i32::from(width))
                     .rev()
-                    .map(|x| Point { x, y: 8 })
+                    .map(|x| Point { x, y: center.y })
                     .collect::<Vec<_>>(),
                 RoadPreset::OneWay,
             );
             author_scenario_road_line(
                 &mut map,
-                &(0..i32::from(MAP_WIDTH))
-                    .map(|x| Point { x, y: 9 })
+                &(0..i32::from(width))
+                    .map(|x| Point { x, y: center.y + 1 })
                     .collect::<Vec<_>>(),
                 RoadPreset::OneWay,
             );
             author_scenario_road_line(
                 &mut map,
-                &(0..i32::from(MAP_HEIGHT))
-                    .map(|y| Point { x: 14, y })
+                &(0..i32::from(height))
+                    .map(|y| Point { x: center.x, y })
                     .collect::<Vec<_>>(),
                 RoadPreset::OneWay,
             );
             author_scenario_road_line(
                 &mut map,
-                &(0..i32::from(MAP_HEIGHT))
+                &(0..i32::from(height))
                     .rev()
-                    .map(|y| Point { x: 15, y })
+                    .map(|y| Point { x: center.x + 1, y })
                     .collect::<Vec<_>>(),
                 RoadPreset::OneWay,
             );
@@ -251,16 +257,22 @@ fn create_small_town_candidate(
     validated: ValidatedSandboxCreationRequest,
 ) -> Result<SandboxCandidate, SandboxCreationError> {
     let fail = || template_invariant_error(SandboxTemplateId::SmallTown);
-    let mut map = blank_map();
+    let mut map = blank_map(validated.map_size);
+    // The town is authored on the Small map and centered on larger maps.
+    let offset = centered_layout_offset(&map);
+    let at = |x: i32, y: i32| Point {
+        x: x + offset.x,
+        y: y + offset.y,
+    };
 
     author_scenario_road_line(
         &mut map,
-        &(3..=24).map(|x| Point { x, y: 8 }).collect::<Vec<_>>(),
+        &(3..=24).map(|x| at(x, 8)).collect::<Vec<_>>(),
         RoadPreset::TwoWay,
     );
     author_scenario_road_line(
         &mut map,
-        &(2..=15).map(|y| Point { x: 14, y }).collect::<Vec<_>>(),
+        &(2..=15).map(|y| at(14, y)).collect::<Vec<_>>(),
         RoadPreset::TwoWay,
     );
     refresh_all_automatic_junctions(&mut map).map_err(|_| fail())?;
@@ -269,22 +281,22 @@ fn create_small_town_candidate(
     let mut snapshot = snapshot_shell(validated, "Small Town", map);
 
     for (area, start, end) in [
-        ("residential", Point { x: 4, y: 6 }, Point { x: 10, y: 7 }),
-        ("commercial", Point { x: 18, y: 6 }, Point { x: 19, y: 7 }),
-        ("industrial", Point { x: 15, y: 11 }, Point { x: 17, y: 12 }),
-        ("office", Point { x: 21, y: 6 }, Point { x: 22, y: 7 }),
+        ("residential", at(4, 6), at(10, 7)),
+        ("commercial", at(18, 6), at(19, 7)),
+        ("industrial", at(15, 11), at(17, 12)),
+        ("office", at(21, 6), at(22, 7)),
     ] {
         snapshot =
             areas::paint_area_rectangle(&snapshot, area, &start, &end).map_err(|_| fail())?;
     }
 
     for (building_type, origin) in [
-        ("smallHouse", Point { x: 4, y: 7 }),
-        ("smallHouse", Point { x: 8, y: 7 }),
-        ("smallHouse", Point { x: 6, y: 7 }),
-        ("officeTower", Point { x: 21, y: 6 }),
-        ("supermarket", Point { x: 18, y: 6 }),
-        ("factory", Point { x: 15, y: 11 }),
+        ("smallHouse", at(4, 7)),
+        ("smallHouse", at(8, 7)),
+        ("smallHouse", at(6, 7)),
+        ("officeTower", at(21, 6)),
+        ("supermarket", at(18, 6)),
+        ("factory", at(15, 11)),
     ] {
         snapshot = buildings::place_building_core(&snapshot, building_type, &origin, 0)
             .map_err(|_| fail())?;
@@ -310,6 +322,7 @@ pub(crate) fn sandbox_candidate_from_persisted_rules(
             SandboxTemplateId::SmallTown => "smallTown",
         }
         .to_string(),
+        map_size: map_size_id(rules.sandbox.map_size).to_string(),
         economy_preset: match rules.economy_preset {
             EconomyPreset::Standard => "standard",
             EconomyPreset::Creative => "creative",
@@ -323,10 +336,11 @@ pub(crate) fn sandbox_candidate_from_persisted_rules(
         .map_err(|error| sandbox_reset_error_from_creation_error(error, rules))
 }
 
-fn blank_map() -> GameMap {
-    let tiles = (0..i32::from(MAP_HEIGHT))
+fn blank_map(size: SandboxMapSize) -> GameMap {
+    let (width, height) = size.dimensions();
+    let tiles = (0..i32::from(height))
         .flat_map(|y| {
-            (0..i32::from(MAP_WIDTH)).map(move |x| Tile {
+            (0..i32::from(width)).map(move |x| Tile {
                 id: tile_id(x, y),
                 x,
                 y,
@@ -340,10 +354,28 @@ fn blank_map() -> GameMap {
         })
         .collect();
     GameMap {
-        width: MAP_WIDTH,
-        height: MAP_HEIGHT,
+        width,
+        height,
         tiles,
         road_structures: Vec::new(),
+    }
+}
+
+/// Whole-tile offset that centers a layout authored on the Small map.
+fn centered_layout_offset(map: &GameMap) -> Point {
+    let (small_width, small_height) = SandboxMapSize::Small.dimensions();
+    Point {
+        x: (i32::from(map.width) - i32::from(small_width)) / 2,
+        y: (i32::from(map.height) - i32::from(small_height)) / 2,
+    }
+}
+
+/// North-west tile of the Crossroads 2x2 center junction.
+fn crossroads_junction_origin(map: &GameMap) -> Point {
+    let offset = centered_layout_offset(map);
+    Point {
+        x: 14 + offset.x,
+        y: 8 + offset.y,
     }
 }
 
@@ -352,26 +384,27 @@ fn validate_crossroads_candidate(
     topology: &RoadTopology,
 ) -> Result<(), SandboxCreationError> {
     let fail = || template_invariant_error(SandboxTemplateId::Crossroads);
-    let expected_footprint = [
-        Point { x: 14, y: 8 },
-        Point { x: 14, y: 9 },
-        Point { x: 15, y: 8 },
-        Point { x: 15, y: 9 },
-    ];
+    let origin = crossroads_junction_origin(map);
+    let at = |dx: i32, dy: i32| Point {
+        x: origin.x + dx,
+        y: origin.y + dy,
+    };
+    let expected_footprint = [at(0, 0), at(0, 1), at(1, 0), at(1, 1)];
     let expected_ports = vec![
-        (Point { x: 14, y: 8 }, Heading::North),
-        (Point { x: 14, y: 8 }, Heading::West),
-        (Point { x: 14, y: 9 }, Heading::South),
-        (Point { x: 14, y: 9 }, Heading::West),
-        (Point { x: 15, y: 8 }, Heading::North),
-        (Point { x: 15, y: 8 }, Heading::East),
-        (Point { x: 15, y: 9 }, Heading::East),
-        (Point { x: 15, y: 9 }, Heading::South),
+        (at(0, 0), Heading::North),
+        (at(0, 0), Heading::West),
+        (at(0, 1), Heading::South),
+        (at(0, 1), Heading::West),
+        (at(1, 0), Heading::North),
+        (at(1, 0), Heading::East),
+        (at(1, 1), Heading::East),
+        (at(1, 1), Heading::South),
     ];
+    let expected_id = junction_id(&expected_footprint, &expected_ports);
     let structure = map
         .road_structures
         .iter()
-        .find(|structure| structure.id() == CROSSROADS_STRUCTURE_ID)
+        .find(|structure| structure.id() == expected_id)
         .ok_or_else(fail)?;
     if map.road_structures.len() != 1 || !structure.is_automatic_junction() {
         return Err(fail());
@@ -390,7 +423,7 @@ fn validate_crossroads_candidate(
         if tile.kind != "road"
             || tile.one_way.is_some()
             || tile.road_connections != expected_connections
-            || tile.road_structure_id.as_deref() != Some(CROSSROADS_STRUCTURE_ID)
+            || tile.road_structure_id.as_deref() != Some(expected_id.as_str())
         {
             return Err(fail());
         }
@@ -399,7 +432,7 @@ fn validate_crossroads_candidate(
     let required = [
         (
             RoadState {
-                position: Point { x: 14, y: 8 },
+                position: at(0, 0),
                 incoming_heading: Heading::South,
             },
             [
@@ -410,7 +443,7 @@ fn validate_crossroads_candidate(
         ),
         (
             RoadState {
-                position: Point { x: 15, y: 8 },
+                position: at(1, 0),
                 incoming_heading: Heading::West,
             },
             [
@@ -421,7 +454,7 @@ fn validate_crossroads_candidate(
         ),
         (
             RoadState {
-                position: Point { x: 15, y: 9 },
+                position: at(1, 1),
                 incoming_heading: Heading::North,
             },
             [
@@ -432,7 +465,7 @@ fn validate_crossroads_candidate(
         ),
         (
             RoadState {
-                position: Point { x: 14, y: 9 },
+                position: at(0, 1),
                 incoming_heading: Heading::East,
             },
             [
@@ -541,6 +574,27 @@ fn parse_template(value: &str) -> Result<SandboxTemplateId, SandboxCreationError
     }
 }
 
+fn parse_map_size(value: &str) -> Result<SandboxMapSize, SandboxCreationError> {
+    match value {
+        "small" => Ok(SandboxMapSize::Small),
+        "medium" => Ok(SandboxMapSize::Medium),
+        "large" => Ok(SandboxMapSize::Large),
+        _ => Err(creation_error(
+            SandboxCreationErrorCode::UnknownMapSize,
+            "mapSize",
+            value,
+        )),
+    }
+}
+
+fn map_size_id(size: SandboxMapSize) -> &'static str {
+    match size {
+        SandboxMapSize::Small => "small",
+        SandboxMapSize::Medium => "medium",
+        SandboxMapSize::Large => "large",
+    }
+}
+
 fn parse_economy_preset(value: &str) -> Result<EconomyPreset, SandboxCreationError> {
     match value {
         "standard" => Ok(EconomyPreset::Standard),
@@ -636,6 +690,7 @@ mod tests {
     fn raw_request() -> SandboxCreationRequest {
         SandboxCreationRequest {
             template_id: "crossroads".to_string(),
+            map_size: "small".to_string(),
             economy_preset: "standard".to_string(),
             starting_capital: Some(120_000.0),
             demand_multiplier: Some(1.0),
@@ -650,6 +705,7 @@ mod tests {
                 "unknown",
                 SandboxCreationErrorCode::UnknownTemplateId,
             ),
+            ("mapSize", "huge", SandboxCreationErrorCode::UnknownMapSize),
             (
                 "economyPreset",
                 "unknown",
@@ -661,6 +717,7 @@ mod tests {
             let mut request = raw_request();
             match field {
                 "templateId" => request.template_id = attempted.to_string(),
+                "mapSize" => request.map_size = attempted.to_string(),
                 "economyPreset" => request.economy_preset = attempted.to_string(),
                 _ => unreachable!(),
             }

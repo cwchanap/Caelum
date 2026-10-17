@@ -100,6 +100,8 @@ const benchContext: WebGpuHostContext = {
     return state;
   },
   getUi: () => ui,
+  getCamera: () => null,
+  onCameraChange: () => {},
   getSceneRevision: () => sceneRevision,
   onTick: () => {},
   onTileClick: () => {},

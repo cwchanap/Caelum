@@ -18,7 +18,7 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a We
 
 ### Population ownership (ECS)
 
-`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v10 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
+`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v12 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
 
 The crate is deterministic: no `SystemTime`/`Instant`/`rand` in library source (`Instant` exists only in native example tooling, such as `examples/presentation_scale.rs`); HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
@@ -74,9 +74,9 @@ the host normalizes it to `null`.
 `scenario.growthWaves` is also required and may be empty. Omitting either key,
 omitting `startingCapital`, omitting a placed building's required `placedAt`,
 omitting a bus route or Metro line's required-nullable `targetHeadwaySeconds`, or
-supplying any other malformed schema-v8 content,
+supplying any other malformed schema-v12 content,
 rejects the snapshot. Hosts reject every snapshot whose schema is not
-8—including every non-v8 schema; development saves are disposable and are
+12—including every older schema; development saves are disposable and are
 cleared rather than migrated.
 `Route.serviceMetrics` and `MetroLine.serviceMetrics` are the opposite direction:
 runtime-derived output that Rust may serialize for the Lines panel but never
@@ -247,7 +247,14 @@ mutating managed engine state. TypeScript exposes this as
 `buildSandboxSnapshot`; candidate persistence and later candidate-first restore
 are separate steps.
 
-Both templates use the shared 28×18 map:
+Every template is offered in three map sizes, chosen on New City and stored
+as `rules.sandbox.mapSize`: **Small** 28×18, **Medium** 56×36, and **Large**
+84×54. Small is the authored layout. Medium and Large center that same layout
+with whole-tile offsets of (14, 9) and (28, 18); Crossroads' arterials still run
+edge to edge, so its 2×2 junction sits at the shifted center. Reset and
+persistence validation read the size from the stored rules, and a snapshot
+whose map dimensions disagree with its size is rejected. The coordinates
+below are for Small:
 
 - **Blank Grid** contains the deterministic row-major tile inventory and no
   authored roads, connections, structures, zoning, track, buildings,
@@ -371,7 +378,8 @@ Rust remains the gameplay authority; the HPA-544 `PresentationUpdate` wire is un
 
 - `createGameRuntime()` owns orchestration plus the internal `sceneRevision` (bumped once per scene-carrying update) that keys the host's world-space batch caches.
 - `createWebGpuHost` (`src/runtime/createWebGpuHost.ts`) owns the GPU surface, pointer/keyboard input wiring, resize handling, the `requestAnimationFrame` loop with ≤10 Hz one-in-flight tick admission (250 ms wall-delta clamp), and fatal device-loss forwarding to the shell error path.
-- `src/render/webgpu/` modules own geometric presentation: painter-order solid batches, the single instanced vehicle draw, vehicle interpolation between observed snapshots, and viewport culling before encode/upload. `boardTransform.ts` keeps the shared tile↔pixel mapping (`tileSize = 32`).
+- `src/render/webgpu/` modules own geometric presentation: painter-order solid batches, the single instanced vehicle draw, vehicle interpolation between observed snapshots, and viewport culling before encode/upload. `boardTransform.ts` keeps the shared tile↔pixel mapping (`tileSize = 32`) and the camera math.
+- The map camera (`{ zoom, center }`, or `null` for the fitted whole-map view) is local view state on `RuntimeSnapshot.camera`. It is never saved or sent to Rust, survives UI resets, Escape, and sandbox reset (same map size), and returns to `null` when a city is created or loaded. The host owns camera input because it knows the board's CSS size: wheel zoom anchored at the cursor, middle-drag or Space+drag pan under every tool, and plain left-drag pan past 4 px under click tools. Buttons and keys (arrows, `+`/`-`, `0`) go through `RuntimeController.adjustCamera`. The GPU transform, pointer mapping, and DOM text overlay all call `getBoardTransform(board, map, camera)`, and vehicle culling uses the visible world rectangle.
 - Svelte owns HUD, panels, and the DOM map-text overlay (`mapTextOverlay.ts`), which render from runtime snapshots.
 - Canvas2D gameplay rendering is gone: `render/canvas.ts` and the per-concern Canvas renderers were deleted with their tests after both the Chromium and Tauri/WKWebView gates passed.
 

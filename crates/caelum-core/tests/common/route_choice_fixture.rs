@@ -51,6 +51,7 @@ fn station_id_at(engine: &GameEngine, point: Point) -> String {
 pub fn mixed_peak_snapshot(count: usize, bus_route_count: usize) -> GameSnapshot {
     let mut engine = GameEngine::from_sandbox_request(SandboxCreationRequest {
         template_id: "blankGrid".to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(1_000_000.0),
         demand_multiplier: Some(1.0),

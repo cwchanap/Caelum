@@ -51,6 +51,7 @@ import {
   type CreateGameHost,
   type WebGpuHostContext,
 } from "./createWebGpuHost";
+import type { Camera } from "../render/boardTransform";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
@@ -256,6 +257,7 @@ export async function createGameRuntime(
   };
   let state = acceptPresentationUpdate(null, await backend.presentation());
   let ui = createUiState();
+  let camera: Camera | null = null;
   let backendError: string | null = null;
   let rejection: GameplayRejection | null = null;
   let sandboxResetError: SandboxResetError | null = null;
@@ -284,6 +286,7 @@ export async function createGameRuntime(
     backendError,
     rejection,
     sandboxResetError,
+    camera,
   });
 
   // The GPU display host, pointer input, and animation cadence live in a
@@ -297,6 +300,7 @@ export async function createGameRuntime(
   const hostContext: WebGpuHostContext = {
     getState: () => state,
     getUi: () => ui,
+    getCamera: () => camera,
     getSceneRevision: () => sceneRevision,
     onTick: (deltaSeconds) => api.tick(deltaSeconds),
     onTileClick: (point) => {
@@ -311,6 +315,11 @@ export async function createGameRuntime(
     },
     onHoverTile: (point) => {
       api.setHoverTile(point);
+    },
+    onCameraChange: (next) => {
+      if (dead) return;
+      camera = next;
+      publish();
     },
     onDragStart: (point) => api.startDrag(point).ui.drag !== null,
     onDragCurrent: (point) => {
@@ -1130,6 +1139,7 @@ export async function createGameRuntime(
     nextRouteDraftInstanceId = 1;
     state = acceptPresentationUpdate(null, update);
     ui = createUiState();
+    camera = null;
     backendError = null;
     rejection = null;
     sandboxResetError = null;
@@ -1911,6 +1921,13 @@ export async function createGameRuntime(
     debugSetBudget(budget) {
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setBudget", budget });
+    },
+    adjustCamera(action) {
+      if (dead) return getSnapshot();
+      // The host owns the board size the camera is clamped against; it
+      // reports the result through onCameraChange.
+      gameHost.adjustCamera(action);
+      return getSnapshot();
     },
     debugCaptureFrame() {
       return gameHost.captureFrame();

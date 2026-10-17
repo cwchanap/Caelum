@@ -135,6 +135,7 @@ mod tests {
     fn batch_fixture() -> (GameSnapshot, RoadTopology) {
         let mut engine = GameEngine::from_sandbox_request(SandboxCreationRequest {
             template_id: "blankGrid".to_string(),
+            map_size: "small".to_string(),
             economy_preset: "standard".to_string(),
             starting_capital: Some(120_000.0),
             demand_multiplier: Some(1.0),
