@@ -610,6 +610,24 @@ export function createWebGpuHostWithRenderer(
       nextCanvas.style.cursor = spaceHeld ? "grab" : "";
     };
 
+    // Aim the pointer at the tile now under it, after a move or after the
+    // camera moved beneath it. A live drag tracks its own `current`; otherwise
+    // the hover tile (badge / building preview / hover highlight) follows.
+    const trackPointer = (clientX: number, clientY: number): void => {
+      const point = canvasToTile(
+        nextCanvas,
+        clientX,
+        clientY,
+        ctx.getState().map,
+        ctx.getCamera(),
+      );
+      if (ctx.getUi().drag !== null) {
+        ctx.onDragCurrent(point);
+      } else {
+        ctx.onHoverTile(point);
+      }
+    };
+
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault();
       if (event.deltaY === 0) {
@@ -626,6 +644,7 @@ export function createWebGpuHostWithRenderer(
           y: event.clientY - rect.top,
         }),
       );
+      trackPointer(event.clientX, event.clientY);
     };
 
     const handleMouseDown = (event: MouseEvent): void => {
@@ -716,22 +735,11 @@ export function createWebGpuHostWithRenderer(
         ctx.onCameraChange(
           panCamera(boardRect(), ctx.getState().map, ctx.getCamera(), dx, dy),
         );
+        // A clamped camera stops the map while the cursor keeps moving.
+        trackPointer(event.clientX, event.clientY);
         return;
       }
-      const point = canvasToTile(
-        nextCanvas,
-        event.clientX,
-        event.clientY,
-        ctx.getState().map,
-        ctx.getCamera(),
-      );
-      // A live drag tracks its own `current`; only idle movement updates the
-      // hover tile (badge / building preview / hover highlight).
-      if (ctx.getUi().drag !== null) {
-        ctx.onDragCurrent(point);
-      } else {
-        ctx.onHoverTile(point);
-      }
+      trackPointer(event.clientX, event.clientY);
     };
 
     const capturePointer = (pointerId: number): void => {
