@@ -78,6 +78,7 @@ function createRuntimeHarness(
     backendError: null,
     rejection,
     sandboxResetError: null,
+    camera: null,
   });
   const publish = (): RuntimeSnapshot =>
     flushSync(() => {
@@ -250,6 +251,7 @@ function createRuntimeHarness(
     cancelDrag: vi.fn(() => publish()),
     handleTileClick: vi.fn(async () => publish()),
     mountCanvas: vi.fn(() => () => {}),
+    adjustCamera: vi.fn(() => publish()),
   } satisfies RuntimeController;
   return {
     runtime,
@@ -297,7 +299,7 @@ describe("App command shell", () => {
     expect(screen.queryByTestId("topbar")).toBeNull();
   });
 
-  it("submits only trimmed name, economy, and template", async () => {
+  it("submits only trimmed name, economy, template, and map size", async () => {
     const { runtime } = createRuntimeHarness({
       persistence: { activeCity: null },
     });
@@ -322,12 +324,21 @@ describe("App command shell", () => {
     await fireEvent.change(templateSelect, {
       target: { value: "smallTown" },
     });
+    const sizeSelect = screen.getByLabelText("Map size");
+    expect((sizeSelect as HTMLSelectElement).value).toBe("small");
+    expect(
+      within(sizeSelect)
+        .getAllByRole("option")
+        .map((option) => option.textContent),
+    ).toEqual(["Small · 28×18", "Medium · 56×36", "Large · 84×54"]);
+    await fireEvent.change(sizeSelect, { target: { value: "large" } });
     await fireEvent.click(create);
 
     expect(runtime.persistence.createCity).toHaveBeenCalledWith({
       name: "Maple Junction",
       economyPreset: "creative",
       templateId: "smallTown",
+      mapSize: "large",
     });
   });
 

@@ -7,6 +7,7 @@ import type {
 
 const SANDBOX_CREATION_ERROR_CODES = new Set<SandboxCreationErrorCode>([
   "unknownTemplateId",
+  "unknownMapSize",
   "unknownEconomyPreset",
   "invalidStartingCapital",
   "invalidDemandMultiplier",

@@ -36,6 +36,7 @@ const WINDOW_END: f64 = 730.0;
 fn scale_snapshot(all_future: bool) -> GameSnapshot {
     let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
         template_id: "smallTown".to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(f64::from(caelum_core::DEFAULT_STARTING_CAPITAL)),
         demand_multiplier: Some(1.0),

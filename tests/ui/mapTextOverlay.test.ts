@@ -2,7 +2,7 @@ import { render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MapTextOverlay from "../../src/components/MapTextOverlay.svelte";
-import { tileSize } from "../../src/render/boardTransform";
+import { tileSize, type Camera } from "../../src/render/boardTransform";
 import {
   addTestBusRoute,
   addTestBusStop,
@@ -30,11 +30,12 @@ function pinOverlayBox(): void {
 async function renderOverlay(
   state = createTestGameState(),
   ui?: Partial<UiState>,
+  camera: Camera | null = null,
 ) {
   pinOverlayBox();
   const mergedUi = { ...createUiState(), ...ui };
   const result = render(MapTextOverlay, {
-    props: { state, ui: mergedUi },
+    props: { state, ui: mergedUi, camera },
   });
   await tick();
   return result;
@@ -76,6 +77,33 @@ describe("MapTextOverlay", () => {
     // Below-placement anchors at the flipped-to tile bottom (row 0).
     expect(badge.style.top).toBe(`${tileSize}px`);
     expect(badge.classList.contains("map-text-below")).toBe(true);
+  });
+
+  it("follows the camera and flips on the top visible row", async () => {
+    // Zoom 2 on the pinned 28x18 box: 64px tiles, view origin at tile (0, 2).
+    await renderOverlay(
+      createTestGameState(),
+      { activeTool: "road", hoverTile: { x: 2, y: 3 } },
+      { zoom: 2, center: { x: 7, y: 6.5 } },
+    );
+
+    const badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.style.left).toBe(`${2.5 * 2 * tileSize}px`);
+    expect(badge.style.top).toBe(`${(3 - 2) * 2 * tileSize}px`);
+    expect(badge.classList.contains("map-text-below")).toBe(false);
+
+    document.body.innerHTML = "";
+    await renderOverlay(
+      createTestGameState(),
+      { activeTool: "road", hoverTile: { x: 2, y: 2 } },
+      { zoom: 2, center: { x: 7, y: 6.5 } },
+    );
+    const topRow = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(topRow.classList.contains("map-text-below")).toBe(true);
   });
 
   it("renders road preview feedback anchored to the preview tiles", async () => {
@@ -171,6 +199,7 @@ describe("MapTextOverlay", () => {
           activeTool: "road",
           hoverTile: { x: 2, y: 3 },
         },
+        camera: null,
       },
     });
     await tick();

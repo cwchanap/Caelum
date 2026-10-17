@@ -1,5 +1,10 @@
 <script lang="ts">
-  import type { EconomyPreset, SandboxTemplateId } from "../domain/types";
+  import type {
+    EconomyPreset,
+    SandboxMapSize,
+    SandboxTemplateId,
+  } from "../domain/types";
+  import { MAP_SIZES } from "../scenario/sandbox";
   import type { NewCityRequest } from "../runtime/workingSaveRuntime";
 
   interface Props {
@@ -13,13 +18,17 @@
   let name = $state("");
   let economyPreset = $state<EconomyPreset>("standard");
   let templateId = $state<SandboxTemplateId>("crossroads");
+  let mapSize = $state<SandboxMapSize>("small");
+  const mapSizeIds = Object.keys(MAP_SIZES) as SandboxMapSize[];
+  const sizeLabel = (id: SandboxMapSize): string =>
+    `${MAP_SIZES[id].label} · ${MAP_SIZES[id].width}×${MAP_SIZES[id].height}`;
   const canCreate = $derived(!busy && name.trim().length > 0);
 
   function submit(event: SubmitEvent): void {
     event.preventDefault();
     const trimmedName = name.trim();
     if (busy || trimmedName.length === 0) return;
-    onCreate({ name: trimmedName, economyPreset, templateId });
+    onCreate({ name: trimmedName, economyPreset, templateId, mapSize });
   }
 </script>
 
@@ -47,6 +56,15 @@
         <option value="crossroads">Crossroads</option>
         <option value="blankGrid">Blank Grid</option>
         <option value="smallTown">Small Town</option>
+      </select>
+    </label>
+
+    <label>
+      <span>Map size</span>
+      <select bind:value={mapSize}>
+        {#each mapSizeIds as id (id)}
+          <option value={id}>{sizeLabel(id)}</option>
+        {/each}
       </select>
     </label>
 

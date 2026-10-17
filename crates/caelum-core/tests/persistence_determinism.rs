@@ -167,6 +167,7 @@ fn restored_engine_has_identical_future_results_and_topology() {
 fn restored_creative_snapshot_immediately_applies_nominal_road_cost_without_deduction() {
     let mut direct = GameEngine::from_sandbox_request(SandboxCreationRequest {
         template_id: "blankGrid".to_string(),
+        map_size: "small".to_string(),
         economy_preset: "creative".to_string(),
         starting_capital: Some(0.0),
         demand_multiplier: Some(1.0),

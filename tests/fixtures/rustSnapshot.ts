@@ -1,6 +1,6 @@
 import { tileId } from "../../src/domain/ids";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
-import { MAP_HEIGHT, MAP_WIDTH } from "../../src/scenario/sandbox";
+import { MAP_SIZES } from "../../src/scenario/sandbox";
 import type {
   GameBackend,
   PresentationUpdate,
@@ -13,8 +13,8 @@ import type {
 // It intentionally omits the canonical Crossroads roads; authoritative sandbox
 // templates and dimensions live in `crates/caelum-core/src/sandbox.rs`.
 function createEmptyTiles(
-  width = MAP_WIDTH,
-  height = MAP_HEIGHT,
+  width = MAP_SIZES.small.width,
+  height = MAP_SIZES.small.height,
 ): RustGameSnapshot["map"]["tiles"] {
   const tiles: RustGameSnapshot["map"]["tiles"] = [];
   for (let y = 0; y < height; y += 1) {
@@ -51,6 +51,7 @@ export function createRustSnapshot(
       economyPreset: "standard",
       sandbox: {
         templateId: "crossroads",
+        mapSize: "small",
         startingCapital: 120_000,
         demandMultiplier: 1,
       },
@@ -62,8 +63,8 @@ export function createRustSnapshot(
     paused: true,
     budget: 120_000,
     map: {
-      width: MAP_WIDTH,
-      height: MAP_HEIGHT,
+      width: MAP_SIZES.small.width,
+      height: MAP_SIZES.small.height,
       tiles: createEmptyTiles(),
       roadStructures: [],
     },
@@ -210,6 +211,7 @@ export function previewBackendStubs(): Pick<
           sandbox: {
             templateId:
               request.templateId === "blankGrid" ? "blankGrid" : "crossroads",
+            mapSize: "small",
             startingCapital: request.startingCapital,
             demandMultiplier: request.demandMultiplier,
           },

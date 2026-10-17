@@ -6,7 +6,11 @@ import type {
   CitySummary,
 } from "../persistence/citySaveStore";
 import { citySaveStoreError } from "../persistence/citySaveStore";
-import type { EconomyPreset, SandboxTemplateId } from "../domain/types";
+import type {
+  EconomyPreset,
+  SandboxMapSize,
+  SandboxTemplateId,
+} from "../domain/types";
 import type {
   GameBackend,
   PresentationUpdate,
@@ -26,6 +30,7 @@ export interface NewCityRequest {
   name: string;
   economyPreset: EconomyPreset;
   templateId: SandboxTemplateId;
+  mapSize: SandboxMapSize;
 }
 
 // Mirror the current hidden values from `canonical_default_request()` in
@@ -283,6 +288,7 @@ export function createWorkingSaveRuntime(
 
       const candidate = await host.backend.buildSandboxSnapshot({
         templateId: request.templateId,
+        mapSize: request.mapSize,
         economyPreset: request.economyPreset,
         startingCapital: NEW_CITY_STARTING_CAPITAL,
         demandMultiplier: NEW_CITY_DEMAND_MULTIPLIER,

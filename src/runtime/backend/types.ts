@@ -410,6 +410,7 @@ export interface RoadMutationPreviewResponse {
 
 export interface SandboxCreationRequest {
   templateId: string;
+  mapSize: string;
   economyPreset: string;
   startingCapital: number;
   demandMultiplier: number;
@@ -417,6 +418,7 @@ export interface SandboxCreationRequest {
 
 export type SandboxCreationErrorCode =
   | "unknownTemplateId"
+  | "unknownMapSize"
   | "unknownEconomyPreset"
   | "invalidStartingCapital"
   | "invalidDemandMultiplier"

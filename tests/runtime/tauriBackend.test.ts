@@ -10,6 +10,7 @@ const invokeMock = vi.mocked(invoke);
 
 const request = {
   templateId: "blankGrid",
+  mapSize: "small",
   economyPreset: "standard",
   startingCapital: 120_000,
   demandMultiplier: 1,

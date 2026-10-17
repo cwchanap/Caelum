@@ -1,6 +1,6 @@
 use caelum_core::model::{
-    DemandMultiplier, EconomyPreset, GameMode, Heading, MovementKind, Point, SandboxTemplateId,
-    StartingCapital,
+    DemandMultiplier, EconomyPreset, GameMode, Heading, MovementKind, Point, SandboxMapSize,
+    SandboxTemplateId, StartingCapital,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
 use caelum_core::traffic::{private_car_candidate, RoadFlow};
@@ -10,6 +10,7 @@ use serde_json::{json, Value};
 fn request(template_id: &str) -> SandboxCreationRequest {
     SandboxCreationRequest {
         template_id: template_id.to_string(),
+        map_size: "small".to_string(),
         economy_preset: "creative".to_string(),
         starting_capital: Some(0.0),
         demand_multiplier: Some(1.5),
@@ -63,6 +64,103 @@ fn blank_grid_contains_only_canonical_empty_tiles() {
 }
 
 #[test]
+fn larger_map_sizes_center_the_authored_templates() {
+    let small_town = create_sandbox_snapshot(request("smallTown")).unwrap();
+    for (size, expected_size, dimensions, offset) in [
+        (
+            "medium",
+            SandboxMapSize::Medium,
+            (56, 36),
+            Point { x: 14, y: 9 },
+        ),
+        (
+            "large",
+            SandboxMapSize::Large,
+            (84, 54),
+            Point { x: 28, y: 18 },
+        ),
+    ] {
+        let sized = |template: &str| {
+            let mut sized_request = request(template);
+            sized_request.map_size = size.to_string();
+            create_sandbox_snapshot(sized_request).unwrap()
+        };
+
+        for template in ["blankGrid", "crossroads", "smallTown"] {
+            let snapshot = sized(template);
+            assert_eq!((snapshot.map.width, snapshot.map.height), dimensions);
+            assert_eq!(
+                snapshot.map.tiles.len(),
+                usize::from(dimensions.0) * usize::from(dimensions.1)
+            );
+            assert_eq!(snapshot.rules.sandbox.map_size, expected_size);
+        }
+
+        // The Crossroads junction sits at the map center and its arterials
+        // still cross the whole map.
+        let crossroads = sized("crossroads");
+        let junction = Point {
+            x: 14 + offset.x,
+            y: 8 + offset.y,
+        };
+        let mut footprint = crossroads.map.road_structures[0].footprint().to_vec();
+        footprint.sort();
+        assert_eq!(
+            footprint,
+            [
+                junction,
+                Point {
+                    x: junction.x,
+                    y: junction.y + 1
+                },
+                Point {
+                    x: junction.x + 1,
+                    y: junction.y
+                },
+                Point {
+                    x: junction.x + 1,
+                    y: junction.y + 1
+                },
+            ]
+        );
+        for edge in [
+            Point {
+                x: 0,
+                y: junction.y,
+            },
+            Point {
+                x: i32::from(dimensions.0) - 1,
+                y: junction.y + 1,
+            },
+            Point {
+                x: junction.x,
+                y: 0,
+            },
+            Point {
+                x: junction.x + 1,
+                y: i32::from(dimensions.1) - 1,
+            },
+        ] {
+            assert_eq!(crossroads.map.tile(edge).unwrap().kind, "road");
+        }
+
+        // Small Town is the Small layout shifted by a whole-tile offset.
+        let town = sized("smallTown");
+        assert_eq!(town.buildings.len(), small_town.buildings.len());
+        for (sized_building, small_building) in town.buildings.iter().zip(&small_town.buildings) {
+            assert_eq!(sized_building.building_type, small_building.building_type);
+            assert_eq!(
+                sized_building.origin,
+                Point {
+                    x: small_building.origin.x + offset.x,
+                    y: small_building.origin.y + offset.y,
+                }
+            );
+        }
+    }
+}
+
+#[test]
 fn valid_settings_change_rules_and_budget_without_changing_template_content() {
     let cases = [
         ("standard", 0, 1.0, EconomyPreset::Standard),
@@ -73,6 +171,7 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
     for template in ["blankGrid", "crossroads", "smallTown"] {
         let canonical = create_sandbox_snapshot(SandboxCreationRequest {
             template_id: template.to_string(),
+            map_size: "small".to_string(),
             economy_preset: "standard".to_string(),
             starting_capital: Some(120_000.0),
             demand_multiplier: Some(1.0),
@@ -82,6 +181,7 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
         for (economy, starting_capital, demand_multiplier, expected_economy) in cases {
             let settings_request = SandboxCreationRequest {
                 template_id: template.to_string(),
+                map_size: "small".to_string(),
                 economy_preset: economy.to_string(),
                 starting_capital: Some(f64::from(starting_capital)),
                 demand_multiplier: Some(demand_multiplier),
@@ -383,6 +483,7 @@ fn entity_ids(collection: &Value) -> Vec<String> {
 fn template_review(template_id: &str) -> Value {
     let snapshot = create_sandbox_snapshot(SandboxCreationRequest {
         template_id: template_id.to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(120_000.0),
         demand_multiplier: Some(1.0),

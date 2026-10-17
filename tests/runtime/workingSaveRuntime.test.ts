@@ -43,6 +43,7 @@ const NEW_CITY_REQUEST = {
   name: "New City",
   economyPreset: "standard",
   templateId: "blankGrid",
+  mapSize: "small",
 } as const;
 
 function backendStub(): GameBackend {
@@ -840,11 +841,13 @@ describe("working save runtime new cities", () => {
       name: "Creative Grid",
       economyPreset: "creative",
       templateId: "blankGrid",
+      mapSize: "small",
     });
 
     expect(fixture.backend.sandboxRequests).toEqual([
       {
         templateId: "blankGrid",
+        mapSize: "small",
         economyPreset: "creative",
         startingCapital: 120_000,
         demandMultiplier: 1,

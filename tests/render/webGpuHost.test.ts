@@ -24,7 +24,7 @@ import {
   type WebGpuRenderFrame,
   type WebGpuRenderer,
 } from "../../src/render/webgpu/renderer";
-import { tileSize } from "../../src/render/boardTransform";
+import { tileSize, type Camera } from "../../src/render/boardTransform";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
 import { createFakeDevice } from "../helpers/fakeWebGpu";
@@ -174,6 +174,7 @@ interface Fixture {
     onDragCommit: Mock;
     onDragCancel: Mock;
     onFatalError: Mock;
+    onCameraChange: Mock;
   };
   fireFrame: (timestamp: number) => void;
   rafCount: () => number;
@@ -191,11 +192,13 @@ interface Fixture {
 function createFixture(options?: {
   state?: GameState;
   ui?: Partial<UiState>;
+  camera?: Camera;
   onDragStartResult?: boolean;
 }): Fixture {
   let state = options?.state ?? createTestGameState();
   let ui = { ...createUiState(), ...options?.ui };
   let sceneRevision = 1;
+  let camera: Camera | null = options?.camera ?? null;
 
   const callbacks = {
     onTick: vi.fn(() => Promise.resolve()),
@@ -207,6 +210,9 @@ function createFixture(options?: {
     onDragCommit: vi.fn(),
     onDragCancel: vi.fn(),
     onFatalError: vi.fn(),
+    onCameraChange: vi.fn((next: Camera | null) => {
+      camera = next;
+    }),
   };
 
   const renderer = createFakeRenderer();
@@ -214,6 +220,7 @@ function createFixture(options?: {
   const ctx: WebGpuHostContext = {
     getState: () => state,
     getUi: () => ui,
+    getCamera: () => camera,
     getSceneRevision: () => sceneRevision,
     ...callbacks,
   };
@@ -367,6 +374,88 @@ describe("createWebGpuHost lifecycle", () => {
     );
 
     expect(callbacks.onTileClick).not.toHaveBeenCalled();
+  });
+
+  it("wheel zooms around the cursor and reports the camera", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+    });
+    const wheel = new WheelEvent("wheel", {
+      ...center({ x: 2, y: 3 }),
+      deltaY: -200,
+      bubbles: true,
+      cancelable: true,
+    });
+
+    canvas.dispatchEvent(wheel);
+
+    expect(wheel.defaultPrevented).toBe(true);
+    const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    expect(camera.zoom).toBeGreaterThan(1);
+    // The tile under the cursor stays under the cursor.
+    canvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+  });
+
+  it("a click-tool drag pans the map and swallows the click", () => {
+    const zoomed: Camera = { zoom: 2, center: { x: 14, y: 9 } };
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+      camera: zoomed,
+    });
+
+    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointermove", { clientX: 302, clientY: 300 });
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+    dispatchPointer(canvas, "pointermove", { clientX: 364, clientY: 300 });
+    dispatchPointer(canvas, "pointerup", { clientX: 364, clientY: 300 });
+    canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 364, clientY: 300, bubbles: true }),
+    );
+
+    // 64px of travel at 64px tiles moves the view one tile west.
+    expect(callbacks.onCameraChange).toHaveBeenLastCalledWith({
+      zoom: 2,
+      center: { x: 13, y: 9 },
+    });
+    expect(callbacks.onTileClick).not.toHaveBeenCalled();
+    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+
+    // A press that does not travel is still an ordinary click.
+    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointerup", { clientX: 300, clientY: 300 });
+    canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 300, clientY: 300, bubbles: true }),
+    );
+    expect(callbacks.onTileClick).toHaveBeenCalledTimes(1);
+  });
+
+  it("middle-button drag pans without starting a road stroke", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "road" },
+      camera: { zoom: 2, center: { x: 14, y: 9 } },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      button: 1,
+      clientX: 300,
+      clientY: 300,
+    });
+    dispatchPointer(canvas, "pointermove", { clientX: 300, clientY: 236 });
+    dispatchPointer(canvas, "pointerup", {
+      button: 1,
+      clientX: 300,
+      clientY: 236,
+    });
+
+    expect(callbacks.onCameraChange).toHaveBeenLastCalledWith({
+      zoom: 2,
+      center: { x: 14, y: 10 },
+    });
+    expect(callbacks.onDragStart).not.toHaveBeenCalled();
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
   });
 
   it("suppresses the browser context menu when route draft undo handles it", () => {
@@ -1343,6 +1432,8 @@ describe("createWebGpuHost teardown destruction", () => {
       const host = await createWebGpuHost({
         getState: () => createTestGameState(),
         getUi: () => createUiState(),
+        getCamera: () => null,
+        onCameraChange: () => {},
         getSceneRevision: () => 1,
         onTick: () => {},
         onTileClick: () => {},
@@ -1376,6 +1467,8 @@ describe("createWebGpuHost gpu bootstrap", () => {
   const noopContext: WebGpuHostContext = {
     getState: () => createTestGameState(),
     getUi: () => createUiState(),
+    getCamera: () => null,
+    onCameraChange: () => {},
     getSceneRevision: () => 1,
     onTick: () => {},
     onTileClick: () => {},

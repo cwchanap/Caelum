@@ -50,6 +50,7 @@ mod tests {
     pub(super) fn population_fixture() -> GameSnapshot {
         let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
             template_id: "smallTown".to_string(),
+            map_size: "small".to_string(),
             economy_preset: "standard".to_string(),
             starting_capital: Some(f64::from(crate::DEFAULT_STARTING_CAPITAL)),
             demand_multiplier: Some(1.0),
@@ -249,6 +250,7 @@ mod tests {
     fn reconcile_sandbox(time: f64) -> GameSnapshot {
         let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
             template_id: "smallTown".to_string(),
+            map_size: "small".to_string(),
             economy_preset: "standard".to_string(),
             starting_capital: Some(f64::from(crate::DEFAULT_STARTING_CAPITAL)),
             demand_multiplier: Some(1.0),

@@ -1,11 +1,16 @@
 import type { GameMap, GameState, Point, Tool } from "../domain/types";
 import type { UiState } from "../ui/uiState";
 import {
+  applyCameraAction,
   applyCanvasPixelSize,
   canvasToTile,
   getBoardTransform,
+  panCamera,
   syncCanvasSize,
-  tileSize,
+  visibleWorldRect,
+  zoomCameraAt,
+  type Camera,
+  type CameraAction,
 } from "../render/boardTransform";
 import { SOLID_VERTEX_FLOATS } from "../render/webgpu/primitives";
 import { buildMapBatch } from "../render/webgpu/mapBatch";
@@ -34,6 +39,13 @@ const TICK_INTERVAL_MS = 100;
 /** Per-frame wall-delta clamp; also the upper bound on any single submitted
  *  tick delta, so a throttled-background spike cannot jump the sim. */
 const MAX_FRAME_DELTA_MS = 250;
+/** Pointer travel (CSS px) before a click-tool press becomes a map pan, so an
+ *  ordinary click still selects or places. */
+const PAN_THRESHOLD_PX = 4;
+/** Wheel zoom sensitivity per wheel delta pixel; pinch (ctrlKey) deltas are
+ *  smaller, so they get a stronger factor. */
+const WHEEL_ZOOM_PER_PX = 0.0015;
+const PINCH_ZOOM_PER_PX = 0.01;
 
 /**
  * Callbacks the WebGPU host uses to read runtime state and forward DOM events
@@ -44,6 +56,10 @@ const MAX_FRAME_DELTA_MS = 250;
 export interface WebGpuHostContext {
   getState: () => GameState;
   getUi: () => UiState;
+  /** Runtime-owned map view; `null` fits the whole map. */
+  getCamera: () => Camera | null;
+  /** Report a new clamped camera from wheel/pan input or `adjustCamera`. */
+  onCameraChange: (camera: Camera | null) => void;
   /** Runtime-owned scene revision (bumped by `acceptPresentationUpdate`). */
   getSceneRevision: () => number;
   onTick: (deltaSeconds: number) => unknown;
@@ -68,6 +84,8 @@ export interface GameHost {
   stop(): void;
   syncAnimationLoop(): void;
   isRunning(): boolean;
+  /** Apply a button/key camera action against the current board size. */
+  adjustCamera(action: CameraAction): void;
   /** Rebuilds the current frame and reads its pixels back from an offscreen
    *  render target. Deterministic under software Vulkan, where canvas
    *  presentation never reaches the compositor; e2e pixel oracles use this
@@ -117,6 +135,9 @@ export function createWebGpuHostWithRenderer(
   let observedCssWidth = 0;
   let observedCssHeight = 0;
   let hasObservedSize = false;
+  /** CSS board size used by the latest draw; the camera is clamped against it. */
+  let boardCssWidth = 0;
+  let boardCssHeight = 0;
   let resizeObserver: ResizeObserver | null = null;
   let activeDetach: (() => void) | null = null;
 
@@ -235,9 +256,12 @@ export function createWebGpuHostWithRenderer(
     const dpr = globalThis.devicePixelRatio ?? 1;
     const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
     const pixelHeight = Math.max(1, Math.round(cssHeight * dpr));
+    boardCssWidth = cssWidth;
+    boardCssHeight = cssHeight;
     const board = getBoardTransform(
       { width: cssWidth, height: cssHeight },
       ctx.getState().map,
+      ctx.getCamera(),
     );
     transform = {
       sx: (2 * board.scale * dpr) / pixelWidth,
@@ -309,12 +333,11 @@ export function createWebGpuHostWithRenderer(
       alpha,
       // Pause or speed 0: every vehicle snaps to its latest cursor.
       paused: latest.paused || latest.speed === 0,
-      viewport: {
-        minX: 0,
-        minY: 0,
-        maxX: map.width * tileSize,
-        maxY: map.height * tileSize,
-      },
+      viewport: visibleWorldRect(
+        { width: boardCssWidth, height: boardCssHeight },
+        map,
+        ctx.getCamera(),
+      ),
     });
     return {
       solids: [
@@ -503,6 +526,20 @@ export function createWebGpuHostWithRenderer(
     syncAnimationLoop();
   };
 
+  const adjustCamera = (action: CameraAction): void => {
+    if (!(boardCssWidth > 0 && boardCssHeight > 0)) {
+      return;
+    }
+    ctx.onCameraChange(
+      applyCameraAction(
+        { width: boardCssWidth, height: boardCssHeight },
+        ctx.getState().map,
+        ctx.getCamera(),
+        action,
+      ),
+    );
+  };
+
   const mount = (host: HTMLElement): (() => void) => {
     // Same host with an existing canvas: just refresh, reuse the teardown.
     if (surfaceHost === host && canvas !== null) {
@@ -534,7 +571,107 @@ export function createWebGpuHostWithRenderer(
     // the first frame still maps to the right tile.
     syncSize(nextCanvas);
 
+    // Map panning: middle-button or Space + left drag pans immediately under
+    // every tool; with a click tool a plain left drag pans once it travels
+    // past PAN_THRESHOLD_PX, and the click that follows is swallowed.
+    let pan: {
+      pointerId: number;
+      startX: number;
+      startY: number;
+      lastX: number;
+      lastY: number;
+      moved: boolean;
+    } | null = null;
+    let suppressClick = false;
+    let spaceHeld = false;
+
+    const boardRect = (): DOMRect => nextCanvas.getBoundingClientRect();
+
+    const beginPan = (event: PointerEvent, moved: boolean): void => {
+      pan = {
+        pointerId: event.pointerId,
+        startX: event.clientX,
+        startY: event.clientY,
+        lastX: event.clientX,
+        lastY: event.clientY,
+        moved,
+      };
+      if (moved) {
+        capturePointer(event.pointerId);
+        nextCanvas.style.cursor = "grabbing";
+      }
+    };
+
+    const endPan = (pointerId: number): void => {
+      if (pan?.moved === true) {
+        releasePointer(pointerId);
+      }
+      pan = null;
+      nextCanvas.style.cursor = spaceHeld ? "grab" : "";
+    };
+
+    const handleWheel = (event: WheelEvent): void => {
+      event.preventDefault();
+      if (event.deltaY === 0) {
+        return;
+      }
+      const rect = boardRect();
+      const pixels = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      const factor = Math.exp(
+        -pixels * (event.ctrlKey ? PINCH_ZOOM_PER_PX : WHEEL_ZOOM_PER_PX),
+      );
+      ctx.onCameraChange(
+        zoomCameraAt(rect, ctx.getState().map, ctx.getCamera(), factor, {
+          x: event.clientX - rect.left,
+          y: event.clientY - rect.top,
+        }),
+      );
+    };
+
+    const handleMouseDown = (event: MouseEvent): void => {
+      // Stop middle-button autoscroll; the middle button pans the map.
+      if (event.button === 1) {
+        event.preventDefault();
+      }
+    };
+
+    // Space belongs to whatever control has focus (it presses buttons and
+    // types in fields); anywhere else it is the pan modifier.
+    const isSpaceTarget = (target: EventTarget | null): boolean =>
+      !(target instanceof Element) ||
+      target.closest(
+        "input, textarea, select, button, a[href], [contenteditable='true']",
+      ) === null;
+
+    const handleKeyDown = (event: KeyboardEvent): void => {
+      if (event.key !== " " || !isSpaceTarget(event.target)) {
+        return;
+      }
+      // Hold Space to pan with the left button; keep it from scrolling.
+      event.preventDefault();
+      if (!spaceHeld) {
+        spaceHeld = true;
+        if (pan === null) nextCanvas.style.cursor = "grab";
+      }
+    };
+
+    const handleKeyUp = (event: KeyboardEvent): void => {
+      if (event.key === " ") {
+        spaceHeld = false;
+        if (pan === null) nextCanvas.style.cursor = "";
+      }
+    };
+
+    const handleWindowBlur = (): void => {
+      spaceHeld = false;
+      if (pan === null) nextCanvas.style.cursor = "";
+    };
+
     const handleClick = (event: MouseEvent): void => {
+      if (suppressClick) {
+        suppressClick = false;
+        return;
+      }
       if (DRAG_TOOLS.has(ctx.getUi().activeTool)) {
         return; // drag tools are driven by pointerdown/up below.
       }
@@ -544,6 +681,7 @@ export function createWebGpuHostWithRenderer(
         event.clientX,
         event.clientY,
         ctx.getState().map,
+        ctx.getCamera(),
       );
 
       if (point !== null) {
@@ -558,11 +696,34 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
+      if (pan !== null && event.pointerId === pan.pointerId) {
+        if (!pan.moved) {
+          const travel = Math.hypot(
+            event.clientX - pan.startX,
+            event.clientY - pan.startY,
+          );
+          if (travel < PAN_THRESHOLD_PX) {
+            return;
+          }
+          pan.moved = true;
+          capturePointer(event.pointerId);
+          nextCanvas.style.cursor = "grabbing";
+        }
+        const dx = event.clientX - pan.lastX;
+        const dy = event.clientY - pan.lastY;
+        pan.lastX = event.clientX;
+        pan.lastY = event.clientY;
+        ctx.onCameraChange(
+          panCamera(boardRect(), ctx.getState().map, ctx.getCamera(), dx, dy),
+        );
+        return;
+      }
       const point = canvasToTile(
         nextCanvas,
         event.clientX,
         event.clientY,
         ctx.getState().map,
+        ctx.getCamera(),
       );
       // A live drag tracks its own `current`; only idle movement updates the
       // hover tile (badge / building preview / hover highlight).
@@ -597,9 +758,23 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerDown = (event: PointerEvent): void => {
+      suppressClick = false;
+      const dragTool = DRAG_TOOLS.has(ctx.getUi().activeTool);
+      if (
+        ctx.getUi().drag === null &&
+        (event.button === 1 || (event.button === 0 && spaceHeld))
+      ) {
+        event.preventDefault();
+        beginPan(event, true);
+        return;
+      }
+      if (event.button === 0 && !dragTool && ctx.getUi().drag === null) {
+        beginPan(event, false);
+        return;
+      }
       // Only the primary (left) button initiates a drag. Right/middle clicks
       // would otherwise start a stale drag gesture.
-      if (event.button !== 0 || !DRAG_TOOLS.has(ctx.getUi().activeTool)) {
+      if (event.button !== 0 || !dragTool) {
         return;
       }
       const point = canvasToTile(
@@ -607,6 +782,7 @@ export function createWebGpuHostWithRenderer(
         event.clientX,
         event.clientY,
         ctx.getState().map,
+        ctx.getCamera(),
       );
       if (point === null) {
         return;
@@ -618,6 +794,13 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerUp = (event: PointerEvent): void => {
+      if (pan !== null && event.pointerId === pan.pointerId) {
+        // A pan that moved swallows the click that follows this release; a
+        // press that never moved is an ordinary click.
+        suppressClick = pan.moved;
+        endPan(event.pointerId);
+        return;
+      }
       // Only the primary button commits; a stray right/middle release mid-drag
       // must not place the road early.
       if (ctx.getUi().drag === null || event.button !== 0) {
@@ -628,6 +811,7 @@ export function createWebGpuHostWithRenderer(
         event.clientX,
         event.clientY,
         ctx.getState().map,
+        ctx.getCamera(),
       );
       // Snap the gesture to the release tile before committing, so a release on
       // a different tile than the last move builds to where the user let go.
@@ -637,6 +821,12 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerLeave = (): void => {
+      if (pan !== null) {
+        // A captured pan keeps tracking past the edge; an uncaptured press
+        // that leaves never became a pan.
+        if (!pan.moved) pan = null;
+        return;
+      }
       // With pointer capture active the browser suppresses leave mid-drag, so
       // reaching here mid-drag means the engine lacks or lost capture. The
       // stroke was already previewed, so commit it at its last tracked tile
@@ -648,6 +838,10 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerCancel = (event: PointerEvent): void => {
+      if (pan !== null && event.pointerId === pan.pointerId) {
+        endPan(event.pointerId);
+        return;
+      }
       // pointercancel means the browser interrupted the stream (window focus
       // loss, OS-level steal) — it still fires under pointer capture and is
       // not a deliberate abort. A mouse stroke was fully previewed, so commit
@@ -706,6 +900,11 @@ export function createWebGpuHostWithRenderer(
     }
 
     canvas.addEventListener("click", handleClick);
+    canvas.addEventListener("wheel", handleWheel, { passive: false });
+    canvas.addEventListener("mousedown", handleMouseDown);
+    globalThis.window?.addEventListener("keydown", handleKeyDown);
+    globalThis.window?.addEventListener("keyup", handleKeyUp);
+    globalThis.window?.addEventListener("blur", handleWindowBlur);
     canvas.addEventListener("contextmenu", handleContextMenu);
     canvas.addEventListener("pointermove", handlePointerMove);
     canvas.addEventListener("pointerdown", handlePointerDown);
@@ -742,6 +941,11 @@ export function createWebGpuHostWithRenderer(
       observedCssHeight = 0;
 
       canvas.removeEventListener("click", handleClick);
+      canvas.removeEventListener("wheel", handleWheel);
+      canvas.removeEventListener("mousedown", handleMouseDown);
+      globalThis.window?.removeEventListener("keydown", handleKeyDown);
+      globalThis.window?.removeEventListener("keyup", handleKeyUp);
+      globalThis.window?.removeEventListener("blur", handleWindowBlur);
       canvas.removeEventListener("contextmenu", handleContextMenu);
       canvas.removeEventListener("pointermove", handlePointerMove);
       canvas.removeEventListener("pointerdown", handlePointerDown);
@@ -775,6 +979,7 @@ export function createWebGpuHostWithRenderer(
     stop,
     syncAnimationLoop,
     isRunning: () => running,
+    adjustCamera,
     captureFrame,
   };
 }

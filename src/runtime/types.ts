@@ -27,6 +27,7 @@ import type {
   SandboxResetError,
 } from "./backend/types";
 import type { WebGpuCapturedFrame } from "../render/webgpu/renderer";
+import type { Camera, CameraAction } from "../render/boardTransform";
 import type {
   RuntimePersistenceController,
   RuntimePersistenceView,
@@ -254,6 +255,9 @@ export interface RuntimeSnapshot {
   // Auto-clears on the next successful dispatch.
   rejection: GameplayRejection | null;
   sandboxResetError: SandboxResetError | null;
+  /** Local map view; `null` fits the whole map. Reset to `null` whenever a
+   *  city is created or loaded. */
+  camera: Camera | null;
 }
 
 export type RuntimeCommandResult = RuntimeSnapshot | Promise<RuntimeSnapshot>;
@@ -333,6 +337,8 @@ export interface RuntimeController {
   setHoverTile: (point: Point | null) => RuntimeSnapshot;
   previewRoadMutation: (mutation: RoadMutation) => RuntimeSnapshot;
   dismissRejection: () => RuntimeSnapshot;
+  /** Zoom, pan, or fit the map view from buttons and keys. */
+  adjustCamera: (action: CameraAction) => RuntimeSnapshot;
   mountCanvas: (host: HTMLElement) => () => void;
 }
 

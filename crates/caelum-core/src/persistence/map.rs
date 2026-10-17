@@ -5,7 +5,6 @@ use crate::clock::{self, GAME_DAY_SECONDS};
 use crate::heading::{heading_rank, offset, opposite};
 use crate::model::{GameSnapshot, GrowthAction, Heading, Point, RoadStructure};
 use crate::road_topology::RoadTopology;
-use crate::sandbox::{MAP_HEIGHT, MAP_WIDTH};
 
 use super::{
     MapSize, ModeError, NumericError, PersistenceError, PersistenceResult, RoadStructureError,
@@ -173,11 +172,12 @@ fn validate_growth_action(
 
 fn validate_map(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     let map = &snapshot.map;
-    if map.width != MAP_WIDTH || map.height != MAP_HEIGHT {
+    let (expected_width, expected_height) = snapshot.rules.sandbox.map_size.dimensions();
+    if map.width != expected_width || map.height != expected_height {
         return Err(PersistenceError::InvalidMapDimensions {
             expected: MapSize {
-                width: MAP_WIDTH,
-                height: MAP_HEIGHT,
+                width: expected_width,
+                height: expected_height,
             },
             actual: MapSize {
                 width: map.width,
@@ -185,7 +185,7 @@ fn validate_map(snapshot: &GameSnapshot) -> PersistenceResult<()> {
             },
         });
     }
-    let expected_count = usize::from(MAP_WIDTH) * usize::from(MAP_HEIGHT);
+    let expected_count = usize::from(expected_width) * usize::from(expected_height);
     if map.tiles.len() != expected_count {
         return Err(PersistenceError::InvalidTile {
             tile_id: String::new(),

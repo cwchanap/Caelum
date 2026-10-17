@@ -1,13 +1,13 @@
 use crate::model::{
     EconomyPreset, GameMode, GameRules, GrowthAction, GrowthWave, MaxAverageWaitSeconds,
     MaxLateRatio, MaxUnservedRatio, ObjectiveThresholds, Point, RollingWindowSeconds,
-    ScenarioConfig, SurvivalTimeSeconds,
+    SandboxMapSize, ScenarioConfig, SurvivalTimeSeconds,
 };
 use crate::objectives::{
     MAX_AVERAGE_WAIT_SECONDS, MAX_LATE_RATIO, MAX_UNSERVED_RATIO, ROLLING_WINDOW_SECONDS,
     SURVIVAL_TIME_SECONDS,
 };
-use crate::sandbox::{canonical_default_settings, MAP_HEIGHT, MAP_WIDTH};
+use crate::sandbox::canonical_default_settings;
 
 pub const SCENARIO_NAME: &str = "Growing Suburb";
 
@@ -71,7 +71,9 @@ pub fn growing_suburb_growth_waves() -> Vec<GrowthWave> {
     const UNIT_WIDTH: i32 = 2;
     const UNIT_HEIGHT: i32 = 1;
 
-    let grid = i32::from(MAP_WIDTH) * i32::from(MAP_HEIGHT);
+    // The seed wave is authored for the Small map.
+    let (map_width, map_height) = SandboxMapSize::Small.dimensions();
+    let grid = i32::from(map_width) * i32::from(map_height);
     let n_units = (grid / GRID_CELLS_PER_HOUSING_UNIT).max(1);
 
     let origins: Vec<Point> = (0..n_units)
@@ -84,8 +86,8 @@ pub fn growing_suburb_growth_waves() -> Vec<GrowthWave> {
     // Guard every unit footprint against the map bounds and the arterial
     // cross (x in {14,15}, y in {8,9}) so future tuning of the anchor, row
     // width, unit size, or grid ratio cannot produce invalid placements.
-    let map_w = i32::from(MAP_WIDTH);
-    let map_h = i32::from(MAP_HEIGHT);
+    let map_w = i32::from(map_width);
+    let map_h = i32::from(map_height);
     for origin in &origins {
         let x0 = origin.x;
         let x1 = origin.x + UNIT_WIDTH - 1;
@@ -93,7 +95,7 @@ pub fn growing_suburb_growth_waves() -> Vec<GrowthWave> {
         let y1 = origin.y + UNIT_HEIGHT - 1;
         assert!(
             x0 >= 0 && x1 < map_w && y0 >= 0 && y1 < map_h,
-            "seed unit origin {origin:?} footprint exceeds map bounds ({MAP_WIDTH}x{MAP_HEIGHT})",
+            "seed unit origin {origin:?} footprint exceeds map bounds ({map_width}x{map_height})",
         );
         let overlaps_horizontal_road = y0 <= 9 && y1 >= 8;
         let overlaps_vertical_road = x0 <= 15 && x1 >= 14;
@@ -147,7 +149,8 @@ mod tests {
 
     #[test]
     fn seed_wave_unit_count_scales_with_grid() {
-        let grid = i32::from(MAP_WIDTH) * i32::from(MAP_HEIGHT);
+        let (map_width, map_height) = SandboxMapSize::Small.dimensions();
+        let grid = i32::from(map_width) * i32::from(map_height);
         let expected = (grid / GRID_CELLS_PER_HOUSING_UNIT).max(1);
         assert_eq!(expected, 5, "28*18/100 == 5 units on the shipped map");
 
@@ -185,7 +188,7 @@ mod tests {
             assert_eq!(building_type, "smallHouse");
             // On-map and west/north of the arterial cross (x in {14,15}, y in {8,9}).
             assert!(origin.x >= 0 && origin.x + 1 < 14, "footprint west of x=14");
-            assert!(origin.y >= 0 && origin.y < i32::from(MAP_HEIGHT));
+            assert!(origin.y >= 0 && origin.y < i32::from(SandboxMapSize::Small.dimensions().1));
             assert_ne!(origin.y, 8);
             assert_ne!(origin.y, 9);
         }

@@ -250,11 +250,11 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
-    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 11);
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 12);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(11)
+        json!(12)
     );
 }
 
@@ -424,13 +424,14 @@ fn retire_service_vehicle_intent_is_line_id_only() {
 fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(11));
+    assert_eq!(value["schemaVersion"], json!(12));
     assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
         value["rules"]["sandbox"],
         json!({
             "templateId": "crossroads",
+            "mapSize": "small",
             "startingCapital": 120000,
             "demandMultiplier": 1.0
         })
@@ -495,6 +496,7 @@ fn snapshot_rejects_unknown_rule_enum_values() {
         &["rules", "gameMode"][..],
         &["rules", "economyPreset"][..],
         &["rules", "sandbox", "templateId"][..],
+        &["rules", "sandbox", "mapSize"][..],
     ] {
         let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
         let mut nested = &mut value;
@@ -522,6 +524,7 @@ fn campaign_rules_and_scenario_round_trip() {
                 "economyPreset": "standard",
                 "sandbox": {
                 "templateId": "crossroads",
+                "mapSize": "small",
                 "startingCapital": 120000,
                 "demandMultiplier": 1.0
             }

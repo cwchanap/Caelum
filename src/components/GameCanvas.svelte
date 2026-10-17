@@ -3,7 +3,7 @@
   import MapTextOverlay from "./MapTextOverlay.svelte";
 
   interface Props {
-    runtime: Pick<RuntimeController, "mountCanvas">;
+    runtime: Pick<RuntimeController, "mountCanvas" | "adjustCamera">;
     snapshot: RuntimeSnapshot | null;
     onShellError: (message: string) => void;
   }
@@ -43,9 +43,38 @@
 >
   <div class="board-surface" use:mountRuntime></div>
   {#if snapshot !== null}
-    <MapTextOverlay state={snapshot.state} ui={snapshot.ui} />
+    <MapTextOverlay
+      state={snapshot.state}
+      ui={snapshot.ui}
+      camera={snapshot.camera}
+    />
   {/if}
+  <div class="board-zoom" role="group" aria-label="Map view">
+    <button
+      type="button"
+      data-testid="map-zoom-in"
+      aria-label="Zoom in"
+      title="Zoom in (+)"
+      onclick={() => runtime.adjustCamera({ kind: "zoomIn" })}>+</button
+    >
+    <button
+      type="button"
+      data-testid="map-zoom-out"
+      aria-label="Zoom out"
+      title="Zoom out (-)"
+      onclick={() => runtime.adjustCamera({ kind: "zoomOut" })}>−</button
+    >
+    <button
+      type="button"
+      data-testid="map-zoom-fit"
+      aria-label="Show whole map"
+      title="Show whole map (0)"
+      disabled={snapshot?.camera == null}
+      onclick={() => runtime.adjustCamera({ kind: "fit" })}>Fit</button
+    >
+  </div>
 </div>
 <p id="game-canvas-description" class="sr-only">
-  Build and inspect the transport sandbox on the city map.
+  Build and inspect the transport sandbox on the city map. Scroll to zoom; drag,
+  middle-drag, or hold Space and drag to pan.
 </p>

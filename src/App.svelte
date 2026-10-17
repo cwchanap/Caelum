@@ -465,6 +465,23 @@
     );
   }
 
+  /** Arrow keys pan only when the map (or nothing in particular) has focus,
+   *  so they keep moving through lists and selects elsewhere. */
+  function isMapKeyTarget(target: EventTarget | null): boolean {
+    return (
+      target === document.body ||
+      target === document.documentElement ||
+      (target instanceof Element && target.closest(".board") !== null)
+    );
+  }
+
+  const PAN_KEYS: Record<string, { x: number; y: number }> = {
+    ArrowLeft: { x: -1, y: 0 },
+    ArrowRight: { x: 1, y: 0 },
+    ArrowUp: { x: 0, y: -1 },
+    ArrowDown: { x: 0, y: 1 },
+  };
+
   function handleCancelOrEscape(): void {
     if (shellError || runtime === null) {
       return;
@@ -548,6 +565,31 @@
 
     if (event.metaKey || event.ctrlKey || event.altKey || targetIsInput) {
       return;
+    }
+
+    if (!showNewCity && snapshot?.persistence.activeCity != null) {
+      const pan = PAN_KEYS[event.key];
+      if (
+        pan !== undefined &&
+        !event.defaultPrevented &&
+        isMapKeyTarget(event.target)
+      ) {
+        event.preventDefault();
+        setSnapshot(runtime.adjustCamera({ kind: "pan", ...pan }));
+        return;
+      }
+      if (key === "+" || key === "=") {
+        setSnapshot(runtime.adjustCamera({ kind: "zoomIn" }));
+        return;
+      }
+      if (key === "-" || key === "_") {
+        setSnapshot(runtime.adjustCamera({ kind: "zoomOut" }));
+        return;
+      }
+      if (key === "0") {
+        setSnapshot(runtime.adjustCamera({ kind: "fit" }));
+        return;
+      }
     }
 
     if (key === "b") {

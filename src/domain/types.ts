@@ -1,14 +1,16 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 11 as const;
+export const SNAPSHOT_SCHEMA_VERSION = 12 as const;
 export type GameMode = "sandbox" | "campaign";
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
+export type SandboxMapSize = "small" | "medium" | "large";
 
 export interface GameRules {
   gameMode: GameMode;
   economyPreset: EconomyPreset;
   sandbox: {
     templateId: SandboxTemplateId;
+    mapSize: SandboxMapSize;
     startingCapital: number;
     demandMultiplier: number;
   };

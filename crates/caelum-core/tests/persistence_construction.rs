@@ -460,3 +460,16 @@ fn deterministic_round_trip_preserves_the_save_snapshot() {
 
     assert_eq!(restored.snapshot_for_save(), saved);
 }
+
+#[test]
+fn map_dimensions_must_match_the_chosen_map_size() {
+    let mut snapshot = GameEngine::new().snapshot();
+    snapshot.rules.sandbox.map_size = caelum_core::SandboxMapSize::Large;
+
+    let SnapshotLoadError::InvalidSnapshot(diagnostic) = from_snapshot_error(snapshot) else {
+        panic!("expected invalid snapshot diagnostic");
+    };
+    let value: serde_json::Value =
+        serde_json::from_str(&diagnostic).expect("diagnostic should be JSON");
+    assert_eq!(value["code"], serde_json::json!("invalidMapDimensions"));
+}

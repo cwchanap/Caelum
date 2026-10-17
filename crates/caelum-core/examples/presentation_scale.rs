@@ -177,6 +177,7 @@ fn measure_ecs_row(label: &str, fixture: &GameSnapshot, count: usize) {
 fn wave_snapshot(count: usize) -> GameSnapshot {
     let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
         template_id: "smallTown".to_string(),
+        map_size: "small".to_string(),
         economy_preset: "standard".to_string(),
         starting_capital: Some(f64::from(caelum_core::DEFAULT_STARTING_CAPITAL)),
         demand_multiplier: Some(1.0),

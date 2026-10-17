@@ -4,6 +4,7 @@ import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 
 const request = {
   templateId: "blankGrid",
+  mapSize: "small",
   economyPreset: "standard",
   startingCapital: 120_000,
   demandMultiplier: 1,
@@ -27,5 +28,15 @@ describe("WASM backend", () => {
     if (!restored.ok) return;
     expect(restored.update.scene).not.toBeNull();
     expect(restored.update.frame.budget).toBe(saved.snapshot.budget);
+  });
+
+  it("reports ticks as frame-only updates", async () => {
+    const backend = await createWasmBackend();
+    await backend.dispatch({ type: "setPaused", paused: false });
+
+    const result = await backend.tick(0.5);
+
+    expect(result.applied).toBe(true);
+    expect(result.update.scene).toBeNull();
   });
 });

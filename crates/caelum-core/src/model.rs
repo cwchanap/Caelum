@@ -1,6 +1,6 @@
 use serde::{Deserialize, Deserializer, Serialize};
 
-pub const SNAPSHOT_SCHEMA_VERSION: u16 = 11;
+pub const SNAPSHOT_SCHEMA_VERSION: u16 = 12;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -22,6 +22,28 @@ pub enum SandboxTemplateId {
     BlankGrid,
     Crossroads,
     SmallTown,
+}
+
+/// Player-chosen sandbox map size. Every template supports every size; the
+/// authored Crossroads and Small Town layouts are centered on larger maps.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum SandboxMapSize {
+    Small,
+    Medium,
+    Large,
+}
+
+impl SandboxMapSize {
+    /// `(width, height)` in tiles. Each size is an integer multiple of Small,
+    /// so centered authored layouts land on whole-tile offsets.
+    pub const fn dimensions(self) -> (u8, u8) {
+        match self {
+            Self::Small => (28, 18),
+            Self::Medium => (56, 36),
+            Self::Large => (84, 54),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
@@ -98,6 +120,7 @@ impl From<StartingCapital> for i32 {
 #[serde(rename_all = "camelCase")]
 pub struct SandboxSettings {
     pub template_id: SandboxTemplateId,
+    pub map_size: SandboxMapSize,
     pub starting_capital: StartingCapital,
     pub demand_multiplier: DemandMultiplier,
 }

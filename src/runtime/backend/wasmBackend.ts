@@ -75,12 +75,12 @@ export async function createWasmBackend(): Promise<GameBackend> {
       }
     },
     async dispatch(intent: GameIntent) {
-      return normalizeUpdateResult(
+      return normalizeWasmUpdateResult(
         engine.dispatch(intent) as GameplayUpdateResult,
       );
     },
     async tick(deltaSeconds: number) {
-      return normalizeUpdateResult(
+      return normalizeWasmUpdateResult(
         engine.tick(deltaSeconds) as GameplayUpdateResult,
       );
     },
@@ -105,5 +105,18 @@ export async function createWasmBackend(): Promise<GameBackend> {
       ) as RoadMutationPreviewResponse;
       return normalizeRoadMutationPreviewResponse(response);
     },
+  };
+}
+
+// serde-wasm-bindgen writes a Rust `None` scene as `undefined` (Tauri JSON
+// writes `null`). Read as a scene, a frame-only tick would re-tessellate the
+// whole map and drop vehicle interpolation every tick.
+function normalizeWasmUpdateResult(
+  result: GameplayUpdateResult,
+): GameplayUpdateResult {
+  const normalized = normalizeUpdateResult(result);
+  return {
+    ...normalized,
+    update: { ...normalized.update, scene: normalized.update.scene ?? null },
   };
 }

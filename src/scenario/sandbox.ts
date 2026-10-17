@@ -1,6 +1,13 @@
-// Shared sandbox dimensions mirrored from the Rust constants in
-// `crates/caelum-core/src/sandbox.rs`. The authoritative Blank Grid and
-// Crossroads maps live in `caelum-core`; TypeScript retains only the dimensions
-// needed by render and end-to-end test geometry.
-export const MAP_WIDTH = 28;
-export const MAP_HEIGHT = 18;
+import type { SandboxMapSize } from "../domain/types";
+
+// Read-only mirror of `SandboxMapSize::dimensions` in
+// `crates/caelum-core/src/model.rs`, for New City labels and test geometry.
+// Rust builds every map; runtime code reads dimensions from the snapshot.
+export const MAP_SIZES: Record<
+  SandboxMapSize,
+  { label: string; width: number; height: number }
+> = {
+  small: { label: "Small", width: 28, height: 18 },
+  medium: { label: "Medium", width: 56, height: 36 },
+  large: { label: "Large", width: 84, height: 54 },
+};
