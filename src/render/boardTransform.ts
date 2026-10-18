@@ -284,11 +284,18 @@ export function canvasToTile(
     return null;
   }
 
+  const cssX = clientX - rect.left;
+  const cssY = clientY - rect.top;
+  // Zoomed in, the map overflows the board, so off-canvas coordinates still
+  // resolve to in-map tiles; a captured pointer's events keep arriving out
+  // there. Reject them so a stroke freezes at the last visible tile.
+  if (cssX < 0 || cssX >= rect.width || cssY < 0 || cssY >= rect.height) {
+    return null;
+  }
+
   // Map in CSS px: the camera is clamped against the CSS board, the same box
   // the host and the DOM text overlay use.
   const transform = getBoardTransform(rect, map, camera);
-  const cssX = clientX - rect.left;
-  const cssY = clientY - rect.top;
   const point = {
     x: Math.floor((cssX - transform.offsetX) / transform.scale / tileSize),
     y: Math.floor((cssY - transform.offsetY) / transform.scale / tileSize),
