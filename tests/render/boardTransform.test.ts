@@ -81,6 +81,26 @@ describe("board transform", () => {
     expect(canvasToTile(canvas, 1, 1, map, camera)).toEqual({ x: 10, y: 4 });
     expect(canvasToTile(canvas, 65, 1, map, camera)).toEqual({ x: 11, y: 4 });
   });
+
+  it("rejects captured-pointer coordinates past the canvas edge", () => {
+    const canvas = document.createElement("canvas");
+    const map = createTestGameState().map;
+    Object.defineProperty(canvas, "getBoundingClientRect", {
+      value: () => mockRect(map.width * tileSize, map.height * tileSize),
+    });
+    const camera = { zoom: 2, center: { x: 17, y: 8.5 } };
+
+    // Zoomed in, the map overflows the board: a pointer past the edge still
+    // resolves to a real in-map tile, but nothing is visible out there.
+    expect(
+      canvasToTile(canvas, map.width * tileSize + 1, 1, map, camera),
+    ).toBeNull();
+    expect(canvasToTile(canvas, -1, 1, map, camera)).toBeNull();
+    expect(
+      canvasToTile(canvas, 1, map.height * tileSize + 4, map, camera),
+    ).toBeNull();
+    expect(canvasToTile(canvas, 1, -4, map, camera)).toBeNull();
+  });
 });
 
 describe("camera", () => {
