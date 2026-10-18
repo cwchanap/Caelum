@@ -237,7 +237,7 @@ impl GameEngine {
         Ok(Self::from_parts(snapshot, road_topology))
     }
 
-    /// Construct an engine from a schema-v11 snapshot, normalizing
+    /// Construct an engine from a schema-v12 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived
