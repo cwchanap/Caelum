@@ -400,6 +400,25 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 2, y: 3 });
   });
 
+  it("a page-mode wheel notch zooms by a board height", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+    });
+
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...center({ x: 2, y: 3 }),
+        deltaY: -1,
+        deltaMode: 2,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    expect(camera.zoom).toBeGreaterThan(2);
+  });
+
   it("a click-tool drag pans the map and swallows the click", () => {
     const zoomed: Camera = { zoom: 2, center: { x: 14, y: 9 } };
     const { canvas, callbacks } = createFixture({

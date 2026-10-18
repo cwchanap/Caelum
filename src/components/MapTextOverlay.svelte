@@ -40,6 +40,10 @@
 
   const items = $derived(selectMapTextOverlayItems(game, ui));
 
+  // How far a label rises above its anchor: the 8px gap, 16px line and 2px
+  // top/bottom padding of .map-text-item in styles.css.
+  const LABEL_RISE_PX = 28;
+
   type PlacedItem = MapTextOverlayItem & {
     left: number;
     top: number;
@@ -66,12 +70,14 @@
           below: false,
         };
       }
-      // Labels hover above their tile, flipping below the tile on the top
-      // visible row so they stay fully visible (same rule as the Canvas badge).
+      // Labels hover above their tile, flipping below it on the top visible
+      // row, or lower when tiles are too short to hold the label's rise.
       const tileTop =
         transform.offsetY + item.anchor.y * tileSize * transform.scale;
       const below =
-        tileTop < Math.max(transform.offsetY, 0) + tileSize * transform.scale;
+        tileTop <
+        Math.max(transform.offsetY, 0) +
+          Math.max(tileSize * transform.scale, LABEL_RISE_PX);
       return {
         ...item,
         left,

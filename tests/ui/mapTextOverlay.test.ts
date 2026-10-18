@@ -79,6 +79,34 @@ describe("MapTextOverlay", () => {
     expect(badge.classList.contains("map-text-below")).toBe(true);
   });
 
+  it("flips a second-row badge whose tile is shorter than the badge", async () => {
+    // Half-size box: 16px tiles, so a row-1 badge would rise past the top.
+    vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(
+      14 * tileSize,
+    );
+    vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(
+      9 * tileSize,
+    );
+    render(MapTextOverlay, {
+      props: {
+        state: createTestGameState(),
+        ui: {
+          ...createUiState(),
+          activeTool: "road",
+          hoverTile: { x: 2, y: 1 },
+        },
+        camera: null,
+      },
+    });
+    await tick();
+
+    const badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.classList.contains("map-text-below")).toBe(true);
+    expect(badge.style.top).toBe(`${tileSize}px`);
+  });
+
   it("follows the camera and flips on the top visible row", async () => {
     // Zoom 2 on the pinned 28x18 box: 64px tiles, view origin at tile (0, 2).
     await renderOverlay(

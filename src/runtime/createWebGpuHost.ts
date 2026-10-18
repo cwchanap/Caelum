@@ -640,7 +640,13 @@ export function createWebGpuHostWithRenderer(
         return;
       }
       const rect = boardRect();
-      const pixels = event.deltaMode === 1 ? event.deltaY * 16 : event.deltaY;
+      // deltaMode: 0 pixels, 1 lines, 2 pages (one board height).
+      const pixels =
+        event.deltaMode === 2
+          ? event.deltaY * rect.height
+          : event.deltaMode === 1
+            ? event.deltaY * 16
+            : event.deltaY;
       const factor = Math.exp(
         -pixels * (event.ctrlKey ? PINCH_ZOOM_PER_PX : WHEEL_ZOOM_PER_PX),
       );
