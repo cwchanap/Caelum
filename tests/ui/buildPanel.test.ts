@@ -115,7 +115,7 @@ describe("BuildPanel detail view", () => {
   it("explains in Zones that served land builds up on its own", () => {
     renderPanel({ activeBuildGroup: "zones" });
     expect(screen.getByTestId("build-hint")).toHaveTextContent(
-      /near a stop on a running line builds up on its own/,
+      /near a stop or station on a running line builds up on its own/,
     );
 
     renderPanel({ activeBuildGroup: "roads" });
