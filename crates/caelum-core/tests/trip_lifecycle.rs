@@ -303,7 +303,7 @@ fn bus_arrival_order_fixture() -> GameSnapshot {
     state
 }
 
-fn staggered_car_arrival_fixture() -> GameSnapshot {
+fn staggered_car_arrival_fixture(offsets: &[f64]) -> GameSnapshot {
     let mut state = car_commute_fixture(&["sim-001"]);
     let home = Point { x: 2, y: 3 };
     let workplace = Point { x: 12, y: 3 };
@@ -316,13 +316,13 @@ fn staggered_car_arrival_fixture() -> GameSnapshot {
         workplace,
     )
     .expect("staggered arrival fixture has a valid car path");
-    state.sims = (0..5)
+    state.sims = (0..offsets.len())
         .map(|index| travelling_worker_sim(&format!("sim-{index:03}"), home))
         .collect();
-    state.active_trips = [0.5, 1.0, 1.5, 2.0, 2.5]
-        .into_iter()
+    state.active_trips = offsets
+        .iter()
         .enumerate()
-        .map(|(index, offset)| ActiveTrip {
+        .map(|(index, &offset)| ActiveTrip {
             id: format!("trip-day-0-trip-{:03}", index + 1),
             sim_id: format!("sim-{index:03}"),
             purpose: TripPurpose::CommuteOutbound,
@@ -695,7 +695,7 @@ fn arriving_car_contributes_to_bus_step_before_payload_is_cleared() {
 
 #[test]
 fn staggered_car_arrivals_resolve_identically_in_coarse_and_split_ticks() {
-    let state = staggered_car_arrival_fixture();
+    let state = staggered_car_arrival_fixture(&[0.5, 1.0, 1.5, 2.0, 2.5]);
     let fixture_time = state.time;
 
     let mut coarse = common::running_engine_from_fixture(state.clone());
@@ -748,6 +748,33 @@ fn driving_trip_keeps_payload_and_flow_until_arrival_boundary() {
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert!(caelum_core::traffic::derive_road_flow(&arrived).is_empty());
+}
+
+#[test]
+fn dense_staggered_car_arrivals_in_one_coarse_tick_match_split_ticks() {
+    // Sixty-four cars arrive 0.04s apart inside one 3s tick. Each car's sim
+    // holds a population scheduler key that the substep budget counts, so the
+    // coarse tick must resolve every arrival and match the split ticks.
+    let offsets: Vec<f64> = (1..=64).map(|index| f64::from(index) * 0.04).collect();
+    let state = staggered_car_arrival_fixture(&offsets);
+    let fixture_time = state.time;
+
+    let mut coarse = common::running_engine_from_fixture(state.clone());
+    coarse.tick(3.0);
+    let coarse_snapshot = coarse.snapshot();
+
+    let mut split = common::running_engine_from_fixture(state);
+    for _ in 0..6 {
+        split.tick(0.5);
+    }
+    let split_snapshot = split.snapshot();
+
+    assert_eq!(coarse_snapshot.time, fixture_time + 3.0);
+    assert_eq!(coarse_snapshot.time, split_snapshot.time);
+    assert!(coarse_snapshot.active_trips.is_empty());
+    assert!(split_snapshot.active_trips.is_empty());
+    assert_eq!(coarse_snapshot.metrics.completed_trips, 64);
+    assert_eq!(coarse_snapshot.metrics, split_snapshot.metrics);
 }
 
 #[test]

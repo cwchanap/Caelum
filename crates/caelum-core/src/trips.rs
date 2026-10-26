@@ -261,6 +261,10 @@ pub(crate) fn tick_trips(
 /// logic fire at exactly the right instant. Population scheduler
 /// boundaries are covered by the `scheduler_due_key_count` term added at the
 /// call site (plus generation-based widening inside `tick_trips`).
+/// Private-car arrivals have no term of their own: the per-sim argument counts
+/// each car through its sim's scheduler key. Sims that share a due time share a
+/// key, so this is a tripwire for debug and test builds, not a proof. Release
+/// builds never truncate a tick.
 /// The cap computed here is the sum of independent upper bounds on the number
 /// of shell-derived events:
 /// - `day_count * 2` — the day boundary, across every day the tick spans;
