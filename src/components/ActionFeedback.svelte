@@ -23,7 +23,9 @@
     aria-live="polite"
     data-testid="action-feedback-announce"
   >
-    {feedback?.announce ? feedback.message : ""}
+    {feedback?.announce
+      ? [feedback.message, ...feedback.details].join(" ")
+      : ""}
   </div>
   {#if feedback !== null}
     <div

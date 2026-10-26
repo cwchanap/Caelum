@@ -64,6 +64,7 @@ describe("ActionFeedback", () => {
           source: "roadHostError",
           tone: "warning",
           message: "Road preview unavailable: host timed out",
+          details: ["Loop 1 will reroute"],
         }),
         onDismiss: vi.fn(),
       },
@@ -77,6 +78,30 @@ describe("ActionFeedback", () => {
     expect(view).toHaveAttribute("data-source", "roadHostError");
     expect(view).toHaveAttribute("data-tone", "warning");
     expect(screen.queryByRole("button", { name: "Dismiss" })).toBeNull();
+  });
+
+  it("announces details alongside the message for announced feedback", () => {
+    render(ActionFeedback, {
+      props: {
+        feedback: feedback({
+          source: "roadDirection",
+          tone: "warning",
+          message: "Road set to one-way North. Click again to cycle direction.",
+          details: ["Shuttle A became broken after this direction change."],
+          dismissible: true,
+          announce: true,
+        }),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    const announce = screen.getByTestId("action-feedback-announce");
+    expect(announce).toHaveTextContent(
+      "Road set to one-way North. Click again to cycle direction.",
+    );
+    expect(announce).toHaveTextContent(
+      "Shuttle A became broken after this direction change.",
+    );
   });
 
   it("renders every material-impact detail", () => {
