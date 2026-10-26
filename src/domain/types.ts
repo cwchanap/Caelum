@@ -1,12 +1,10 @@
 export type TileKind = "empty" | "road";
-export const SNAPSHOT_SCHEMA_VERSION = 13 as const;
-export type GameMode = "sandbox" | "campaign";
+export const SNAPSHOT_SCHEMA_VERSION = 14 as const;
 export type EconomyPreset = "standard" | "creative";
 export type SandboxTemplateId = "blankGrid" | "crossroads" | "smallTown";
 export type SandboxMapSize = "small" | "medium" | "large";
 
 export interface GameRules {
-  gameMode: GameMode;
   economyPreset: EconomyPreset;
   sandbox: {
     templateId: SandboxTemplateId;
@@ -16,13 +14,6 @@ export interface GameRules {
   };
 }
 
-export interface ObjectiveThresholds {
-  maxLateRatio: number;
-  maxUnservedRatio: number;
-  maxAverageWait: number;
-  rollingWindowSeconds: number;
-  survivalTime: number;
-}
 export type AreaKind =
   | "residential"
   | "commercial"
@@ -439,14 +430,11 @@ export interface RoutePlan {
   estimatedSeconds: number;
 }
 
-export type TripOutcomeKind = "arrived" | "late" | "unserved";
-
 /** Live presentation metrics row (frame data from the Rust projection). */
 export interface PresentationMetrics {
   lateTrips: number;
   unservedTrips: number;
   averageWaitSeconds: number;
-  state: "running" | "won" | "lost";
 }
 
 export interface BuildingOccupancyView {

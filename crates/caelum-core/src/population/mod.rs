@@ -40,12 +40,11 @@ mod tests {
     use crate::commute::{departure_minute_for_sim, trip_deadline_seconds};
     use crate::ids::entity_id;
     use crate::model::{
-        ActiveTrip, CitizenRoutine, GameMode, GameSnapshot, PlacedBuilding, Point, PrivateCarTrip,
-        RoutePlan, ScheduledActivity, ScheduledActivityKind, Sim, TransitMode, TripPosition,
-        TripPurpose, TripStatus, Vehicle,
+        ActiveTrip, CitizenRoutine, GameSnapshot, PlacedBuilding, Point, PrivateCarTrip, RoutePlan,
+        ScheduledActivity, ScheduledActivityKind, Sim, TransitMode, TripPosition, TripPurpose,
+        TripStatus, Vehicle,
     };
     use crate::sandbox::{create_sandbox_snapshot, SandboxCreationRequest};
-    use crate::state::create_initial_snapshot;
 
     pub(super) fn population_fixture() -> GameSnapshot {
         let mut snapshot = create_sandbox_snapshot(SandboxCreationRequest {
@@ -675,37 +674,6 @@ mod tests {
             ordinal_before + 4,
             "the allocator never reuses despawned IDs"
         );
-    }
-
-    #[test]
-    fn campaign_reconciliation_schedules_no_resident_move_ins() {
-        let mut before = create_initial_snapshot();
-        before.rules.game_mode = GameMode::Campaign;
-        before.sims.clear();
-        before.active_trips.clear();
-        let mut after = before.clone();
-        let anchor = Point::from((20, 3));
-        after
-            .buildings
-            .push(reconcile_house("building-new", anchor, after.time));
-        let mut world = build_world(&before);
-
-        let mutation = reconcile_buildings(&mut world, &before, &mut after);
-
-        assert!(!mutation.changed);
-        let mut schedule = build_schedule();
-        let result = run_due(
-            &mut world,
-            &mut schedule,
-            f64::from(after.day + 10) * GAME_DAY_SECONDS,
-        );
-        assert!(!result.changed);
-        assert_eq!(
-            population_count(&world),
-            0,
-            "campaign housing never moves residents in"
-        );
-        assert!(drain_trip_demands(&mut world).is_empty());
     }
 
     #[test]

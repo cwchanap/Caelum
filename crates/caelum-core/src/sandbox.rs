@@ -4,9 +4,9 @@ use crate::clock::{clock_minutes, day_index};
 use crate::ids::tile_id;
 use crate::intent::RoadPreset;
 use crate::model::{
-    DemandMultiplier, EconomyPreset, GameMap, GameMode, GameRules, GameSnapshot, Heading, Metrics,
-    MetricsState, MovementKind, Point, SandboxMapSize, SandboxSettings, SandboxTemplateId,
-    ScenarioConfig, StartingCapital, Tile, TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
+    DemandMultiplier, EconomyPreset, GameMap, GameRules, GameSnapshot, Heading, Metrics,
+    MovementKind, Point, SandboxMapSize, SandboxSettings, SandboxTemplateId, StartingCapital, Tile,
+    TransitNetwork, SNAPSHOT_SCHEMA_VERSION,
 };
 use crate::road::{author_scenario_road_line, junction_id, refresh_all_automatic_junctions};
 use crate::road_topology::{RoadState, RoadTopology};
@@ -65,15 +65,12 @@ pub struct SandboxCreationError {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum SandboxResetErrorCode {
-    UnsupportedGameMode,
     TemplateInvariantViolation,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SandboxResetErrorContext {
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub game_mode: Option<GameMode>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub template_id: Option<SandboxTemplateId>,
     /// The original `SandboxCreationErrorCode` that triggered the reset
@@ -90,19 +87,6 @@ pub struct SandboxResetErrorContext {
 pub struct SandboxResetError {
     pub code: SandboxResetErrorCode,
     pub context: SandboxResetErrorContext,
-}
-
-impl SandboxResetError {
-    fn unsupported_game_mode(game_mode: GameMode) -> Self {
-        Self {
-            code: SandboxResetErrorCode::UnsupportedGameMode,
-            context: SandboxResetErrorContext {
-                game_mode: Some(game_mode),
-                template_id: None,
-                creation_error_code: None,
-            },
-        }
-    }
 }
 
 /// Map a `SandboxCreationError` from reconstructing a persisted sandbox's
@@ -127,7 +111,6 @@ fn sandbox_reset_error_from_creation_error(
     SandboxResetError {
         code: SandboxResetErrorCode::TemplateInvariantViolation,
         context: SandboxResetErrorContext {
-            game_mode: None,
             template_id: Some(rules.sandbox.template_id),
             creation_error_code,
         },
@@ -197,12 +180,12 @@ pub(crate) fn create_sandbox_candidate(
     request: SandboxCreationRequest,
 ) -> Result<SandboxCandidate, SandboxCreationError> {
     let validated = validate_request(request)?;
-    let (name, map, road_topology) = match validated.template_id {
+    let (map, road_topology) = match validated.template_id {
         SandboxTemplateId::BlankGrid => {
             let map = blank_map(validated.map_size);
             let topology = RoadTopology::compile(&map)
                 .map_err(|_| template_invariant_error(SandboxTemplateId::BlankGrid))?;
-            ("Blank Grid", map, topology)
+            (map, topology)
         }
         SandboxTemplateId::Crossroads => {
             let mut map = blank_map(validated.map_size);
@@ -243,12 +226,12 @@ pub(crate) fn create_sandbox_candidate(
             let topology = RoadTopology::compile(&map)
                 .map_err(|_| template_invariant_error(SandboxTemplateId::Crossroads))?;
             validate_crossroads_candidate(&map, &topology)?;
-            ("Crossroads", map, topology)
+            (map, topology)
         }
         SandboxTemplateId::SmallTown => return create_small_town_candidate(validated),
     };
     Ok(SandboxCandidate {
-        snapshot: snapshot_shell(validated, name, map),
+        snapshot: snapshot_shell(validated, map),
         road_topology,
     })
 }
@@ -278,7 +261,7 @@ fn create_small_town_candidate(
     refresh_all_automatic_junctions(&mut map).map_err(|_| fail())?;
     let road_topology = RoadTopology::compile(&map).map_err(|_| fail())?;
 
-    let mut snapshot = snapshot_shell(validated, "Small Town", map);
+    let mut snapshot = snapshot_shell(validated, map);
 
     for (area, start, end) in [
         ("residential", at(4, 6), at(10, 7)),
@@ -311,10 +294,6 @@ fn create_small_town_candidate(
 pub(crate) fn sandbox_candidate_from_persisted_rules(
     rules: &GameRules,
 ) -> Result<SandboxCandidate, SandboxResetError> {
-    if rules.game_mode != GameMode::Sandbox {
-        return Err(SandboxResetError::unsupported_game_mode(rules.game_mode));
-    }
-
     let request = SandboxCreationRequest {
         template_id: match rules.sandbox.template_id {
             SandboxTemplateId::BlankGrid => "blankGrid",
@@ -488,11 +467,7 @@ fn validate_crossroads_candidate(
     Ok(())
 }
 
-fn snapshot_shell(
-    validated: ValidatedSandboxCreationRequest,
-    name: &str,
-    map: GameMap,
-) -> GameSnapshot {
+fn snapshot_shell(validated: ValidatedSandboxCreationRequest, map: GameMap) -> GameSnapshot {
     GameSnapshot {
         schema_version: SNAPSHOT_SCHEMA_VERSION,
         time: 0.0,
@@ -502,7 +477,6 @@ fn snapshot_shell(
         paused: true,
         budget: validated.starting_capital.value(),
         rules: GameRules {
-            game_mode: GameMode::Sandbox,
             economy_preset: validated.economy_preset,
             sandbox: sandbox_settings_from_validated(&validated),
         },
@@ -531,13 +505,6 @@ fn snapshot_shell(
             total_wait_seconds: 0.0,
             waiting_trip_count: 0,
             average_wait_seconds: 0.0,
-            trip_outcomes: Vec::new(),
-            state: MetricsState::Running,
-            loss_reason: None,
-        },
-        scenario: ScenarioConfig {
-            name: name.to_string(),
-            objectives: None,
         },
     }
 }

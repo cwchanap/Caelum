@@ -1,5 +1,5 @@
 use caelum_core::model::{
-    DemandMultiplier, EconomyPreset, GameMode, Heading, MovementKind, Point, SandboxMapSize,
+    DemandMultiplier, EconomyPreset, Heading, MovementKind, Point, SandboxMapSize,
     SandboxTemplateId, StartingCapital,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
@@ -58,8 +58,6 @@ fn blank_grid_contains_only_canonical_empty_tiles() {
     assert!(snapshot.transit.routes.is_empty());
     assert!(snapshot.transit.metro_lines.is_empty());
     assert!(snapshot.transit.vehicles.is_empty());
-    assert_eq!(snapshot.scenario.name, "Blank Grid");
-    assert!(snapshot.scenario.objectives.is_none());
 }
 
 #[test]
@@ -194,10 +192,8 @@ fn valid_settings_change_rules_and_budget_without_changing_template_content() {
             assert_eq!(first.sims, canonical.sims);
             assert_eq!(first.active_trips, canonical.active_trips);
             assert_eq!(first.transit, canonical.transit);
-            assert_eq!(first.scenario, canonical.scenario);
             assert_eq!(first.metrics, canonical.metrics);
             assert_eq!(first.budget, starting_capital);
-            assert_eq!(first.rules.game_mode, GameMode::Sandbox);
             assert_eq!(first.rules.economy_preset, expected_economy);
             assert_eq!(
                 first.rules.sandbox.template_id,
@@ -331,7 +327,6 @@ fn small_town_has_authored_structure_and_connected_building_access() {
     let topology = RoadTopology::compile(&snapshot.map).unwrap();
 
     assert_eq!((snapshot.map.width, snapshot.map.height), (28, 18));
-    assert_eq!(snapshot.scenario.name, "Small Town");
 
     for x in 3..=24 {
         assert_eq!(snapshot.map.tile(Point { x, y: 8 }).unwrap().kind, "road");
@@ -407,7 +402,6 @@ fn small_town_has_authored_structure_and_connected_building_access() {
     assert!(snapshot.transit.routes.is_empty());
     assert!(snapshot.transit.metro_lines.is_empty());
     assert!(snapshot.transit.vehicles.is_empty());
-    assert!(snapshot.scenario.objectives.is_none());
 
     let flow = RoadFlow::new();
     for (home, work) in [
@@ -518,7 +512,6 @@ fn template_review(template_id: &str) -> Value {
         "roadStructures": snapshot_json["map"]["roadStructures"].clone(),
         "rules": snapshot_json["rules"].clone(),
         "budget": snapshot.budget,
-        "scenario": snapshot_json["scenario"].clone(),
         "counters": {
             "schemaVersion": snapshot.schema_version,
             "time": snapshot.time,

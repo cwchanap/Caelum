@@ -16,7 +16,7 @@ use serde::de::IntoDeserializer;
 use serde::Deserialize;
 
 /// Shared finite-and-non-negative validation for `f64` snapshot fields.
-/// `entity` is `None` for shell/rules/scenario fields and `Some(_)` for
+/// `entity` is `None` for shell/rules fields and `Some(_)` for
 /// entity-scoped fields.
 pub(super) fn finite_non_negative(
     entity: Option<EntityRef>,

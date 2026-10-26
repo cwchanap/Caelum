@@ -14,7 +14,7 @@ use bevy_ecs::prelude::World;
 use crate::building_catalog::building_definition;
 use crate::buildings;
 use crate::clock::GAME_DAY_SECONDS;
-use crate::model::{GameMode, GameSnapshot, Point};
+use crate::model::{GameSnapshot, Point};
 use crate::population;
 use crate::router;
 use crate::transit::stop_coverage_radius;
@@ -72,9 +72,6 @@ struct Site {
 /// Run one growth pass at `at_time` and reconcile the ECS population with the
 /// grown buildings. Returns whether population state changed.
 pub(crate) fn grow_city(state: &mut GameSnapshot, world: &mut World, at_time: f64) -> bool {
-    if state.rules.game_mode != GameMode::Sandbox {
-        return false;
-    }
     let nodes = served_nodes(state);
     if nodes.is_empty() {
         return false;

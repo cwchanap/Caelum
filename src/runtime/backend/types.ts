@@ -28,7 +28,6 @@ import type {
   Station,
   TransitPath,
   TransitMode,
-  TripOutcomeKind,
   TripPosition,
   TransitNetwork,
   Vehicle,
@@ -40,12 +39,6 @@ import type {
 } from "../../domain/types";
 import type { SnapshotError, SnapshotResult } from "./persistenceContract";
 export type RoadPresetIntent = "twoWay" | "oneWay" | "dualBidirectional";
-
-export interface RustTripOutcome {
-  outcome: TripOutcomeKind;
-  waitSeconds: number;
-  time: number;
-}
 
 export interface RustRouteLegPath extends Omit<
   RouteLegPath,
@@ -130,25 +123,6 @@ export interface RustMetrics {
   totalWaitSeconds: number;
   waitingTripCount: number;
   averageWaitSeconds: number;
-  tripOutcomes: RustTripOutcome[];
-  state: "running" | "won" | "lost";
-  lossReason: string | null | undefined;
-}
-
-export interface RustObjectiveThresholds {
-  maxLateRatio: number;
-  maxUnservedRatio: number;
-  maxAverageWait: number;
-  rollingWindowSeconds: number;
-  survivalTime: number;
-}
-
-/// Raw snapshots always include scenario identity and an `objectives` key. Its value is objective thresholds, JSON/Tauri `null`,
-/// or present WASM `undefined`; both host encodings of Rust `None` normalize
-/// to canonical `null`. Non-null thresholds remain authoritative core data.
-export interface RustScenarioConfig {
-  name: string;
-  objectives: RustObjectiveThresholds | null | undefined;
 }
 
 export interface RustGameSnapshot {
@@ -169,7 +143,6 @@ export interface RustGameSnapshot {
   nextTripSequence: number;
   nextCitizenOrdinal: number;
   metrics: RustMetrics;
-  scenario: RustScenarioConfig;
 }
 
 export type GameIntent =
@@ -431,14 +404,11 @@ export interface SandboxCreationError {
   };
 }
 
-export type SandboxResetErrorCode =
-  | "unsupportedGameMode"
-  | "templateInvariantViolation";
+export type SandboxResetErrorCode = "templateInvariantViolation";
 
 export interface SandboxResetError {
   code: SandboxResetErrorCode;
   context: {
-    gameMode?: "sandbox" | "campaign";
     templateId?: "blankGrid" | "crossroads" | "smallTown";
     [key: string]: unknown;
   };

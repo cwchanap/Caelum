@@ -144,13 +144,10 @@ pub enum SnapshotField {
     Speed,
     Paused,
     Budget,
-    GameMode,
     EconomyPreset,
     SandboxTemplateId,
     StartingCapital,
     DemandMultiplier,
-    ScenarioObjectives,
-    ObjectiveThresholds,
     MapWidth,
     MapHeight,
     TileCount,
@@ -213,11 +210,6 @@ pub enum SnapshotField {
     NextTripSequence,
     MetricsCounters,
     MetricsWaits,
-    MetricsTripOutcomes,
-    OutcomeWaitSeconds,
-    OutcomeTimestamp,
-    MetricsState,
-    MetricsLossReason,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -250,10 +242,6 @@ pub enum NumericError {
 pub enum ModeError {
     PersistenceRequiresPaused,
     UnsupportedSpeed,
-    InvalidEconomyForMode,
-    SandboxObjectivesPresent,
-    SandboxTerminalState,
-    CampaignTerminalWithoutObjectives,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -387,9 +375,6 @@ pub enum DerivedStateError {
     TripPositionMismatch { trip: EntityRef },
     TripCounterMismatch,
     MetricsRelationshipMismatch,
-    OutcomeWindowMismatch,
-    ObjectiveStateMismatch,
-    LossReasonMismatch,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]

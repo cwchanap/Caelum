@@ -1,8 +1,7 @@
 //! Wire-format lock for the soon-to-be-enum fields.
 //!
 //! These tests pin the exact JSON spelling of every `String` field that has become a
-//! fieldless enum (`status`, `purpose`, `mode`, `Metrics.state`, `TripOutcome.outcome`,
-//! `CitizenRoutine`). They MUST stay green when the types change to enums with
+//! fieldless enum (`status`, `purpose`, `mode`, `CitizenRoutine`). They MUST stay green when the types change to enums with
 //! `#[serde(rename_all = ...)]` — that is the proof the WASM/Tauri wire format is
 //! byte-identical to the current TS-parity strings. If any assertion here changes, the
 //! wire contract changed.
@@ -11,17 +10,15 @@ use caelum_core::building_catalog::{building_definition, BUILDINGS};
 use caelum_core::model::LegFailureReason;
 use caelum_core::model::SNAPSHOT_SCHEMA_VERSION;
 use caelum_core::model::{
-    ActiveTrip, BusStopKind, CitizenRoutine, DemandMultiplier, GameRules, GameSnapshot, Heading,
-    Metrics, MetricsState, MetroLine, MovementKind, PathGeometry, PlacedBuilding, Point,
-    PrivateCarTrip, RoadPathStep, RoadPort, RoadStructure, RoundaboutSize, Route, RouteLeg,
-    RouteLegKind, RouteLegPath, RouteLegStatus, RoutePlan, ScenarioConfig, ScheduledActivity,
-    ScheduledActivityKind, ServiceDirection, ServiceMetrics, ServicePattern, Sim, Station, Stop,
-    StopRoadAccess, Tile, TransitMode, TransitNodeStatus, TransitPath, TripOutcome,
-    TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, BusStopKind, CitizenRoutine, DemandMultiplier, GameSnapshot, Heading, MetroLine,
+    MovementKind, PathGeometry, PlacedBuilding, Point, PrivateCarTrip, RoadPathStep, RoadPort,
+    RoadStructure, RoundaboutSize, Route, RouteLeg, RouteLegKind, RouteLegPath, RouteLegStatus,
+    RoutePlan, ScheduledActivity, ScheduledActivityKind, ServiceDirection, ServiceMetrics,
+    ServicePattern, Sim, Station, Stop, StopRoadAccess, Tile, TransitMode, TransitNodeStatus,
+    TransitPath, TripPosition, TripPurpose, TripStatus, Vehicle,
 };
 use caelum_core::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use caelum_core::road::RoadMutation;
-use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
     GameEngine, GameIntent, RoadMutationPreviewRequest, RoadPreset, RoutePreviewRequest,
@@ -250,11 +247,11 @@ fn vehicle_wire_uses_tagged_path_cursor_without_legacy_progress() {
 #[test]
 fn snapshot_carries_the_authoritative_schema_version() {
     let snapshot = create_initial_snapshot();
-    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 13);
+    assert_eq!(SNAPSHOT_SCHEMA_VERSION, 14);
     assert_eq!(snapshot.schema_version, SNAPSHOT_SCHEMA_VERSION);
     assert_eq!(
         serde_json::to_value(snapshot).unwrap()["schemaVersion"],
-        json!(13)
+        json!(14)
     );
 }
 
@@ -421,11 +418,10 @@ fn retire_service_vehicle_intent_is_line_id_only() {
 }
 
 #[test]
-fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
+fn default_snapshot_serializes_standard_sandbox_rules() {
     let value = serde_json::to_value(create_initial_snapshot()).unwrap();
 
-    assert_eq!(value["schemaVersion"], json!(13));
-    assert_eq!(value["rules"]["gameMode"], json!("sandbox"));
+    assert_eq!(value["schemaVersion"], json!(14));
     assert_eq!(value["rules"]["economyPreset"], json!("standard"));
     assert_eq!(
         value["rules"]["sandbox"],
@@ -437,8 +433,6 @@ fn default_snapshot_serializes_standard_sandbox_rules_and_null_objectives() {
         })
     );
     assert!(value["rules"]["sandbox"].get("moveInRate").is_none());
-    assert_eq!(value["scenario"]["objectives"], json!(null));
-    assert!(value["scenario"].get("growthWaves").is_none());
 }
 
 #[test]
@@ -480,20 +474,8 @@ fn snapshot_rejects_invalid_schema_v4_sandbox_fields() {
 }
 
 #[test]
-fn nullable_objectives_key_is_required() {
-    let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
-    value["scenario"]
-        .as_object_mut()
-        .unwrap()
-        .remove("objectives");
-
-    assert!(serde_json::from_value::<GameSnapshot>(value).is_err());
-}
-
-#[test]
 fn snapshot_rejects_unknown_rule_enum_values() {
     for path in [
-        &["rules", "gameMode"][..],
         &["rules", "economyPreset"][..],
         &["rules", "sandbox", "templateId"][..],
         &["rules", "sandbox", "mapSize"][..],
@@ -511,68 +493,6 @@ fn snapshot_rejects_unknown_rule_enum_values() {
             path.join(".")
         );
     }
-}
-
-#[test]
-fn campaign_rules_and_scenario_round_trip() {
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives());
-
-    assert_eq!(
-        serde_json::to_value(&rules).unwrap(),
-        json!({
-                "gameMode": "campaign",
-                "economyPreset": "standard",
-                "sandbox": {
-                "templateId": "crossroads",
-                "mapSize": "small",
-                "startingCapital": 120000,
-                "demandMultiplier": 1.0
-            }
-        })
-    );
-    assert_eq!(
-        serde_json::to_value(&scenario).unwrap()["objectives"],
-        json!({
-            "maxLateRatio": 0.25,
-            "maxUnservedRatio": 0.2,
-            "maxAverageWait": 180.0,
-            "rollingWindowSeconds": 300.0,
-            "survivalTime": 1_200.0,
-        })
-    );
-
-    let restored_rules: GameRules =
-        serde_json::from_value(serde_json::to_value(&rules).unwrap()).unwrap();
-    let restored_scenario: ScenarioConfig =
-        serde_json::from_value(serde_json::to_value(&scenario).unwrap()).unwrap();
-
-    assert_eq!(restored_rules, rules);
-    assert_eq!(restored_scenario, scenario);
-}
-
-#[test]
-fn snapshot_requires_current_rules_and_scenario_fields() {
-    for field in ["rules", "scenario", "objectives"] {
-        let mut value = serde_json::to_value(create_initial_snapshot()).unwrap();
-        if field == "objectives" {
-            value["scenario"].as_object_mut().unwrap().remove(field);
-        } else {
-            value.as_object_mut().unwrap().remove(field);
-        }
-
-        assert!(
-            serde_json::from_value::<GameSnapshot>(value).is_err(),
-            "current field {field} must be required"
-        );
-    }
-}
-
-#[test]
-fn explicit_null_objectives_deserializes_to_none() {
-    let value = serde_json::to_value(create_initial_snapshot()).unwrap();
-    let snapshot: GameSnapshot = serde_json::from_value(value).unwrap();
-
-    assert_eq!(snapshot.scenario.objectives, None);
 }
 
 #[test]
@@ -854,80 +774,6 @@ fn route_leg_visit_fields_are_required_and_walk_fields_serialize_as_null() {
             "schema-v2 RouteLeg field {field} must be required"
         );
     }
-}
-
-#[test]
-fn metrics_state_serializes_to_legacy_strings() {
-    for (state, wire) in [
-        (MetricsState::Running, "running"),
-        (MetricsState::Won, "won"),
-        (MetricsState::Lost, "lost"),
-    ] {
-        let metrics = Metrics {
-            late_trips: 0,
-            completed_trips: 0,
-            unserved_trips: 0,
-            total_wait_seconds: 0.0,
-            waiting_trip_count: 0,
-            average_wait_seconds: 0.0,
-            trip_outcomes: Vec::new(),
-            state,
-            loss_reason: None,
-        };
-        let value = serde_json::to_value(&metrics).expect("metrics should serialize");
-        assert_eq!(
-            value["state"],
-            json!(wire),
-            "metrics state wire spelling changed: {wire}"
-        );
-    }
-}
-
-#[test]
-fn trip_outcome_kind_serializes_to_legacy_strings() {
-    for (outcome, wire) in [
-        (TripOutcomeKind::Arrived, "arrived"),
-        (TripOutcomeKind::Late, "late"),
-        (TripOutcomeKind::Unserved, "unserved"),
-    ] {
-        let trip_outcome = TripOutcome {
-            outcome,
-            wait_seconds: 0.0,
-            time: 0.0,
-        };
-        let value = serde_json::to_value(&trip_outcome).expect("outcome should serialize");
-        assert_eq!(
-            value["outcome"],
-            json!(wire),
-            "trip outcome wire spelling changed: {wire}"
-        );
-    }
-}
-
-#[test]
-fn trip_outcome_field_names_serialize_to_camel_case_wire() {
-    let trip_outcome = TripOutcome {
-        outcome: TripOutcomeKind::Late,
-        wait_seconds: 42.5,
-        time: 7.25,
-    };
-    let value = serde_json::to_value(&trip_outcome).expect("outcome should serialize");
-    assert_eq!(
-        value["waitSeconds"],
-        json!(42.5),
-        "trip outcome wait_seconds must serialize as camelCase waitSeconds on the wire"
-    );
-    assert_eq!(
-        value["time"],
-        json!(7.25),
-        "trip outcome time must serialize as camelCase time on the wire"
-    );
-    // snake_case must NOT leak onto the wire — the TS host adapters read
-    // camelCase field names.
-    assert!(
-        value.get("wait_seconds").is_none(),
-        "trip outcome leaked snake_case wait_seconds onto the wire"
-    );
 }
 
 fn v10_sim(id: &str, routine: CitizenRoutine, next_activity: Option<ScheduledActivity>) -> Sim {
@@ -1399,30 +1245,6 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             );
         }
     }
-}
-
-#[test]
-fn snapshot_scenario_objectives_serialize_to_ts_parity_names() {
-    // The shell reads these threshold names verbatim (runtimeSelectors formats
-    // the objective copy from them), and they must match the TS domain
-    // `Scenario.objectives` shape exactly — including `rollingWindowSeconds`,
-    // which a previous TS shim had drifted to 600 while the core evaluates 300.
-    let value = serde_json::to_value(growing_suburb_objectives()).expect("objectives serialize");
-    assert_eq!(value["maxLateRatio"], json!(0.25));
-    assert_eq!(value["maxUnservedRatio"], json!(0.2));
-    assert_eq!(value["maxAverageWait"], json!(180.0));
-    assert_eq!(value["rollingWindowSeconds"], json!(300.0));
-    assert_eq!(value["survivalTime"], json!(1_200.0));
-    // No leaked snake_case keys from the Rust field names.
-    let objectives = &value;
-    assert!(
-        objectives.get("rolling_window_seconds").is_none(),
-        "objectives must not leak the snake_case `rolling_window_seconds` field"
-    );
-    assert!(
-        objectives.get("survival_time").is_none(),
-        "objectives must not leak the snake_case `survival_time` field"
-    );
 }
 
 #[test]
