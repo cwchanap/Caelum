@@ -420,11 +420,36 @@ export async function createGameRuntime(
   const commitDispatchResult = (
     result: GameplayUpdateResult,
     nextUi: UiState,
+    intent?: GameIntent,
   ): RuntimeSnapshot => {
     if (result.applied) {
       workingSave.markDirty();
     }
-    return commit(acceptPresentationUpdate(state, result.update), nextUi);
+    const nextState = acceptPresentationUpdate(state, result.update);
+    if (intent !== undefined) {
+      const notice =
+        result.applied && intent.type === "cycleRoadDirection"
+          ? {
+              direction:
+                nextState.map.tiles.find((tile) =>
+                  samePoint(tile, intent.point),
+                )?.oneWay ?? null,
+              brokenRouteNames: nextState.transit.routes
+                .filter(
+                  (route) =>
+                    route.pathBroken &&
+                    state.transit.routes.find(
+                      (previous) => previous.id === route.id,
+                    )?.pathBroken === false,
+                )
+                .map((route) => route.name),
+            }
+          : null;
+      if (nextUi.roadDirectionNotice !== notice) {
+        nextUi = { ...nextUi, roadDirectionNotice: notice };
+      }
+    }
+    return commit(nextState, nextUi);
   };
 
   const clearHoverPreviewTimer = (): void => {
@@ -520,7 +545,7 @@ export async function createGameRuntime(
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
           : (nextUi ?? ui);
-      return commitDispatchResult(result, resolvedUi);
+      return commitDispatchResult(result, resolvedUi, intent);
     });
 
   const enqueueComputedDispatch = (
@@ -541,7 +566,7 @@ export async function createGameRuntime(
         typeof nextUi === "function"
           ? nextUi(result.applied, ui)
           : (nextUi ?? ui);
-      return commitDispatchResult(result, resolvedUi);
+      return commitDispatchResult(result, resolvedUi, intent);
     });
 
   const enqueueTick = (deltaSeconds: number): Promise<RuntimeSnapshot> =>
@@ -846,21 +871,25 @@ export async function createGameRuntime(
         }
         if (result.applied && tokenIsCurrent) {
           previewCoordinator.invalidateRoute();
-          return commitDispatchResult(result, {
-            ...ui,
-            activeTool: "inspect",
-            selectedId: null,
-            selectedNodeKind: null,
-            selectedBuilding: null,
-            selectedArea: null,
-            activeBuildGroup: null,
-            activeCommandDestination: "lines",
-            routeDraft: null,
-            routeDraftHistory: emptyRouteDraftHistory(),
-            routeDraftNotice: null,
-            routePreviewError: null,
-            routePreviewHostError: null,
-          });
+          return commitDispatchResult(
+            result,
+            {
+              ...ui,
+              activeTool: "inspect",
+              selectedId: null,
+              selectedNodeKind: null,
+              selectedBuilding: null,
+              selectedArea: null,
+              activeBuildGroup: null,
+              activeCommandDestination: "lines",
+              routeDraft: null,
+              routeDraftHistory: emptyRouteDraftHistory(),
+              routeDraftNotice: null,
+              routePreviewError: null,
+              routePreviewHostError: null,
+            },
+            intent,
+          );
         }
         // Non-fatal rejection with a current token: surface into the draft
         // panel so the editor does not keep showing a stale "Connected"
@@ -871,11 +900,15 @@ export async function createGameRuntime(
           result.rejection !== null &&
           current !== null
         ) {
-          return commitDispatchResult(result, {
-            ...ui,
-            routePreviewError: result.rejection,
-            routePreviewHostError: null,
-          });
+          return commitDispatchResult(
+            result,
+            {
+              ...ui,
+              routePreviewError: result.rejection,
+              routePreviewHostError: null,
+            },
+            intent,
+          );
         }
         // A superseded save changed the snapshot. The current draft's preview
         // was computed against the pre-save snapshot and may carry a stale
@@ -892,16 +925,20 @@ export async function createGameRuntime(
               preview: null,
               previewPending: canRequestPreview,
             };
-            const supersededResult = commitDispatchResult(result, {
-              ...ui,
-              routeDraft: refreshedDraft,
-            });
+            const supersededResult = commitDispatchResult(
+              result,
+              {
+                ...ui,
+                routeDraft: refreshedDraft,
+              },
+              intent,
+            );
             if (canRequestPreview) requestRoutePreview(refreshedDraft);
             return supersededResult;
           }
-          return commitDispatchResult(result, ui);
+          return commitDispatchResult(result, ui, intent);
         }
-        return commitDispatchResult(result, ui);
+        return commitDispatchResult(result, ui, intent);
       },
       // Superseded-save host errors must not kill the runtime: the user may
       // already be on a replacement draft. A truly dead backend is still
@@ -1912,11 +1949,11 @@ export async function createGameRuntime(
     },
     dismissRejection() {
       if (dead) return getSnapshot();
-      if (rejection === null) {
+      if (rejection === null && ui.roadDirectionNotice === null) {
         return commit(state, ui);
       }
       rejection = null;
-      return publish();
+      return commit(state, { ...ui, roadDirectionNotice: null });
     },
     debugSetBudget(budget) {
       if (dead) return Promise.resolve(getSnapshot());

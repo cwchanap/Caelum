@@ -664,6 +664,7 @@ function selectActionFeedback(
   editorOwnsRejection: boolean,
   roadHostError: string | null,
   roadPreview: RoadMutationPreviewView | null,
+  roadDirectionNotice: UiState["roadDirectionNotice"],
 ): ShellActionFeedback | null {
   if (rejection !== null && !editorOwnsRejection) {
     return {
@@ -671,6 +672,23 @@ function selectActionFeedback(
       tone: "error",
       message: rejectionMessage(rejection),
       details: [],
+      dismissible: true,
+      announce: true,
+    };
+  }
+  if (roadDirectionNotice !== null) {
+    const { direction, brokenRouteNames } = roadDirectionNotice;
+    const label =
+      direction === null
+        ? "two-way"
+        : `one-way ${direction[0].toUpperCase()}${direction.slice(1)}`;
+    return {
+      source: "roadDirection",
+      tone: brokenRouteNames.length > 0 ? "warning" : "info",
+      message: `Road set to ${label}. Click again to cycle direction.`,
+      details: brokenRouteNames.map(
+        (name) => `${name} became broken after this direction change.`,
+      ),
       dismissible: true,
       announce: true,
     };
@@ -799,6 +817,7 @@ export function selectShellState(
       editorOwnsRejection,
       ui.roadMutationPreviewError,
       roadMutationPreview,
+      ui.roadDirectionNotice,
     ),
   };
 }

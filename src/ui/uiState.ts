@@ -4,6 +4,7 @@ import type {
   BuildingType,
   Overlay,
   Point,
+  RoadDirection,
   RoadPreset,
   RoundaboutSize,
   Tool,
@@ -85,6 +86,10 @@ export interface UiState {
   roadMutationPreview: RoadMutationPreviewResponse | null;
   /** Recoverable host failure for the current road preview request. */
   roadMutationPreviewError: string | null;
+  roadDirectionNotice: {
+    direction: RoadDirection | null;
+    brokenRouteNames: string[];
+  } | null;
   selectedRouteId: string | null;
   routeFailureFocus: { routeId: string; legIndex: number } | null;
   activeCommandDestination: CommandDestination | null;
@@ -112,6 +117,7 @@ export function createUiState(): UiState {
     roadPreviewGeneration: 0,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
+    roadDirectionNotice: null,
     selectedRouteId: null,
     routeFailureFocus: null,
     activeCommandDestination: null,
