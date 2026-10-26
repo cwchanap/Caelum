@@ -1511,8 +1511,49 @@ body {
   z-index: 25;
   right: 16px;
   bottom: calc(var(--command-shelf-height) + 8px);
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
   min-height: 44px;
   max-width: min(640px, calc(100vw - 32px));
+  padding: 12px;
+  border: 1px solid var(--cyan);
+  background: var(--surface);
+  color: var(--ink);
+}
+
+.action-feedback--warning {
+  border-color: var(--amber);
+}
+
+.action-feedback--error {
+  border-color: var(--red);
+}
+
+.action-feedback-icon {
+  width: 20px;
+  height: 20px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+}
+
+.action-feedback-details {
+  grid-column: 2;
+  margin: 0;
+  padding-left: 1.2em;
+}
+
+.action-feedback-dismiss {
+  grid-column: 3;
+  grid-row: 1 / span 2;
+  min-width: 44px;
+  min-height: 44px;
+  border: 1px solid var(--line-strong);
+  background: var(--surface-raised);
+  color: inherit;
+  cursor: pointer;
 }
 
 .inspection-card {
