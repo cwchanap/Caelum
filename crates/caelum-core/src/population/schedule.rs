@@ -16,8 +16,8 @@ use crate::commute::{
 };
 use crate::ids::entity_id;
 use crate::model::{
-    CitizenRoutine, GameMode, GameSnapshot, PlacedBuilding, Point, ScheduledActivity,
-    ScheduledActivityKind, Sim, TripPurpose, TripStatus,
+    CitizenRoutine, GameSnapshot, PlacedBuilding, Point, ScheduledActivity, ScheduledActivityKind,
+    Sim, TripPurpose, TripStatus,
 };
 use crate::trips::{is_terminal_status, EPSILON, WAIT_PATIENCE_SECONDS};
 
@@ -143,45 +143,40 @@ pub(crate) fn build_world(snapshot: &GameSnapshot) -> World {
     world.insert_resource(index);
     world.insert_resource(NextCitizenOrdinal(next_ordinal));
     // Template and restored housing: schedule each still-vacant housing slot
-    // as an exact-time move-in (Sandbox only), mirroring `reconcile_buildings`
+    // as an exact-time move-in, mirroring `reconcile_buildings`
     // for added housing. Slots already filled by durable residents are skipped
     // so restore does not replay their move-ins (which would mint citizens at
     // the wrong due time and home tile). Residents are only ever despawned
     // alongside their whole building, so the first N slots are always the
     // occupied ones.
-    if snapshot.rules.game_mode == GameMode::Sandbox {
-        let resident_counts: HashMap<String, usize> = world
-            .resource::<PopulationIndex>()
-            .residents_by_building
-            .iter()
-            .map(|(building_id, residents)| (building_id.clone(), residents.len()))
-            .collect();
-        let mut scheduler = PopulationScheduler::default();
-        for building in &snapshot.buildings {
-            let Some(definition) = building_definition(&building.building_type) else {
-                continue;
-            };
-            if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
-                continue;
-            }
-            let occupied_slots =
-                u16::try_from(resident_counts.get(&building.id).copied().unwrap_or(0))
-                    .unwrap_or(u16::MAX);
-            for slot in occupied_slots..definition.resident_capacity {
-                insert_scheduler_event(
-                    &mut scheduler,
-                    building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS,
-                    PopulationEvent::MoveIn {
-                        building_id: building.id.clone(),
-                        slot,
-                    },
-                );
-            }
+    let resident_counts: HashMap<String, usize> = world
+        .resource::<PopulationIndex>()
+        .residents_by_building
+        .iter()
+        .map(|(building_id, residents)| (building_id.clone(), residents.len()))
+        .collect();
+    let mut scheduler = PopulationScheduler::default();
+    for building in &snapshot.buildings {
+        let Some(definition) = building_definition(&building.building_type) else {
+            continue;
+        };
+        if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
+            continue;
         }
-        world.insert_resource(scheduler);
-    } else {
-        world.insert_resource(PopulationScheduler::default());
+        let occupied_slots = u16::try_from(resident_counts.get(&building.id).copied().unwrap_or(0))
+            .unwrap_or(u16::MAX);
+        for slot in occupied_slots..definition.resident_capacity {
+            insert_scheduler_event(
+                &mut scheduler,
+                building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS,
+                PopulationEvent::MoveIn {
+                    building_id: building.id.clone(),
+                    slot,
+                },
+            );
+        }
     }
+    world.insert_resource(scheduler);
     world.insert_resource(DuePopulationEvents::default());
     world.insert_resource(PendingTripDemands::default());
     world.insert_resource(SchedulerNow(snapshot.time));
@@ -397,8 +392,7 @@ fn take_index(world: &mut World) -> PopulationIndex {
 /// Reconcile the live population world with a shell candidate whose building
 /// set changed. Only changed building IDs are handled:
 ///
-/// - added Sandbox housing schedules each slot as an exact-time move-in
-///   (campaign reconciliation schedules nothing);
+/// - added housing schedules each slot as an exact-time move-in;
 /// - removed housing despawns exactly its residents and scrubs their trips
 ///   and vehicle passenger references from the candidate;
 /// - removed workplaces clear their surviving workers into the shared
@@ -464,29 +458,26 @@ pub(crate) fn reconcile_buildings(
         world.insert_resource(index);
     }
 
-    // Added Sandbox housing schedules every slot at its exact due time;
+    // Added housing schedules every slot at its exact due time;
     // `apply_move_in` revalidates occupancy, so slots already due fill in
-    // canonical (building_id, slot) order. Campaign reconciliation schedules
-    // nothing.
-    if after.rules.game_mode == GameMode::Sandbox {
-        for building in &added {
-            let Some(definition) = building_definition(&building.building_type) else {
-                continue;
-            };
-            if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
-                continue;
-            }
-            for slot in 0..definition.resident_capacity {
-                let due_time = building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS;
-                insert_scheduler_event(
-                    &mut world.resource_mut::<PopulationScheduler>(),
-                    due_time,
-                    PopulationEvent::MoveIn {
-                        building_id: building.id.clone(),
-                        slot,
-                    },
-                );
-            }
+    // canonical (building_id, slot) order.
+    for building in &added {
+        let Some(definition) = building_definition(&building.building_type) else {
+            continue;
+        };
+        if definition.resident_capacity == 0 || building.occupied_tiles.is_empty() {
+            continue;
+        }
+        for slot in 0..definition.resident_capacity {
+            let due_time = building.placed_at + f64::from(slot) * MOVE_IN_INTERVAL_SECONDS;
+            insert_scheduler_event(
+                &mut world.resource_mut::<PopulationScheduler>(),
+                due_time,
+                PopulationEvent::MoveIn {
+                    building_id: building.id.clone(),
+                    slot,
+                },
+            );
         }
     }
 

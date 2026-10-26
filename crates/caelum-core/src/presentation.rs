@@ -12,8 +12,8 @@ use std::collections::{BTreeMap, HashSet};
 
 use crate::building_catalog::building_definition;
 use crate::model::{
-    CitizenRoutine, GameMap, GameRules, GameSnapshot, MetricsState, PlacedBuilding, Point,
-    RouteLegPath, ServiceMetrics, ServicePattern, Station, Stop, TransitMode, TripPosition,
+    CitizenRoutine, GameMap, GameRules, GameSnapshot, PlacedBuilding, Point, RouteLegPath,
+    ServiceMetrics, ServicePattern, Station, Stop, TransitMode, TripPosition,
 };
 use crate::platforms::platform_waiting_occupancy;
 use crate::service_control::{service_metrics_by_line, waiting_location_health};
@@ -153,7 +153,6 @@ pub struct PresentationMetrics {
     pub late_trips: u32,
     pub unserved_trips: u32,
     pub average_wait_seconds: f64,
-    pub state: MetricsState,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -295,7 +294,6 @@ fn project_frame(snapshot: &GameSnapshot, population: &PopulationAggregates) -> 
             late_trips: snapshot.metrics.late_trips,
             unserved_trips: snapshot.metrics.unserved_trips,
             average_wait_seconds: snapshot.metrics.average_wait_seconds,
-            state: snapshot.metrics.state,
         },
         population_count: population.population_count,
         building_occupancy: population

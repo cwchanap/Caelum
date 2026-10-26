@@ -1,15 +1,11 @@
 mod common;
 
 use caelum_core::model::{
-    CitizenRoutine, MetricsState, MovementKind, RoundaboutSize, ScheduledActivityKind,
-    ServicePattern, TransitMode,
+    CitizenRoutine, MovementKind, RoundaboutSize, ScheduledActivityKind, ServicePattern,
+    TransitMode,
 };
 use caelum_core::traffic::RoadFlow;
-use caelum_core::{
-    clock,
-    scenario::{growing_suburb_campaign, growing_suburb_objectives},
-    transit, GameEngine, GameIntent, RoadPreset,
-};
+use caelum_core::{clock, transit, GameEngine, GameIntent, RoadPreset};
 
 #[test]
 fn zone_build_and_route_sequence_has_stable_counts() {
@@ -51,7 +47,7 @@ fn zone_build_and_route_sequence_has_stable_counts() {
 // --- Multi-tick golden traces ------------------------------------------------
 //
 // The tests below pin the integrated tick pipeline (trip spawn/advance, metrics,
-// objectives, day rollover). The asserted constants are golden values captured from
+// day rollover). The asserted constants are golden values captured from
 // the current Rust core; they are deliberately baked in so any regression in routing,
 // trip lifecycle, or metric accounting surfaces as a test failure. They are NOT to be
 // "fixed" by adjusting the constants — a change here means behaviour changed.
@@ -85,24 +81,10 @@ fn nearby_walker_engine() -> GameEngine {
     engine
 }
 
-fn nearby_walker_campaign_engine() -> GameEngine {
-    let mut engine = nearby_walker_engine();
-    // Sandbox occupancy is tick-driven. Fill the housing before switching the
-    // fixture into campaign mode, whose growth pipeline intentionally does not
-    // apply Sandbox move-ins.
-    engine.tick(500.0);
-    let mut snapshot = engine.snapshot();
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives());
-    snapshot.rules = rules;
-    snapshot.scenario = scenario;
-    common::running_engine_from_fixture(snapshot)
-}
-
 /// Golden trace over a full day-0 commute. By 900s every resident has completed the
 /// outbound leg and two have completed the return; the other two (3-tile walks to
 /// tiles (4,4)/(5,4)) are still mid-return. So the pipeline shows six lifetime
-/// completions, two in-flight trips, zero late/unserved — while still "running" (the
-/// survival win triggers at 1200s, see `won_via_real_tick_pipeline`).
+/// completions, two in-flight trips, zero late/unserved.
 #[test]
 fn full_day_commute_trace_has_stable_golden_metrics() {
     let mut engine = nearby_walker_engine();
@@ -113,16 +95,12 @@ fn full_day_commute_trace_has_stable_golden_metrics() {
     assert!(result.applied);
     assert_eq!(snapshot.day, 0);
     assert_eq!(snapshot.clock_minutes, 1080);
-    assert_eq!(snapshot.metrics.state, MetricsState::Running);
     // 4 outbound + 2 return = 6 lifetime completions; sim-003/004 still walking home.
     assert_eq!(snapshot.metrics.completed_trips, 6);
     assert_eq!(snapshot.metrics.late_trips, 0);
     assert_eq!(snapshot.metrics.unserved_trips, 0);
     assert_eq!(snapshot.metrics.waiting_trip_count, 0);
     assert_eq!(snapshot.active_trips.len(), 2);
-    // trip_outcomes is the rolling 300s window (see prune_trip_outcomes): only the two
-    // ~890s returns survive; the four ~390s outbound arrivals were pruned.
-    assert_eq!(snapshot.metrics.trip_outcomes.len(), 2);
 }
 
 /// A large forward tick and many 1s stepped ticks must reach byte-identical metric
@@ -158,26 +136,13 @@ fn large_tick_matches_stepped_tick_for_full_commute() {
 }
 
 #[test]
-fn won_via_real_tick_pipeline() {
-    let mut engine = nearby_walker_campaign_engine();
-
-    // Tick past the survival threshold with real completed demand in the pipeline.
-    let _result = engine.tick(clock::GAME_DAY_SECONDS + 1.0);
-
-    assert_eq!(engine.snapshot().metrics.state, MetricsState::Won);
-    assert_eq!(engine.snapshot().metrics.loss_reason, None);
-    assert!(engine.snapshot().metrics.completed_trips > 0);
-}
-
-#[test]
 fn commute_respawns_across_day_boundary() {
     let mut engine = nearby_walker_engine();
 
-    // Run all of day 0 to completion without crossing the survival win at 1200s.
+    // Run all of day 0 to completion.
     engine.tick(clock::GAME_DAY_SECONDS - 1.0);
     let snapshot = engine.snapshot();
     assert_eq!(snapshot.day, 0);
-    assert_eq!(snapshot.metrics.state, MetricsState::Running);
     assert!(snapshot.active_trips.is_empty());
 
     // Drive the engine tick across the day boundary. This isolates the day-rollover path

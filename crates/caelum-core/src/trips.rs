@@ -5,10 +5,9 @@ use bevy_ecs::prelude::{Schedule, World};
 use crate::clock::{self, GAME_DAY_SECONDS};
 use crate::commute::{trip_deadline_seconds, WALK_SECONDS_PER_TILE};
 use crate::model::{
-    ActiveTrip, GameMode, GameSnapshot, Metrics, MetricsState, ObjectiveThresholds, Point,
-    RoutePlan, TransitMode, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus,
+    ActiveTrip, GameSnapshot, Metrics, Point, RoutePlan, TransitMode, TripPosition, TripPurpose,
+    TripStatus,
 };
-use crate::objectives;
 use crate::population;
 use crate::road_topology::RoadTopology;
 use crate::router;
@@ -59,7 +58,6 @@ struct TripTickResult {
     late_trips: u32,
     unserved_trips: u32,
     wait_seconds: f64,
-    outcome: Option<TripOutcome>,
 }
 
 struct TripMetricDelta {
@@ -67,43 +65,6 @@ struct TripMetricDelta {
     late_trips: u32,
     unserved_trips: u32,
     wait_seconds: f64,
-    outcomes: Vec<TripOutcome>,
-}
-
-/// Evaluate objectives after every substep and stops the
-/// tick as soon as a loss or win condition is reached.
-///
-/// A coarse tick (e.g. resuming from a suspended browser tab) can span a waiting
-/// trip past a campaign average-wait loss threshold and then to its 240s patience
-/// expiry, or generate bad outcomes that fall outside the active rolling window by
-/// the time the final substep completes. Evaluating objectives only once on the
-/// final snapshot misses those loss conditions — the expired trip is gone from
-/// `waiting_trip_count`, and the stale outcomes are pruned. Per-substep
-/// evaluation makes a coarse tick equivalent to a sequence of stepped ticks for
-/// objective detection, preserving the determinism/granularity-independence
-/// invariant.
-pub(crate) fn tick_trips_with_objectives(
-    state: &GameSnapshot,
-    road_topology: &RoadTopology,
-    world: &mut World,
-    population_schedule: &mut Schedule,
-    delta_seconds: f64,
-) -> TickAdvance {
-    tick_trips_substepped(
-        state,
-        road_topology,
-        world,
-        population_schedule,
-        delta_seconds,
-        |next| {
-            // Use the opt variant so the common no-fire path skips the snapshot
-            // clone the legacy wrapper would perform on every substep.
-            if let Some(evaluated) = objectives::evaluate_objectives_opt(next) {
-                *next = evaluated;
-            }
-            next.metrics.state != MetricsState::Running
-        },
-    )
 }
 
 /// Run the exact-time population scheduler up to `state.time`. Returns whether
@@ -206,15 +167,17 @@ fn widen_population_cap(world: &World, cap: &mut usize, last_generation: &mut u6
     *last_generation = generation;
 }
 
-fn tick_trips_substepped(
+/// Advance trips, ECS population, and city growth to `state.time + delta`. The
+/// tick is split at every boundary (see [`next_boundary_after`]) so coarse and
+/// fine ticks produce the same state.
+pub(crate) fn tick_trips(
     state: &GameSnapshot,
     road_topology: &RoadTopology,
     world: &mut World,
     population_schedule: &mut Schedule,
     delta_seconds: f64,
-    mut on_substep: impl FnMut(&mut GameSnapshot) -> bool,
 ) -> TickAdvance {
-    if state.paused || state.metrics.state != MetricsState::Running || state.speed == 0 {
+    if state.paused || state.speed == 0 {
         return TickAdvance {
             snapshot: state.clone(),
             population_changed: false,
@@ -226,43 +189,18 @@ fn tick_trips_substepped(
     let final_time = next.time + scaled_delta;
     sync_clock(&mut next);
 
-    // Evaluate objectives at the current timestamp before advancing time.
-    // A loaded snapshot whose metrics already satisfy a terminal condition
-    // (e.g. `time >= survivalTime` with completed trips, or `average_wait`
-    // already above the loss threshold) must be detected at its current
-    // timestamp, not at the next boundary — otherwise coarse and fine ticks
-    // produce different terminal timestamps, breaking the granularity-
-    // independence invariant. Process due events (population wakes, demand
-    // spawning) first so the evaluation sees the correct state
-    // at the current time, then evaluate. If terminal, return immediately.
     let mut population_changed = apply_due_world_events(&next, world, population_schedule);
     drain_and_spawn(&mut next, road_topology, world);
-    if on_substep(&mut next) {
-        return TickAdvance {
-            snapshot: next,
-            population_changed,
-        };
-    }
 
-    let mut early_termination = false;
     let mut steps = 0;
     // The substep budget covers the scheduler's current due-time keys plus the
     // shell-derived bounds, but city growth inside the loop can add population
-    // scheduler keys (housing move-ins), and each substep appends
-    // new `TripOutcome`s whose expiry boundaries weren't counted. Widen the
-    // cap after every population pass via the scheduler's boundary generation,
-    // and after every substep for outcome expiry, so the tick cannot be
-    // truncated in release builds. The outcome widening is Campaign-only,
-    // matching the `outcome_expiry_bound` term in `max_tick_substeps`.
+    // scheduler keys (housing move-ins). Widen the cap after every population
+    // pass via the scheduler's boundary generation, so the tick cannot be
+    // truncated in release builds.
     let mut cap = max_tick_substeps(&next, final_time)
         .saturating_add(population::scheduler_due_key_count(world));
     let mut last_population_boundary_generation = population::scheduler_boundary_generation(world);
-    let campaign_mode = next.rules.game_mode == GameMode::Campaign;
-    let mut last_outcome_count = if campaign_mode {
-        next.metrics.trip_outcomes.len()
-    } else {
-        0
-    };
     loop {
         if steps >= cap || final_time - next.time <= EPSILON {
             break;
@@ -270,13 +208,6 @@ fn tick_trips_substepped(
 
         population_changed |= apply_due_world_events(&next, world, population_schedule);
         widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
-        if campaign_mode {
-            let outcome_count = next.metrics.trip_outcomes.len();
-            if outcome_count > last_outcome_count {
-                cap = cap.saturating_add(outcome_count.saturating_sub(last_outcome_count));
-                last_outcome_count = outcome_count;
-            }
-        }
 
         let road_flow = drain_and_spawn(&mut next, road_topology, world);
 
@@ -293,66 +224,52 @@ fn tick_trips_substepped(
         next = advanced;
         population_changed |= resolution_changed;
         steps += 1;
-        // Run population wakes reached by this substep before evaluating
-        // objectives, so a terminal substep still returns them applied.
         population_changed |= apply_due_world_events(&next, world, population_schedule);
-        if on_substep(&mut next) {
-            early_termination = true;
-            break;
-        }
     }
 
-    if !early_termination {
-        // The substep cap is an upper bound on legitimate boundary events (see
-        // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
-        // source is denser than the budget — a correctness regression. Surface it
-        // in debug/test builds via debug_assert, but still process the remaining
-        // time through normal boundary progression so release builds never return
-        // a partially advanced tick.
-        let dropped = final_time - next.time;
-        debug_assert!(
-            dropped <= EPSILON,
-            "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
-            next.time,
-            final_time,
-            dropped
-        );
+    // The substep cap is an upper bound on legitimate boundary events (see
+    // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
+    // source is denser than the budget — a correctness regression. Surface it
+    // in debug/test builds via debug_assert, but still process the remaining
+    // time through normal boundary progression so release builds never return
+    // a partially advanced tick.
+    let dropped = final_time - next.time;
+    debug_assert!(
+        dropped <= EPSILON,
+        "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
+        next.time,
+        final_time,
+        dropped
+    );
 
-        while final_time - next.time > EPSILON {
-            population_changed |= apply_due_world_events(&next, world, population_schedule);
-            widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
-            let road_flow = drain_and_spawn(&mut next, road_topology, world);
+    while final_time - next.time > EPSILON {
+        population_changed |= apply_due_world_events(&next, world, population_schedule);
+        widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
+        let road_flow = drain_and_spawn(&mut next, road_topology, world);
 
-            let substep_end = next_boundary_after(&next, &road_flow, world)
-                .map(|boundary| boundary.min(final_time))
-                .unwrap_or(final_time);
-            let mut substep_delta = (substep_end - next.time).max(0.0);
+        let substep_end = next_boundary_after(&next, &road_flow, world)
+            .map(|boundary| boundary.min(final_time))
+            .unwrap_or(final_time);
+        let mut substep_delta = (substep_end - next.time).max(0.0);
+        if substep_delta <= EPSILON {
+            // No forward boundary: still consume residual time so the tick
+            // contract (advance by delta) holds in release builds.
+            substep_delta = final_time - next.time;
             if substep_delta <= EPSILON {
-                // No forward boundary: still consume residual time so the tick
-                // contract (advance by delta) holds in release builds.
-                substep_delta = final_time - next.time;
-                if substep_delta <= EPSILON {
-                    break;
-                }
-            }
-
-            let (advanced, resolution_changed) =
-                advance_tick_substep(&next, &road_flow, substep_delta, world);
-            next = advanced;
-            population_changed |= resolution_changed;
-            // Same post-substep population pass as the main loop.
-            population_changed |= apply_due_world_events(&next, world, population_schedule);
-            if on_substep(&mut next) {
-                early_termination = true;
                 break;
             }
         }
 
-        if !early_termination {
-            population_changed |= apply_due_world_events(&next, world, population_schedule);
-            drain_and_spawn(&mut next, road_topology, world);
-        }
+        let (advanced, resolution_changed) =
+            advance_tick_substep(&next, &road_flow, substep_delta, world);
+        next = advanced;
+        population_changed |= resolution_changed;
+        // Same post-substep population pass as the main loop.
+        population_changed |= apply_due_world_events(&next, world, population_schedule);
     }
+
+    population_changed |= apply_due_world_events(&next, world, population_schedule);
+    drain_and_spawn(&mut next, road_topology, world);
 
     TickAdvance {
         snapshot: next,
@@ -368,7 +285,7 @@ fn tick_trips_substepped(
 /// each Sandbox city-growth time) so spawn, boarding, growth, and day-rollover
 /// logic fire at exactly the right instant. Population scheduler
 /// boundaries are covered by the `scheduler_due_key_count` term added at the
-/// call site (plus generation-based widening inside `tick_trips_substepped`).
+/// call site (plus generation-based widening inside `tick_trips`).
 /// The cap computed here is the sum of independent upper bounds on the number
 /// of shell-derived events:
 /// - `day_count * 2` — the day boundary, across every day the tick spans;
@@ -380,13 +297,8 @@ fn tick_trips_substepped(
 ///   upper-bounds bus arrivals too. Each vehicle contributes independently, so the
 ///   union of arrival events over the tick is at most
 ///   `duration * METRO_TILES_PER_SECOND * vehicle_count`; and
-/// - Sandbox `growth_count * 2` — every city-growth time the tick spans (see
-///   `crate::growth`), doubled like the day boundary; and
-/// - campaign `trip_outcomes.len()` — one boundary per in-window outcome expiry, since
-///   `next_boundary_after` breaks at the instant each outcome falls out of the rolling
-///   evaluation window so a coarse tick samples the loss gates there (see
-///   `next_boundary_after`'s outcome-expiry block). The vector is pruned to the window,
-///   so this term is bounded by the recent trip-resolution count.
+/// - `growth_count * 2` — every city-growth time the tick spans (see
+///   `crate::growth`), doubled like the day boundary.
 ///
 /// then `+1`. Without `vehicle_bound`, a large delta advanced while a metro runs on
 /// short segments exhausts the per-second budget before reaching `final_time` and
@@ -403,25 +315,15 @@ fn max_tick_substeps(state: &GameSnapshot, final_time: f64) -> usize {
     let vehicle_bound =
         (duration * transit::METRO_TILES_PER_SECOND * state.transit.vehicles.len() as f64).ceil()
             as usize;
-    let growth_bound = if state.rules.game_mode == GameMode::Sandbox {
-        ((duration / crate::growth::GROWTH_INTERVAL_SECONDS).ceil() as usize)
-            .saturating_add(1)
-            .saturating_mul(2)
-    } else {
-        0
-    };
-    let outcome_expiry_bound = if state.rules.game_mode == GameMode::Campaign {
-        state.metrics.trip_outcomes.len()
-    } else {
-        0
-    };
+    let growth_bound = ((duration / crate::growth::GROWTH_INTERVAL_SECONDS).ceil() as usize)
+        .saturating_add(1)
+        .saturating_mul(2);
 
     day_count
         .saturating_mul(2)
         .saturating_add(per_second_net)
         .saturating_add(vehicle_bound)
         .saturating_add(growth_bound)
-        .saturating_add(outcome_expiry_bound)
         .saturating_add(1)
 }
 
@@ -509,10 +411,6 @@ fn advance_active_trips_with_zero_delta_ids(
         late_trips: results.iter().map(|result| result.late_trips).sum(),
         unserved_trips: results.iter().map(|result| result.unserved_trips).sum(),
         wait_seconds: results.iter().map(|result| result.wait_seconds).sum(),
-        outcomes: results
-            .iter()
-            .filter_map(|result| result.outcome.clone())
-            .collect(),
     };
 
     // Gate income on `completed_trips > 0` so a trip that was already
@@ -556,14 +454,7 @@ fn advance_active_trips_with_zero_delta_ids(
     let population_changed =
         population::apply_trip_resolutions(world, &resolutions, next.day, next.time);
 
-    let retention_window_seconds = objectives::effective_rolling_window_seconds(state);
-    next.metrics = update_metrics(
-        &state.metrics,
-        &next.active_trips,
-        metric_delta,
-        state.time,
-        retention_window_seconds,
-    );
+    next.metrics = update_metrics(&state.metrics, &next.active_trips, metric_delta);
     (next, population_changed)
 }
 
@@ -613,15 +504,8 @@ fn next_boundary_after(
     world: &World,
 ) -> Option<f64> {
     let mut next = None;
-    let active_thresholds = active_objective_thresholds(state);
     let next_day_boundary = (f64::from(state.day) + 1.0) * GAME_DAY_SECONDS;
     track_next_boundary(&mut next, next_day_boundary, state.time);
-
-    if let Some(survival_time) =
-        active_thresholds.map(|thresholds| thresholds.survival_time.value())
-    {
-        track_next_boundary(&mut next, survival_time, state.time);
-    }
 
     // The ECS population scheduler owns every citizen wake (commute departures,
     // returns, move-ins). Its earliest future due-time key is the next
@@ -631,20 +515,8 @@ fn next_boundary_after(
     }
 
     for trip in &state.active_trips {
-        track_active_trip_boundary(
-            &mut next,
-            state,
-            flow,
-            trip,
-            active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
-        );
+        track_active_trip_boundary(&mut next, state, flow, trip);
     }
-
-    track_aggregate_wait_boundary(
-        &mut next,
-        state,
-        active_thresholds.map(|thresholds| thresholds.max_average_wait.value()),
-    );
 
     for vehicle in &state.transit.vehicles {
         if let Some(seconds) = transit::seconds_until_next_vehicle_stop(state, flow, vehicle) {
@@ -652,109 +524,13 @@ fn next_boundary_after(
         }
     }
 
-    if state.rules.game_mode == GameMode::Sandbox {
-        track_next_boundary(
-            &mut next,
-            crate::growth::next_growth_time(state.time),
-            state.time,
-        );
-    }
-
-    // Track the instant each in-window trip outcome falls out of the rolling
-    // evaluation window. A coarse tick that spans an outcome expiry must break
-    // there so `evaluate_objectives` samples the rolling counts after the
-    // expiring outcomes are pruned but before later outcomes expire — otherwise
-    // a burst of good outcomes expiring before bad ones flips the unserved/late
-    // ratio above the threshold and is missed because both groups are pruned
-    // together by the time the final substep evaluates. Only meaningful when
-    // campaign objectives are active; sandbox mode never evaluates loss gates.
-    //
-    // The `2 * EPSILON` offset (rather than the single `EPSILON` used elsewhere)
-    // ensures the candidate is strictly later than `state.time + EPSILON` even
-    // when `state.time` is exactly at the expiry (`outcome.time +
-    // retention_window`). `track_next_boundary` now promotes candidates in
-    // `(state.time, state.time + EPSILON]` to `state.time + 2 * EPSILON`, so a
-    // single `EPSILON` would also suffice, but the explicit `2 * EPSILON` keeps
-    // the expiry sample strictly beyond the equality band without relying on
-    // the promotion — preventing a coarse tick starting at the exact expiry
-    // from skipping the boundary and pruning both the expiring and later
-    // outcomes together, missing the loss gate that fine ticks detect.
-    if active_thresholds.is_some() {
-        let retention_window = objectives::effective_rolling_window_seconds(state);
-        for outcome in &state.metrics.trip_outcomes {
-            track_next_boundary(
-                &mut next,
-                outcome.time + retention_window + 2.0 * EPSILON,
-                state.time,
-            );
-        }
-    }
+    track_next_boundary(
+        &mut next,
+        crate::growth::next_growth_time(state.time),
+        state.time,
+    );
 
     next
-}
-
-fn active_objective_thresholds(state: &GameSnapshot) -> Option<&ObjectiveThresholds> {
-    if state.rules.game_mode == GameMode::Campaign {
-        state.scenario.objectives.as_ref()
-    } else {
-        None
-    }
-}
-
-/// Track a boundary at the instant the aggregate `average_wait_seconds` metric
-/// can cross the active campaign average-wait threshold, so a coarse substep samples the loss
-/// gate there instead of skipping over the crossing.
-///
-/// The per-trip `wait_threshold_remaining` boundary in
-/// `track_waiting_terminal_boundaries` only fires when an *individual* trip's
-/// wait crosses the threshold. But the aggregate average can cross the
-/// threshold between two per-trip boundaries and then recede when a trip
-/// expires (patience reaches 0) — causing the loss to be missed entirely.
-///
-/// Between boundary events every waiting trip's wait grows at 1s/s, so the
-/// average also grows at 1s/s and crosses the threshold after
-/// `max_average_wait - current_average` seconds. This is computed from
-/// the trips' `patience_remaining` (not `state.metrics.average_wait_seconds`,
-/// which is stale until the first `update_metrics` call). Patience expiries and
-/// vehicle boardings are already tracked as boundaries, so the substep ends
-/// there first and this boundary is recomputed from the new state — keeping the
-/// calculation correct as the waiting set changes.
-fn track_aggregate_wait_boundary(
-    next: &mut Option<f64>,
-    state: &GameSnapshot,
-    max_average_wait: Option<f64>,
-) {
-    let Some(max_average_wait) = max_average_wait else {
-        return;
-    };
-    let waiting_trips: Vec<&ActiveTrip> = state
-        .active_trips
-        .iter()
-        .filter(|trip| trip.status == TripStatus::Waiting)
-        .collect();
-    if waiting_trips.is_empty() {
-        return;
-    }
-
-    let current_wait_seconds: f64 = waiting_trips
-        .iter()
-        .map(|trip| elapsed_wait_seconds(trip))
-        .sum();
-    let average_wait_seconds = current_wait_seconds / f64::from(waiting_trips.len() as u32);
-    let seconds_to_threshold = max_average_wait - average_wait_seconds;
-    if seconds_to_threshold > EPSILON {
-        track_next_boundary(
-            next,
-            state.time + seconds_to_threshold + EPSILON,
-            state.time,
-        );
-    } else if seconds_to_threshold >= -EPSILON {
-        // Equality needs one sample strictly beyond the `>` threshold. Use a
-        // boundary later than `state.time + EPSILON`; after that substep the
-        // wait is beyond this equality band, preventing repeated epsilon-boundary
-        // loops.
-        track_next_boundary(next, state.time + 2.0 * EPSILON, state.time);
-    }
 }
 
 fn track_active_trip_boundary(
@@ -762,7 +538,6 @@ fn track_active_trip_boundary(
     state: &GameSnapshot,
     flow: &traffic::RoadFlow,
     trip: &ActiveTrip,
-    max_average_wait: Option<f64>,
 ) {
     if is_terminal_status(trip.status) {
         return;
@@ -806,7 +581,7 @@ fn track_active_trip_boundary(
             return;
         };
         if leg.mode != TransitMode::Walk {
-            track_waiting_terminal_boundaries(next, state, trip, max_average_wait);
+            track_waiting_terminal_boundaries(next, state, trip);
             return;
         }
         match seconds_to_next_walk_boundary(&trip.position, &leg.to) {
@@ -823,31 +598,7 @@ fn track_waiting_terminal_boundaries(
     next: &mut Option<f64>,
     state: &GameSnapshot,
     trip: &ActiveTrip,
-    max_average_wait: Option<f64>,
 ) {
-    // Break at the average-wait loss threshold so a coarse substep doesn't span
-    // from below the active average-wait threshold all the way to patience
-    // expiry without sampling the metric. The shared elapsed-wait helper
-    // determines each trip's current wait; the threshold is crossed after
-    // `patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait)` more
-    // seconds. A tiny `EPSILON` offset lands the sample strictly above the
-    // threshold because the loss gate uses `>` not `>=`.
-    if let Some(max_average_wait) = max_average_wait {
-        let seconds_to_threshold =
-            trip.patience_remaining - (WAIT_PATIENCE_SECONDS - max_average_wait);
-        if seconds_to_threshold > EPSILON {
-            track_next_boundary(
-                next,
-                state.time + seconds_to_threshold + EPSILON,
-                state.time,
-            );
-        } else if seconds_to_threshold >= -EPSILON {
-            // As with the aggregate tracker, advance once beyond equality and
-            // then fall out of the epsilon band to avoid a zero-progress loop.
-            track_next_boundary(next, state.time + 2.0 * EPSILON, state.time);
-        }
-    }
-
     if trip.patience_remaining > EPSILON {
         track_next_boundary(next, state.time + trip.patience_remaining, state.time);
     }
@@ -881,14 +632,10 @@ fn track_next_boundary(next: &mut Option<f64>, candidate: f64, state_time: f64) 
         return;
     }
     // A candidate in `(state_time, state_time + EPSILON]` is not yet due (the
-    // pre-processing checks `due_time <= state.time`) but would be
-    // discarded by a strict `> after` filter — lost between the current-time
-    // pre-processing and the next-boundary schedule. Promote it to a strictly
-    // forward sample so the substep machinery breaks here, applies the event,
-    // and re-evaluates objectives at a deterministic timestamp regardless of
-    // tick granularity. Without this, a survival objective at
-    // `state.time + EPSILON/2` is skipped until the next unrelated boundary,
-    // and coarse vs fine ticks terminate at different timestamps.
+    // pre-processing checks `due_time <= state.time`) but would be discarded by
+    // a strict `> after` filter. Promote it to a strictly forward sample so the
+    // substep machinery breaks here and applies the event at a deterministic
+    // timestamp regardless of tick granularity.
     let after = state_time + EPSILON;
     let sample = if candidate <= after {
         after + EPSILON
@@ -959,11 +706,6 @@ fn tick_trip(
                 late_trips: 0,
                 unserved_trips: 1,
                 wait_seconds: 0.0,
-                outcome: Some(trip_outcome(
-                    TripOutcomeKind::Unserved,
-                    0.0,
-                    tick_start_time,
-                )),
             };
         };
 
@@ -1001,11 +743,6 @@ fn tick_trip(
                 late_trips: 0,
                 unserved_trips: 1,
                 wait_seconds: 0.0,
-                outcome: Some(trip_outcome(
-                    TripOutcomeKind::Unserved,
-                    0.0,
-                    tick_start_time,
-                )),
             };
         };
 
@@ -1029,11 +766,6 @@ fn tick_trip(
             late_trips: 0,
             unserved_trips: 1,
             wait_seconds: 0.0,
-            outcome: Some(trip_outcome(
-                TripOutcomeKind::Unserved,
-                0.0,
-                tick_start_time,
-            )),
         };
     };
     if is_walking_only(&route_plan)
@@ -1046,11 +778,6 @@ fn tick_trip(
             late_trips: 0,
             unserved_trips: 1,
             wait_seconds: 0.0,
-            outcome: Some(trip_outcome(
-                TripOutcomeKind::Unserved,
-                0.0,
-                tick_start_time,
-            )),
         };
     }
 
@@ -1093,11 +820,6 @@ fn tick_trip(
             late_trips: 0,
             unserved_trips: 1,
             wait_seconds: 0.0,
-            outcome: Some(trip_outcome(
-                TripOutcomeKind::Unserved,
-                0.0,
-                tick_start_time,
-            )),
         };
     };
 
@@ -1125,7 +847,6 @@ fn tick_trip(
             late_trips: 0,
             unserved_trips: 0,
             wait_seconds: 0.0,
-            outcome: None,
         };
     }
 
@@ -1138,18 +859,12 @@ fn tick_trip(
         (next_trip.current_leg_wait_seconds + wait_seconds).max(0.0);
 
     if terminal_wait_seconds.is_some() {
-        let outcome_wait_seconds = elapsed_wait_seconds(&next_trip);
         return TripTickResult {
             trip: mark_unserved(next_trip),
             completed_trips: 0,
             late_trips: 0,
             unserved_trips: 1,
             wait_seconds,
-            outcome: Some(trip_outcome(
-                TripOutcomeKind::Unserved,
-                outcome_wait_seconds,
-                tick_start_time + wait_seconds,
-            )),
         };
     }
 
@@ -1159,7 +874,6 @@ fn tick_trip(
         late_trips: 0,
         unserved_trips: 0,
         wait_seconds: delta_seconds,
-        outcome: None,
     }
 }
 
@@ -1197,7 +911,6 @@ fn unchanged(trip: &ActiveTrip) -> TripTickResult {
         late_trips: 0,
         unserved_trips: 0,
         wait_seconds: 0.0,
-        outcome: None,
     }
 }
 
@@ -1215,23 +928,6 @@ fn score_arrival(mut trip: ActiveTrip, time: f64) -> TripTickResult {
         late_trips: u32::from(late),
         unserved_trips: 0,
         wait_seconds: 0.0,
-        outcome: Some(trip_outcome(
-            if late {
-                TripOutcomeKind::Late
-            } else {
-                TripOutcomeKind::Arrived
-            },
-            0.0,
-            time,
-        )),
-    }
-}
-
-fn trip_outcome(outcome: TripOutcomeKind, wait_seconds: f64, time: f64) -> TripOutcome {
-    TripOutcome {
-        outcome,
-        wait_seconds: wait_seconds.max(0.0),
-        time,
     }
 }
 
@@ -1246,8 +942,6 @@ fn update_metrics(
     metrics: &Metrics,
     trips: &[ActiveTrip],
     metric_delta: TripMetricDelta,
-    current_time: f64,
-    retention_window_seconds: f64,
 ) -> Metrics {
     let total_wait_seconds = metrics.total_wait_seconds + metric_delta.wait_seconds;
     let waiting_trip_count = trips
@@ -1260,14 +954,6 @@ fn update_metrics(
         .map(elapsed_wait_seconds)
         .sum();
 
-    let mut trip_outcomes = metrics
-        .trip_outcomes
-        .iter()
-        .cloned()
-        .chain(metric_delta.outcomes)
-        .collect();
-    objectives::prune_trip_outcomes(&mut trip_outcomes, current_time, retention_window_seconds);
-
     Metrics {
         late_trips: metrics.late_trips + metric_delta.late_trips,
         completed_trips: metrics.completed_trips + metric_delta.completed_trips,
@@ -1279,9 +965,6 @@ fn update_metrics(
         } else {
             0.0
         },
-        trip_outcomes,
-        state: metrics.state,
-        loss_reason: metrics.loss_reason.clone(),
     }
 }
 
@@ -1368,57 +1051,13 @@ mod tests {
     use crate::engine::GameEngine;
     use crate::intent::GameIntent;
     use crate::model::{
-        ActiveTrip, EconomyPreset, MaxAverageWaitSeconds, MaxLateRatio, MaxUnservedRatio,
-        MetricsState, ObjectiveThresholds, PlacedBuilding, Point, PrivateCarTrip,
-        RollingWindowSeconds, RouteLeg, RoutePlan, ServiceDirection, ServicePattern,
-        SurvivalTimeSeconds, TransitMode, TransitPath, TripOutcome, TripOutcomeKind, TripPosition,
-        TripPurpose, TripStatus,
+        ActiveTrip, EconomyPreset, PlacedBuilding, Point, PrivateCarTrip, RouteLeg, RoutePlan,
+        ServiceDirection, ServicePattern, TransitMode, TransitPath, TripPosition, TripPurpose,
+        TripStatus,
     };
     use crate::road_topology::RoadTopology;
-    use crate::scenario::growing_suburb_campaign;
     use crate::state::create_initial_snapshot;
     use crate::SandboxCreationRequest;
-
-    /// Build a campaign snapshot with custom objectives, paused=false, speed=1.
-    fn campaign_snapshot(objectives: ObjectiveThresholds) -> GameSnapshot {
-        let mut state = create_initial_snapshot();
-        let (rules, scenario) = growing_suburb_campaign(objectives);
-        state.rules = rules;
-        state.scenario = scenario;
-        state.paused = false;
-        state
-    }
-
-    /// Custom objectives with the given rolling window and survival time.
-    fn objectives_with(rolling_window: f64, survival_time: f64) -> ObjectiveThresholds {
-        ObjectiveThresholds {
-            max_late_ratio: MaxLateRatio::new(0.25).expect("valid MaxLateRatio"),
-            max_unserved_ratio: MaxUnservedRatio::new(0.20).expect("valid MaxUnservedRatio"),
-            max_average_wait: MaxAverageWaitSeconds::new(180.0)
-                .expect("valid MaxAverageWaitSeconds"),
-            rolling_window_seconds: RollingWindowSeconds::new(rolling_window)
-                .expect("valid RollingWindowSeconds"),
-            survival_time: SurvivalTimeSeconds::new(survival_time)
-                .expect("valid SurvivalTimeSeconds"),
-        }
-    }
-
-    fn tick_with_objectives_for_test(
-        state: &GameSnapshot,
-        topology: &RoadTopology,
-        delta_seconds: f64,
-    ) -> GameSnapshot {
-        let mut world = crate::population::build_world(state);
-        let mut population_schedule = crate::population::build_schedule();
-        super::tick_trips_with_objectives(
-            state,
-            topology,
-            &mut world,
-            &mut population_schedule,
-            delta_seconds,
-        )
-        .snapshot
-    }
 
     fn trip_with_private_car_payload() -> ActiveTrip {
         ActiveTrip {
@@ -1882,126 +1521,5 @@ mod tests {
         }
         // Identical final RoadFlow.
         assert_eq!(production_flow, reference_flow);
-    }
-
-    /// Regression test for Finding 1: when `state.time` is exactly at the first
-    /// outcome's expiry time, the expiry boundary must still be tracked so a
-    /// coarse tick samples the loss gate there. With a single `EPSILON` offset,
-    /// the candidate equals `after = state.time + EPSILON` and is discarded,
-    /// causing the tick to skip to the next expiry where both outcome groups are
-    /// pruned together — missing the loss that fine ticks detect.
-    #[test]
-    fn outcome_expiry_boundary_at_exact_start_time_is_sampled() {
-        let objectives = objectives_with(10.0, 1200.0);
-        let mut state = campaign_snapshot(objectives);
-        state.time = 10.0;
-        state.day = clock::day_index(state.time);
-        state.clock_minutes = clock::clock_minutes(state.time);
-
-        // 40 Arrived outcomes at t=0 (expire at t=10), 10 Unserved at t=5
-        // (expire at t=15). At t=10 the 40 arrivals fall out of the window,
-        // leaving 10 unserved out of 10 total → ratio 1.0 > 0.2 → loss.
-        state.metrics.completed_trips = 40;
-        state.metrics.unserved_trips = 10;
-        state.metrics.trip_outcomes = (0..40)
-            .map(|_| TripOutcome {
-                outcome: TripOutcomeKind::Arrived,
-                wait_seconds: 0.0,
-                time: 0.0,
-            })
-            .chain((0..10).map(|_| TripOutcome {
-                outcome: TripOutcomeKind::Unserved,
-                wait_seconds: 0.0,
-                time: 5.0,
-            }))
-            .collect();
-
-        // Coarse tick from t=10 to t=20 — spans past the unserved expiry at t=15.
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        let next = tick_with_objectives_for_test(&state, &topology, 10.0);
-
-        assert_eq!(
-            next.metrics.state,
-            MetricsState::Lost,
-            "coarse tick starting at exact expiry must detect the loss"
-        );
-    }
-
-    /// Regression test for Finding 3: a loaded campaign whose `state.time` is
-    /// already past `survivalTime` with completed trips must be detected as won
-    /// at the current timestamp, without advancing to the next boundary. Without
-    /// pre-loop objective evaluation, a 1s tick and a 300s tick would produce
-    /// different terminal timestamps.
-    #[test]
-    fn already_satisfied_survival_objective_detected_at_current_time() {
-        let objectives = objectives_with(300.0, 100.0);
-        let mut state = campaign_snapshot(objectives);
-        state.time = 100.0;
-        state.day = clock::day_index(state.time);
-        state.clock_minutes = clock::clock_minutes(state.time);
-        state.metrics.completed_trips = 1;
-
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        let next = tick_with_objectives_for_test(&state, &topology, 1.0);
-
-        assert_eq!(
-            next.metrics.state,
-            MetricsState::Won,
-            "already-satisfied survival objective detected without advancing"
-        );
-        assert_eq!(
-            next.time, 100.0,
-            "terminal timestamp is the current time, not the next boundary"
-        );
-    }
-
-    /// Regression test for the near-current boundary gap: when `state.time` is
-    /// within `EPSILON` below a survival boundary, the boundary falls in
-    /// `(state.time, state.time + EPSILON]`. It is not yet due during
-    /// current-time pre-processing (`survivalTime > state.time`) but was also
-    /// discarded by the old `> after` filter in `next_boundary_after` — lost
-    /// until the next unrelated boundary. A 1s tick and a 300s tick would then
-    /// terminate at different timestamps, breaking granularity independence.
-    /// `track_next_boundary` now promotes such candidates to
-    /// `state.time + 2 * EPSILON` so both granularities fire at the same
-    /// promoted boundary.
-    #[test]
-    fn survival_boundary_in_epsilon_gap_fires_deterministically_across_granularities() {
-        let survival_time = 100.0;
-        let objectives = objectives_with(300.0, survival_time);
-        let mut state = campaign_snapshot(objectives);
-        // Land `state.time` halfway into the epsilon gap below the boundary.
-        state.time = survival_time - EPSILON / 2.0;
-        state.day = clock::day_index(state.time);
-        state.clock_minutes = clock::clock_minutes(state.time);
-        state.metrics.completed_trips = 1;
-
-        // Coarse: one 300s tick spanning well past the survival boundary.
-        let topology = RoadTopology::compile(&state.map).expect("fixture topology compiles");
-        let coarse = tick_with_objectives_for_test(&state, &topology, 300.0);
-
-        // Fine: 300 × 1s ticks; the survival boundary fires inside the first.
-        let mut fine = state.clone();
-        for _ in 0..300 {
-            if fine.metrics.state != MetricsState::Running {
-                break;
-            }
-            fine = tick_with_objectives_for_test(&fine, &topology, 1.0);
-        }
-
-        assert_eq!(
-            coarse.metrics.state,
-            MetricsState::Won,
-            "coarse tick detects the survival win"
-        );
-        assert_eq!(
-            fine.metrics.state,
-            MetricsState::Won,
-            "fine ticks detect the survival win"
-        );
-        assert_eq!(
-            coarse.time, fine.time,
-            "coarse and fine terminate at the same promoted boundary timestamp"
-        );
     }
 }

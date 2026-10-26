@@ -364,14 +364,6 @@ fn validate_metrics(snapshot: &GameSnapshot) -> PersistenceResult<()> {
         SnapshotField::MetricsWaits,
         snapshot.metrics.average_wait_seconds,
     )?;
-    for outcome in &snapshot.metrics.trip_outcomes {
-        super::finite_non_negative(
-            None,
-            SnapshotField::OutcomeWaitSeconds,
-            outcome.wait_seconds,
-        )?;
-        super::finite_non_negative(None, SnapshotField::OutcomeTimestamp, outcome.time)?;
-    }
     Ok(())
 }
 

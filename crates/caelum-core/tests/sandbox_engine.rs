@@ -1,10 +1,10 @@
 use caelum_core::clock::{GAME_DAY_SECONDS, MINUTES_PER_DAY};
-use caelum_core::model::{CitizenRoutine, GameMode, Point, TripPurpose};
+use caelum_core::model::{CitizenRoutine, Point, TripPurpose};
 use caelum_core::presentation::{population_aggregates_from_snapshot, project_update};
 use caelum_core::state::create_initial_snapshot;
 use caelum_core::{
     canonical_default_request, create_sandbox_snapshot, GameEngine, GameIntent,
-    SandboxCreationRequest, SandboxResetErrorCode,
+    SandboxCreationRequest,
 };
 
 const MORNING_CLOCK_MINUTE: u16 = 480; // 08:00
@@ -180,20 +180,4 @@ fn default_engine_construction_matches_the_canonical_factory() {
     assert_eq!(GameEngine::new().snapshot(), expected);
     assert_eq!(GameEngine::default().snapshot(), expected);
     assert_eq!(create_initial_snapshot(), expected);
-}
-
-#[test]
-fn campaign_reset_is_rejected_without_mutating_snapshot_or_topology() {
-    let mut campaign = create_initial_snapshot();
-    campaign.rules.game_mode = GameMode::Campaign;
-    let mut engine = GameEngine::from_snapshot(campaign).unwrap();
-    let before_snapshot = engine.snapshot();
-    let before_topology = engine.road_topology_for_test().clone();
-
-    let error = engine.reset().unwrap_err();
-
-    assert_eq!(error.code, SandboxResetErrorCode::UnsupportedGameMode);
-    assert_eq!(error.context.game_mode, Some(GameMode::Campaign));
-    assert_eq!(engine.snapshot(), before_snapshot);
-    assert_eq!(engine.road_topology_for_test(), &before_topology);
 }

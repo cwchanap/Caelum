@@ -20,7 +20,7 @@ pub(super) fn validate_shell_rules_map_and_compile(
         });
     }
     validate_scalar_state(snapshot)?;
-    validate_rules_and_scenario(snapshot)?;
+    validate_rules(snapshot)?;
     validate_map(snapshot)?;
     RoadTopology::compile(&snapshot.map).map_err(PersistenceError::from)
 }
@@ -62,7 +62,7 @@ fn validate_scalar_state(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     Ok(())
 }
 
-fn validate_rules_and_scenario(snapshot: &GameSnapshot) -> PersistenceResult<()> {
+fn validate_rules(snapshot: &GameSnapshot) -> PersistenceResult<()> {
     let demand = snapshot.rules.sandbox.demand_multiplier.value();
     if !demand.is_finite() {
         return Err(PersistenceError::InvalidNumericValue {

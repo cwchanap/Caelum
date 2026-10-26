@@ -139,7 +139,7 @@ fn previous_schema_12_rejects_with_expected_current_actual_12() {
     match GameEngine::from_snapshot(snapshot) {
         Err(SnapshotLoadError::UnsupportedSchema { expected, actual }) => {
             assert_eq!(expected, SNAPSHOT_SCHEMA_VERSION);
-            assert_eq!(expected, 13);
+            assert_eq!(expected, 14);
             assert_eq!(actual, 12);
         }
         Err(error) => panic!("schema 12 must be rejected as unsupported, got {error:?}"),

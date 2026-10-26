@@ -412,12 +412,7 @@ export function createWebGpuHostWithRenderer(
 
   const canAnimate = (): boolean => {
     const state = ctx.getState();
-    return (
-      running &&
-      !state.paused &&
-      state.metrics.state === "running" &&
-      state.speed !== 0
-    );
+    return running && !state.paused && state.speed !== 0;
   };
 
   const admitTick = (deltaSeconds: number): void => {

@@ -1,12 +1,12 @@
 use caelum_core::model::{
-    ActiveTrip, CitizenRoutine, GameSnapshot, MaxAverageWaitSeconds, MetricsState, PlacedBuilding,
-    Point, PrivateCarTrip, RollingWindowSeconds, RouteLeg, RouteLegStatus, RoutePlan,
-    ScheduledActivity, ScheduledActivityKind, ServiceDirection, ServicePattern, Sim, TransitMode,
-    TransitNetwork, TripOutcome, TripOutcomeKind, TripPosition, TripPurpose, TripStatus, Vehicle,
+    ActiveTrip, CitizenRoutine, GameSnapshot, PlacedBuilding, Point, PrivateCarTrip, RouteLeg,
+    RouteLegStatus, RoutePlan, ScheduledActivity, ScheduledActivityKind, ServiceDirection,
+    ServicePattern, Sim, TransitMode, TransitNetwork, TripPosition, TripPurpose, TripStatus,
+    Vehicle,
 };
 use caelum_core::{
-    clock, commute, objectives, road_topology::RoadTopology, state::create_initial_snapshot,
-    traffic, transit, trips,
+    clock, commute, road_topology::RoadTopology, state::create_initial_snapshot, traffic, transit,
+    trips,
 };
 use caelum_core::{GameEngine, GameIntent};
 use common::persistence_fixtures::{travelling_worker_sim, worker_sim};
@@ -791,10 +791,6 @@ fn missing_driving_payload_becomes_unserved_and_saveable() {
     let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
-    assert_eq!(
-        next.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Unserved
-    );
 
     let engine = GameEngine::from_snapshot(next);
     assert!(engine.is_ok(), "unserved result is persistence-valid");
@@ -987,14 +983,6 @@ fn waiting_trips_lose_patience_and_update_wait_metrics() {
     assert_eq!(next.metrics.total_wait_seconds, 1.0);
     assert_eq!(next.metrics.waiting_trip_count, 0);
     assert_eq!(next.metrics.average_wait_seconds, 0.0);
-    assert_eq!(
-        next.metrics.trip_outcomes,
-        vec![TripOutcome {
-            outcome: TripOutcomeKind::Unserved,
-            wait_seconds: 240.0,
-            time: 1.0,
-        }]
-    );
 }
 
 #[test]
@@ -1014,14 +1002,6 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
     assert_eq!(arrived.metrics.late_trips, 0);
-    assert_eq!(
-        arrived.metrics.trip_outcomes,
-        vec![TripOutcome {
-            outcome: TripOutcomeKind::Arrived,
-            wait_seconds: 0.0,
-            time: 20.0,
-        }]
-    );
     assert_eq!(
         arrived
             .sims
@@ -1049,14 +1029,6 @@ fn short_walking_route_arrives_and_late_arrival_counts_late() {
     assert!(late_next.active_trips.is_empty());
     assert_eq!(late_next.metrics.completed_trips, 1);
     assert_eq!(late_next.metrics.late_trips, 1);
-    assert_eq!(
-        late_next.metrics.trip_outcomes,
-        vec![TripOutcome {
-            outcome: TripOutcomeKind::Late,
-            wait_seconds: 0.0,
-            time: 1.0,
-        }]
-    );
 }
 
 #[test]
@@ -1086,10 +1058,6 @@ fn empty_route_plan_not_at_destination_is_unserved_not_phantom_arrival() {
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 0);
     assert_eq!(next.metrics.unserved_trips, 1);
-    assert_eq!(
-        next.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Unserved
-    );
 }
 
 #[test]
@@ -1106,14 +1074,6 @@ fn no_route_planning_marks_trip_unserved() {
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
-    assert_eq!(
-        next.metrics.trip_outcomes,
-        vec![TripOutcome {
-            outcome: TripOutcomeKind::Unserved,
-            wait_seconds: 0.0,
-            time: 0.0,
-        }]
-    );
 }
 
 #[test]
@@ -1142,36 +1102,6 @@ fn waiting_timeout_outcome_uses_exact_time_under_large_tick() {
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
     assert_eq!(next.metrics.total_wait_seconds, 5.0);
-    assert_eq!(next.metrics.trip_outcomes.len(), 1);
-    assert_eq!(
-        next.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Unserved
-    );
-    assert_eq!(next.metrics.trip_outcomes[0].wait_seconds, 240.0);
-    assert!((next.metrics.trip_outcomes[0].time - 105.0).abs() < 0.000_001);
-}
-
-#[test]
-fn stale_history_pruning_keeps_history_signal_for_empty_window() {
-    let mut state = create_initial_snapshot();
-    state.time = 1_000.0;
-    state.metrics.unserved_trips = 10;
-    state.metrics.trip_outcomes = (0..10)
-        .map(|index| TripOutcome {
-            outcome: TripOutcomeKind::Unserved,
-            wait_seconds: 0.0,
-            time: 100.0 + f64::from(index),
-        })
-        .collect();
-
-    let next = trips::advance_active_trips(&state, &traffic::RoadFlow::new(), 0.0);
-
-    assert_eq!(next.metrics.trip_outcomes.len(), 1);
-    assert_eq!(next.metrics.trip_outcomes[0].time, 109.0);
-    assert_eq!(
-        objectives::evaluate_objectives(&next).metrics.state,
-        MetricsState::Running
-    );
 }
 
 #[test]
@@ -1226,30 +1156,12 @@ fn riding_arrival_outcome_uses_vehicle_stop_boundary_time() {
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
-    assert_eq!(next.metrics.trip_outcomes.len(), 1);
-    assert_eq!(
-        next.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Arrived
-    );
-    assert!((next.metrics.trip_outcomes[0].time - 12.5).abs() < 0.000_001);
 
     // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
     assert!(coarse_snapshot.active_trips.is_empty());
     assert_eq!(
         coarse_snapshot.metrics.completed_trips,
         next.metrics.completed_trips
-    );
-    assert_eq!(
-        coarse_snapshot.metrics.trip_outcomes.len(),
-        next.metrics.trip_outcomes.len()
-    );
-    assert_eq!(
-        coarse_snapshot.metrics.trip_outcomes[0].outcome,
-        next.metrics.trip_outcomes[0].outcome
-    );
-    assert!(
-        (coarse_snapshot.metrics.trip_outcomes[0].time - next.metrics.trip_outcomes[0].time).abs()
-            < 0.000_001
     );
 }
 
@@ -1318,7 +1230,6 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
         .as_ref()
         .is_some_and(|plan| { plan.legs.iter().any(|leg| leg.mode == TransitMode::Bus) }));
     assert_eq!(disembarked.metrics.completed_trips, 0);
-    assert!(disembarked.metrics.trip_outcomes.is_empty());
 
     // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
     assert_eq!(
@@ -1341,12 +1252,6 @@ fn just_disembarked_trip_does_not_consume_ride_time_as_walking_time() {
     assert_eq!(coarse_arrived.budget, arrived.budget);
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
-    assert_eq!(arrived.metrics.trip_outcomes.len(), 1);
-    assert_eq!(
-        arrived.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Arrived
-    );
-    assert!((arrived.metrics.trip_outcomes[0].time - 32.5).abs() < 0.000_001);
 }
 
 #[test]
@@ -1414,7 +1319,6 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
     assert_eq!(walking.current_leg_index, 1);
     assert_eq!(walking.position, (12, 4).into());
     assert_eq!(disembarked.metrics.completed_trips, 0);
-    assert!(disembarked.metrics.trip_outcomes.is_empty());
 
     // Coarse-tick equivalence: one 12.5s tick must match ten 1.25s ticks.
     assert_eq!(
@@ -1431,12 +1335,6 @@ fn waiting_trip_that_boards_and_disembarks_does_not_advance_the_following_walk()
 
     assert!(arrived.active_trips.is_empty());
     assert_eq!(arrived.metrics.completed_trips, 1);
-    assert_eq!(arrived.metrics.trip_outcomes.len(), 1);
-    assert_eq!(
-        arrived.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Arrived
-    );
-    assert!((arrived.metrics.trip_outcomes[0].time - 32.5).abs() < 0.000_001);
 }
 
 #[test]
@@ -1719,7 +1617,6 @@ fn unserved_same_day_outbound_is_not_respawned_after_pruning() {
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
-    assert_eq!(next.metrics.trip_outcomes.len(), 1);
     assert_eq!(
         sim.next_activity.as_ref().map(|activity| activity.kind),
         Some(ScheduledActivityKind::DailyRoutine),
@@ -1776,7 +1673,6 @@ fn unserved_same_day_return_is_not_respawned_after_pruning() {
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.unserved_trips, 1);
-    assert_eq!(next.metrics.trip_outcomes.len(), 1);
     assert_eq!(
         sim.next_activity.as_ref().map(|activity| activity.kind),
         Some(ScheduledActivityKind::DailyRoutine),
@@ -2222,11 +2118,6 @@ fn all_zero_length_walks_collapses_to_immediate_arrival() {
 
     assert!(next.active_trips.is_empty());
     assert_eq!(next.metrics.completed_trips, 1);
-    assert_eq!(next.metrics.trip_outcomes.len(), 1);
-    assert_eq!(
-        next.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Arrived
-    );
 }
 
 /// A zero-length transfer walk between two transit legs (two lines sharing the
@@ -2346,11 +2237,6 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
         large_snapshot.metrics.total_wait_seconds,
         stepped_snapshot.metrics.total_wait_seconds
     );
-    assert_eq!(large_snapshot.metrics.trip_outcomes.len(), 1);
-    assert_eq!(
-        large_snapshot.metrics.trip_outcomes[0].outcome,
-        TripOutcomeKind::Unserved
-    );
     // The trip drained 30s of patience this tick (patience_remaining was 30s).
     assert!(
         (large_snapshot.metrics.total_wait_seconds - 30.0).abs() < 0.001,
@@ -2358,366 +2244,6 @@ fn zero_length_walk_then_wait_timeout_matches_across_tick_granularities() {
         large_snapshot.metrics.total_wait_seconds
     );
     // Outcome fires at patience boundary: start (100s) + 30s drained.
-    assert!(
-        (large_snapshot.metrics.trip_outcomes[0].time - 130.0).abs() < 0.001,
-        "expected outcome at t=130, got {}",
-        large_snapshot.metrics.trip_outcomes[0].time
-    );
-}
-
-/// Regression: a coarse tick that spans a waiting trip past the 180s average-wait
-/// loss threshold and then to its 240s patience expiry must still detect the loss.
-/// Without per-substep objective evaluation and a boundary at the wait-threshold,
-/// the trip expires inside one substep and `waiting_trip_count` drops to 0 on the
-/// final snapshot, so `evaluate_objectives` sees no loss — even though stepped
-/// ticks (which sample metrics each tick) would lose.
-#[test]
-fn coarse_tick_detects_wait_loss_before_patience_expiry() {
-    let mut state = common::campaign_state();
-    state.paused = false;
-    let mut waiting = trip(
-        "trip-001",
-        TripStatus::Waiting,
-        (7, 8).into(),
-        (22, 8).into(),
-    );
-    waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    // Waited 170s so far (patience 70s remaining). A 70s coarse tick spans from
-    // 170s of wait past the 180s threshold to the 240s patience expiry.
-    waiting.patience_remaining = 70.0;
-    state.active_trips = vec![waiting];
-    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
-
-    let mut engine = common::running_engine_from_fixture(state);
-    let result = engine.tick(70.0);
-    assert!(result.rejection.is_none());
-    let next = engine.snapshot();
-
-    assert_eq!(next.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        next.metrics.loss_reason.as_deref(),
-        Some("Average wait time is too high")
-    );
-}
-
-/// Regression: a coarse tick can miss the aggregate `average_wait_seconds`
-/// crossing `MAX_AVERAGE_WAIT_SECONDS` even when no individual trip's wait
-/// threshold boundary fires at the right time. Two waiting trips with unequal
-/// wait times: Trip A (wait=179s, patience=61s) and Trip B (wait=119s,
-/// patience=121s). The aggregate average is 149s, crossing 180s at t=31s. But
-/// the per-trip wait-threshold boundary for Trip A fires at t=1s (when its own
-/// wait hits 180s, aggregate still 150s), and the next boundary is Trip A's
-/// patience expiry at t=61s — by which point Trip A leaves the waiting set and
-/// the average drops to exactly 180s (not strictly greater). Trip B then
-/// expires at t=121s. Without an aggregate-wait boundary, the loss between
-/// t=31s and t=61s is never sampled and the simulation incorrectly continues.
-#[test]
-fn coarse_tick_detects_aggregate_wait_loss_between_per_trip_boundaries() {
-    let mut state = common::campaign_state();
-    state.paused = false;
-    state.time = 0.0;
-
-    let mut trip_a = trip(
-        "trip-001",
-        TripStatus::Waiting,
-        (7, 8).into(),
-        (22, 8).into(),
-    );
-    trip_a.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    trip_a.patience_remaining = 61.0; // waited 179s
-
-    let mut trip_b = trip(
-        "trip-002",
-        TripStatus::Waiting,
-        (7, 8).into(),
-        (22, 8).into(),
-    );
-    trip_b.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    trip_b.patience_remaining = 121.0; // waited 119s
-
-    state.active_trips = vec![trip_a, trip_b];
-    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
-
-    // A 200s coarse tick: the aggregate average crosses 180s at t=31s, well
-    // before Trip A's patience expiry at t=61s. Without the aggregate boundary
-    // the crossing is missed and the loss is never detected.
-    let mut engine = common::running_engine_from_fixture(state);
-    let result = engine.tick(200.0);
-    assert!(result.rejection.is_none());
-    let next = engine.snapshot();
-
-    assert_eq!(next.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        next.metrics.loss_reason.as_deref(),
-        Some("Average wait time is too high")
-    );
-}
-
-fn assert_average_wait_loss_matches_coarse_and_fine(state: &caelum_core::GameSnapshot) {
-    let mut coarse = common::running_engine_from_fixture(state.clone());
-    coarse.tick(300.0);
-    let coarse_snapshot = coarse.snapshot();
-
-    let mut fine = common::running_engine_from_fixture(state.clone());
-    fine.tick(1.0);
-    let fine_snapshot = fine.snapshot();
-
-    assert_eq!(coarse_snapshot.metrics.state, MetricsState::Lost);
-    assert_eq!(fine_snapshot.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        coarse_snapshot.metrics.loss_reason.as_deref(),
-        Some("Average wait time is too high")
-    );
-    assert_eq!(
-        coarse_snapshot.metrics.loss_reason,
-        fine_snapshot.metrics.loss_reason
-    );
-    assert_eq!(coarse_snapshot.time, fine_snapshot.time);
-    assert!(
-        (coarse_snapshot.time - 0.000_002).abs() < 1e-12,
-        "expected strict-threshold sample at t=0.000002, got {}",
-        coarse_snapshot.time
-    );
-}
-
-#[test]
-fn coarse_tick_samples_aggregate_wait_when_threshold_is_already_equal() {
-    let mut state = common::campaign_state();
-    state.paused = false;
-    state.scenario.objectives.as_mut().unwrap().max_average_wait =
-        MaxAverageWaitSeconds::new(149.0).unwrap();
-
-    let mut trip_a = trip(
-        "trip-001",
-        TripStatus::Waiting,
-        (7, 8).into(),
-        (22, 8).into(),
-    );
-    trip_a.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    trip_a.patience_remaining = 61.0; // waited 179s
-
-    let mut trip_b = trip(
-        "trip-002",
-        TripStatus::Waiting,
-        (7, 8).into(),
-        (22, 8).into(),
-    );
-    trip_b.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    trip_b.patience_remaining = 121.0; // waited 119s; aggregate average is exactly 149s
-
-    state.active_trips = vec![trip_a, trip_b];
-    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
-
-    assert_average_wait_loss_matches_coarse_and_fine(&state);
-}
-
-#[test]
-fn coarse_tick_samples_per_trip_wait_when_zero_threshold_is_already_equal() {
-    let mut state = common::campaign_state();
-    state.paused = false;
-    state.scenario.objectives.as_mut().unwrap().max_average_wait =
-        MaxAverageWaitSeconds::new(0.0).unwrap();
-
-    // A just-spawned waiting trip with a full patience budget has zero
-    // elapsed wait, so both the per-trip terminal tracker and the aggregate
-    // tracker sit exactly on the 0s threshold — the strict-threshold sample
-    // (one epsilon past the `>` gate) must still be scheduled. (The old
-    // construction parked the trip in Idle with a plan, which the persistence
-    // boundary rightly rejects as unsavable state.)
-    let mut just_spawned = trip(
-        "trip-001",
-        TripStatus::Waiting,
-        (7, 8).into(),
-        (22, 8).into(),
-    );
-    just_spawned.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-    state.active_trips = vec![just_spawned];
-    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
-
-    assert_average_wait_loss_matches_coarse_and_fine(&state);
-}
-
-/// Regression: a coarse tick that generates bad outcomes early and advances past
-/// the 300s rolling window must still detect the loss. Without per-substep
-/// objective evaluation, `prune_trip_outcomes` drops the stale outcomes by the
-/// final snapshot and `evaluate_objectives` sees an empty in-range window.
-#[test]
-fn coarse_tick_detects_rolling_window_loss_before_outcomes_expire() {
-    let mut state = common::campaign_state();
-    state.paused = false;
-    state.time = 0.0;
-    // Ten trips that will time out (unserved) at t=10s, each with 10s patience.
-    state.active_trips = (0..10)
-        .map(|index| {
-            let mut waiting = trip(
-                &format!("trip-{index:03}"),
-                TripStatus::Waiting,
-                (7, 8).into(),
-                (22, 8).into(),
-            );
-            waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-            waiting.patience_remaining = 10.0;
-            waiting
-        })
-        .collect();
-
-    // A 400s coarse tick: the trips expire at t=10s (generating 10 unserved
-    // outcomes), then the tick advances 390s past the 300s rolling window. By
-    // the final snapshot at t=400s, the outcomes at t=10s are pruned (window
-    // start = 100s). Without per-substep evaluation, the loss is missed.
-    state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
-
-    let mut engine = common::running_engine_from_fixture(state);
-    let result = engine.tick(400.0);
-    assert!(result.rejection.is_none());
-    let next = engine.snapshot();
-
-    assert_eq!(next.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        next.metrics.loss_reason.as_deref(),
-        Some("Too many unserved citizens")
-    );
-}
-
-#[test]
-fn custom_campaign_window_matches_coarse_and_fine_objective_ticks() {
-    fn build() -> caelum_core::GameSnapshot {
-        let mut state = common::campaign_state();
-        state.paused = false;
-        state
-            .scenario
-            .objectives
-            .as_mut()
-            .unwrap()
-            .rolling_window_seconds = RollingWindowSeconds::new(600.0).unwrap();
-        state.scenario.objectives.as_mut().unwrap().max_average_wait =
-            MaxAverageWaitSeconds::new(300.0).unwrap();
-        state.active_trips = (0..10)
-            .map(|index| {
-                let mut waiting = trip(
-                    &format!("trip-{index:03}"),
-                    TripStatus::Waiting,
-                    (7, 8).into(),
-                    (22, 8).into(),
-                );
-                waiting.route_plan = Some(bus_plan((7, 8).into(), (22, 8).into(), "route-001"));
-                waiting.patience_remaining = 10.0;
-                waiting
-            })
-            .collect();
-        state.sims = vec![travelling_worker_sim("sim-001", (2, 3).into())];
-        state
-    }
-
-    let mut coarse = common::running_engine_from_fixture(build());
-    coarse.tick(700.0);
-    let coarse_snapshot = coarse.snapshot();
-
-    let mut fine = common::running_engine_from_fixture(build());
-    // Bound the fine-grained loop so a regression that never reaches a terminal
-    // state fails the test instead of hanging CI. 700 seconds of game time at
-    // 1-second ticks is the same horizon as the coarse tick; the cap is generous
-    // beyond that to absorb substep re-evaluations.
-    const MAX_FINE_TICKS: usize = 2_000;
-    let mut iterations = 0;
-    while fine.snapshot().metrics.state == MetricsState::Running {
-        iterations += 1;
-        assert!(
-            iterations <= MAX_FINE_TICKS,
-            "fine-grained loop did not reach a terminal state within {MAX_FINE_TICKS} ticks"
-        );
-        fine.tick(1.0);
-    }
-    let fine_snapshot = fine.snapshot();
-    assert_ne!(
-        fine_snapshot.metrics.state,
-        MetricsState::Running,
-        "fine-grained loop must reach a terminal state"
-    );
-
-    assert_eq!(coarse_snapshot.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        coarse_snapshot.metrics.loss_reason,
-        fine_snapshot.metrics.loss_reason
-    );
-    assert_eq!(coarse_snapshot.time, fine_snapshot.time);
-    assert_eq!(
-        coarse_snapshot.metrics.unserved_trips,
-        fine_snapshot.metrics.unserved_trips
-    );
-}
-
-/// Regression: a coarse tick that spans the expiry of "good" outcomes (arrived)
-/// while "bad" outcomes (unserved) are still in the rolling window must break at
-/// the good-outcome expiry boundary and detect the loss there. Without an
-/// outcome-expiry boundary in `next_boundary_after`, the coarse tick prunes both
-/// groups together by the final substep and the loss — which fine ticks detect
-/// the instant the good outcomes expire — is missed.
-///
-/// Scenario: a 10s custom rolling window, 40 arrived outcomes at t=0, 10
-/// unserved outcomes at t=5. At t=5 the unserved ratio is 10/50 = 0.20 (not
-/// above the default 0.20 threshold). At t=10+eps the 40 arrivals expire,
-/// leaving 10/10 = 1.0 unserved in the window — a loss. A coarse tick from
-/// t=5 to t=20 must sample that instant rather than jumping to t=20 where both
-/// groups are gone.
-#[test]
-fn coarse_tick_detects_loss_when_good_outcomes_expire_before_bad_ones() {
-    let mut state = common::campaign_state();
-    state.paused = false;
-    state.time = 5.0;
-    state
-        .scenario
-        .objectives
-        .as_mut()
-        .unwrap()
-        .rolling_window_seconds = RollingWindowSeconds::new(10.0).unwrap();
-    state.metrics.completed_trips = 40;
-    state.metrics.unserved_trips = 10;
-    state.metrics.trip_outcomes = (0..40)
-        .map(|_| TripOutcome {
-            outcome: TripOutcomeKind::Arrived,
-            wait_seconds: 0.0,
-            time: 0.0,
-        })
-        .chain((0..10).map(|_| TripOutcome {
-            outcome: TripOutcomeKind::Unserved,
-            wait_seconds: 0.0,
-            time: 5.0,
-        }))
-        .collect();
-
-    // The coarse tick spans both expiry instants (arrivals at t=10, unserved at
-    // t=15). The substep must break at t=10+eps, prune the arrivals, and
-    // evaluate the loss gate on the remaining 10 unserved outcomes.
-    let mut coarse = common::running_engine_from_fixture(state.clone());
-    coarse.tick(15.0);
-    let coarse_snapshot = coarse.snapshot();
-
-    assert_eq!(coarse_snapshot.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        coarse_snapshot.metrics.loss_reason.as_deref(),
-        Some("Too many unserved citizens")
-    );
-
-    // Fine ticks must also detect the loss, confirming the coarse tick's
-    // terminal state is not a divergence from the granularity-independent
-    // invariant.
-    let mut fine = common::running_engine_from_fixture(state);
-    let mut iterations = 0;
-    while fine.snapshot().metrics.state == MetricsState::Running {
-        iterations += 1;
-        assert!(
-            iterations <= 100,
-            "fine-grained loop did not reach a terminal state within 100 ticks"
-        );
-        fine.tick(1.0);
-    }
-    let fine_snapshot = fine.snapshot();
-    assert_eq!(fine_snapshot.metrics.state, MetricsState::Lost);
-    assert_eq!(
-        coarse_snapshot.metrics.loss_reason,
-        fine_snapshot.metrics.loss_reason
-    );
 }
 
 // === Stage B: Student, day-off, and bounded optional demand ===

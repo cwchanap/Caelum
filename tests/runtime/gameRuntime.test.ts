@@ -1886,8 +1886,8 @@ describe("Game Runtime", () => {
   it("surfaces a typed sandbox reset failure without changing runtime lifecycle state", async () => {
     const backend = backendSpy();
     const resetError: SandboxResetError = {
-      code: "unsupportedGameMode",
-      context: { gameMode: "campaign" },
+      code: "templateInvariantViolation",
+      context: { templateId: "crossroads" },
     };
     backend.reset = vi.fn(
       async () => ({ ok: false, error: resetError }) as const,
@@ -1921,8 +1921,8 @@ describe("Game Runtime", () => {
   it("clears a typed sandbox reset error after the next successful reset", async () => {
     const backend = backendSpy();
     const resetError: SandboxResetError = {
-      code: "unsupportedGameMode",
-      context: { gameMode: "campaign" },
+      code: "templateInvariantViolation",
+      context: { templateId: "crossroads" },
     };
     let shouldRejectReset = true;
     backend.reset = async () => {
@@ -2215,11 +2215,7 @@ describe("Game Runtime", () => {
           adjustCamera: () => {},
           syncAnimationLoop: () => {
             const state = context.getState();
-            const animate =
-              running &&
-              !state.paused &&
-              state.speed !== 0 &&
-              state.metrics.state === "running";
+            const animate = running && !state.paused && state.speed !== 0;
             if (!animate) rafPending = false;
           },
           isRunning: () => running,

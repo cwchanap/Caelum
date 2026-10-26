@@ -6,7 +6,7 @@
 //! Authoritative simulation core for Caelum.
 //!
 //! This crate owns the tick pipeline, transit routing, the trip/commute lifecycle,
-//! objectives, and metrics. It is independent of Svelte and Tauri and is intended to
+//! and metrics. It is independent of Svelte and Tauri and is intended to
 //! become the live runtime once the WASM/Tauri adapters wire [`engine::GameEngine`]
 //! into the frontend, at which point it also serves as the parity oracle for the
 //! legacy TypeScript simulation under `src/simulation/`.
@@ -15,10 +15,9 @@
 //! [`model::GameSnapshot`] plus the live ECS population world
 //! ([`population`]): due scheduler wakes emit trip demands, the demand bridge
 //! spawns + advances trips through [`trips`] (tick vehicles), then
-//! [`objectives::evaluate_objectives`] computes metrics + win/loss. Terminal
-//! trip resolutions feed back into the ECS world; the engine publishes a new
-//! snapshot whenever shell or population state changed (see
-//! [`engine::GameEngine::tick`]).
+//! updates the trip metrics. Terminal trip resolutions feed back into the ECS
+//! world; the engine publishes a new snapshot whenever shell or population state
+//! changed (see [`engine::GameEngine::tick`]).
 //!
 //! Determinism is a contract: no RNG, no wall-clock time, a fixed N-E-S-W BFS tiebreak,
 //! and stable id/jitter derivation (see [`commute`] and [`ids`]).
@@ -36,7 +35,6 @@ pub mod ids;
 pub mod intent;
 pub mod model;
 pub mod network;
-pub mod objectives;
 pub(crate) mod operating_cost;
 pub(crate) mod persistence;
 pub mod platforms;
@@ -52,7 +50,6 @@ pub mod route_editor;
 pub mod route_lifecycle;
 pub mod router;
 pub(crate) mod sandbox;
-pub mod scenario;
 pub(crate) mod service_control;
 pub mod service_itinerary;
 pub mod state;

@@ -199,20 +199,6 @@ fn stage_a_two_hundred_thousand_worker_engine_structural_and_granularity() {
             .map(active_trip_identity)
             .collect::<Vec<_>>()
     );
-    assert_eq!(
-        coarse_snapshot
-            .metrics
-            .trip_outcomes
-            .iter()
-            .map(|outcome| (outcome.outcome, outcome.wait_seconds))
-            .collect::<Vec<_>>(),
-        fine_snapshot
-            .metrics
-            .trip_outcomes
-            .iter()
-            .map(|outcome| (outcome.outcome, outcome.wait_seconds))
-            .collect::<Vec<_>>()
-    );
     let coarse_metrics = &coarse_snapshot.metrics;
     let fine_metrics = &fine_snapshot.metrics;
     assert_eq!(coarse_metrics.late_trips, fine_metrics.late_trips);

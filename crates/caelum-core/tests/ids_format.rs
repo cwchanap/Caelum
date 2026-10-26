@@ -2,8 +2,8 @@
 //!
 //! These formats MUST stay in lockstep with the TypeScript id generators so that
 //! Rust snapshots can be compared against, and handed to, the existing frontend
-//! state. The Growing Suburb scenario and growth-wave tiles are keyed with the
-//! TypeScript `tile-${x}-${y}` format; drifting here breaks parity/integration.
+//! state. Tile IDs are keyed with the TypeScript `tile-${x}-${y}` format; drifting
+//! here breaks parity/integration.
 
 use caelum_core::ids::{entity_id, next_entity_id, tile_id};
 

@@ -1,6 +1,6 @@
 # Caelum
 
-Caelum is an MVP 2D city and public transport simulation where players build roads, bus routes, metro lines, and stations to keep a Growing Suburb moving while citizens commute across an expanding deterministic scenario.
+Caelum is a 2D city and public transport simulation where players build roads, bus routes, metro lines, and stations while citizens commute across a deterministic sandbox city that grows where transit serves it.
 
 ## Run
 

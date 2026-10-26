@@ -237,7 +237,7 @@ impl GameEngine {
         Ok(Self::from_parts(snapshot, road_topology))
     }
 
-    /// Construct an engine from a schema-v13 snapshot, normalizing
+    /// Construct an engine from a schema-v14 snapshot, normalizing
     /// persistence-derived fields and rebuilding topology before validation.
     /// `prepare_snapshot` canonicalizes shell fields (forces `paused`, rebuilds
     /// clock derivations, sorts road connections), rebuilds trip/entity derived
@@ -394,8 +394,8 @@ impl GameEngine {
     }
 
     /// Advance the simulation by `delta_seconds` of game time (scaled by the current
-    /// speed) and run objective evaluation. Tick results are frame-only unless city
-    /// growth changed the buildings, which carries the scene. `applied`
+    /// speed). Tick results are frame-only unless city growth changed the
+    /// buildings, which carries the scene. `applied`
     /// is `shell_changed || population_changed` — ECS population work applies even
     /// when the shell compared equal, and is always retained.
     pub fn tick(&mut self, delta_seconds: f64) -> GameplayUpdateResult {
@@ -409,7 +409,7 @@ impl GameEngine {
         let TickAdvance {
             snapshot: next,
             population_changed,
-        } = trips::tick_trips_with_objectives(
+        } = trips::tick_trips(
             &self.snapshot,
             &self.road_topology,
             &mut self.world,

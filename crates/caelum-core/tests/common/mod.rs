@@ -10,8 +10,6 @@ pub mod persistence_fixtures;
 pub mod route_choice_fixture;
 
 use caelum_core::model::{Heading, Point};
-use caelum_core::scenario::{growing_suburb_campaign, growing_suburb_objectives};
-use caelum_core::state::create_initial_snapshot;
 use caelum_core::{GameEngine, GameIntent, GameSnapshot};
 
 /// Canonical Students are every 10th ID (sim-010, sim-020, ...). Delegates to
@@ -63,17 +61,6 @@ pub fn corridor(state: &mut GameSnapshot, points: &[Point], one_way: Option<Head
             .road_connections
             .push(opposite(heading));
     }
-}
-
-/// A campaign-mode `GameSnapshot` for the Growing Suburb scenario with the
-/// default objective thresholds and no growth waves. Used by integration tests
-/// that need to exercise the campaign objective/metrics path.
-pub fn campaign_state() -> GameSnapshot {
-    let mut state = create_initial_snapshot();
-    let (rules, scenario) = growing_suburb_campaign(growing_suburb_objectives());
-    state.rules = rules;
-    state.scenario = scenario;
-    state
 }
 
 pub fn strict_engine_from_fixture(mut snapshot: GameSnapshot) -> GameEngine {

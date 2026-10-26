@@ -15,7 +15,6 @@ const SANDBOX_CREATION_ERROR_CODES = new Set<SandboxCreationErrorCode>([
 ]);
 
 const SANDBOX_RESET_ERROR_CODES = new Set<SandboxResetErrorCode>([
-  "unsupportedGameMode",
   "templateInvariantViolation",
 ]);
 
@@ -61,14 +60,6 @@ export function isSandboxResetError(
     typeof value.code !== "string" ||
     !SANDBOX_RESET_ERROR_CODES.has(value.code as SandboxResetErrorCode) ||
     !isPlainObject(value.context)
-  ) {
-    return false;
-  }
-
-  if (
-    "gameMode" in value.context &&
-    value.context.gameMode !== "sandbox" &&
-    value.context.gameMode !== "campaign"
   ) {
     return false;
   }

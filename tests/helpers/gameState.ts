@@ -284,7 +284,6 @@ export function createTestGameState(
 ): GameState {
   const base: GameState = {
     rules: {
-      gameMode: "sandbox",
       economyPreset: "standard",
       sandbox: {
         templateId: "crossroads",
@@ -312,7 +311,6 @@ export function createTestGameState(
       lateTrips: 0,
       unservedTrips: 0,
       averageWaitSeconds: 0,
-      state: "running",
     },
     populationCount: 0,
     buildingOccupancy: [],

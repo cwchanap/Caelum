@@ -360,20 +360,6 @@ fn sandbox_move_ins_preserve_commute_set_across_coarse_and_fine_ticks() {
             fine_snapshot.metrics.unserved_trips,
         )
     );
-    assert_eq!(
-        coarse_snapshot
-            .metrics
-            .trip_outcomes
-            .iter()
-            .map(|outcome| (outcome.outcome, outcome.wait_seconds))
-            .collect::<Vec<_>>(),
-        fine_snapshot
-            .metrics
-            .trip_outcomes
-            .iter()
-            .map(|outcome| (outcome.outcome, outcome.wait_seconds))
-            .collect::<Vec<_>>()
-    );
 }
 
 #[test]

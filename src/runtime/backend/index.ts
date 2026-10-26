@@ -26,7 +26,6 @@ export type {
   RoutePreviewResponse,
   RustGameSnapshot,
   RustMetrics,
-  RustTripOutcome,
   SandboxCreationError,
   SandboxCreationErrorCode,
   SandboxCreationRequest,

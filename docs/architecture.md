@@ -6,19 +6,19 @@ Caelum runs as a shared browser + Tauri frontend with a Svelte shell around a We
 
 `crates/caelum-core` owns the simulation. It is a Cargo workspace member gated by CI (`cargo fmt --check`, `cargo clippy -D warnings`, `cargo test`, `cargo build`) and by `lint-staged`.
 
-- `engine.rs` — `GameEngine` owns the shell `GameSnapshot`, the compiled `RoadTopology`, and the ECS population world/schedule as one commit unit, and runs `tick_trips_with_objectives`, which advances immutable snapshots in deterministic boundary-aware substeps and evaluates objectives after each substep. A tick commits the shell candidate and ECS mutations together: `applied = shell_changed || population_changed`. Trip outcomes are recorded inline by the trip pipeline (via `update_metrics`); there is no separate `record_trip_outcome` step.
+- `engine.rs` — `GameEngine` owns the shell `GameSnapshot`, the compiled `RoadTopology`, and the ECS population world/schedule as one commit unit, and runs `tick_trips`, which advances immutable snapshots in deterministic boundary-aware substeps. A tick commits the shell candidate and ECS mutations together: `applied = shell_changed || population_changed`. Trip resolutions update the lifetime metric counters inline (via `update_metrics`).
 - `transit.rs`, `network.rs`, `router.rs`, `trips.rs`, `commute.rs` — transit network, multi-leg router, trip/commute lifecycle with substep ticking across boundary times (departures, vehicle stops, walk ends, day rollovers).
 - `areas.rs`, `buildings.rs`, `building_catalog.rs` — area zoning and building placement, gated by area.
-- `objectives.rs`, `platforms.rs` — objective evaluation and platform capacity.
+- `platforms.rs` — platform capacity.
 - `sandbox.rs` — validated sandbox creation requests, deterministic Blank Grid/Crossroads maps, canonical defaults, template invariants, and reset reconstruction.
-- `scenario.rs`, `clock.rs` — Growing Suburb campaign configuration and deterministic clock.
+- `clock.rs` — deterministic clock.
 - `intent.rs` — `GameIntent` enum mirroring the TS intent flow, with camelCase serde used by the active WASM and Tauri host boundaries.
 - `model.rs`, `state.rs`, `ids.rs` — shared data model, snapshot, monotonic ID generation.
 - `population/` — the load-bearing standalone `bevy_ecs` population world: citizen components, the exact-time scheduler, the derived population index, and the trip-demand bridge.
 
 ### Population ownership (ECS)
 
-`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v13 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
+`GameEngine` owns the shell snapshot, the road topology, and the ECS population world/schedule. The live shell's `sims` vector is empty at runtime — latent citizens live only in the ECS world. The exact-time scheduler wakes only due events (no whole-population scan), and a tick commits the shell and ECS state as one unit. The explicit durable snapshot (`GameEngine::snapshot` / `snapshot_for_save`) reconstructs schema-v14 sims from the world; ordinary tick/dispatch/presentation never does. One `project_update` consumes `PopulationAggregates` — built either from durable sims or from the ECS population index, with parity coverage. HPA-348 owns route-choice batching. HPA-640 owns WebGPU/viewport/LOD/cadence.
 
 The crate is deterministic: no `SystemTime`/`Instant`/`rand` in library source (`Instant` exists only in native example tooling, such as `examples/presentation_scale.rs`); HashMaps/HashSets are used only for lookup, never for ordered output. The `transit_build`, `router_planning`, `network_paths`, and `platforms` tests are golden/characterization tests that pin the Rust core's behavior to specific values.
 
@@ -64,18 +64,15 @@ contract is deliberately a shared runtime seam, not a plugin or host-platform
 API. Neither adapter exposes a runtime identity, session object, validation
 operation, or mutating sandbox operation.
 
-The host contract is `SNAPSHOT_SCHEMA_VERSION = 13`. Every snapshot carries
-required Rust-owned `GameRules` plus a required `ScenarioConfig`.
+The host contract is `SNAPSHOT_SCHEMA_VERSION = 14`. Every snapshot carries
+required Rust-owned `GameRules`.
 `rules.sandbox.startingCapital` is required and records the exact amount reset
 must restore; it is an integer from `0` through `i32::MAX`.
-`scenario.objectives` is a required-but-nullable wire key: it is an object or
-explicit JSON `null`; a present WASM `undefined` represents Rust `None` and
-the host normalizes it to `null`.
-Omitting `objectives`, omitting `startingCapital`, omitting a placed building's required `placedAt`,
+Omitting `startingCapital`, omitting a placed building's required `placedAt`,
 omitting a bus route or Metro line's required-nullable `targetHeadwaySeconds`, or
-supplying any other malformed schema-v13 content,
+supplying any other malformed schema-v14 content,
 rejects the snapshot. Hosts reject every snapshot whose schema is not
-13—including every older schema; development saves are disposable and are
+14—including every older schema; development saves are disposable and are
 cleared rather than migrated.
 `Route.serviceMetrics` and `MetroLine.serviceMetrics` are the opposite direction:
 runtime-derived output that Rust may serialize for the Lines panel but never
@@ -271,7 +268,7 @@ Equal validated requests produce equal complete snapshots, including stable
 tile and structure IDs. Changing economy, starting capital, or demand settings
 changes rules/budget only; it does not change the authored template map.
 Checked-in deterministic characterizations cover the complete ordered tile
-IDs, non-default tiles, structures, rules, budget, counters, scenario, and
+IDs, non-default tiles, structures, rules, budget, counters, and
 entity-ID collections.
 
 `GameEngine::reset()` reconstructs a candidate from the active snapshot's
@@ -279,9 +276,7 @@ persisted sandbox rules, then swaps snapshot and compiled topology together
 only after successful construction. Reset therefore discards every player
 mutation and restores the exact active template, economy, starting capital,
 demand multiplier, and paused snapshot state; Blank Grid cannot reset to
-Crossroads or vice versa. Campaign reset is deliberately unsupported: it
-returns `SandboxResetError { code: "unsupportedGameMode", context:
-{ gameMode: "campaign" } }` and leaves the complete campaign state unchanged.
+Crossroads or vice versa.
 
 WASM and Tauri keep domain failures separate from host failures. Their adapters
 recognize complete typed creation/reset error objects and return `{ ok: false,
@@ -329,31 +324,9 @@ Roundabouts are Rust-owned fixed counterclockwise 2x2/3x3 stamps. Placement capt
 `Tile.area` is an independent zoning layer held on each tile alongside the physical `kind`. It is retained across `kind` transitions (painting a road over a zoned tile, then bulldozing the road, leaves the area intact) and the renderer only honors it on `kind === "empty"` tiles. The player paints areas (residential / commercial / industrial / office / civic / park) via drag rectangles in the build panel; Rust owns the paintability gate and the immutable `paintAreaRectangle` intent. Buildings are gated by area: a housing or destination building may only be placed on a tile whose `area` matches the catalog entry's `allowedArea`. Read-only TypeScript catalog data lives under `src/domain/catalog/` for UI and rendering.
 
 The fresh game is the canonical Standard Crossroads sandbox: `$120,000`
-starting capital, demand multiplier `1.0`, an initially paused snapshot, and no
-campaign objectives.
-Sandbox ticks continue trips and metrics but never newly win or lose. Explicit
-campaign snapshots may attach objective thresholds; Rust evaluates them only in
-campaign mode.
-
-Serialized campaign thresholds are authoritative: hosts display the values
-Rust enforces and do not derive or hard-code a local copy. When an objectives
-object is present, its `rollingWindowSeconds` field is required; omitting it is
-malformed. Each `ObjectiveThresholds` field is a validated newtype, so invalid
-values (non-finite, negative, or — for `rollingWindowSeconds` and
-`survivalTimeSeconds` — non-positive) are rejected at the Rust deserialization
-boundary as a serde error (surfaced by both hosts as a shell/runtime error —
-see the design spec's Error Handling section: serde boundary mismatches are
-distinct from `GameplayRejection`) rather than coerced at evaluation time. The
-deterministic 300-second constant applies to both trip-outcome retention and
-objective scoring when objectives are inactive or absent in their allowed mode
-configuration; a present-but-invalid configured rolling window is unreachable
-because the newtype rejects it at load.
-
-Growing Suburb remains a campaign scenario name, independent from sandbox
-template identity. Its campaign helper currently reuses the canonical
-Crossroads sandbox settings while retaining campaign mode, objectives
-ownership, and the `"Growing Suburb"` scenario name. Sandboxes use only the
-`"Blank Grid"` and `"Crossroads"` scenario/template labels.
+starting capital, demand multiplier `1.0`, and an initially paused snapshot.
+Sandbox ticks advance trips, population, and city growth. There is no win or
+loss state.
 
 ## City growth
 
@@ -415,11 +388,11 @@ Host bootstrap failures stay in the shell layer, while gameplay validation remai
 
 1. Svelte components emit user intents to the runtime.
 2. The runtime applies local UI intents directly and sends gameplay intents to the host backend.
-3. The Rust `GameEngine` advances city growth, transit movement, and objectives, projecting each result into a `PresentationUpdate`.
+3. The Rust `GameEngine` advances city growth, transit movement, and trips, projecting each result into a `PresentationUpdate`.
 4. The WebGPU host renders the committed presentation state from runtime-owned batches.
 5. Svelte rerenders from the latest runtime snapshot.
 
 The host-owned `requestAnimationFrame` loop admits simulation ticks to the backend at ≤10 per second while unpaused (one tick in flight, wall-delta clamped) and interpolates vehicle presentation between observed snapshots; the load-bearing standalone Bevy ECS population
 introduced by HPA-347 is live in `caelum-core` (see Population ownership above).
 
-The Growing Suburb scenario remains deterministic for tests: initial state, generated citizens, identifiers, and objective evaluation stay stable across repeated runs.
+The sandbox templates remain deterministic for tests: initial state, generated citizens, and identifiers stay stable across repeated runs.

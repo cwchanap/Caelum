@@ -91,7 +91,6 @@ fn production_fixture() -> GameEngine {
     let snapshot = engine.snapshot();
     assert!(!snapshot.sims.is_empty());
     assert!(!snapshot.active_trips.is_empty());
-    assert!(!snapshot.metrics.trip_outcomes.is_empty());
     engine
 }
 

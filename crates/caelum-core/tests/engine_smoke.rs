@@ -1,4 +1,4 @@
-use caelum_core::model::{MetricsState, ServicePattern, TransitMode};
+use caelum_core::model::{ServicePattern, TransitMode};
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn assert_intent_json(intent: GameIntent, json: serde_json::Value) {
@@ -186,7 +186,6 @@ fn new_engine_exposes_initial_snapshot() {
     assert_eq!(snapshot.speed, 1);
     assert_eq!(snapshot.map.width, 28);
     assert_eq!(snapshot.map.height, 18);
-    assert_eq!(snapshot.metrics.state, MetricsState::Running);
 }
 
 #[test]

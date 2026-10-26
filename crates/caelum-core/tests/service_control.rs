@@ -260,10 +260,6 @@ fn standard_daily_operating_cost_crosses_budget_below_zero_at_midnight() {
     assert!(result.applied);
     assert_eq!(engine.snapshot().day, 1);
     assert_eq!(engine.snapshot().budget, -1);
-    assert_eq!(
-        engine.snapshot().metrics.state,
-        caelum_core::model::MetricsState::Running
-    );
 }
 
 #[test]

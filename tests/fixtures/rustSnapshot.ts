@@ -47,7 +47,6 @@ export function createRustSnapshot(
   return {
     schemaVersion: SNAPSHOT_SCHEMA_VERSION,
     rules: {
-      gameMode: "sandbox",
       economyPreset: "standard",
       sandbox: {
         templateId: "crossroads",
@@ -82,13 +81,6 @@ export function createRustSnapshot(
       totalWaitSeconds: 0,
       waitingTripCount: 0,
       averageWaitSeconds: 0,
-      tripOutcomes: [],
-      state: "running",
-      lossReason: null,
-    },
-    scenario: {
-      name: "Crossroads",
-      objectives: null,
     },
     ...overrides,
   };
@@ -139,7 +131,6 @@ export function createPresentationUpdate(
         lateTrips: snapshot.metrics.lateTrips,
         unservedTrips: snapshot.metrics.unservedTrips,
         averageWaitSeconds: snapshot.metrics.averageWaitSeconds,
-        state: snapshot.metrics.state,
       },
       populationCount: snapshot.sims.length,
       buildingOccupancy: [],
@@ -204,7 +195,6 @@ export function previewBackendStubs(): Pick<
       const snapshot = createRustSnapshot({
         budget: request.startingCapital,
         rules: {
-          gameMode: "sandbox",
           economyPreset:
             request.economyPreset === "creative" ? "creative" : "standard",
           sandbox: {
