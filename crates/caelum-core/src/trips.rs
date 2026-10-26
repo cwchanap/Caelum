@@ -201,10 +201,19 @@ pub(crate) fn tick_trips(
     let mut cap = max_tick_substeps(&next, final_time)
         .saturating_add(population::scheduler_due_key_count(world));
     let mut last_population_boundary_generation = population::scheduler_boundary_generation(world);
-    loop {
-        if steps >= cap || final_time - next.time <= EPSILON {
-            break;
-        }
+    while final_time - next.time > EPSILON {
+        // The cap is an upper bound on legitimate boundary events (see
+        // `max_tick_substeps`). Exhausting it means a boundary source is denser than
+        // the budget, a correctness regression. Debug and test builds surface that
+        // here; release builds keep consuming the remaining time so a tick never
+        // returns partially advanced.
+        debug_assert!(
+            steps < cap,
+            "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
+            next.time,
+            final_time,
+            final_time - next.time
+        );
 
         population_changed |= apply_due_world_events(&next, world, population_schedule);
         widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
@@ -214,9 +223,16 @@ pub(crate) fn tick_trips(
         let substep_end = next_boundary_after(&next, &road_flow, world)
             .map(|boundary| boundary.min(final_time))
             .unwrap_or(final_time);
-        let substep_delta = (substep_end - next.time).max(0.0);
+        let mut substep_delta = (substep_end - next.time).max(0.0);
+        debug_assert!(
+            substep_delta > EPSILON,
+            "no forward tick boundary at time {} before final_time {}",
+            next.time,
+            final_time
+        );
         if substep_delta <= EPSILON {
-            break;
+            // Release builds consume the residual time so the tick contract holds.
+            substep_delta = final_time - next.time;
         }
 
         let (advanced, resolution_changed) =
@@ -224,47 +240,6 @@ pub(crate) fn tick_trips(
         next = advanced;
         population_changed |= resolution_changed;
         steps += 1;
-        population_changed |= apply_due_world_events(&next, world, population_schedule);
-    }
-
-    // The substep cap is an upper bound on legitimate boundary events (see
-    // `max_tick_substeps`). Reaching here with unprocessed time means a boundary
-    // source is denser than the budget — a correctness regression. Surface it
-    // in debug/test builds via debug_assert, but still process the remaining
-    // time through normal boundary progression so release builds never return
-    // a partially advanced tick.
-    let dropped = final_time - next.time;
-    debug_assert!(
-        dropped <= EPSILON,
-        "tick substep cap exhausted at time {} before final_time {} (dropped {}s)",
-        next.time,
-        final_time,
-        dropped
-    );
-
-    while final_time - next.time > EPSILON {
-        population_changed |= apply_due_world_events(&next, world, population_schedule);
-        widen_population_cap(world, &mut cap, &mut last_population_boundary_generation);
-        let road_flow = drain_and_spawn(&mut next, road_topology, world);
-
-        let substep_end = next_boundary_after(&next, &road_flow, world)
-            .map(|boundary| boundary.min(final_time))
-            .unwrap_or(final_time);
-        let mut substep_delta = (substep_end - next.time).max(0.0);
-        if substep_delta <= EPSILON {
-            // No forward boundary: still consume residual time so the tick
-            // contract (advance by delta) holds in release builds.
-            substep_delta = final_time - next.time;
-            if substep_delta <= EPSILON {
-                break;
-            }
-        }
-
-        let (advanced, resolution_changed) =
-            advance_tick_substep(&next, &road_flow, substep_delta, world);
-        next = advanced;
-        population_changed |= resolution_changed;
-        // Same post-substep population pass as the main loop.
         population_changed |= apply_due_world_events(&next, world, population_schedule);
     }
 
