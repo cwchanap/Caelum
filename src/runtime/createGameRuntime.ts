@@ -527,26 +527,31 @@ export async function createGameRuntime(
     return run.then((snapshot) => snapshot);
   };
 
+  const dispatchNow = async (
+    intent: GameIntent,
+    nextUi?: UiState | ((applied: boolean, currentUi: UiState) => UiState),
+  ): Promise<RuntimeSnapshot> => {
+    const result = await backend.dispatch(intent);
+    backendError = null;
+    // Preserve a prior rejection on no-op dispatches (applied === false,
+    // rejection === null) — otherwise a no-op intent like re-toggling pause
+    // would clear a placement rejection the player hasn't dismissed yet.
+    // Update only on success (clears) or when a new rejection is present.
+    if (result.applied || result.rejection !== null) {
+      rejection = result.rejection;
+    }
+    const resolvedUi =
+      typeof nextUi === "function"
+        ? nextUi(result.applied, ui)
+        : (nextUi ?? ui);
+    return commitDispatchResult(result, resolvedUi, intent);
+  };
+
   const enqueueDispatch = (
     intent: GameIntent,
     nextUi?: UiState | ((applied: boolean, currentUi: UiState) => UiState),
   ): Promise<RuntimeSnapshot> =>
-    queueBackend(async () => {
-      const result = await backend.dispatch(intent);
-      backendError = null;
-      // Preserve a prior rejection on no-op dispatches (applied === false,
-      // rejection === null) — otherwise a no-op intent like re-toggling pause
-      // would clear a placement rejection the player hasn't dismissed yet.
-      // Update only on success (clears) or when a new rejection is present.
-      if (result.applied || result.rejection !== null) {
-        rejection = result.rejection;
-      }
-      const resolvedUi =
-        typeof nextUi === "function"
-          ? nextUi(result.applied, ui)
-          : (nextUi ?? ui);
-      return commitDispatchResult(result, resolvedUi, intent);
-    });
+    queueBackend(() => dispatchNow(intent, nextUi));
 
   const enqueueComputedDispatch = (
     getIntent: () => GameIntent | null,
@@ -557,16 +562,7 @@ export async function createGameRuntime(
       if (intent === null) {
         return commit(state, ui);
       }
-      const result = await backend.dispatch(intent);
-      backendError = null;
-      if (result.applied || result.rejection !== null) {
-        rejection = result.rejection;
-      }
-      const resolvedUi =
-        typeof nextUi === "function"
-          ? nextUi(result.applied, ui)
-          : (nextUi ?? ui);
-      return commitDispatchResult(result, resolvedUi, intent);
+      return dispatchNow(intent, nextUi);
     });
 
   const enqueueTick = (deltaSeconds: number): Promise<RuntimeSnapshot> =>
@@ -821,11 +817,14 @@ export async function createGameRuntime(
           ? "create"
           : `edit:${draft.source.routeId}:${draft.source.expectedRevision}`,
     };
+    const isCreate = draft.source.kind === "create";
+    const mode = draft.mode;
     const tokenKey = `${token.instanceId}:${token.generation}:${token.source}`;
     if (activeRouteSaveTokens.has(tokenKey)) {
       return getSnapshot();
     }
     activeRouteSaveTokens.add(tokenKey);
+    let nextDraftInstanceIdAtAcceptedCreate: number | null = null;
     const intent: GameIntent =
       draft.source.kind === "create"
         ? {
@@ -857,7 +856,27 @@ export async function createGameRuntime(
     };
     return queueBackend(
       async () => {
+        const existingIds = new Set(
+          isCreate
+            ? mode === "bus"
+              ? state.transit.routes.map((route) => route.id)
+              : state.transit.metroLines.map((line) => line.id)
+            : [],
+        );
         const result = await backend.dispatch(intent);
+        const deployCreatedLine = (): Promise<RuntimeSnapshot> | null => {
+          if (!isCreate || !result.applied || result.update.scene === null) {
+            return null;
+          }
+          const ids =
+            mode === "bus"
+              ? result.update.scene.routes.map((route) => route.id)
+              : result.update.scene.metroLines.map((line) => line.id);
+          const newIds = ids.filter((id) => !existingIds.has(id));
+          return newIds.length === 1
+            ? dispatchNow({ type: "deployInitialFleet", lineId: newIds[0] })
+            : null;
+        };
         const current = ui.routeDraft;
         const tokenIsCurrent = isCurrent(current);
         if (tokenIsCurrent) {
@@ -870,8 +889,12 @@ export async function createGameRuntime(
           rejection = null;
         }
         if (result.applied && tokenIsCurrent) {
+          if (isCreate) {
+            // The create closes this draft itself; a later instance is a real replacement.
+            nextDraftInstanceIdAtAcceptedCreate = nextRouteDraftInstanceId;
+          }
           previewCoordinator.invalidateRoute();
-          return commitDispatchResult(
+          const saved = commitDispatchResult(
             result,
             {
               ...ui,
@@ -890,6 +913,7 @@ export async function createGameRuntime(
             },
             intent,
           );
+          return deployCreatedLine() ?? saved;
         }
         // Non-fatal rejection with a current token: surface into the draft
         // panel so the editor does not keep showing a stale "Connected"
@@ -934,9 +958,10 @@ export async function createGameRuntime(
               intent,
             );
             if (canRequestPreview) requestRoutePreview(refreshedDraft);
-            return supersededResult;
+            return deployCreatedLine() ?? supersededResult;
           }
-          return commitDispatchResult(result, ui, intent);
+          const supersededResult = commitDispatchResult(result, ui, intent);
+          return deployCreatedLine() ?? supersededResult;
         }
         return commitDispatchResult(result, ui, intent);
       },
@@ -944,7 +969,11 @@ export async function createGameRuntime(
       // already be on a replacement draft. A truly dead backend is still
       // caught by the next tick/dispatch failBackend path.
       (error) => {
-        if (isCurrent(ui.routeDraft)) {
+        const createStillOwnsClosedDraft =
+          nextDraftInstanceIdAtAcceptedCreate !== null &&
+          ui.routeDraft === null &&
+          nextRouteDraftInstanceId === nextDraftInstanceIdAtAcceptedCreate;
+        if (isCurrent(ui.routeDraft) || createStillOwnsClosedDraft) {
           return failBackend(error);
         }
         return getSnapshot();

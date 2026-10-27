@@ -242,7 +242,7 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
   await expect(page.getByTestId("route-preview-status")).toHaveText(
     /connected/i,
   );
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
   await expect(page.getByTestId("command-tool-select")).toHaveAttribute(
     "aria-pressed",
     "true",
@@ -252,6 +252,14 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
   const created = (await runtimeSnapshot(page)).state.transit.routes.at(-1);
   expect(created).toBeDefined();
   const routeId = created!.id;
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === routeId,
+      );
+      return route?.vehicleIds.length ?? 0;
+    })
+    .toBeGreaterThan(0);
   const routeName = page.getByTestId(`route-name-${routeId}`);
   await expect(routeName).toHaveValue(created!.name);
   await routeName.fill("Harbour Shuttle");
@@ -297,10 +305,9 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
 
   await openCommandDestination(page, "lines");
   await page.getByTestId(`route-toggle-${routeId}`).click();
-  // A bus route is fleet-free until the player deploys: an active, connected
-  // route with no vehicles reads No fleet rather than Running.
+  // Reactivating the line keeps the fleet started by Save & run.
   await expect(page.getByTestId(`route-status-${routeId}`)).toHaveText(
-    "No fleet",
+    "Running",
   );
   const deleteButton = page.getByTestId(`route-delete-${routeId}`);
   await deleteButton.click();

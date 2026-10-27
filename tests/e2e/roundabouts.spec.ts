@@ -159,7 +159,7 @@ async function createRoundaboutShuttleRoute(
       };
     })
     .toEqual({ pattern: "shuttle", pending: false, rejection: null });
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
   await expect
     .poll(async () => {
       const route = (await runtimeSnapshot(page)).state.transit.routes.at(-1);

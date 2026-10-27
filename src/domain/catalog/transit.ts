@@ -1,5 +1,7 @@
 import type { Stop } from "../types";
 
+export const METRO_STATION_COVERAGE_RADIUS = 4;
+
 export const COSTS = {
   busStop: 2_000,
   busTerminal: 12_000,
@@ -10,6 +12,6 @@ export const COSTS = {
   track: 500,
 } as const;
 
-export function stopCoverageRadius(stop: Stop): number {
+export function stopCoverageRadius(stop: Pick<Stop, "kind">): number {
   return stop.kind === "busTerminal" ? 4 : 2;
 }

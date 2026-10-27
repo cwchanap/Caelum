@@ -240,9 +240,33 @@ fn bus_route_creation_is_fleet_free_and_budget_free() {
     });
     assert!(created.applied, "fixture route should apply: {created:?}");
 
+    assert_eq!(
+        engine.snapshot().transit.routes[0].target_headway_seconds,
+        Some(600)
+    );
     assert!(engine.snapshot().transit.routes[0].vehicle_ids.is_empty());
     assert!(engine.snapshot().transit.vehicles.is_empty());
     assert_eq!(engine.snapshot().budget, before.budget);
+}
+
+#[test]
+fn metro_line_creation_sets_default_headway_without_fleet() {
+    let mut engine = metro_network_engine();
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Metro,
+        pattern: caelum_core::model::ServicePattern::Loop,
+        waypoint_ids: vec!["station-001".to_string(), "station-002".to_string()],
+    });
+    assert!(created.applied, "fixture line should apply: {created:?}");
+
+    assert_eq!(
+        engine.snapshot().transit.metro_lines[0].target_headway_seconds,
+        Some(600)
+    );
+    assert!(engine.snapshot().transit.metro_lines[0]
+        .vehicle_ids
+        .is_empty());
+    assert!(engine.snapshot().transit.vehicles.is_empty());
 }
 
 #[test]
@@ -670,7 +694,9 @@ fn deployed_metro_retarget_updates_target_without_touching_live_state() {
 
 #[test]
 fn deployment_requires_target_and_existing_route_state() {
-    let mut missing_target = bus_route_engine();
+    let mut snapshot = bus_route_engine().snapshot_for_save();
+    snapshot.transit.routes[0].target_headway_seconds = None;
+    let mut missing_target = GameEngine::from_snapshot(snapshot).unwrap();
     let missing = missing_target.dispatch(GameIntent::DeployInitialFleet {
         line_id: "route-001".to_string(),
     });
@@ -1398,7 +1424,9 @@ fn zero_fleet_and_missing_target_adds_stay_free_no_ops() {
 
     // The legacy AssignVehicle seam can put a vehicle on a line with no
     // target; Add must still not act as an alternate first-deployment path.
-    let mut missing_target = bus_route_engine();
+    let mut snapshot = bus_route_engine().snapshot_for_save();
+    snapshot.transit.routes[0].target_headway_seconds = None;
+    let mut missing_target = GameEngine::from_snapshot(snapshot).unwrap();
     let assigned = missing_target.dispatch(GameIntent::AssignVehicle {
         mode: "bus".to_string(),
         line_id: "route-001".to_string(),
@@ -1605,6 +1633,10 @@ fn zero_fleet_bus_route_is_not_a_passenger_service_until_a_vehicle_is_assigned()
 fn engine_snapshot_publishes_metro_service_metrics() {
     let engine = metro_line_engine();
     let snapshot = engine.snapshot();
+    assert_eq!(
+        snapshot.transit.metro_lines[0].target_headway_seconds,
+        Some(600)
+    );
     let metrics = snapshot.transit.metro_lines[0]
         .service_metrics
         .as_ref()
@@ -1612,10 +1644,10 @@ fn engine_snapshot_publishes_metro_service_metrics() {
 
     assert!(metrics.round_trip_seconds > 0.0);
     assert_eq!(metrics.assigned_fleet, 0);
-    assert_eq!(metrics.required_fleet, None);
-    assert_eq!(metrics.estimated_deployment_cost, None);
+    assert_eq!(metrics.required_fleet, Some(1));
+    assert_eq!(metrics.estimated_deployment_cost, Some(METRO_COST));
     assert_eq!(metrics.daily_operating_cost, 0);
-    assert_eq!(metrics.estimated_daily_operating_cost, None);
+    assert_eq!(metrics.estimated_daily_operating_cost, Some(2_500));
     assert_eq!(metrics.next_vehicle_cost, None);
     assert_eq!(metrics.nominal_headway_seconds, None);
     assert_eq!(metrics.waiting_at_risk_count, 0);

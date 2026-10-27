@@ -21,6 +21,8 @@ use crate::trips::current_leg_wait_seconds;
 
 /// Authoritative floor for `target_headway_seconds` on a transit route.
 pub const MIN_HEADWAY_SECONDS: u32 = 60;
+/// Default service target assigned to newly created Bus routes and Metro lines.
+pub const DEFAULT_TARGET_HEADWAY_SECONDS: u32 = 600;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct WaitingHealth {

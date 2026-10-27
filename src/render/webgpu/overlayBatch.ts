@@ -12,7 +12,10 @@ import {
   selectRouteEditorView,
 } from "../../runtime/runtimeSelectors";
 import { getBuildingFootprint } from "../../domain/catalog/buildings";
-import { stopCoverageRadius } from "../../domain/catalog/transit";
+import {
+  METRO_STATION_COVERAGE_RADIUS,
+  stopCoverageRadius,
+} from "../../domain/catalog/transit";
 import {
   canPlaceBusStop,
   isAreaPaintable,
@@ -108,6 +111,20 @@ function isInMap(state: GameState, point: Point): boolean {
   );
 }
 
+function drawCoverageSquare(
+  g: SolidGeometry,
+  center: Point,
+  radius: number,
+): void {
+  g.rect(
+    (center.x - radius) * tileSize,
+    (center.y - radius) * tileSize,
+    tileSize * (radius * 2 + 1),
+    tileSize * (radius * 2 + 1),
+    COVERAGE,
+  );
+}
+
 function drawDataOverlays(
   g: SolidGeometry,
   state: GameState,
@@ -116,24 +133,11 @@ function drawDataOverlays(
   if (ui.activeOverlay === "coverage") {
     for (const stop of state.transit.stops) {
       if (stop.status !== "present") continue;
-      const radius = stopCoverageRadius(stop);
-      g.rect(
-        (stop.position.x - radius) * tileSize,
-        (stop.position.y - radius) * tileSize,
-        tileSize * (radius * 2 + 1),
-        tileSize * (radius * 2 + 1),
-        COVERAGE,
-      );
+      drawCoverageSquare(g, stop.position, stopCoverageRadius(stop));
     }
     for (const station of state.transit.stations) {
       if (station.status !== "present") continue;
-      g.rect(
-        (station.position.x - 4) * tileSize,
-        (station.position.y - 4) * tileSize,
-        tileSize * 9,
-        tileSize * 9,
-        COVERAGE,
-      );
+      drawCoverageSquare(g, station.position, METRO_STATION_COVERAGE_RADIUS);
     }
   }
 
@@ -175,6 +179,18 @@ function drawDataOverlays(
         node.position,
         withAlpha(CROWDING, maxRatio >= 1 ? 0.55 : 0.3),
       );
+    }
+  }
+
+  if (ui.hoverTile !== null && isInMap(state, ui.hoverTile)) {
+    if (ui.activeTool === "busStop") {
+      drawCoverageSquare(
+        g,
+        ui.hoverTile,
+        stopCoverageRadius({ kind: "busStop" }),
+      );
+    } else if (ui.activeTool === "metroStation") {
+      drawCoverageSquare(g, ui.hoverTile, METRO_STATION_COVERAGE_RADIUS);
     }
   }
 }

@@ -279,7 +279,9 @@ fn metro_line_fixture() -> MetroLine {
 
 #[test]
 fn metro_line_service_fields_are_required_nullable_and_derived_output() {
-    let line = metro_line_fixture();
+    let mut line = metro_line_fixture();
+    // Exercise explicit-null persistence independently from the creation default.
+    line.target_headway_seconds = None;
     let line_json = serde_json::to_value(&line).unwrap();
 
     assert!(line_json.get("targetHeadwaySeconds").is_some());
@@ -315,7 +317,9 @@ fn metro_line_service_fields_are_required_nullable_and_derived_output() {
 
 #[test]
 fn bus_route_target_headway_is_required_nullable_on_the_wire() {
-    let route = bus_route_fixture();
+    let mut route = bus_route_fixture();
+    // Exercise explicit-null persistence independently from the creation default.
+    route.target_headway_seconds = None;
     let route_json = serde_json::to_value(&route).unwrap();
 
     // Required-nullable: the key is always present and serializes as null while unset.

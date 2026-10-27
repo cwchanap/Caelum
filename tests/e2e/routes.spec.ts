@@ -203,7 +203,7 @@ async function createDamageRoute(
   }
   await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Loop" }).check();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
 }
 
 async function newestBusRoute(page: import("@playwright/test").Page) {
@@ -308,7 +308,7 @@ test("create, manage, and delete a bus route", async ({ page }) => {
     .getByTestId("route-draft")
     .getByRole("button", { name: "Remove" })
     .click();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
 
   // The route now appears in the management panel.
   await openCommandDestination(page, "lines");
@@ -540,14 +540,22 @@ test("create a metro line on laid track", async ({ page }) => {
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
 
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("panel-lines")).toBeVisible();
   await expect(page.getByTestId("route-name-metro-001")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const line = (await readRuntimeTransit(page)).metroLines.find(
+        (candidate) => candidate.id === "metro-001",
+      );
+      return line?.vehicleIds.length ?? 0;
+    })
+    .toBeGreaterThan(0);
 });
 
-test("finishing a bus route leaves the fleet unassigned", async ({ page }) => {
+test("finishing a bus route starts its initial fleet", async ({ page }) => {
   await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
@@ -571,10 +579,10 @@ test("finishing a bus route leaves the fleet unassigned", async ({ page }) => {
   }
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
 
-  // Route creation is intentionally fleet-free. Poll for the async runtime
-  // commit, then assert no bus vehicle was implicitly created.
+  // Save & run commits the route before the initial fleet dispatch. Poll the
+  // live Rust-derived transit state until both commits are observable.
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
   await expect
@@ -583,14 +591,19 @@ test("finishing a bus route leaves the fleet unassigned", async ({ page }) => {
       const route = transit.routes.find(
         (candidate) => candidate.id === "route-001",
       );
-      return route !== undefined && route.vehicleIds.length === 0;
+      return route?.vehicleIds.length ?? 0;
     })
-    .toBe(true);
+    .toBeGreaterThan(0);
   const transit = await readRuntimeTransit(page);
-  expect(transit.vehicles).toEqual([]);
-  expect(
-    transit.routes.find((route) => route.id === "route-001")?.vehicleIds,
-  ).toEqual([]);
+  expect(transit.routes).toHaveLength(1);
+  const route = transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  expect(route?.vehicleIds.length).toBeGreaterThan(0);
+  expect(transit.vehicles).toHaveLength(route!.vehicleIds.length);
+  expect(transit.vehicles.every((vehicle) => vehicle.mode === "bus")).toBe(
+    true,
+  );
 });
 
 test("starts a bus service and recovers fleet after a route edit", async ({
@@ -615,7 +628,7 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     FARTHER_ROUTE_STOP,
   ]);
 
-  // Draft + finish a route over all three stops (fleet-free creation).
+  // Save & run starts a bus service over all three stops.
   await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of SIMPLE_ROUTE_STOPS) {
@@ -623,30 +636,32 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   }
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
 
-  // Saved routes are fleet-free: status reads No fleet and no vehicles exist.
-  await expect(page.getByTestId("route-status-route-001")).toHaveText(
-    "No fleet",
-  );
+  // Save & run can publish the route before assigning its initial fleet.
   await expect
     .poll(async () => {
       const transit = await readRuntimeTransit(page);
       const route = transit.routes.find(
         (candidate) => candidate.id === "route-001",
       );
-      return route !== undefined && route.vehicleIds.length === 0;
+      return route?.vehicleIds.length ?? 0;
     })
-    .toBe(true);
-  expect((await readRuntimeTransit(page)).vehicles).toEqual([]);
+    .toBeGreaterThan(0);
+  const initialTransit = await readRuntimeTransit(page);
+  const initialRoute = initialTransit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  expect(initialRoute?.vehicleIds.length).toBeGreaterThan(0);
+  expect(initialTransit.vehicles).toHaveLength(initialRoute!.vehicleIds.length);
+  await expect(page.getByTestId("route-status-route-001")).toHaveText(
+    "Running",
+  );
 
-  // Set a whole-minute target headway; Rust derives the required fleet.
+  // Edit the already-running service's whole-minute target headway.
   const service = page.getByTestId("route-service-route-001");
-  await expect(
-    service.getByText("Target").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText("—");
   await page.getByTestId("route-headway-route-001").fill("1");
   await page.getByTestId("route-headway-set-route-001").click();
   await expect
@@ -662,50 +677,18 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     .toBe(true);
   await expect(service).toContainText("1.0 min");
 
-  // Recommended N is the Rust-derived row value (informational estimate). The
-  // Deploy button does not promise a specific count: on Tauri a tick in flight
-  // when the click queues can change road flow before deploy_bus_fleet
-  // recomputes required_fleet, so the purchased count is whatever Rust derives
-  // at execution time. Assert the deployed count equals the post-deploy
-  // assignedFleet Fleet readout rather than the pre-click Recommended readout.
-  const recommendedReadout = service
-    .getByText("Recommended")
-    .locator("xpath=following-sibling::span[1]");
-  let recommendedText = "";
-  await expect
-    .poll(async () => {
-      recommendedText = ((await recommendedReadout.textContent()) ?? "")
-        .replace(/\s+/g, " ")
-        .trim();
-      return recommendedText;
-    })
-    .toMatch(/^\d+ bus(?:es)?$/);
-  const recommendedFleet = Number(
-    recommendedText.match(/^(\d+) bus(?:es)?$/)![1],
-  );
-  expect(recommendedFleet).toBeGreaterThan(0);
-  const persisted = (await runtimeSnapshot(page)).state.transit.routes.find(
-    (candidate) => candidate.id === "route-001",
-  )!;
-  expect(persisted.serviceMetrics?.requiredFleet).toBe(recommendedFleet);
-  const deploy = page.getByRole("button", { name: "Deploy fleet" });
-  await expect(deploy).toBeVisible();
-
-  // Deploying places a non-empty bus fleet; the count is Rust's execution-time
-  // derivation, not the pre-click Required readout.
-  await deploy.click();
-  let deployedFleet = 0;
+  // Save & run already deployed the initial fleet. Changing the target does
+  // not issue another DeployInitialFleet for this now-running route.
+  const deployedFleet = initialRoute!.vehicleIds.length;
   await expect
     .poll(async () => {
       const transit = await readRuntimeTransit(page);
       const route = transit.routes.find(
         (candidate) => candidate.id === "route-001",
       );
-      if (route === undefined) return false;
-      deployedFleet = route.vehicleIds.length;
-      return deployedFleet > 0;
+      return route?.vehicleIds.length ?? 0;
     })
-    .toBe(true);
+    .toBe(deployedFleet);
   const deployed = await readRuntimeTransit(page);
   expect(
     deployed.routes.find((route) => route.id === "route-001")?.vehicleIds,
@@ -723,7 +706,7 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     throw new Error("Post-deploy Rust required fleet is missing");
   }
 
-  // Post-deployment UI keeps the target editor and shows Estimated interval
+  // Running-service UI keeps the target editor and shows Estimated interval
   // with separate Fleet/Recommended values; setup deploy controls stay absent.
   await expect(
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
@@ -893,7 +876,9 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     .toMatch(/^Day 1 (?!00:00$)\d{2}:\d{2}$/);
 });
 
-test("tunes a deployed bus service from its line summary", async ({ page }) => {
+test("tunes a Save & run bus service from its line summary", async ({
+  page,
+}) => {
   await createDefaultCity(page);
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
@@ -908,16 +893,24 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
   }
   await expectRoadsideStopAnchors(page, SIMPLE_ROUTE_STOPS);
 
-  // Create the Bus line, set a valid 1-minute target, deploy initial fleet.
+  // Save & run starts the bus service with its default target headway.
   await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: "New Bus" }).click();
   for (const stop of SIMPLE_ROUTE_STOPS) {
     await clickMapTile(canvas, stop);
   }
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return route?.vehicleIds.length ?? 0;
+    })
+    .toBeGreaterThan(0);
 
   await page.getByTestId("route-headway-route-001").fill("1");
   await page.getByTestId("route-headway-set-route-001").click();
@@ -932,16 +925,6 @@ test("tunes a deployed bus service from its line summary", async ({ page }) => {
       );
     })
     .toBe(true);
-  await page.getByRole("button", { name: "Deploy fleet" }).click();
-  await expect
-    .poll(async () => {
-      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
-        (candidate) => candidate.id === "route-001",
-      );
-      return (route?.vehicleIds.length ?? 0) > 0;
-    })
-    .toBe(true);
-
   // Leave geometry edit mode so no later interaction can add waypoints.
   await selectTool(page, "select");
 
@@ -1163,7 +1146,7 @@ test("turns between paired roads and edits the committed route", async ({
     .toEqual({ pending: false, rejection: null });
   await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Loop" }).check();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
 
   // Poll until the route is committed — the Save dispatch is async.
   await expect
@@ -1223,7 +1206,7 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
   // Poll until the metro line is committed — the Save dispatch is async.
   await expect
     .poll(async () => {
@@ -1250,11 +1233,11 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await clickMapTile(canvas, first);
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-status-" + line.id)).toHaveText(
-    "No fleet",
+    "Running",
   );
 });
 
-test("starts a Metro service by setting a target headway and deploying the fleet", async ({
+test("starts a Metro service with Save & run and tunes its target headway", async ({
   page,
 }) => {
   await createDefaultCity(page);
@@ -1272,13 +1255,14 @@ test("starts a Metro service by setting a target headway and deploying the fleet
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
 
-  // Create and save the Metro line without buying a fleet.
+  // Fund and start the Metro service from its new route draft.
+  await debugSetBudget(page, 500_000);
   await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: "New Metro" }).click();
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
   await openCommandDestination(page, "lines");
 
   await expect
@@ -1288,19 +1272,23 @@ test("starts a Metro service by setting a target headway and deploying the fleet
     -1,
   )!.id;
   await expect(page.getByTestId(`route-name-${lineId}`)).toBeVisible();
-  await expect(page.getByTestId(`route-status-${lineId}`)).toHaveText(
-    "No fleet",
-  );
   await expect
     .poll(async () => {
       const line = (await readRuntimeTransit(page)).metroLines.find(
         (candidate) => candidate.id === lineId,
       );
-      return line?.vehicleIds ?? null;
+      return line?.vehicleIds.length ?? 0;
     })
-    .toEqual([]);
+    .toBeGreaterThan(0);
+  const startedLine = (
+    await runtimeSnapshot(page)
+  ).state.transit.metroLines.find((line) => line.id === lineId);
+  expect(startedLine?.vehicleIds.length).toBeGreaterThan(0);
+  await expect(page.getByTestId(`route-status-${lineId}`)).toHaveText(
+    "Running",
+  );
 
-  // Set a whole-minute target; the panel displays Rust's required fleet and cost.
+  // Set a whole-minute target; the panel displays Rust's service metrics.
   const service = page.getByTestId(`route-service-${lineId}`);
   await page.getByTestId(`route-headway-${lineId}`).fill("6");
   await page.getByTestId(`route-headway-set-${lineId}`).click();
@@ -1312,29 +1300,7 @@ test("starts a Metro service by setting a target headway and deploying the fleet
       .getByText("Recommended")
       .locator("xpath=following-sibling::span[1]"),
   ).toHaveText("1 train");
-  await expect(
-    service
-      .getByText("Est. deploy cost")
-      .locator("xpath=following-sibling::span[1]"),
-  ).toHaveText("$50,000");
-
-  // Provision the purchase explicitly before deploying the initial train.
-  await debugSetBudget(page, 500_000);
-  await page.getByTestId(`route-deploy-${lineId}`).click();
-
-  let vehicleIds: string[] = [];
-  await expect
-    .poll(async () => {
-      const line = (await readRuntimeTransit(page)).metroLines.find(
-        (candidate) => candidate.id === lineId,
-      );
-      vehicleIds = line?.vehicleIds ?? [];
-      return vehicleIds.length > 0;
-    })
-    .toBe(true);
-  expect(vehicleIds).not.toEqual([]);
-
-  // Deployment keeps the target editor and switches the row to Estimated
+  // Editing a running service keeps its target editor and Estimated
   // interval with separate Fleet/Recommended; setup deploy controls stay absent.
   await expect(
     service.getByText("Target").locator("xpath=following-sibling::span[1]"),
@@ -1344,14 +1310,18 @@ test("starts a Metro service by setting a target headway and deploying the fleet
       .getByText("Estimated interval")
       .locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
-  const postDeploySnapshot = await runtimeSnapshot(page);
-  const postDeployLine = postDeploySnapshot.state.transit.metroLines.find(
+  const updatedSnapshot = await runtimeSnapshot(page);
+  const updatedLine = updatedSnapshot.state.transit.metroLines.find(
     (line) => line.id === lineId,
   );
-  const postDeployRequired = postDeployLine?.serviceMetrics?.requiredFleet;
-  if (postDeployRequired === null || postDeployRequired === undefined) {
-    throw new Error("Post-deploy Rust required fleet is missing");
+  const requiredFleet = updatedLine?.serviceMetrics?.requiredFleet;
+  if (requiredFleet === null || requiredFleet === undefined) {
+    throw new Error(
+      "Rust required fleet is missing for the running Metro line",
+    );
   }
+  const vehicleIds = updatedLine?.vehicleIds ?? [];
+  expect(vehicleIds.length).toBeGreaterThan(0);
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
   ).toHaveText(String(vehicleIds.length));
@@ -1359,7 +1329,7 @@ test("starts a Metro service by setting a target headway and deploying the fleet
     service
       .getByText("Recommended")
       .locator("xpath=following-sibling::span[1]"),
-  ).toHaveText(new RegExp(`^${postDeployRequired} trains?$`));
+  ).toHaveText(new RegExp(`^${requiredFleet} trains?$`));
   await expect(service.getByText("Est. deploy cost")).toHaveCount(0);
   await expect(page.getByTestId(`route-headway-${lineId}`)).toBeVisible();
   await expect(
@@ -1404,7 +1374,7 @@ test("navigates from a selected stop to its serving line and back", async ({
     await clickMapTile(canvas, stop);
   }
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: "Save route" }).click();
+  await page.getByRole("button", { name: "Save & run" }).click();
 
   // The Save dispatch is asynchronous; wait for the committed route and the
   // cleared draft before leaving geometry mode.
@@ -1528,9 +1498,8 @@ test("reroutes when possible, then preserves a dotted last-valid leg until repai
   );
   await rebuildRoadTile(page, canvas, ALTERNATE_ROAD_TILE);
   await openCommandDestination(page, "lines");
-  // The route is connected again, but a bus route is fleet-free until the
-  // player deploys: the status reads No fleet rather than Running.
+  // Restoring the alternate road leaves the already-running service in place.
   await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
-    "No fleet",
+    "Running",
   );
 });

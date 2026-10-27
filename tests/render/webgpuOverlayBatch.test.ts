@@ -134,33 +134,63 @@ describe("buildOverlayRanges shape", () => {
 });
 
 describe("buildOverlayRanges data overlays", () => {
-  it("fills coverage areas for present stops and stations", () => {
-    let state = createTestGameState();
-    state = withStops(state, [presentStop("stop-1", { x: 2, y: 2 })]);
-    state = {
-      ...state,
+  it("fills exact five-tile stop and nine-tile station coverage squares", () => {
+    const stopState = withStops(createTestGameState(), [
+      presentStop("stop-1", { x: 3, y: 3 }),
+    ]);
+    const { underRoutes: stopCoverage } = buildOverlayRanges(stopState, {
+      ...createUiState(),
+      activeOverlay: "coverage",
+    });
+
+    // Bus Stop radius 2: exactly 5x5 tiles, from (32,32) to (192,192).
+    for (const [x, y] of [
+      [32, 32],
+      [192, 32],
+      [32, 192],
+      [192, 192],
+    ]) {
+      expect(hasVertexNear(stopCoverage, colors.coverage, x, y)).toBe(true);
+    }
+    expect(hasVertexNear(stopCoverage, colors.coverage, 224, 192)).toBe(false);
+    expect(alphaAt(stopCoverage, colors.coverage, 32, 32)).toBeCloseTo(
+      parseColor(colors.coverage)[3],
+      5,
+    );
+
+    const stationBase = createTestGameState();
+    const stationState = {
+      ...stationBase,
       transit: {
-        ...state.transit,
+        ...stationBase.transit,
         stations: [
           {
             id: "station-1",
             status: "present" as const,
-            position: { x: 8, y: 2 },
+            position: { x: 8, y: 8 },
             platforms: [],
           },
         ],
       },
     };
-    const { underRoutes } = buildOverlayRanges(state, {
+    const { underRoutes: stationCoverage } = buildOverlayRanges(stationState, {
       ...createUiState(),
       activeOverlay: "coverage",
     });
 
-    // busStop radius 2: rect from (0,0) spanning 5 tiles; station radius 4
-    // from its own position.
-    expect(hasVertexNear(underRoutes, colors.coverage, 0, 0)).toBe(true);
-    expect(hasVertexNear(underRoutes, colors.coverage, 160, 160)).toBe(true);
-    expect(alphaAt(underRoutes, colors.coverage, 0, 0)).toBeCloseTo(
+    // Metro radius 4: exactly 9x9 tiles, from (128,128) to (416,416).
+    for (const [x, y] of [
+      [128, 128],
+      [416, 128],
+      [128, 416],
+      [416, 416],
+    ]) {
+      expect(hasVertexNear(stationCoverage, colors.coverage, x, y)).toBe(true);
+    }
+    expect(hasVertexNear(stationCoverage, colors.coverage, 448, 416)).toBe(
+      false,
+    );
+    expect(alphaAt(stationCoverage, colors.coverage, 128, 128)).toBeCloseTo(
       parseColor(colors.coverage)[3],
       5,
     );
@@ -552,6 +582,120 @@ describe("buildOverlayRanges broken route markers", () => {
 });
 
 describe("buildOverlayRanges placement and mutation previews", () => {
+  it.each([
+    {
+      tool: "busStop" as const,
+      hoverTile: { x: 3, y: 3 },
+      corners: [
+        [32, 32],
+        [192, 32],
+        [32, 192],
+        [192, 192],
+      ],
+    },
+    {
+      tool: "metroStation" as const,
+      hoverTile: { x: 8, y: 8 },
+      corners: [
+        [128, 128],
+        [416, 128],
+        [128, 416],
+        [416, 416],
+      ],
+    },
+  ])(
+    "draws $tool coverage at hover outside the Coverage overlay",
+    ({ tool, hoverTile, corners }) => {
+      const { underRoutes } = buildOverlayRanges(createTestGameState(), {
+        ...createUiState(),
+        activeOverlay: "demand",
+        activeTool: tool,
+        hoverTile,
+      });
+
+      for (const [x, y] of corners) {
+        expect(hasVertexNear(underRoutes, colors.coverage, x, y)).toBe(true);
+      }
+      expect(
+        alphaAt(underRoutes, colors.coverage, corners[0][0], corners[0][1]),
+      ).toBeCloseTo(parseColor(colors.coverage)[3], 5);
+    },
+  );
+
+  it("keeps the Bus Stop validity marker after hover coverage", () => {
+    const { underRoutes } = buildOverlayRanges(createTestGameState(), {
+      ...createUiState(),
+      activeOverlay: "demand",
+      activeTool: "busStop",
+      hoverTile: { x: 3, y: 3 },
+    });
+    const rows = rowsOf(underRoutes);
+    const coverageIndex = rows.findIndex(([x, y]) => x === 32 && y === 32);
+    const validityMarkerIndex = rows.findIndex(
+      ([x, y]) => x === 96 && y === 96,
+    );
+
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 96, 96)).toBe(
+      true,
+    );
+    expect(coverageIndex).toBeGreaterThanOrEqual(0);
+    expect(validityMarkerIndex).toBeGreaterThan(coverageIndex);
+  });
+
+  it("skips hover coverage without an in-bounds tile or transit placement tool", () => {
+    const state = createTestGameState();
+    const { underRoutes: missingHover } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeOverlay: "demand",
+      activeTool: "busStop",
+      hoverTile: null,
+    });
+    expect(missingHover.length).toBe(0);
+
+    const cases = [
+      {
+        activeTool: "busStop" as const,
+        hoverTile: { x: -1, y: 3 },
+        coverageOrigin: { x: -96, y: 32 },
+      },
+      {
+        activeTool: "metroStation" as const,
+        hoverTile: { x: state.map.width, y: 3 },
+        coverageOrigin: { x: (state.map.width - 4) * 32, y: -32 },
+      },
+      {
+        activeTool: "busRoute" as const,
+        hoverTile: { x: 3, y: 3 },
+        coverageOrigin: { x: 32, y: 32 },
+      },
+    ];
+
+    for (const { activeTool, hoverTile, coverageOrigin } of cases) {
+      const { underRoutes } = buildOverlayRanges(state, {
+        ...createUiState(),
+        activeOverlay: "demand",
+        activeTool,
+        hoverTile,
+      });
+      expect(
+        hasVertexNear(
+          underRoutes,
+          colors.coverage,
+          coverageOrigin.x,
+          coverageOrigin.y,
+        ),
+      ).toBe(false);
+    }
+
+    const { underRoutes: buildingPreview } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeOverlay: "demand",
+      selectedBuilding: "busTerminal",
+      hoverTile: { x: 3, y: 3 },
+    });
+    expect(hasVertexNear(buildingPreview, colors.coverage, 32, 32)).toBe(false);
+  });
+
   it("previews a road mutation from the matching Rust response", () => {
     const state = createTestGameState();
     const ui = {
