@@ -12,6 +12,7 @@ Caelum already exposes Coverage, Crowding, Demand, and Traffic overlays, but the
 
 - `src/domain/types.ts`: `Overlay = "coverage" | "crowding" | "demand" | "traffic"`.
 - `src/components/hud/panels/DataPanel.svelte`: local overlay labels/toggles and a plain `dl` containing Late/Unserved/Avg Wait.
+- `src/runtime/runtimeSelectors.ts`: a second `OVERLAY_LABELS` map supplies `ShellCommandState.activeOverlayLabel` for the Data badge in `CommandShelf.svelte`. Its names must move to the same catalog; retain the existing shell field.
 - `src/App.svelte`: both the Data panel and `GameCanvas` receive the same `RuntimeSnapshot`; `handleSetOverlay` calls `runtime.setOverlay`.
 - `src/components/GameCanvas.svelte`: board-owned DOM siblings sit above the GPU surface. `src/styles.css` places the zoom group bottom-left (`z-index: 3`) and map text (`z-index: 2`).
 - `src/render/webgpu/overlayBatch.ts` and `src/render/colors.ts`: definitive overlay semantics and existing colour tokens.
@@ -22,7 +23,7 @@ This is a **presentation-only** change. Rust's transport/demand simulation, back
 
 ### One catalog, four truthful legends
 
-Add `src/ui/overlayCatalog.ts` with a small typed, ordered set of overlay descriptors: id, display label, short explanatory sentence, current colour reference from `src/render/colors.ts`, and an explicit swatch kind (`coverage`, `stepped`, or `intensity`). The catalog is static display metadata, **not** a new runtime model. Keeping it in the UI layer avoids making domain types depend on the renderer palette. Replace DataPanel's local list with it; consume the selected descriptor in a new `OverlayLegend.svelte`.
+Add `src/ui/overlayCatalog.ts` with a small typed, ordered set of overlay descriptors keyed by `Overlay`, each containing a display `label`, `legendText`, and `swatches: readonly string[]` built from the existing hues in `src/render/colors.ts`. The catalog is static display metadata, **not** a new runtime model. Keeping it in the UI layer avoids making domain types depend on the renderer palette. Reuse the catalog's labels in both `DataPanel.svelte` and `runtimeSelectors.ts` (delete its duplicate `OVERLAY_LABELS` constant), preserving `activeOverlayLabel` for the CommandShelf badge. The new `OverlayLegend.svelte` renders each descriptor's swatches with one loop, without a `swatchKind` union or conditional render branches.
 
 | Overlay | Actual visual behavior | Legend copy / swatch |
 | --- | --- | --- |
@@ -31,7 +32,7 @@ Add `src/ui/overlayCatalog.ts` with a small typed, ordered set of overlay descri
 | Demand | Yellow tiles over `demandFlow` points; opacity rises with count | “Darker yellow means more travel demand at this location.” Qualitative low → high ramp |
 | Traffic | Red/orange road tiles over `trafficFlow` points; opacity rises with flow | “Darker red means more private-car traffic on this road.” Qualitative low → high ramp |
 
-Swatches reuse **hues** from `colors.ts` and communicate strength, not invented units or precisely calibrated numeric ranges. The Crowding steps should not imply a smooth continuous scale. Do not claim that Coverage always means running service or that Traffic equals lateness.
+Swatches reuse **hues** from `colors.ts` and communicate strength, not invented units or precisely calibrated numeric ranges. Use one chip for Coverage; two chips for Crowding (effective alpha **0.06 / 0.11** from `colors.crowding`'s 0.2 alpha multiplied by the renderer's 0.3 / 0.55); and a few increasingly opaque chips for Demand and Traffic. The last two are illustrative samples, not a shared numeric scale or promise of continuous colour calibration. No `swatchKind` branches or swatch-rendering framework are needed. Do not claim that Coverage always means running service or that Traffic equals lateness.
 
 ### Placement and lifecycle
 
@@ -56,7 +57,7 @@ Changing the current `dl` to three semantic button cards means existing tests th
 
 ## Scope boundaries
 
-**In:** one read-only overlay catalog; one legend component; tiny changes to `GameCanvas.svelte`, `DataPanel.svelte`, and styles; targeted UI and Playwright assertions.
+**In:** one read-only overlay catalog shared by `DataPanel.svelte` and `runtimeSelectors.ts` for labels; one legend component; small changes to `GameCanvas.svelte`, `DataPanel.svelte`, and styles; targeted UI and Playwright assertions.
 
 **Out:** numeric thresholds/units that the map does not display, new overlay types, simulation or Rust changes, new GPU shader logic, persistence, panel navigation, animation systems, art and SFX. No follow-up PR is required for this ticket; implementation should continue in **this same draft PR** after review.
 
