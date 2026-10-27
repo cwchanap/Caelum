@@ -15,12 +15,12 @@ The current `main` branch already has all four overlays and a working `runtime.s
 
 **Create:** `src/ui/overlayCatalog.ts`
 
-- Define a statically ordered collection keyed by `Overlay` with `label`, `legendText`, `color` and `swatchKind` (`coverage | stepped | intensity`). Import `colors` from `src/render/colors.ts`; keep this dependency in the UI layer, not in `src/domain/`.
+- Define a statically ordered collection keyed by `Overlay` with `label`, `legendText`, and `swatches: readonly string[]`. Import `colors` from `src/render/colors.ts` for hues; keep this dependency in the UI layer, not in `src/domain/`.
 - Use a literal/typed descriptor map and a four-item display order, rather than another service, class or registry.
-- Match the current renderer semantics: Coverage is a single shaded range; Crowding has half/full thresholds; Demand and Traffic darken with intensity. Keep explanatory text qualitative. Do not duplicate simulation thresholds in code just to draw a swatch.
-- Reuse this catalog for DataPanel's overlay labels, avoiding four hardcoded duplicate labels.
+- Match current renderer semantics with precomputed swatch arrays: Coverage has **one** blue chip; Crowding has **two** orange chips (effective alphas `0.2 * 0.3 = 0.06` and `0.2 * 0.55 = 0.11`); Demand and Traffic have **three or four** increasingly opaque chips in their respective hues. `withAlpha` multiplies the base colour's alpha; it does not replace it. Keep legend text qualitative and do not expose fabricated units or numeric ranges.
+- Reuse this catalog for `DataPanel.svelte`'s overlay labels **and** `src/runtime/runtimeSelectors.ts`'s `activeOverlayLabel` derivation. Delete the existing duplicate `OVERLAY_LABELS` map there; preserve `ShellCommandState.activeOverlayLabel` and `CommandShelf.svelte`'s Data badge. This keeps the existing runtime presentation contract while eliminating a second source of names.
 
-**Verification:** TypeScript exhaustiveness catches a missing descriptor if the `Overlay` union changes.
+**Verification:** TypeScript exhaustiveness catches a missing descriptor if the `Overlay` union changes; `tests/runtime/runtimeSelectors.test.ts` continues checking the Data badge label without a duplicated lookup.
 
 ### 2. Render a board-local legend
 
@@ -30,7 +30,7 @@ The current `main` branch already has all four overlays and a working `runtime.s
 - Pass `snapshot.ui.activeOverlay` to a purely presentational component. Render only while there is an active overlay; it looks up its descriptor by ID.
 - Add a stable `data-testid="overlay-legend"` and accessible region name (e.g. “Traffic legend”), plus title, explanatory sentence and visually identifiable swatch.
 - Put the component in the existing `.board` beside `MapTextOverlay`, *not* inside the GPU canvas or `CommandPanel`. Apply a compact top-left placement, max width, contrasting existing surface tokens, and `pointer-events: none`. Preserve existing bottom-left zoom controls and keep command panel stacking above the legend.
-- Use existing overlay colours for the swatches. A single coloured chip is appropriate for Coverage; two visibly distinct strengths for Crowding; qualitative transparent-to-hue ramps for Demand and Traffic. These are explanatory, not numeric scales. Avoid helper classes or generic gradient engines.
+- Render `descriptor.swatches` as a single `#each` row of coloured chips regardless of overlay. One chip for Coverage, two for Crowding, three/four for Demand and Traffic; all are explanatory, not numeric scales. Avoid `swatchKind` branches, helper classes, and generic gradient engines.
 
 **Verification:** Null active overlay renders no legend; switching updates contents; overlays can be toggled without remounting the map. CSS does not steal pointer events from map interactions.
 
@@ -50,10 +50,10 @@ The current `main` branch already has all four overlays and a working `runtime.s
 **Add:** `tests/ui/overlayLegend.test.ts`, `tests/ui/dataPanel.test.ts`  
 **Modify:** `tests/e2e/commandShelf.spec.ts`, `tests/e2e/routes.spec.ts` (and `smoke.spec.ts` only if needed)
 
-- Legend unit/component test: one check for each descriptor/overlay, verify correct text and correct swatch kind; null hides element; changing the prop changes legend. Prefer a small parameterized test over dozens of DOM snapshots.
+- Legend unit/component test: one check for each descriptor/overlay, verifying text and expected chip count/colours; null hides element; changing the prop changes legend. Prefer a small parameterized test over dozens of DOM snapshots or swatch-kind branch tests.
 - DataPanel unit test: click one metric and assert the exact `onSetOverlay` argument (Unserved → Demand is the acceptance baseline); keyboard activation for one metric; clicking the same metric again stays selected. Separate check that an active explicit overlay button clears on click and reports `aria-pressed`.
 - Playwright: create a city, open Data, select overlay, assert legend visible on board; switch/clear and verify it changes/disappears; close Data and verify legend persists when still active; click Unserved and see Demand selected. Verify map tile interaction remains possible with legend present.
-- Update `routes.spec.ts`'s metric-readout lookup: it currently relies on `dt` followed by sibling `dd`, which deliberately changes to whole-card buttons. Assert values through the new semantically named metric buttons instead. Preserve the existing data-panel pointer-ownership test in `commandShelf.spec.ts`.
+- Update `routes.spec.ts`'s metric-readout lookup: it currently relies on `dt` followed by sibling `dd`, which deliberately changes to whole-card buttons. Assert values through the new semantically named metric buttons instead. **Preserve and extend the real pointer-ownership test** in `commandShelf.spec.ts:363-394`: it clicks the Late label while a road tool is armed and checks that no road tile changed. With the new Late button, additionally assert it activates Traffic while still not changing the map. Separately retain the existing viewport/bounding-box containment checks in that file.
 
 **Verification:** No new Rust test or fixture: gameplay and transport projection are untouched. Avoid an exact pixel or screenshot test for decorative gradient details.
 
@@ -73,16 +73,16 @@ The repo's existing CI remains the merge gate. If a command fails, fix within th
 
 ## Reuse and risk check
 
-- **Reuse** `RuntimeSnapshot.ui.activeOverlay`, `DataPanel.onSetOverlay`, `App.handleSetOverlay`, `colors.ts`, `.board` stacking, and Svelte 5 props; add no separate store, derived simulation state, renderer pass, or wire fields.
+- **Reuse** `RuntimeSnapshot.ui.activeOverlay`, `DataPanel.onSetOverlay`, `App.handleSetOverlay`, `ShellCommandState.activeOverlayLabel`, `colors.ts`, `.board` stacking, and Svelte 5 props; remove duplicate `OVERLAY_LABELS` rather than keeping parallel names. Add no separate store, derived simulation state, renderer pass, or wire fields.
 - **Copy accuracy** matters: Coverage is based on present nodes, not guaranteed running service; Crowding is thresholded; metric mappings are helpful starting points, not precise per-metric map projections.
 - **CSS placement** matters: existing board zoom is bottom-left, command panel is higher z-index, and overlays must be pointer-transparent.
 - **Existing test coupling** matters: the old `dl` XPath selectors must change with the button markup rather than keeping compatibility wrappers.
 
 ## Definition of done
 
-- [ ] The four overlay controls share catalog labels and produce correct map legends.
+- [ ] All four overlay controls and the CommandShelf Data badge share catalog labels; map legends render from descriptor swatch arrays.
 - [ ] Legend survives Data panel closure and is absent when no overlay is active.
 - [ ] All three metric cards activate the documented overlay via mouse and keyboard, without clearing active selection.
 - [ ] Map interactions still work with the legend visible.
-- [ ] Existing metric-value and overlay-toggle tests still pass with updated semantic locators.
+- [ ] Existing metric-value, overlay-toggle, and Data-panel click-ownership tests still pass with updated semantic locators.
 - [ ] Typecheck, targeted tests, lint, format and CI pass; no Rust or persistence changes.
