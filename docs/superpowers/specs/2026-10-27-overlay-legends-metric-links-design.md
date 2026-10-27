@@ -22,7 +22,7 @@ This is a **presentation-only** change. Rust's transport/demand simulation, back
 
 ### One catalog, four truthful legends
 
-Add `src/domain/catalog/overlays.ts` with a small typed, ordered set of overlay descriptors: id, display label, short explanatory sentence, current colour reference from `src/render/colors.ts`, and an explicit swatch kind (`coverage`, `stepped`, or `intensity`). The catalog is static display metadata, **not** a new runtime model. Replace DataPanel's local list with it; consume the selected descriptor in a new `OverlayLegend.svelte`.
+Add `src/ui/overlayCatalog.ts` with a small typed, ordered set of overlay descriptors: id, display label, short explanatory sentence, current colour reference from `src/render/colors.ts`, and an explicit swatch kind (`coverage`, `stepped`, or `intensity`). The catalog is static display metadata, **not** a new runtime model. Keeping it in the UI layer avoids making domain types depend on the renderer palette. Replace DataPanel's local list with it; consume the selected descriptor in a new `OverlayLegend.svelte`.
 
 | Overlay | Actual visual behavior | Legend copy / swatch |
 | --- | --- | --- |
