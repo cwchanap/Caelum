@@ -103,7 +103,6 @@ describe("RouteEditor", () => {
       "Move down",
       "Reverse",
       "Remove",
-      "Save route",
       "Cancel",
     ];
 
@@ -118,6 +117,7 @@ describe("RouteEditor", () => {
         ),
       ).toBeVisible();
     }
+    expect(screen.getByRole("button", { name: "Save & run" })).toBeVisible();
 
     await rerender(editorProps(editDraftView()));
     expect(screen.getByText("Editing Route 1")).toBeVisible();
@@ -132,6 +132,7 @@ describe("RouteEditor", () => {
         ),
       ).toBeVisible();
     }
+    expect(screen.getByRole("button", { name: "Save route" })).toBeVisible();
   });
 
   it("offers Reload after a stale revision and keeps Cancel available", () => {

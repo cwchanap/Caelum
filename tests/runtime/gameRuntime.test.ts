@@ -3101,11 +3101,17 @@ describe("route creation and management", () => {
     });
   }
 
-  async function withTwoStops(backend = backendSpy(routeSnapshot())) {
+  async function withTwoStops(
+    backend = backendSpy(routeSnapshot()),
+    initialCity: Parameters<
+      typeof createGameRuntime
+    >[0]["initialCity"] = undefined,
+  ) {
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
       hoverPreviewDebounceMs: 0,
       backend,
+      initialCity,
     });
     runtime.setTool("busRoute");
     await runtime.handleTileClick({ x: 14, y: 7 });
@@ -3392,13 +3398,15 @@ describe("route creation and management", () => {
       "stop-001",
       "stop-003",
     ]);
-    expect(backend.intents).toContainEqual({
-      type: "updateRoute",
-      routeId: "route-001",
-      expectedRevision: 0,
-      pattern: "loop",
-      waypointIds: ["stop-001", "stop-003"],
-    });
+    expect(backend.intents).toEqual([
+      {
+        type: "updateRoute",
+        routeId: "route-001",
+        expectedRevision: 0,
+        pattern: "loop",
+        waypointIds: ["stop-001", "stop-003"],
+      },
+    ]);
   });
 
   it("selects a retained missing draft handle without changing or previewing the draft", async () => {
@@ -4148,7 +4156,7 @@ describe("route creation and management", () => {
     expect(afterReload.ui.routeDraft).toBe(fresh.ui.routeDraft);
   });
 
-  it("successful creation save dispatches one atomic intent", async () => {
+  it("successful creation save deploys the initial fleet after the route", async () => {
     const base = backendSpy(routeSnapshot());
     const dispatch = vi.fn(base.dispatch.bind(base));
     const backend: BackendSpy = {
@@ -4163,10 +4171,15 @@ describe("route creation and management", () => {
 
     await runtime.saveRouteDraft();
 
-    expect(dispatch).toHaveBeenCalledTimes(1);
-    expect(dispatch).toHaveBeenCalledWith(
-      expect.objectContaining({ type: "createRoute" }),
-    );
+    expect(dispatch.mock.calls.map(([intent]) => intent)).toEqual([
+      {
+        type: "createRoute",
+        mode: "bus",
+        pattern: "loop",
+        waypointIds: ["stop-001", "stop-002"],
+      },
+      { type: "deployInitialFleet", lineId: "route-001" },
+    ]);
     expect(dispatch).not.toHaveBeenCalledWith(
       expect.objectContaining({ type: "assignVehicle" }),
     );
@@ -4226,6 +4239,184 @@ describe("route creation and management", () => {
     expect(committed.legs.map(routeLegProjection)).toEqual(
       preview.legs.map(routeLegProjection),
     );
+    expect(committed.targetHeadwaySeconds).toBe(600);
+    expect(committed.vehicleIds.length).toBeGreaterThan(0);
+  });
+
+  it("surfaces an initial fleet host failure after Save commits the route", async () => {
+    const base = await createWasmBackend();
+    const road = await base.dispatch({
+      type: "layRoadLine",
+      points: Array.from({ length: 9 }, (_, index) => ({ x: index + 3, y: 4 })),
+      preset: "twoWay",
+    });
+    expect(road.applied).toBe(true);
+    for (const point of [
+      { x: 3, y: 3 },
+      { x: 11, y: 3 },
+    ]) {
+      const stop = await base.dispatch({ type: "addBusStop", point });
+      expect(stop.applied).toBe(true);
+    }
+    const backend: GameBackend = {
+      ...base,
+      async dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          throw new Error("fleet deployment unavailable");
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+      initialCity: {
+        id: "city-route-save",
+        name: "Route Save City",
+        createdAt: "2026-08-08T09:00:00.000Z",
+        savedAt: "2026-08-08T09:30:00.000Z",
+      },
+    });
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 3, y: 3 });
+    runtime.handleTileClick({ x: 11, y: 3 });
+    await flushPromises();
+
+    await runtime.saveRouteDraft();
+
+    const snapshot = runtime.getSnapshot();
+    const savedRoute = snapshot.state.transit.routes.at(-1);
+    expect(savedRoute?.targetHeadwaySeconds).toBe(600);
+    expect(savedRoute?.vehicleIds).toHaveLength(0);
+    expect(snapshot.state.transit.vehicles).toHaveLength(0);
+    expect(snapshot.persistence.dirty).toBe(true);
+    expect(snapshot.ui.routeDraft).toBeNull();
+    expect(snapshot.backendError).toBe("fleet deployment unavailable");
+    expect(snapshot.rejection).toBeNull();
+    expect(snapshot.shell.actionFeedback).toBeNull();
+  });
+
+  it("creates and deploys a Metro line through Save", async () => {
+    const initial = fullRustSnapshot({
+      map: routeMap(),
+      transit: {
+        stops: [],
+        stations: [
+          {
+            id: "station-001",
+            status: "present",
+            position: { x: 14, y: 7 },
+            platforms: [
+              { id: "station-001-p0", label: "A", capacity: 300, routeIds: [] },
+            ],
+          },
+          {
+            id: "station-002",
+            status: "present",
+            position: { x: 14, y: 8 },
+            platforms: [
+              { id: "station-002-p0", label: "A", capacity: 300, routeIds: [] },
+            ],
+          },
+        ],
+        routes: [],
+        metroLines: [],
+        vehicles: [],
+      },
+    });
+    const backend = backendSpy(initial);
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.setTool("metroLine");
+    runtime.handleTileClick({ x: 14, y: 7 });
+    runtime.handleTileClick({ x: 14, y: 8 });
+    await flushPromises();
+
+    await runtime.saveRouteDraft();
+
+    expect(backend.intents.map((intent) => intent.type)).toEqual([
+      "createRoute",
+      "deployInitialFleet",
+    ]);
+    expect(
+      runtime.getSnapshot().state.transit.metroLines[0].vehicleIds,
+    ).toHaveLength(2);
+  });
+
+  it("keeps a created Bus line and manual Deploy fallback after budget rejection", async () => {
+    const base = await createWasmBackend();
+    const road = await base.dispatch({
+      type: "layRoadLine",
+      points: Array.from({ length: 9 }, (_, index) => ({ x: index + 3, y: 4 })),
+      preset: "twoWay",
+    });
+    expect(road.applied).toBe(true);
+    for (const point of [
+      { x: 3, y: 3 },
+      { x: 11, y: 3 },
+    ]) {
+      const stop = await base.dispatch({ type: "addBusStop", point });
+      expect(stop.applied).toBe(true);
+    }
+    const backend: GameBackend = {
+      ...base,
+      async dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          return {
+            update: await base.presentation(),
+            applied: false,
+            rejection: {
+              code: "insufficientBudget",
+              context: {
+                requiredBudget: 800,
+                availableBudget: 0,
+                affectedRouteIds: [intent.lineId],
+              },
+            },
+          };
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 3, y: 3 });
+    runtime.handleTileClick({ x: 11, y: 3 });
+    await flushPromises();
+
+    await runtime.saveRouteDraft();
+
+    const snapshot = runtime.getSnapshot();
+    const route = snapshot.state.transit.routes[0];
+    const row = snapshot.shell.routes[0];
+    expect(route.targetHeadwaySeconds).toBe(600);
+    expect(route.vehicleIds).toEqual([]);
+    expect(snapshot.state.transit.vehicles).toHaveLength(0);
+    expect(snapshot.ui.routeDraft).toBeNull();
+    expect(snapshot.rejection).toEqual({
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 800,
+        availableBudget: 0,
+        affectedRouteIds: [route.id],
+      },
+    });
+    expect(snapshot.shell.actionFeedback?.message).toBe(
+      "Needs $800; only $0 is available.",
+    );
+    expect(row).toMatchObject({
+      status: { primary: "noFleet" },
+      service: { targetHeadwaySeconds: 600, assignedFleet: 0 },
+    });
+    expect(row.service.requiredFleet).not.toBeNull();
   });
 
   it("routes Save through the selected service pattern", async () => {
@@ -4271,7 +4462,7 @@ describe("route creation and management", () => {
     expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
   });
 
-  it("Save sends one atomic createRoute intent", async () => {
+  it("Save creates the route before requesting the initial fleet", async () => {
     const backend = backendSpy(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
 
@@ -4284,6 +4475,7 @@ describe("route creation and management", () => {
         pattern: "loop",
         waypointIds: ["stop-001", "stop-002"],
       },
+      { type: "deployInitialFleet", lineId: "route-001" },
     ]);
     expect(backend.intents).not.toContainEqual({
       type: "assignVehicle",
@@ -4358,8 +4550,32 @@ describe("route creation and management", () => {
   });
 
   it("does not let a slow route finish clear a newer draft", async () => {
-    const backend = deferredDispatchBackend(routeSnapshot());
-    const { runtime } = await withTwoStops(backend);
+    const deferred = deferredDispatchBackend(routeSnapshot());
+    const backend: DeferredDispatchBackend = {
+      ...deferred,
+      async dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          throw new Error("fleet deployment unavailable");
+        }
+        return deferred.dispatch(intent);
+      },
+    };
+    const city = {
+      id: "city-route-save",
+      name: "Route Save City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+      initialCity: city,
+    });
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    await flushPromises();
 
     const firstFinish = runtime.saveRouteDraft();
     await Promise.resolve();
@@ -4376,10 +4592,81 @@ describe("route creation and management", () => {
     await backend.resolveNext();
     await firstFinish;
 
+    expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
+    expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+    expect(runtime.getSnapshot().backendError).toBeNull();
     expect(runtime.getSnapshot().ui.routeDraft?.waypointIds).toEqual([
       "stop-001",
       "stop-002",
     ]);
+  });
+
+  it("keeps a replacement draft when deployment fails after it opens", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const city = {
+      id: "city-route-save",
+      name: "Route Save City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    const { runtime } = await withTwoStops(backend, city);
+    await flushPromises();
+
+    const save = runtime.saveRouteDraft();
+    await Promise.resolve();
+    await backend.resolveNext();
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+
+    runtime.setTool("busRoute");
+    const replacement = runtime.getSnapshot().ui.routeDraft;
+    expect(replacement).not.toBeNull();
+    backend.failNextDispatch(new Error("fleet deployment unavailable"));
+    await backend.resolveNext();
+    await save;
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.state.transit.routes).toHaveLength(1);
+    expect(snapshot.state.transit.vehicles).toHaveLength(0);
+    expect(snapshot.persistence.dirty).toBe(true);
+    expect(snapshot.ui.routeDraft?.instanceId).toBe(replacement?.instanceId);
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.rejection).toBeNull();
+    expect(snapshot.shell.actionFeedback).toBeNull();
+  });
+
+  it("suppresses deployment failure after a replacement draft is cancelled", async () => {
+    const backend = deferredDispatchBackend(routeSnapshot());
+    const city = {
+      id: "city-route-save",
+      name: "Route Save City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    const { runtime } = await withTwoStops(backend, city);
+    await flushPromises();
+
+    const save = runtime.saveRouteDraft();
+    await Promise.resolve();
+    await backend.resolveNext();
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+
+    runtime.setTool("busRoute");
+    expect(runtime.getSnapshot().ui.routeDraft).not.toBeNull();
+    expect(runtime.cancelRouteDraft().ui.routeDraft).toBeNull();
+    backend.failNextDispatch(new Error("fleet deployment unavailable"));
+    await backend.resolveNext();
+    await save;
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.state.transit.routes).toHaveLength(1);
+    expect(snapshot.state.transit.vehicles).toHaveLength(0);
+    expect(snapshot.persistence.dirty).toBe(true);
+    expect(snapshot.ui.routeDraft).toBeNull();
+    expect(snapshot.backendError).toBeNull();
+    expect(snapshot.rejection).toBeNull();
+    expect(snapshot.shell.actionFeedback).toBeNull();
   });
 
   it("clears a stale rejection when a superseded save succeeds", async () => {
@@ -4409,6 +4696,8 @@ describe("route creation and management", () => {
     await runtime.handleTileClick({ x: 14, y: 8 });
     expect(runtime.getSnapshot().rejection).toBeNull();
 
+    await backend.resolveNext();
+    await flushPromises();
     await backend.resolveNext();
     await secondAttempt;
 
@@ -4626,6 +4915,8 @@ describe("route creation and management", () => {
     await backend.resolveNext();
     await flushPromises();
     await backend.resolveNext();
+    await flushPromises();
+    await backend.resolveNext();
     await finishPromise;
 
     expect(
@@ -4653,8 +4944,9 @@ describe("route creation and management", () => {
     await runtime.saveRouteDraft();
 
     expect(
-      backend.intents.some((intent) => intent.type === "assignVehicle"),
+      backend.intents.some((intent) => intent.type === "deployInitialFleet"),
     ).toBe(false);
+    expect(runtime.getSnapshot().state.transit.routes).toHaveLength(0);
     expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
   });
 
@@ -4664,7 +4956,7 @@ describe("route creation and management", () => {
 
     // Two synchronous calls (double-click) both enqueue before either
     // resolves. The second closure must bail when it sees the draft was
-    // cleared by the first — no duplicate route and no implicit bus vehicle.
+    // cleared by the first — no duplicate route or fleet deployment.
     const first = runtime.saveRouteDraft();
     const second = runtime.saveRouteDraft();
     await Promise.all([first, second]);
@@ -4673,11 +4965,15 @@ describe("route creation and management", () => {
       (intent) => intent.type === "createRoute",
     ).length;
     expect(createRouteCount).toBe(1);
+    expect(
+      backend.intents.filter((intent) => intent.type === "deployInitialFleet"),
+    ).toHaveLength(1);
     expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
-    expect(runtime.getSnapshot().state.transit.routes[0].vehicleIds).toEqual(
-      [],
-    );
-    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(0);
+    expect(runtime.getSnapshot().state.transit.routes[0].vehicleIds).toEqual([
+      "vehicle-001",
+      "vehicle-002",
+    ]);
+    expect(runtime.getSnapshot().state.transit.vehicles).toHaveLength(2);
   });
 
   it("deduplicates deferred Saves for the same draft", async () => {
@@ -4693,8 +4989,13 @@ describe("route creation and management", () => {
       backend.intents.filter((intent) => intent.type === "createRoute"),
     ).toHaveLength(1);
     await backend.resolveNext();
+    await flushPromises();
+    await backend.resolveNext();
     await Promise.all([save, finish]);
     expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
+    expect(
+      backend.intents.filter((intent) => intent.type === "deployInitialFleet"),
+    ).toHaveLength(1);
   });
 
   it("removes a draft stop and cancels a draft", async () => {

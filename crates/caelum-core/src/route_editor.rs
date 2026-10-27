@@ -11,6 +11,7 @@ use crate::network::resolve_route_legs;
 use crate::platforms::{apply_route_platform_delta, assign_added_waypoint_platforms};
 use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::route_lifecycle::{self, rebase_edited_route_vehicles_and_riders};
+use crate::service_control::DEFAULT_TARGET_HEADWAY_SECONDS;
 use crate::transit_nodes::{garbage_collect_missing_nodes, validate_present_compatible_node};
 
 #[derive(Clone)]
@@ -409,7 +410,7 @@ fn insert_route(
             revision: 0,
             legs,
             path_broken: false,
-            target_headway_seconds: None,
+            target_headway_seconds: Some(DEFAULT_TARGET_HEADWAY_SECONDS),
             service_metrics: None,
         }),
         TransitMode::Metro => snapshot.transit.metro_lines.push(MetroLine {
@@ -423,7 +424,7 @@ fn insert_route(
             revision: 0,
             legs,
             path_broken: false,
-            target_headway_seconds: None,
+            target_headway_seconds: Some(DEFAULT_TARGET_HEADWAY_SECONDS),
             service_metrics: None,
         }),
         // Walk routes are rejected by `validate_waypoints` before this point.

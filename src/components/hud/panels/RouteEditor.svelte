@@ -194,7 +194,11 @@
       class="route-save"
       disabled={editor.previewPending || !editor.canSave}
       onclick={onSave}
-      >{editor.previewPending ? "Checking route…" : "Save route"}</button
+      >{editor.previewPending
+        ? "Checking route…"
+        : editor.source === "create"
+          ? "Save & run"
+          : "Save route"}</button
     >
     <button type="button" class="route-cancel" onclick={onCancel}>Cancel</button
     >
