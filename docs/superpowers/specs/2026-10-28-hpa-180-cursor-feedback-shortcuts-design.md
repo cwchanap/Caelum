@@ -18,7 +18,7 @@ No new preview protocol, gameplay economy, input framework, art or audio.
 - `buildRoadMutationPreview` in `src/runtime/runtimeSelectors.ts` generation-checks Rust-owned cost, route impacts and rejection, and maps line IDs to names.
 - `src/runtime/createGameRuntime.ts` requests `previewRoadMutation` for road and **remove** drags (also road/roundabout/remove hover); track and area drags do **not** have an equivalent authoritative preview. Generation invalidation prevents late responses becoming the current preview.
 - `selectActionFeedback` currently presents `roadImpact` / `roadRejection` in the strip *as well as* road-preview text on the map; real dispatched rejections, road preview host errors and road-direction-change notices have distinct meaning.
-- `src/App.svelte` owns keyboard dispatch. `BuildPanel.svelte` and `CommandShelf.svelte` render discoverable controls. Actual bindings include B, R, T, D, V, road-only 1/2/3, Esc, map +/-/0; **R rotates a selected building instead of arming Road**.
+- `src/App.svelte` owns keyboard dispatch. `BuildPanel.svelte` and `CommandShelf.svelte` render discoverable controls. The **chip-bearing** bindings for this task are B, R, T, D, V and road-only 1/2/3; **R rotates a selected building instead of arming Road**. Other existing branches handle route-draft undo/redo (Ctrl/Cmd+Z/Y), waypoint Delete/Backspace, arrow pans, Escape and map +/-/0, and are not part of the shared chip keymap.
 
 ## Decision 1 — One map-local preview label, not a new overlay
 
@@ -28,7 +28,7 @@ Extend the existing cursor badge/preview derivation rather than creating a secon
 - Show the tool label and the authoritative cost when meaningful. For accepted road previews, summarize impacts compactly (e.g. `$500 · Line 3 breaks`, `2 lines reroute`), prioritizing broken-route warnings over reroute counts. An explicit rejected road preview shows the existing `rejectionMessage` in a warning-toned cursor label, **not a misleading cost**.
 - Keep the current preview generation check and do not create independent TS price, routing or validity calculations. Do not label a stale preview as current during rapid movement. Preserve click-only roundabout preview information, road direction feedback and route waypoint/failure labels.
 - For track and zone drags the label still identifies the active tool, but **does not invent a monetary preview**: neither has a Rust preview response today. Removal uses its existing Rust preview where it provides useful information. This is an explicit limit on the issue's broader wording, not permission to introduce a second pricing engine.
-- Reuse current DOM text overlay and positioning; keep it `pointer-events: none`, clipped to the board, and add narrowly scoped warning/long-text styles so the label stays legible near viewport edges. Avoid a toast clone or a large persistent panel.
+- Reuse current DOM text overlay and positioning; keep it `pointer-events: none`, clipped to the board, and add narrowly scoped warning/long-text styles plus horizontal edge clamping so the label stays legible near viewport edges. The merged label must drop the existing **unused** `cursorBadge.placement: "aboveOrBelow"` field; `MapTextOverlay.svelte` already owns the vertical flip by item kind. Avoid a toast clone or a large persistent panel.
 
 ## Decision 2 — Keep the feedback strip for actual outcomes
 
@@ -43,10 +43,10 @@ Do not turn transient pointer movement into a live-region announcement. Reuse th
 
 ## Decision 3 — Share shortcut definitions without rewriting the input system
 
-Add one tiny `src/ui/shortcuts.ts` holding key/label constants and the smallest necessary context-sensitive hint lookup. Use it in the current `App.svelte` key comparisons and render labels in `BuildPanel.svelte` / `CommandShelf.svelte` for actions that have real bindings. Add the same hint in title/accessible label text and a small visual chip.
+Add one tiny `src/ui/shortcuts.ts` holding key/label constants **only for visible shortcut-chip actions** (B/R/T/D/V and road-only 1/2/3) and the smallest necessary context-sensitive hint lookup. Use those constants in the corresponding `App.svelte` key comparisons and render labels in `BuildPanel.svelte` / `CommandShelf.svelte`. Leave undo/redo (Z/Y), Delete/Backspace waypoint removal, arrow pans, Escape and camera +/-/0 comparisons App-local: they have no new chip surface in this task. Add the applicable hint in title/accessible label text and a small visual chip.
 
 - Build B, Road R (unless a building is armed), Track T, Demolish D, Select V; on an armed Road tool, presets 1/2/3. A selected building uses R for Rotate, with that **context made explicit**.
-- Escape and camera +/-/0 may be explained in their existing controls, but **do not pretend** every Build leaf has a shortcut. For an action without a direct key, omit the chip.
+- Do **not** add Escape/camera navigation hint chips or extend the shared module for those keys. **Do not pretend** every Build leaf has a shortcut; omit the chip for actions without a direct key.
 - Preserve target/input guards, route-draft keyboard handling and all current RuntimeController calls. Keep route draft lock behavior; labels must not suggest that a disabled action can be triggered.
 - Treat numeric `tool-num` labels in BuildPanel as **ordinal positions**, not keyboard shortcuts. Do not silently rebrand them as keys.
 
@@ -56,8 +56,9 @@ Add one tiny `src/ui/shortcuts.ts` holding key/label constants and the smallest 
 2. Rust preview rejection appears in warning tone by the cursor, not in the feedback strip; stale previews are never shown as fresh.
 3. Road/removal preview host errors, committed direction notices and **actual** dispatch rejections keep their existing strip behavior and announcement rules.
 4. Track and area drags still show truthful active-tool feedback without fabricated cost. Zero-cost removal is not advertised as a refund.
-5. Shortcut hints reflect B/R/T/D/V, road-only 1/2/3 and the contextual R rotation behavior; input focus, route draft and camera interactions stay unchanged.
-6. Existing map-text / selector / BuildPanel / shelf and focused browser tests pass after obsolete dual-preview/strip assertions are updated.
+5. Shortcut chips reflect B/R/T/D/V, road-only 1/2/3 and the contextual R rotation behavior, sharing constants with precisely those key comparisons; unhinted undo/delete/pan/navigation and input focus/route draft behavior remain unchanged.
+6. A unit-level DOM overlay test verifies a long cursor warning is horizontally clamped at a board edge; the removed `placement` field does not survive the merged label.
+7. Existing map-text / selector / BuildPanel / shelf and focused browser tests pass after obsolete dual-preview/strip assertions are updated.
 
 ## Explicit non-goals
 
