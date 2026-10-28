@@ -5,6 +5,7 @@ import type { RuntimeSnapshot } from "../../src/runtime/types";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
 import { createTestGameState } from "../helpers/gameState";
 import { createUiState } from "../../src/ui/uiState";
+import { colors } from "../../src/render/colors";
 
 function snapshotFixture(): RuntimeSnapshot {
   const state = createTestGameState();
@@ -86,6 +87,69 @@ describe("GameCanvas", () => {
     expect(board.querySelector(".board-surface")!.nextElementSibling).toBe(
       overlay,
     );
+  });
+
+  it("updates the board legend without remounting the map", async () => {
+    const runtime = {
+      mountCanvas: vi.fn((host: HTMLElement) => {
+        const canvas = document.createElement("canvas");
+        host.append(canvas);
+        return () => {};
+      }),
+      adjustCamera: vi.fn(),
+    };
+    const initial = snapshotFixture();
+    const { rerender } = render(GameCanvas, {
+      props: { runtime, snapshot: initial, onShellError: vi.fn() },
+    });
+    const board = screen.getByTestId("game-canvas-host");
+    const canvas = board.querySelector("canvas");
+    const mapTextOverlay = board.querySelector(".map-text-overlay");
+
+    expect(screen.queryByTestId("overlay-legend")).toBeNull();
+
+    await rerender({
+      runtime,
+      snapshot: {
+        ...initial,
+        ui: { ...initial.ui, activeOverlay: "coverage" },
+      },
+      onShellError: vi.fn(),
+    });
+
+    const coverageLegend = screen.getByRole("region", {
+      name: "Coverage legend",
+    });
+    expect(coverageLegend).toHaveTextContent("Transit stop and station reach");
+    expect(
+      coverageLegend.querySelectorAll("[data-testid='overlay-legend-swatch']"),
+    ).toHaveLength(1);
+
+    await rerender({
+      runtime,
+      snapshot: {
+        ...initial,
+        ui: { ...initial.ui, activeOverlay: "crowding" },
+      },
+      onShellError: vi.fn(),
+    });
+
+    const crowdingLegend = screen.getByRole("region", {
+      name: "Crowding legend",
+    });
+    expect(crowdingLegend).toHaveTextContent(
+      "Platform crowding, increasing with occupancy",
+    );
+    expect(
+      crowdingLegend.querySelectorAll("[data-testid='overlay-legend-swatch']"),
+    ).toHaveLength(2);
+    expect(
+      crowdingLegend.querySelector(".overlay-legend__swatches"),
+    ).toHaveStyle({ backgroundColor: colors.empty });
+    expect(crowdingLegend.parentElement).toBe(board);
+    expect(mapTextOverlay?.parentElement).toBe(board);
+    expect(board.querySelector("canvas")).toBe(canvas);
+    expect(runtime.mountCanvas).toHaveBeenCalledTimes(1);
   });
 
   it("zoom buttons ask the runtime to move the camera", async () => {

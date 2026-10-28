@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { RuntimeController, RuntimeSnapshot } from "../runtime/types";
   import MapTextOverlay from "./MapTextOverlay.svelte";
+  import OverlayLegend from "./OverlayLegend.svelte";
 
   interface Props {
     runtime: Pick<RuntimeController, "mountCanvas" | "adjustCamera">;
@@ -48,6 +49,7 @@
       ui={snapshot.ui}
       camera={snapshot.camera}
     />
+    <OverlayLegend activeOverlay={snapshot.ui.activeOverlay} />
   {/if}
   <div class="board-zoom" role="group" aria-label="Map view">
     <button
