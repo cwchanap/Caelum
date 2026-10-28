@@ -878,7 +878,7 @@ body {
 
 .metrics-note {
   margin: 8px 0 0;
-  color: var(--ink-faint);
+  color: var(--ink-mid);
   font-size: 10px;
   line-height: 1.45;
 }

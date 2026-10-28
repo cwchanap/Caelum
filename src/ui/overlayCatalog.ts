@@ -22,7 +22,8 @@ export const OVERLAY_CATALOG = {
   },
   crowding: {
     label: "Crowding",
-    legendText: "Platform crowding, increasing with occupancy",
+    legendText:
+      "Orange marks platforms above half capacity; darker means full or over capacity",
     swatches: [
       `color-mix(in srgb, ${colors.crowding} 30%, transparent)`,
       `color-mix(in srgb, ${colors.crowding} 55%, transparent)`,
