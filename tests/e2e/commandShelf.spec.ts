@@ -367,15 +367,10 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   await page.setViewportSize({ width: 1280, height: 800 });
   await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
-  const targetTile = "tile-14-12";
 
   await selectBuildLeaf(page, "roads", "road-twoWay");
   await openCommandDestination(page, "data");
   const before = await runtimeSnapshot(page);
-  const beforeTile = before.state.map.tiles.find(
-    (tile) => tile.id === targetTile,
-  );
-  expect(beforeTile).toBeDefined();
 
   const lateMetric = page
     .getByTestId("panel-data")
@@ -388,10 +383,7 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   );
 
   const afterMetricClick = await runtimeSnapshot(page);
-  const afterTile = afterMetricClick.state.map.tiles.find(
-    (tile) => tile.id === targetTile,
-  );
-  expect(afterTile).toEqual(beforeTile);
+  expect(afterMetricClick.state.map.tiles).toEqual(before.state.map.tiles);
   expect(afterMetricClick.ui.activeOverlay).toBe("traffic");
   expect(afterMetricClick.ui.activeTool).toBe("road");
   const legend = page.getByRole("region", { name: "Traffic legend" });
@@ -410,9 +402,10 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   const legendTile = afterMetricClick.state.map.tiles.find((tile) => {
     if (
       tile.kind !== "empty" ||
-      afterMetricClick.state.buildings.some(
-        (building) =>
-          building.position.x === tile.x && building.position.y === tile.y,
+      afterMetricClick.state.buildings.some((building) =>
+        building.occupiedTiles.some(
+          (occupied) => occupied.x === tile.x && occupied.y === tile.y,
+        ),
       )
     ) {
       return false;
