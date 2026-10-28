@@ -66,7 +66,9 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
 
   await openCommandDestination(page, "data");
   const data = page.getByTestId("panel-data");
-  const traffic = data.getByRole("button", { name: "Traffic" });
+  const traffic = data
+    .getByRole("group", { name: "Overlays" })
+    .getByRole("button", { name: "Traffic", exact: true });
   await expect(traffic).toBeVisible();
   await traffic.click();
   await expect(traffic).toHaveAttribute("aria-pressed", "true");
