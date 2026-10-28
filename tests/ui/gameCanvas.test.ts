@@ -120,7 +120,9 @@ describe("GameCanvas", () => {
     const coverageLegend = screen.getByRole("region", {
       name: "Coverage legend",
     });
-    expect(coverageLegend).toHaveTextContent("Transit stop and station reach");
+    expect(coverageLegend).toHaveTextContent(
+      "Shaded tiles are near stops or stations; active service can support nearby growth.",
+    );
     expect(
       coverageLegend.querySelectorAll("[data-testid='overlay-legend-swatch']"),
     ).toHaveLength(1);
