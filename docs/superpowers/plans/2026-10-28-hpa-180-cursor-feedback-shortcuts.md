@@ -22,10 +22,10 @@ If a prior change already delivered a behavior, reuse it and delete the redundan
 - Merge the tool badge and road-preview text into one label at `ui.drag.current ?? ui.hoverTile` when there is an eligible generation-matched Rust preview. Prefer one concise warning over concatenating multiple incompatible messages.
 - Keep compact cost and route-impact descriptions: single affected line may use its name; multiple lines use counts; broken impacts are more important than reroutes.
 - Rejection uses the existing formatted `rejectionMessage` and warning styling. Avoid displaying a valid-looking cost for a rejected mutation.
-- Preserve roundabout hover, route waypoint/failure labels, normal tool badges and their tests. Remove the obsolete separately anchored `roadPreview` item/positioning path only if it has no remaining distinct use.
+- Preserve roundabout hover, route waypoint/failure labels, normal tool badges and their tests. Remove the obsolete separately anchored `roadPreview` item/positioning path only if it has no remaining distinct use. Drop the unused `cursorBadge.placement` field in the merged item type and constructors (the DOM overlay already handles the vertical flip).
 - Keep DOM overlay noninteractive, clamp/flip text within the board when near an edge, and use a restrained maximum width rather than introducing a tooltip framework. Do not perform a second Rust preview call.
 
-**Unit tests:** update `tests/render/mapTextOverlay.test.ts` and `tests/ui/mapTextOverlay.test.ts` for (a) current-tile anchor and single label, (b) cost/impact, (c) rejected-warning styling, and (d) stale/absent preview. Reuse existing fixtures.
+**Unit tests:** update `tests/render/mapTextOverlay.test.ts` and `tests/ui/mapTextOverlay.test.ts` for (a) current-tile anchor and single label, (b) cost/impact, (c) rejected-warning styling, (d) stale/absent preview, and **(e) one horizontal edge-clamp assertion** for the longer label using a controlled board width; preserve the existing vertical flip. Update/remove fixtures asserting the dead `placement` field. Reuse existing fixtures.
 
 ## Step 2 — Remove transient feedback-strip duplication
 
@@ -41,8 +41,8 @@ If a prior change already delivered a behavior, reuse it and delete the redundan
 
 **Files:** new `src/ui/shortcuts.ts`, `src/App.svelte`, `src/components/hud/panels/BuildPanel.svelte`, `src/components/hud/CommandShelf.svelte`
 
-- Declare the actually supported key labels in one module and use the same values in the App window-keydown comparisons. Avoid a generic commands/registry/dispatch engine.
-- Build B; Road R when no building is armed; Track T; Demolish D; Select V; 1/2/3 road presets only while the road tool is armed; R for Rotate while a building is armed. Display no key chip for unbound Build leaves. Existing Escape and camera navigation remain supported.
+- Declare **only chip-bearing key labels** (B/R/T/D/V and road-only 1/2/3, with contextual R rotation) in one module and use the same constants in the corresponding App window-keydown comparisons. Leave Z/Y undo/redo, Delete/Backspace waypoint removal, arrow-key pan, Escape and camera +/-/0 comparisons App-local: this task gives them no new hint surface. Avoid a generic commands/registry/dispatch engine.
+- Build B; Road R when no building is armed; Track T; Demolish D; Select V; 1/2/3 road presets only while the road tool is armed; R for Rotate while a building is armed. Display no key chip for unbound Build leaves or the existing Escape/camera navigation keys; those bindings remain supported without refactoring.
 - Add small chip and tooltip/accessible text to applicable shelf buttons and Build leaf controls. Clarify the context-sensitive R/1–3 behavior rather than implying impossible actions. Existing Build leaf ordinals are not shortcut keys.
 - Keep existing input, modifier, route-draft and map-focus guards exactly as they work today. A shared definition must not accidentally expand where a key fires.
 
@@ -67,4 +67,4 @@ If a prior change already delivered a behavior, reuse it and delete the redundan
 
 ## Done when
 
-There is one truthful, legible current-tile map label per preview; committed outcome feedback survives; source and labels of supported keybindings cannot drift; UI/browser tests cover the player flow; and the PR includes a short actual validation record. No Rust save/schema/host changes or new frontend architecture.
+There is one truthful, legible current-tile map label per preview (including horizontal edge handling); committed outcome feedback survives; **chip-bearing** shortcut labels share their actual key constants while unhinted keys stay App-local; UI/browser tests cover the player flow; and the PR includes a short actual validation record. No Rust save/schema/host changes or new frontend architecture.
