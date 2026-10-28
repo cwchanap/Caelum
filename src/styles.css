@@ -828,6 +828,61 @@ body {
   box-shadow: 0 0 8px var(--cyan);
 }
 
+.metrics-row {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.metrics-row button {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  min-width: 0;
+  min-height: 60px;
+  padding: 8px 9px;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  text-align: left;
+}
+
+.metrics-row button:hover {
+  border-color: var(--line-strong);
+  color: var(--ink);
+}
+
+.metrics-row button.active {
+  border-color: var(--cyan);
+  background: rgba(63, 224, 197, 0.06);
+  color: var(--cyan);
+}
+
+.metric-name {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.04em;
+}
+
+.metric-value {
+  display: block;
+  margin-top: 8px;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.metrics-note {
+  margin: 8px 0 0;
+  color: var(--ink-faint);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
 /* City and inspection printouts */
 
 .brief-id {
