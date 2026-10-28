@@ -1571,12 +1571,13 @@ describe("App command shell", () => {
     expect(runtime.stop).toHaveBeenCalled();
   });
 
-  it("renders Data's four overlays, empty hint, and metrics", async () => {
+  it("links Data metrics to persistent, clearable board overlays", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-data"));
+    const overlays = within(screen.getByRole("group", { name: "Overlays" }));
     expect(
-      screen.getAllByRole("button", {
+      overlays.getAllByRole("button", {
         name: /coverage|crowding|demand|traffic/i,
       }),
     ).toHaveLength(4);
@@ -1584,9 +1585,45 @@ describe("App command shell", () => {
     expect(
       screen.getByText("Choose an overlay to inspect the network."),
     ).toBeVisible();
-    expect(screen.getAllByText("Late").at(-1)).toBeVisible();
-    expect(screen.getAllByText("Unserved").at(-1)).toBeVisible();
-    expect(screen.getAllByText("Avg Wait").at(-1)).toBeVisible();
+
+    const metrics = within(screen.getByRole("region", { name: "Metrics" }));
+    const late = metrics.getByRole("button", {
+      name: /Late 0.*show Traffic overlay/,
+    });
+    const unserved = metrics.getByRole("button", {
+      name: /Unserved 0.*show Coverage overlay/,
+    });
+    expect(
+      metrics.getByRole("button", {
+        name: /Avg Wait 0s.*show Crowding overlay/,
+      }),
+    ).toBeVisible();
+    expect(late).toBeVisible();
+    expect(unserved).toBeVisible();
+
+    await fireEvent.click(unserved);
+    expect(overlays.getByRole("button", { name: "Coverage" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.getByRole("region", { name: "Coverage legend" }),
+    ).toBeVisible();
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close Data" }));
+    expect(screen.queryByTestId("command-panel")).toBeNull();
+    expect(
+      screen.getByRole("region", { name: "Coverage legend" }),
+    ).toBeVisible();
+
+    await fireEvent.click(screen.getByTestId("command-destination-data"));
+    await fireEvent.click(
+      within(screen.getByRole("group", { name: "Overlays" })).getByRole(
+        "button",
+        { name: "Coverage" },
+      ),
+    );
+    expect(screen.queryByTestId("overlay-legend")).toBeNull();
   });
 
   it("passes the active city name to City and lets Lines collapse during a draft", async () => {

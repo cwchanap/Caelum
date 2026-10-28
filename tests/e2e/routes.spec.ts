@@ -318,18 +318,21 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   const metrics = page.getByTestId("panel-data").getByRole("region", {
     name: "Metrics",
   });
-  const avgWaitReadout = metrics
-    .getByText("Avg Wait")
-    .locator("xpath=following-sibling::dd[1]");
-  const unservedReadout = metrics
-    .getByText("Unserved")
-    .locator("xpath=following-sibling::dd[1]");
-  const lateReadout = metrics
-    .getByText("Late")
-    .locator("xpath=following-sibling::dd[1]");
-  await expect(avgWaitReadout).toHaveText(/^\d+s$/);
-  await expect(unservedReadout).toHaveText(/^\d+$/);
-  await expect(lateReadout).toHaveText(/^\d+$/);
+  await expect(
+    metrics.getByRole("button", {
+      name: /Avg Wait \d+s.*show Crowding overlay/,
+    }),
+  ).toBeVisible();
+  await expect(
+    metrics.getByRole("button", {
+      name: /Unserved \d+.*show Coverage overlay/,
+    }),
+  ).toBeVisible();
+  await expect(
+    metrics.getByRole("button", {
+      name: /Late \d+.*show Traffic overlay/,
+    }),
+  ).toBeVisible();
   await openCommandDestination(page, "lines");
 
   // Toggle inactive, then delete (two clicks for confirm).
