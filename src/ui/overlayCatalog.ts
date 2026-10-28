@@ -32,7 +32,8 @@ export const OVERLAY_CATALOG = {
   },
   demand: {
     label: "Demand",
-    legendText: "Destination demand, increasing with activity",
+    legendText:
+      "Darker yellow means more active travel demand at this location.",
     swatches: [
       `color-mix(in srgb, ${colors.demand} 24%, transparent)`,
       `color-mix(in srgb, ${colors.demand} 42.24%, transparent)`,
@@ -42,7 +43,7 @@ export const OVERLAY_CATALOG = {
   },
   traffic: {
     label: "Traffic",
-    legendText: "Road traffic, increasing with flow",
+    legendText: "Darker red means more private-car traffic on this road.",
     swatches: [
       `color-mix(in srgb, ${colors.traffic} 25%, transparent)`,
       `color-mix(in srgb, ${colors.traffic} 50%, transparent)`,
