@@ -15,7 +15,7 @@
 <div class="hud-panel" data-testid="panel-data">
   <section class="panel-section overlay-section">
     <h3 class="section-head"><span class="num">04</span> Data</h3>
-    <div class="overlays" aria-label="Overlays">
+    <div class="overlays" role="group" aria-label="Overlays">
       {#each OVERLAY_IDS as overlay (overlay)}
         <button
           type="button"

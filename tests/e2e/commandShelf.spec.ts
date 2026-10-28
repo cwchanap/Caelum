@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { getBoardTransform, tileSize } from "../../src/render/boardTransform";
 import {
   clickMapTile,
   createDefaultCity,
@@ -365,6 +366,7 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const targetTile = "tile-14-12";
 
   await selectBuildLeaf(page, "roads", "road-twoWay");
@@ -375,22 +377,72 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   );
   expect(beforeTile).toBeDefined();
 
-  const lateLabel = page.getByTestId("panel-data").getByText("Late", {
-    exact: true,
-  });
-  const lateBox = await lateLabel.boundingBox();
+  const lateMetric = page
+    .getByTestId("panel-data")
+    .getByRole("button", { name: /Late \d+.*show Traffic overlay/ });
+  const lateBox = await lateMetric.boundingBox();
   expect(lateBox).not.toBeNull();
   await page.mouse.click(
     lateBox!.x + lateBox!.width / 2,
     lateBox!.y + lateBox!.height / 2,
   );
 
-  const after = await runtimeSnapshot(page);
-  const afterTile = after.state.map.tiles.find(
+  const afterMetricClick = await runtimeSnapshot(page);
+  const afterTile = afterMetricClick.state.map.tiles.find(
     (tile) => tile.id === targetTile,
   );
   expect(afterTile).toEqual(beforeTile);
+  expect(afterMetricClick.ui.activeOverlay).toBe("traffic");
+  expect(afterMetricClick.ui.activeTool).toBe("road");
+  const legend = page.getByRole("region", { name: "Traffic legend" });
+  await expect(legend).toBeVisible();
   await expect(page.getByTestId("panel-data")).toBeVisible();
+
+  const legendBox = await legend.boundingBox();
+  const canvasBox = await canvas.boundingBox();
+  expect(legendBox).not.toBeNull();
+  expect(canvasBox).not.toBeNull();
+  const transform = getBoardTransform(
+    canvasBox!,
+    afterMetricClick.state.map,
+    afterMetricClick.camera,
+  );
+  const legendTile = afterMetricClick.state.map.tiles.find((tile) => {
+    if (
+      tile.kind !== "empty" ||
+      afterMetricClick.state.buildings.some(
+        (building) =>
+          building.position.x === tile.x && building.position.y === tile.y,
+      )
+    ) {
+      return false;
+    }
+    const x =
+      canvasBox!.x +
+      transform.offsetX +
+      (tile.x + 0.5) * tileSize * transform.scale;
+    const y =
+      canvasBox!.y +
+      transform.offsetY +
+      (tile.y + 0.5) * tileSize * transform.scale;
+    return (
+      x >= legendBox!.x &&
+      x <= legendBox!.x + legendBox!.width &&
+      y >= legendBox!.y &&
+      y <= legendBox!.y + legendBox!.height
+    );
+  });
+  if (legendTile === undefined) {
+    throw new Error("No empty map tile lies beneath the legend");
+  }
+
+  await clickMapTile(canvas, legendTile);
+  const afterLegendClick = await runtimeSnapshot(page);
+  expect(
+    afterLegendClick.state.map.tiles.find((tile) => tile.id === legendTile.id)
+      ?.kind,
+  ).toBe("road");
+  expect(afterLegendClick.ui.activeTool).toBe("road");
 });
 
 test("keeps RouteEditor labels owned while a line draft is pinned", async ({
