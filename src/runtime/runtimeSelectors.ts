@@ -2,7 +2,6 @@ import type {
   GameState,
   GameplayRejection,
   MetroLine,
-  Overlay,
   Route,
   RouteLegPath,
   SandboxTemplateId,
@@ -12,6 +11,7 @@ import type {
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
+import { OVERLAY_CATALOG } from "../ui/overlayCatalog";
 import { resolveNodeAtTile } from "../ui/actions";
 import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
@@ -36,13 +36,6 @@ import type {
   ShellRouteWaitLocation,
   ShellState,
 } from "./types";
-
-const OVERLAY_LABELS: Record<Overlay, string> = {
-  coverage: "Coverage",
-  crowding: "Crowding",
-  demand: "Demand",
-  traffic: "Traffic",
-};
 
 const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
   blankGrid: "Blank Grid",
@@ -782,7 +775,9 @@ export function selectShellState(
     demolishActive: ui.activeTool === "remove",
     lineCount,
     activeOverlayLabel:
-      ui.activeOverlay === null ? null : OVERLAY_LABELS[ui.activeOverlay],
+      ui.activeOverlay === null
+        ? null
+        : OVERLAY_CATALOG[ui.activeOverlay].label,
   };
 
   return {
