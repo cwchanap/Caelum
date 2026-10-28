@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { Overlay } from "../../../domain/types";
   import type { ShellTopbarState } from "../../../runtime/types";
+  import { OVERLAY_CATALOG, OVERLAY_IDS } from "../../../ui/overlayCatalog";
 
   interface Props {
     activeOverlay: Overlay | null;
@@ -9,29 +10,22 @@
   }
 
   let { activeOverlay, metrics, onSetOverlay }: Props = $props();
-
-  const overlays: Array<{ id: Overlay; label: string }> = [
-    { id: "coverage", label: "Coverage" },
-    { id: "crowding", label: "Crowding" },
-    { id: "demand", label: "Demand" },
-    { id: "traffic", label: "Traffic" },
-  ];
 </script>
 
 <div class="hud-panel" data-testid="panel-data">
   <section class="panel-section overlay-section">
     <h3 class="section-head"><span class="num">04</span> Data</h3>
     <div class="overlays" aria-label="Overlays">
-      {#each overlays as overlay (overlay.id)}
+      {#each OVERLAY_IDS as overlay (overlay)}
         <button
           type="button"
-          data-overlay={overlay.id}
-          aria-pressed={activeOverlay === overlay.id}
-          class:active={activeOverlay === overlay.id}
+          data-overlay={overlay}
+          aria-pressed={activeOverlay === overlay}
+          class={{ active: activeOverlay === overlay }}
           onclick={() =>
-            onSetOverlay(activeOverlay === overlay.id ? null : overlay.id)}
+            onSetOverlay(activeOverlay === overlay ? null : overlay)}
         >
-          {overlay.label}
+          {OVERLAY_CATALOG[overlay].label}
         </button>
       {/each}
     </div>
