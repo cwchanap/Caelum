@@ -10,6 +10,10 @@ import {
   SOLID_VERTEX_FLOATS,
   parseColor,
 } from "../../src/render/webgpu/primitives";
+import {
+  CROWDING_FULL_ALPHA,
+  CROWDING_HALF_ALPHA,
+} from "../../src/render/overlayAlpha";
 import { colors } from "../../src/render/colors";
 import { getBuildingFootprint } from "../../src/domain/catalog/buildings";
 import { createUiState } from "../../src/ui/uiState";
@@ -246,14 +250,20 @@ describe("buildOverlayRanges data overlays", () => {
       platformOccupancy: [{ platformId: "stop-1-p0", count: 50, capacity: 50 }],
     };
     const { underRoutes: full } = buildOverlayRanges(stateFull, crowdingUi);
-    expect(alphaAt(full, colors.crowding, 64, 64)).toBeCloseTo(0.2 * 0.55, 5);
+    expect(alphaAt(full, colors.crowding, 64, 64)).toBeCloseTo(
+      parseColor(colors.crowding)[3] * CROWDING_FULL_ALPHA,
+      5,
+    );
 
     const stateHalf = {
       ...base,
       platformOccupancy: [{ platformId: "stop-1-p0", count: 38, capacity: 50 }],
     };
     const { underRoutes: half } = buildOverlayRanges(stateHalf, crowdingUi);
-    expect(alphaAt(half, colors.crowding, 64, 64)).toBeCloseTo(0.2 * 0.3, 5);
+    expect(alphaAt(half, colors.crowding, 64, 64)).toBeCloseTo(
+      parseColor(colors.crowding)[3] * CROWDING_HALF_ALPHA,
+      5,
+    );
   });
 
   it("skips non-present stops and stations in the coverage overlay", () => {

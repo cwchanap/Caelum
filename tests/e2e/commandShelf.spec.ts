@@ -1,11 +1,11 @@
 import { expect, test } from "@playwright/test";
-import { getBoardTransform, tileSize } from "../../src/render/boardTransform";
 import {
   clickMapTile,
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
   hoverMapTile,
+  mapTileViewportPoint,
   openCommandDestination,
   runtimeSnapshot,
   selectBuildLeaf,
@@ -391,15 +391,9 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
   await expect(page.getByTestId("panel-data")).toBeVisible();
 
   const legendBox = await legend.boundingBox();
-  const canvasBox = await canvas.boundingBox();
   expect(legendBox).not.toBeNull();
-  expect(canvasBox).not.toBeNull();
-  const transform = getBoardTransform(
-    canvasBox!,
-    afterMetricClick.state.map,
-    afterMetricClick.camera,
-  );
-  const legendTile = afterMetricClick.state.map.tiles.find((tile) => {
+  let legendTile: (typeof afterMetricClick.state.map.tiles)[number] | undefined;
+  for (const tile of afterMetricClick.state.map.tiles) {
     if (
       tile.kind !== "empty" ||
       afterMetricClick.state.buildings.some((building) =>
@@ -408,34 +402,35 @@ test("keeps visible Data labels owned while a road tool is armed", async ({
         ),
       )
     ) {
-      return false;
+      continue;
     }
-    const x =
-      canvasBox!.x +
-      transform.offsetX +
-      (tile.x + 0.5) * tileSize * transform.scale;
-    const y =
-      canvasBox!.y +
-      transform.offsetY +
-      (tile.y + 0.5) * tileSize * transform.scale;
-    return (
-      x >= legendBox!.x &&
-      x <= legendBox!.x + legendBox!.width &&
-      y >= legendBox!.y &&
-      y <= legendBox!.y + legendBox!.height
-    );
-  });
+    const point = await mapTileViewportPoint(canvas, tile);
+    if (
+      point.x >= legendBox!.x &&
+      point.x <= legendBox!.x + legendBox!.width &&
+      point.y >= legendBox!.y &&
+      point.y <= legendBox!.y + legendBox!.height
+    ) {
+      legendTile = tile;
+      break;
+    }
+  }
   if (legendTile === undefined) {
     throw new Error("No empty map tile lies beneath the legend");
   }
 
   await clickMapTile(canvas, legendTile);
-  const afterLegendClick = await runtimeSnapshot(page);
-  expect(
-    afterLegendClick.state.map.tiles.find((tile) => tile.id === legendTile.id)
-      ?.kind,
-  ).toBe("road");
-  expect(afterLegendClick.ui.activeTool).toBe("road");
+  // The road build travels through the async gameplay queue, so poll the
+  // snapshot until the dispatch lands.
+  await expect
+    .poll(
+      async () =>
+        (await runtimeSnapshot(page)).state.map.tiles.find(
+          (tile) => tile.id === legendTile.id,
+        )?.kind,
+    )
+    .toBe("road");
+  expect((await runtimeSnapshot(page)).ui.activeTool).toBe("road");
 });
 
 test("keeps RouteEditor labels owned while a line draft is pinned", async ({

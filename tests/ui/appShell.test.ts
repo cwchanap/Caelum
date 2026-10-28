@@ -1593,14 +1593,24 @@ describe("App command shell", () => {
     const unserved = metrics.getByRole("button", {
       name: /Unserved 0.*show Coverage overlay/,
     });
-    expect(
-      metrics.getByRole("button", {
-        name: /Avg Wait 0s.*show Crowding overlay/,
-      }),
-    ).toBeVisible();
+    const avgWait = metrics.getByRole("button", {
+      name: /Avg Wait 0s.*show Crowding overlay/,
+    });
+    expect(avgWait).toBeVisible();
     expect(late).toBeVisible();
     expect(unserved).toBeVisible();
 
+    await fireEvent.click(unserved);
+    expect(overlays.getByRole("button", { name: "Coverage" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(unserved).toHaveAttribute("aria-current", "true");
+    expect(
+      screen.getByRole("region", { name: "Coverage legend" }),
+    ).toBeVisible();
+
+    // Metric clicks only select: clicking again never clears the overlay.
     await fireEvent.click(unserved);
     expect(overlays.getByRole("button", { name: "Coverage" })).toHaveAttribute(
       "aria-pressed",
@@ -1610,17 +1620,37 @@ describe("App command shell", () => {
       screen.getByRole("region", { name: "Coverage legend" }),
     ).toBeVisible();
 
+    await fireEvent.click(avgWait);
+    expect(overlays.getByRole("button", { name: "Crowding" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(avgWait).toHaveAttribute("aria-current", "true");
+    expect(unserved).toHaveAttribute("aria-current", "false");
+    expect(
+      screen.getByRole("region", { name: "Crowding legend" }),
+    ).toBeVisible();
+
+    await fireEvent.click(avgWait);
+    expect(overlays.getByRole("button", { name: "Crowding" })).toHaveAttribute(
+      "aria-pressed",
+      "true",
+    );
+    expect(
+      screen.getByRole("region", { name: "Crowding legend" }),
+    ).toBeVisible();
+
     await fireEvent.click(screen.getByRole("button", { name: "Close Data" }));
     expect(screen.queryByTestId("command-panel")).toBeNull();
     expect(
-      screen.getByRole("region", { name: "Coverage legend" }),
+      screen.getByRole("region", { name: "Crowding legend" }),
     ).toBeVisible();
 
     await fireEvent.click(screen.getByTestId("command-destination-data"));
     await fireEvent.click(
       within(screen.getByRole("group", { name: "Overlays" })).getByRole(
         "button",
-        { name: "Coverage" },
+        { name: "Crowding" },
       ),
     );
     expect(screen.queryByTestId("overlay-legend")).toBeNull();
