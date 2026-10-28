@@ -138,7 +138,7 @@ describe("GameCanvas", () => {
       name: "Crowding legend",
     });
     expect(crowdingLegend).toHaveTextContent(
-      "Platform crowding, increasing with occupancy",
+      "Orange marks platforms above half capacity; darker means full or over capacity",
     );
     expect(
       crowdingLegend.querySelectorAll("[data-testid='overlay-legend-swatch']"),
