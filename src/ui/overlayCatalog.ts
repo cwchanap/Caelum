@@ -17,7 +17,8 @@ export const OVERLAY_IDS = [
 export const OVERLAY_CATALOG = {
   coverage: {
     label: "Coverage",
-    legendText: "Transit stop and station reach",
+    legendText:
+      "Shaded tiles are near stops or stations; active service can support nearby growth.",
     swatches: [colors.coverage],
   },
   crowding: {
