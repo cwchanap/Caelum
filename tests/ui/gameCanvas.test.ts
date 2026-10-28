@@ -140,7 +140,7 @@ describe("GameCanvas", () => {
       name: "Crowding legend",
     });
     expect(crowdingLegend).toHaveTextContent(
-      "Orange marks platforms above half capacity; darker means full or over capacity",
+      "Red marks platforms above half capacity; darker means full or over capacity.",
     );
     expect(
       crowdingLegend.querySelectorAll("[data-testid='overlay-legend-swatch']"),
@@ -148,7 +148,25 @@ describe("GameCanvas", () => {
     expect(
       crowdingLegend.querySelector(".overlay-legend__swatches"),
     ).toHaveStyle({ backgroundColor: colors.empty });
-    expect(crowdingLegend.parentElement).toBe(board);
+
+    await rerender({
+      runtime,
+      snapshot: {
+        ...initial,
+        ui: { ...initial.ui, activeOverlay: "traffic" },
+      },
+      onShellError: vi.fn(),
+    });
+
+    const trafficLegend = screen.getByRole("region", {
+      name: "Traffic legend",
+    });
+    // Traffic only ever paints on road tiles, so its chips preview on road
+    // grey rather than empty ground.
+    expect(
+      trafficLegend.querySelector(".overlay-legend__swatches"),
+    ).toHaveStyle({ backgroundColor: colors.road });
+    expect(trafficLegend.parentElement).toBe(board);
     expect(mapTextOverlay?.parentElement).toBe(board);
     expect(board.querySelector("canvas")).toBe(canvas);
     expect(runtime.mountCanvas).toHaveBeenCalledTimes(1);

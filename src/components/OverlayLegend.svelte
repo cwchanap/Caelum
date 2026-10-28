@@ -1,6 +1,5 @@
 <script lang="ts">
   import type { Overlay } from "../domain/types";
-  import { colors } from "../render/colors";
   import { OVERLAY_CATALOG } from "../ui/overlayCatalog";
 
   interface Props {
@@ -24,10 +23,10 @@
     <p class="overlay-legend__copy">{descriptor.legendText}</p>
     <div
       class="overlay-legend__swatches"
-      style:background-color={colors.empty}
+      style:background-color={descriptor.swatchBackground}
       aria-hidden="true"
     >
-      {#each descriptor.swatches as swatch (swatch)}
+      {#each descriptor.swatches as swatch, index (index)}
         <span
           class="overlay-legend__swatch"
           data-testid="overlay-legend-swatch"

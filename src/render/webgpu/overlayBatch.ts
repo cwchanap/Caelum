@@ -30,12 +30,14 @@ import { failedLegMarkerPoint } from "../mapTextOverlay";
 import { directionArrow } from "./mapBatch";
 import { draftLegVertices } from "./transitBatch";
 import { SolidGeometry, parseColor, withAlpha } from "./primitives";
+import {
+  CROWDING_FULL_ALPHA,
+  CROWDING_HALF_ALPHA,
+  demandAlpha,
+  trafficAlpha,
+} from "../overlayAlpha";
 
 const previewStrokeInset = 2;
-
-/** Presentation flow is derived in Rust against the same road-capacity model. */
-const ROAD_FLOW_CAPACITY = 4;
-const MAX_CONGESTION_MULTIPLIER = 3;
 
 const HOVER = parseColor(colors.hover);
 const MISSING_HANDLE_DASH = { dash: 4, gap: 3 };
@@ -54,12 +56,6 @@ const TRAFFIC = parseColor(colors.traffic);
 const CROWDING = parseColor(colors.crowding);
 
 type Rgb = ReturnType<typeof parseColor>;
-
-/** Repeated demand saturates: each additional destination multiplies the
- *  remaining opacity, so stacks darken smoothly instead of overdrawing. */
-function demandAlpha(count: number): number {
-  return 1 - Math.pow(1 - 0.24, count);
-}
 
 function strokeRect(
   g: SolidGeometry,
@@ -148,13 +144,8 @@ function drawDataOverlays(
   }
 
   if (ui.activeOverlay === "traffic") {
-    const fullScaleFlow = ROAD_FLOW_CAPACITY * MAX_CONGESTION_MULTIPLIER;
     for (const row of state.trafficFlow) {
-      fillTile(
-        g,
-        row.point,
-        withAlpha(TRAFFIC, Math.min(row.flow / fullScaleFlow, 1)),
-      );
+      fillTile(g, row.point, withAlpha(TRAFFIC, trafficAlpha(row.flow)));
     }
   }
 
@@ -177,7 +168,10 @@ function drawDataOverlays(
       fillTile(
         g,
         node.position,
-        withAlpha(CROWDING, maxRatio >= 1 ? 0.55 : 0.3),
+        withAlpha(
+          CROWDING,
+          maxRatio >= 1 ? CROWDING_FULL_ALPHA : CROWDING_HALF_ALPHA,
+        ),
       );
     }
   }
