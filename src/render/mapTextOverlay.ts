@@ -12,6 +12,7 @@ import {
   selectRouteEditorView,
   selectRouteFailures,
 } from "../runtime/runtimeSelectors";
+import { rejectionMessage } from "../runtime/rejectionMessages";
 import type { RoadMutationPreviewView } from "../runtime/types";
 import type { UiState } from "../ui/uiState";
 import { pointAndTangentAt } from "./pathGeometry";
@@ -34,11 +35,12 @@ export type MapTextOverlayItem =
       kind: "cursorBadge";
       anchor: Point;
       text: string;
-      placement: "aboveOrBelow";
+      tone?: "warning";
     }
   | { kind: "routeWaypoint"; anchor: TripPosition; text: string }
-  | { kind: "roadPreview"; anchor: Point; text: string }
   | { kind: "routeFailure"; anchor: TripPosition; text: string };
+
+type CursorBadge = { text: string; tone?: "warning" };
 
 /** The tile under the pointer: the drag's current tile while a gesture is
  *  active, otherwise the idle hover tile. */
@@ -46,8 +48,47 @@ function cursorTile(ui: UiState) {
   return ui.drag?.current ?? ui.hoverTile;
 }
 
+function hasUsefulPreview(preview: RoadMutationPreviewView): boolean {
+  return (
+    preview.cost > 0 ||
+    preview.changedTiles.length > 0 ||
+    preview.authoredTiles.length > 0 ||
+    preview.generatedStructures.length > 0 ||
+    preview.routeImpacts.length > 0
+  );
+}
+
+function previewBadge(
+  label: string,
+  state: GameState,
+  preview: RoadMutationPreviewView,
+): CursorBadge {
+  if (preview.rejection !== null) {
+    return {
+      text: `${label} · ${rejectionMessage(preview.rejection)} ⊘`,
+      tone: "warning",
+    };
+  }
+  if (!hasUsefulPreview(preview)) {
+    return { text: label };
+  }
+  const impacts = [...preview.routeImpacts]
+    .sort(compareRouteImpacts)
+    .map((impact) => `${impact.routeName} ${impact.kind}`)
+    .join(" · ");
+  const cost =
+    state.rules.economyPreset === "creative" ? "Free" : preview.costLabel;
+  return {
+    text: `${label} · ${cost}${impacts.length === 0 ? "" : ` · ${impacts}`}`,
+  };
+}
+
 /** Tool/preset label shown on the cursor, or null when no badge applies. */
-function cursorBadgeText(state: GameState, ui: UiState): string | null {
+function cursorBadgeText(
+  state: GameState,
+  ui: UiState,
+  preview: RoadMutationPreviewView | null,
+): CursorBadge | null {
   const cursor = cursorTile(ui);
   if (cursor === null) {
     return null;
@@ -57,7 +98,7 @@ function cursorBadgeText(state: GameState, ui: UiState): string | null {
     const ok =
       isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
       canPlaceBuilding(state, ui.selectedBuilding, cursor, ui.buildingRotation);
-    return `⦿ ${def.label} ${ui.buildingRotation}°${ok ? "" : " ⊘"}`;
+    return { text: `⦿ ${def.label} ${ui.buildingRotation}°${ok ? "" : " ⊘"}` };
   }
   switch (ui.activeTool) {
     case "road": {
@@ -67,35 +108,49 @@ function cursorBadgeText(state: GameState, ui: UiState): string | null {
           : ui.roadPreset === "dualBidirectional"
             ? " ⇄"
             : "";
+      const label = `⦿ Road${glyph}`;
+      if (preview !== null) {
+        return previewBadge(label, state, preview);
+      }
       const tile = getTile(state.map, cursor);
       // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
       // reject cycleRoadDirection, so exclude them from the existing-road fallback.
       const ok =
         isValidRoadPlacement(state, cursor) ||
         (tile?.kind === "road" && tile.roadStructureId === undefined);
-      return `⦿ Road${glyph}${ok ? "" : " ⊘"}`;
+      return { text: `${label}${ok ? "" : " ⊘"}` };
     }
     case "track":
-      return `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`;
+      return {
+        text: `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`,
+      };
     case "roundabout": {
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
-      const preview = ui.roadMutationPreview;
-      const matching =
-        preview !== null && preview.generation === ui.roadPreviewGeneration;
-      if (!matching) {
-        return `⦿ Roundabout ${sizeLabel} …`;
+      const label = `⦿ Roundabout ${sizeLabel}`;
+      if (preview === null) {
+        return { text: `${label} …` };
       }
-      return `⦿ Roundabout ${sizeLabel}${preview.rejection === null ? "" : " ⊘"}`;
+      return previewBadge(label, state, preview);
     }
     case "area": {
       if (ui.selectedArea === null) {
         return null;
       }
       const ok = isAreaPaintable(state, cursor);
-      return `⦿ Area ${AREA_LABELS[ui.selectedArea]}${ok ? "" : " ⊘"}`;
+      return {
+        text: `⦿ Area ${AREA_LABELS[ui.selectedArea]}${ok ? "" : " ⊘"}`,
+      };
     }
-    case "remove":
-      return "⦿ Demolish";
+    case "remove": {
+      const label = "⦿ Demolish";
+      if (
+        preview === null ||
+        (preview.rejection !== null && ui.drag?.tool !== "remove")
+      ) {
+        return { text: label };
+      }
+      return previewBadge(label, state, preview);
+    }
     default:
       return null;
   }
@@ -110,23 +165,6 @@ function compareRouteImpacts(
   }
   if (left.kind === right.kind) return 0;
   return left.kind < right.kind ? -1 : 1;
-}
-
-function roadPreviewFeedback(preview: RoadMutationPreviewView): string {
-  const impacts = [...preview.routeImpacts]
-    .sort(compareRouteImpacts)
-    .map((impact) => `${impact.routeName} ${impact.kind}`)
-    .join(" · ");
-  const cost = preview.costLabel;
-  return impacts.length === 0 ? cost : `${cost} · ${impacts}`;
-}
-
-function roadPreviewAnchor(preview: RoadMutationPreviewView): Point {
-  return (
-    preview.authoredTiles[0]?.point ??
-    preview.changedTiles[0] ??
-    preview.generatedStructures[0]?.footprint[0] ?? { x: 0, y: 0 }
-  );
 }
 
 function transitNode(state: GameState, nodeId: string) {
@@ -261,26 +299,17 @@ export function selectMapTextOverlayItems(
   const items: MapTextOverlayItem[] = [];
 
   const cursor = cursorTile(ui);
-  const badge = cursorBadgeText(state, ui);
+  const preview = buildRoadMutationPreview(state, ui);
+  const badge = cursorBadgeText(state, ui, preview);
   if (cursor !== null && badge !== null) {
     items.push({
       kind: "cursorBadge",
       anchor: cursor,
-      text: badge,
-      placement: "aboveOrBelow",
+      ...badge,
     });
   }
 
   items.push(...routeWaypointItems(state, ui));
-
-  const preview = buildRoadMutationPreview(state, ui);
-  if (preview !== null) {
-    items.push({
-      kind: "roadPreview",
-      anchor: roadPreviewAnchor(preview),
-      text: roadPreviewFeedback(preview),
-    });
-  }
 
   items.push(...routeFailureItems(state, ui));
 
