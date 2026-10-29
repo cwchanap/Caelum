@@ -656,7 +656,6 @@ function selectActionFeedback(
   rejection: GameplayRejection | null,
   editorOwnsRejection: boolean,
   roadHostError: string | null,
-  roadPreview: RoadMutationPreviewView | null,
   roadDirectionNotice: UiState["roadDirectionNotice"],
 ): ShellActionFeedback | null {
   if (rejection !== null && !editorOwnsRejection) {
@@ -696,37 +695,6 @@ function selectActionFeedback(
       announce: false,
     };
   }
-  if (roadPreview !== null && roadPreview.rejection !== null) {
-    return {
-      source: "roadRejection",
-      tone: "warning",
-      message: rejectionMessage(roadPreview.rejection),
-      details: [],
-      dismissible: false,
-      announce: false,
-    };
-  }
-  if (
-    roadPreview !== null &&
-    (roadPreview.cost > 0 || roadPreview.routeImpacts.length > 0)
-  ) {
-    return {
-      source: "roadImpact",
-      tone: "info",
-      message:
-        roadPreview.cost > 0
-          ? `Preview cost ${roadPreview.costLabel}`
-          : "Road network impact",
-      details: roadPreview.routeImpacts.map(
-        (impact) =>
-          `${impact.routeName} will ${
-            impact.kind === "broken" ? "become broken" : "reroute"
-          }`,
-      ),
-      dismissible: false,
-      announce: false,
-    };
-  }
   return null;
 }
 
@@ -750,7 +718,6 @@ export function selectShellState(
   );
   const networkSummary = `${state.metrics.lateTrips} late · ${state.metrics.unservedTrips} unserved`;
   const routeDraft = selectRouteEditorView(state, ui, rejection);
-  const roadMutationPreview = buildRoadMutationPreview(state, ui);
   const routeId =
     ui.routeDraft?.source.kind === "edit" ? ui.routeDraft.source.routeId : null;
   const editorOwnsRejection =
@@ -806,12 +773,10 @@ export function selectShellState(
     inspector,
     routeDraft,
     routes: buildRouteList(state, ui),
-    roadMutationPreview,
     actionFeedback: selectActionFeedback(
       rejection,
       editorOwnsRejection,
       ui.roadMutationPreviewError,
-      roadMutationPreview,
       ui.roadDirectionNotice,
     ),
   };
