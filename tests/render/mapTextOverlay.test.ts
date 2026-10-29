@@ -178,7 +178,7 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: 7, y: 8 },
-        text: "⦿ Road · $500 · route-a rerouted · route-z broken",
+        text: "⦿ Road · $500 · route-z broken · route-a rerouted",
       },
     ]);
   });
@@ -438,7 +438,7 @@ describe("selectMapTextOverlayItems", () => {
       expect(items[0]?.anchor).toEqual({ x: 2, y: 2 });
     });
 
-    it("sorts route impacts by name then kind, keeping stable ties", () => {
+    it("sorts broken impacts before reroutes and keeps stable ties", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
@@ -454,14 +454,14 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      // Unknown route ids fall back to the id as the display name; equal
-      // (name, kind) pairs keep their authored order.
+      // Unknown route ids fall back to their ids as display names; equal
+      // kind/name pairs keep their authored order.
       expect(items[0]?.text).toBe(
         "⦿ Road · $0 · route-x broken · route-x broken · route-x rerouted",
       );
     });
 
-    it("sorts route impacts across names and both kind directions", () => {
+    it("sorts broken routes first, then sorts each group by name", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
@@ -478,10 +478,9 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      // Name ordering first, then kind ordering within a name — regardless of
-      // authored order.
+      // Broken routes precede reroutes regardless of name or authored order.
       expect(items[0]?.text).toBe(
-        "⦿ Road · $0 · route-a broken · route-a rerouted · route-b broken · route-b rerouted",
+        "⦿ Road · $0 · route-a broken · route-b broken · route-a rerouted · route-b rerouted",
       );
     });
 
