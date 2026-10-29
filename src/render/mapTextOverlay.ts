@@ -160,11 +160,11 @@ function compareRouteImpacts(
   left: RoadMutationPreviewView["routeImpacts"][number],
   right: RoadMutationPreviewView["routeImpacts"][number],
 ): number {
+  if (left.kind !== right.kind) return left.kind === "broken" ? -1 : 1;
   if (left.routeName !== right.routeName) {
     return left.routeName < right.routeName ? -1 : 1;
   }
-  if (left.kind === right.kind) return 0;
-  return left.kind < right.kind ? -1 : 1;
+  return 0;
 }
 
 function transitNode(state: GameState, nodeId: string) {
