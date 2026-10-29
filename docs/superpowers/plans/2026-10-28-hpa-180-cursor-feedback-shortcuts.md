@@ -6,65 +6,64 @@
 
 ## Scope gate and current reuse
 
-Before changing production code, confirm the inspected seams still apply to the implementation base:
+- `selectMapTextOverlayItems` already derives a separate cursor badge and road-preview item; `MapTextOverlay.svelte` owns board-projected DOM text and vertical flipping. Do not add a new renderer or state owner.
+- `buildRoadMutationPreview` already provides generation-checked Rust responses for **road, roundabout and remove**, but not track or area. `setHoverTile` already clears stale previews.
+- `selectActionFeedback` holds ephemeral preview branches plus actual-result branches; `ShellState.roadMutationPreview` is not used by a production component once strip previews go away. Keep `UiState.roadMutationPreview` for the map/GPU.
+- Real key handling lives in `App.svelte`; Build/Select/Demolish are on the command shelf, Track is a Build leaf, Rotate is enabled conditionally, and numbered road presets already have ordinal labels.
 
-- `selectMapTextOverlayItems` derives existing cursor and road-preview labels; `MapTextOverlay.svelte` uses `getBoardTransform` for display; `styles.css` already has `.map-text-item` variants.
-- `buildRoadMutationPreview` and runtime generation checking are the authoritative source of road/remove preview results. `roadMutationForUi` currently handles road/remove gestures plus road/roundabout/remove hover, **not track or area**.
-- `selectActionFeedback` owns strip precedence; `ShellActionFeedback` has two ephemeral sources to remove.
-- `App.svelte` has the real window-keyboard branches; `BuildPanel.svelte` and `CommandShelf.svelte` are the relevant hint surfaces.
-
-If a prior change already delivered a behavior, reuse it and delete the redundant planned edit. No speculative Rust preview expansion solely to satisfy a generic wording in the ticket.
+Reuse these seams; no new Rust pricing, preview API, keyboard dispatcher, framework or second implementation PR.
 
 ## Step 1 — Consolidate cursor feedback in existing map-text derivation
 
 **Files:** `src/render/mapTextOverlay.ts`, `src/components/MapTextOverlay.svelte`, `src/styles.css`
 
-- Merge the tool badge and road-preview text into one label at `ui.drag.current ?? ui.hoverTile` when there is an eligible generation-matched Rust preview. Prefer one concise warning over concatenating multiple incompatible messages.
-- Keep compact cost and route-impact descriptions: single affected line may use its name; multiple lines use counts; broken impacts are more important than reroutes.
-- Rejection uses the existing formatted `rejectionMessage` and warning styling. Avoid displaying a valid-looking cost for a rejected mutation.
-- Preserve roundabout hover, route waypoint/failure labels, normal tool badges and their tests. Remove the obsolete separately anchored `roadPreview` item/positioning path only if it has no remaining distinct use. Drop the unused `cursorBadge.placement` field in the merged item type and constructors (the DOM overlay already handles the vertical flip).
-- Keep DOM overlay noninteractive, clamp/flip text within the board when near an edge, and use a restrained maximum width rather than introducing a tooltip framework. Do not perform a second Rust preview call.
+- Build one `cursorBadge` at `ui.drag.current ?? ui.hoverTile` whenever the cursor has a useful **generation-matched** preview, independent of tool: **road, roundabout, remove**. Add a small `tone` field for rejected-preview styling. Delete the distinct `roadPreview` union kind, `roadPreviewAnchor` and its separate push; drop the unused `placement` field and its fixtures.
+- Keep tool name and compact Rust cost/impact on accepted previews. When Rust rejects, show `rejectionMessage(preview.rejection)`, a warning tone and `⊘` **instead of the nominal cost**. This includes roundabout rejection (which otherwise loses its reason when Step 2 removes the strip branch).
+- Reuse the existing pending-state fallback: once a matching Rust response exists, **only its rejection** determines `⊘`/warning, not the TypeScript single-tile road-validity heuristic. That prevents a skipped endpoint being displayed as rejected when Rust accepted the line. For no matching response, retain ordinary badges and the pending roundabout glyph.
+- For **idle remove hover**, suppress empty-ground `blockedTile`/other rejection previews and leave `⦿ Demolish`; show rejection details during an actual remove drag. Keep useful accepted removal preview and real dispatch failure unchanged.
+- For Creative economy show `Free` rather than a misleading nominal build charge; this is a simple display check of `state.rules.economyPreset`, not a TypeScript cost engine.
+- Keep DOM overlay noninteractive. Mirror vertical flip with a lightweight **horizontal side flip** based on anchor x versus measured board width (left third/right third/centre). Use a CSS class and ensure combined horizontal/vertical transforms work. Do **not** implement measured-width clamping or speculative max-width/long-text styles. Examine a real browser if a long message still overflows.
 
-**Unit tests:** update `tests/render/mapTextOverlay.test.ts` and `tests/ui/mapTextOverlay.test.ts` for (a) current-tile anchor and single label, (b) cost/impact, (c) rejected-warning styling, (d) stale/absent preview, and **(e) one horizontal edge-clamp assertion** for the longer label using a controlled board width; preserve the existing vertical flip. Update/remove fixtures asserting the dead `placement` field. Reuse existing fixtures.
+**Focused tests:** update existing `tests/render/mapTextOverlay.test.ts` and `tests/ui/mapTextOverlay.test.ts` for the merged label, Rust verdict over old glyph, **roundabout rejection reason**, removal hover suppression versus drag, and one side-flip class assertion using the existing mocked board dimensions. Adapt old `roadPreview` and `placement` expectations. Reuse existing stale/generation checks; do not duplicate coverage purely for branch count.
 
 ## Step 2 — Remove transient feedback-strip duplication
 
-**Files:** `src/runtime/runtimeSelectors.ts`, `src/runtime/types.ts`, dependent feedback tests
+**Files:** `src/runtime/runtimeSelectors.ts`, `src/runtime/types.ts`, impacted selector/feedback tests
 
-- Drop `roadImpact` and `roadRejection` selector branches, plus only their now-unused source types.
-- Preserve precedence and semantics of actual gameplay `rejection`, committed `roadDirection`, and `roadHostError`; leave route-editor ownership, dismiss logic and screen-reader announcement untouched.
-- Keep existing `buildRoadMutationPreview` generation gating; no second selector for preview prices.
+- Delete `roadImpact`/`roadRejection` branches and their `ShellActionFeedback.source` variants. Remove the now-unused `roadPreview` parameter from `selectActionFeedback` and its call; remove `ShellState.roadMutationPreview` and the extra `selectShellState` assignment.
+- Do not remove the underlying `UiState.roadMutationPreview` or `buildRoadMutationPreview`, still used by DOM/WebGPU map presentation.
+- Preserve **real** `rejection`, `roadDirection` and `roadHostError` feedback, ordering, accessibility and route-editor ownership.
 
-**Tests:** update `tests/runtime/runtimeSelectors.test.ts` and `tests/ui/actionFeedback.test.ts`; assert a preview-only result does **not** generate strip feedback, while committed rejection, direction-change and host error still do.
+**Focused tests:** update `tests/runtime/runtimeSelectors.test.ts` to prove preview-only hover does not populate the strip; preserve the existing actual rejection and host-error cases. Delete/update the obsolete shell-preview assertion (formerly around line 1583). Remove the dead `roadImpact` fixture/assertions from `tests/ui/actionFeedback.test.ts` instead of rebuilding those tests.
 
 ## Step 3 — Define small shared shortcut constants and hints
 
-**Files:** new `src/ui/shortcuts.ts`, `src/App.svelte`, `src/components/hud/panels/BuildPanel.svelte`, `src/components/hud/CommandShelf.svelte`
+**Files:** `src/ui/shortcuts.ts`, `src/App.svelte`, `src/components/hud/panels/BuildPanel.svelte`, `src/components/hud/CommandShelf.svelte`
 
-- Declare **only chip-bearing key labels** (B/R/T/D/V and road-only 1/2/3, with contextual R rotation) in one module and use the same constants in the corresponding App window-keydown comparisons. Leave Z/Y undo/redo, Delete/Backspace waypoint removal, arrow-key pan, Escape and camera +/-/0 comparisons App-local: this task gives them no new hint surface. Avoid a generic commands/registry/dispatch engine.
-- Build B; Road R when no building is armed; Track T; Demolish D; Select V; 1/2/3 road presets only while the road tool is armed; R for Rotate while a building is armed. Display no key chip for unbound Build leaves or the existing Escape/camera navigation keys; those bindings remain supported without refactoring.
-- Add small chip and tooltip/accessible text to applicable shelf buttons and Build leaf controls. Clarify the context-sensitive R/1–3 behavior rather than implying impossible actions. Existing Build leaf ordinals are not shortcut keys.
-- Keep existing input, modifier, route-draft and map-focus guards exactly as they work today. A shared definition must not accidentally expand where a key fires.
+- Define plain `B/R/T/D/V/1/2/3` key constants and use them in corresponding `App.svelte` comparisons. Do **not** create a context-aware hint lookup, keyboard registry or new dispatch mechanism. Leave undo/redo, Delete/Backspace, pan, Escape and camera keys App-local.
+- Visible `aria-hidden="true"` chips appear **only where click matches the key action**: shelf Build **B**, Select **V**, Demolish **D**; Track leaf **T**; conditionally enabled Rotate button **R**. Do not show an R-for-Road chip (no matching button).
+- Road preset `1/2/3` keys appear **only in the preset leaf `title` and `aria-keyshortcuts` while the Road tool is armed**. Existing 01/02/03 ordinals remain unchanged; add no duplicated visible chip. Without an armed Road tool, show no active preset shortcut claim.
+- Use native `aria-keyshortcuts` and `title` on chip buttons too (`Select (V)`); keep chips hidden from the accessible name and leave `aria-label`/text names unchanged. Honor current disabled-state and route-draft guards.
 
-**Tests:** update `tests/ui/buildPanel.test.ts`, shelf/component tests, and relevant `tests/ui/appShell.test.ts` keyboard assertions; verify hints and actual bindings agree in the contextual cases.
+**Focused tests:** add chip rendering, native shortcut attributes and unchanged accessible-name assertions to current `tests/ui/buildPanel.test.ts` and `tests/ui/commandShelf.test.ts` (or closest existing shelf tests). **Do not** re-test existing keyboard action behavior in `appShell.test.ts`; it already covers the matching key dispatch. Only modify those tests if an existing assertion breaks legitimately.
 
 ## Step 4 — Focused browser journey and review
 
-**Files:** `tests/e2e/commandShelf.spec.ts` and only other impacted E2E tests.
+**File:** `tests/e2e/commandShelf.spec.ts`
 
-- Replace the existing `roadImpact` strip assertion with one map-local preview assertion at a road hover/drag with cost.
-- Exercise a genuine rejected road preview: map warning is visible and the strip remains empty until an actual failed dispatch, which still produces its original dismissible strip feedback.
-- Verify the label follows the drag current tile and does not block canvas pointer input. Check a warning at the top/edge of the map for clipping, and one shortcut hint against the actual key behavior.
-- Run `bun run check`, `bun run test:unit`, `bun run lint:svelte`, `bun run lint:css`, `bun run format:check`, and focused Playwright `bun run test:e2e` (or the repository's focused command). Report concrete results; CI remains the merge gate.
+- Rewrite the existing road-preview `roadImpact` strip assertion to inspect the **single map-local** road cost label (on hover/drag, anchored to current tile).
+- Extend that same focused journey to prove a rejected preview gives its warning **at the cursor but not the strip**, while a genuine failed commit still produces the dismissible strip feedback.
+- Keep a manual browser look at unusual long/edge messages before adding CSS. Do not add separate E2E coverage for unchanged `pointer-events: none`, edge class flipping or already-tested keyboard behavior.
+- Run `bun run check`, `bun run test:unit`, `bun run lint:svelte`, `bun run lint:css`, `bun run format:check`, and the repository's focused Playwright command. Record actual results. CI remains the merge gate.
 
 ## Implementation boundaries and review questions
 
-- **Authoritative preview scope:** Rust currently previews road/remove mutations, not track/area. Do not invent their prices in TypeScript or create a generic preview protocol as part of cursor-text work. If full track/area price previews are deemed essential, explicitly revise the scope with evidence before coding instead of sneaking in a new cross-host API.
-- **UI ownership:** do not duplicate Road preview results in the shell strip after this change; keep actual rejections and host errors visible.
-- **Shortcut context:** R is overloaded with building rotation; 1/2/3 only switch presets in Road mode. Labels must not falsely promise unconditional shortcuts.
-- **No follow-up PR:** planning docs and implementation should live in this same PR. Avoid splitting tests or cleanup into a separate task.
-- **No new art or SFX** required; if requested later, plan them in a separate ticket.
+- **Tool coverage:** Use Rust generation-matched previews for road, **roundabout** and remove. Never invent a track/area preview price or add a generic host contract.
+- **Verdict precedence:** Once Rust responds, don't mix its accepted multi-tile result with TS single-tile `⊘`. The roundabout rejection reason must survive the strip cleanup; remove hover on empty ground should remain quiet.
+- **One feedback owner:** Temporary preview belongs to the cursor, actual dispatch failures and host errors stay in the strip. Delete the unconsumed `ShellState.roadMutationPreview` projection.
+- **UI discoverability:** Show chips only for real matching actions; preserve accessible button names; don't turn road preset ordinals into duplicated keys.
+- **YAGNI:** No generic keymap, no width-measurement utility, no extended verification matrix, no new art or SFX. If assets are requested later, scope them separately. Design and implementation stay on this single PR.
 
 ## Done when
 
-There is one truthful, legible current-tile map label per preview (including horizontal edge handling); committed outcome feedback survives; **chip-bearing** shortcut labels share their actual key constants while unhinted keys stay App-local; UI/browser tests cover the player flow; and the PR includes a short actual validation record. No Rust save/schema/host changes or new frontend architecture.
+There is one truthful current-tile map label for road/roundabout/remove, with Rust-owned acceptance, quiet demolition hover and correct Creative/free wording; real outcomes remain in the strip; stale shell-preview data is deleted; visible chips match clickable actions without changing their accessible names; focused tests and a short actual validation record are included. No Rust save/schema/host changes, new frontend architecture or second PR.
