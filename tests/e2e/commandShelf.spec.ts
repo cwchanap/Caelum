@@ -323,25 +323,64 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
     .toBe(false);
 });
 
-test("shows one road impact strip and one dismissible rejection", async ({
+test("shows road previews at the cursor and a dismissible failed commit", async ({
   page,
 }) => {
   await page.setViewportSize({ width: 1280, height: 800 });
   await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const tile = { x: 2, y: 10 } as const;
+  const dragEnd = { x: 4, y: 10 } as const;
 
   await selectBuildLeaf(page, "roads", "road-twoWay");
-  await hoverMapTile(canvas, tile);
+  const overlay = page.getByTestId("map-text-overlay");
+  const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
   const feedback = page.getByTestId("action-feedback");
-  await expect(feedback).toHaveCount(1);
-  await expect(feedback).toHaveAttribute("data-source", "roadImpact");
-  await expect(feedback).toContainText("Preview cost");
+
+  async function expectBadgeAt(currentTile: { x: number; y: number }) {
+    await expect
+      .poll(async () => {
+        const ui = (await runtimeSnapshot(page)).ui;
+        return ui.drag?.current ?? ui.hoverTile;
+      })
+      .toEqual(currentTile);
+    await expect(badge).toHaveCount(1);
+    const point = await mapTileViewportPoint(canvas, currentTile);
+    const overlayBox = await overlay.boundingBox();
+    expect(overlayBox).not.toBeNull();
+    const anchorX = await badge.evaluate((element) =>
+      Number.parseFloat((element as HTMLElement).style.left),
+    );
+    expect(anchorX).toBeCloseTo(point.x - overlayBox!.x, 0);
+  }
+
+  await hoverMapTile(canvas, tile);
+  await expect(badge).toContainText("$100");
+  await expectBadgeAt(tile);
+  await expect(feedback).toHaveCount(0);
   await expect(page.getByTestId("rejection-banner")).toHaveCount(0);
   await expect(page.getByTestId("road-mutation-notice")).toHaveCount(0);
 
+  const startPoint = await mapTileViewportPoint(canvas, tile);
+  const endPoint = await mapTileViewportPoint(canvas, dragEnd);
+  await page.mouse.move(startPoint.x, startPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
+  await expect(badge).toContainText("$300");
+  await expectBadgeAt(dragEnd);
+  await page.mouse.up();
+  await expect(feedback).toHaveCount(0);
+
   await debugSetBudget(page, 0);
-  await clickMapTile(canvas, tile);
+  const map = (await runtimeSnapshot(page)).state.map;
+  const rejectedTile = { x: map.width - 1, y: 10 };
+  await hoverMapTile(canvas, rejectedTile);
+  await expect(badge).toHaveClass(/map-text-warning/);
+  await expect(badge).toContainText("Needs $100; only $0 is available. ⊘");
+  await expectBadgeAt(rejectedTile);
+  await expect(feedback).toHaveCount(0);
+
+  await clickMapTile(canvas, rejectedTile);
   await expect(feedback).toHaveCount(1);
   await expect(feedback).toHaveAttribute("data-source", "rejection");
   await expect(feedback).toContainText("available");
