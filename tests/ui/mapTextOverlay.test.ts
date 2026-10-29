@@ -63,6 +63,7 @@ describe("MapTextOverlay", () => {
     expect(badge.style.left).toBe(`${2 * tileSize + tileSize / 2}px`);
     expect(badge.style.top).toBe(`${3 * tileSize}px`);
     expect(badge.classList.contains("map-text-below")).toBe(false);
+    expect(badge.classList.contains("map-text-side-left")).toBe(true);
   });
 
   it("flips the badge below the tile on the top row", async () => {
@@ -77,6 +78,7 @@ describe("MapTextOverlay", () => {
     // Below-placement anchors at the flipped-to tile bottom (row 0).
     expect(badge.style.top).toBe(`${tileSize}px`);
     expect(badge.classList.contains("map-text-below")).toBe(true);
+    expect(badge.classList.contains("map-text-side-left")).toBe(true);
   });
 
   it("flips a second-row badge whose tile is shorter than the badge", async () => {
@@ -134,10 +136,10 @@ describe("MapTextOverlay", () => {
     expect(topRow.classList.contains("map-text-below")).toBe(true);
   });
 
-  it("renders road preview feedback anchored to the preview tiles", async () => {
+  it("renders Rust preview feedback in the cursor badge", async () => {
     const ui: Partial<UiState> = {
       activeTool: "road",
-      hoverTile: { x: 1, y: 4 },
+      hoverTile: { x: 4, y: 4 },
       roadPreviewGeneration: 1,
       roadMutationPreview: {
         generation: 1,
@@ -157,11 +159,40 @@ describe("MapTextOverlay", () => {
     await renderOverlay(createTestGameState(), ui);
 
     const feedback = document.querySelector(
-      '.map-text-item[data-kind="roadPreview"]',
+      '.map-text-item[data-kind="cursorBadge"]',
     ) as HTMLElement;
     expect(feedback).not.toBeNull();
-    expect(feedback.textContent).toContain("$96");
-    expect(feedback.style.left).toBe(`${1 * tileSize + tileSize / 2}px`);
+    expect(
+      screen.getByTestId("map-text-overlay").querySelectorAll(".map-text-item"),
+    ).toHaveLength(1);
+    expect(feedback.textContent).toBe("⦿ Road · $96");
+    expect(feedback.style.left).toBe(`${4 * tileSize + tileSize / 2}px`);
+  });
+
+  it("shows rejected preview details with warning styling", async () => {
+    await renderOverlay(createTestGameState(), {
+      activeTool: "road",
+      hoverTile: { x: 4, y: 4 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 96,
+        warnings: [],
+        routeImpacts: [],
+        rejection: { code: "blockedTile", context: {} },
+      },
+    });
+
+    const feedback = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(feedback.textContent).toBe("⦿ Road · That tile is blocked. ⊘");
+    expect(feedback.textContent).not.toContain("$96");
+    expect(feedback.classList.contains("map-text-warning")).toBe(true);
   });
 
   it("renders numbered route waypoints centered on their nodes", async () => {

@@ -48,6 +48,7 @@
     left: number;
     top: number;
     below: boolean;
+    side: "left" | "center" | "right";
   };
 
   const placed = $derived.by(() => {
@@ -68,6 +69,7 @@
             transform.offsetY +
             (item.anchor.y + 0.5) * tileSize * transform.scale,
           below: false,
+          side: "center",
         };
       }
       // Labels hover above their tile, flipping below it on the top visible
@@ -78,11 +80,19 @@
         tileTop <
         Math.max(transform.offsetY, 0) +
           Math.max(tileSize * transform.scale, LABEL_RISE_PX);
+      const boardWidth = box?.width ?? 0;
+      const side =
+        left < boardWidth / 3
+          ? "left"
+          : left > (2 * boardWidth) / 3
+            ? "right"
+            : "center";
       return {
         ...item,
         left,
         top: below ? tileTop + tileSize * transform.scale : tileTop,
         below,
+        side,
       };
     });
   });
@@ -96,8 +106,15 @@
 >
   {#each placed as item, index (index)}
     <span
-      class="map-text-item"
-      class:map-text-below={item.below}
+      class={[
+        "map-text-item",
+        item.below && "map-text-below",
+        item.side === "left" && "map-text-side-left",
+        item.side === "right" && "map-text-side-right",
+        item.kind === "cursorBadge" &&
+          item.tone === "warning" &&
+          "map-text-warning",
+      ]}
       data-kind={item.kind}
       style="left: {item.left}px; top: {item.top}px">{item.text}</span
     >

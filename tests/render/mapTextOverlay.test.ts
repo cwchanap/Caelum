@@ -1,9 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  GameState,
-  RoadStructure,
-  RouteLegPath,
-} from "../../src/domain/types";
+import type { GameState, RouteLegPath } from "../../src/domain/types";
 import { selectMapTextOverlayItems } from "../../src/render/mapTextOverlay";
 import type { RoadMutationPreviewResponse } from "../../src/runtime/backend/types";
 import { createUiState, type UiState } from "../../src/ui/uiState";
@@ -50,7 +46,7 @@ function markerPath(
 }
 
 describe("selectMapTextOverlayItems", () => {
-  it("derives the cursor badge wording and aboveOrBelow placement", () => {
+  it("derives the cursor badge wording", () => {
     const state = withRoads(createTestGameState(), [{ x: 7, y: 8 }]);
     const ui = {
       ...createUiState(),
@@ -66,7 +62,6 @@ describe("selectMapTextOverlayItems", () => {
         kind: "cursorBadge",
         anchor: { x: 7, y: 8 },
         text: "⦿ Road →",
-        placement: "aboveOrBelow",
       },
     ]);
   });
@@ -91,7 +86,6 @@ describe("selectMapTextOverlayItems", () => {
         kind: "cursorBadge",
         anchor: { x: 4, y: 2 },
         text: "⦿ Demolish",
-        placement: "aboveOrBelow",
       },
     ]);
   });
@@ -155,11 +149,12 @@ describe("selectMapTextOverlayItems", () => {
     ]);
   });
 
-  it("derives the road preview feedback label from the Rust response", () => {
+  it("merges useful Rust preview feedback into the cursor badge", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
+      hoverTile: { x: 7, y: 8 },
       roadPreviewGeneration: 3,
       roadMutationPreview: {
         generation: 3,
@@ -177,22 +172,23 @@ describe("selectMapTextOverlayItems", () => {
       },
     };
 
-    const items = itemsOfKind(state, ui, "roadPreview");
+    const items = itemsOfKind(state, ui, "cursorBadge");
 
     expect(items).toEqual([
       {
-        kind: "roadPreview",
-        anchor: { x: 5, y: 6 },
-        text: "$500 · route-a rerouted · route-z broken",
+        kind: "cursorBadge",
+        anchor: { x: 7, y: 8 },
+        text: "⦿ Road · $500 · route-a rerouted · route-z broken",
       },
     ]);
   });
 
-  it("emits no road preview item when the preview is stale", () => {
+  it("keeps only the ordinary badge when the preview is stale", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
+      hoverTile: { x: 5, y: 6 },
       roadPreviewGeneration: 2,
       roadMutationPreview: {
         generation: 1,
@@ -207,7 +203,13 @@ describe("selectMapTextOverlayItems", () => {
       },
     };
 
-    expect(itemsOfKind(state, ui, "roadPreview")).toHaveLength(0);
+    expect(itemsOfKind(state, ui, "cursorBadge")).toEqual([
+      {
+        kind: "cursorBadge",
+        anchor: { x: 5, y: 6 },
+        text: "⦿ Road",
+      },
+    ]);
   });
 
   describe("cursor badge wording", () => {
@@ -338,12 +340,17 @@ describe("selectMapTextOverlayItems", () => {
           roadPreviewGeneration: 2,
           roadMutationPreview: previewResponse({
             generation: 2,
-            rejection: { code: "insufficientBudget", context: {} },
+            cost: 500,
+            rejection: { code: "unsafeRoundaboutPortMapping", context: {} },
           }),
         },
         "cursorBadge",
       );
-      expect(rejected[0]?.text).toBe("⦿ Roundabout 3×3 ⊘");
+      expect(rejected[0]?.text).toBe(
+        "⦿ Roundabout 3×3 · The roads crossing this footprint cannot map safely to roundabout ports. ⊘",
+      );
+      expect(rejected[0]?.text).not.toContain("$500");
+      expect(rejected[0]?.tone).toBe("warning");
     });
 
     it("labels the area tool only while an area kind is selected", () => {
@@ -386,7 +393,7 @@ describe("selectMapTextOverlayItems", () => {
     });
   });
 
-  describe("road preview item", () => {
+  describe("mutation previews in the cursor badge", () => {
     function previewResponse(
       overrides: Partial<RoadMutationPreviewResponse> = {},
     ): RoadMutationPreviewResponse {
@@ -408,67 +415,27 @@ describe("selectMapTextOverlayItems", () => {
       return {
         ...createUiState(),
         activeTool: "road",
+        hoverTile: { x: 2, y: 2 },
         roadPreviewGeneration: preview.generation,
         roadMutationPreview: preview,
       };
     }
 
-    it("anchors on the first authored tile before changed tiles", () => {
+    it("anchors preview feedback on the cursor, not preview tiles", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
           previewResponse({
-            authoredTiles: [
-              {
-                point: { x: 9, y: 9 },
-                roadConnections: ["east"],
-              },
-            ],
             changedTiles: [{ x: 5, y: 6 }],
+            authoredTiles: [
+              { point: { x: 9, y: 9 }, roadConnections: ["east"] },
+            ],
           }),
         ),
-        "roadPreview",
+        "cursorBadge",
       );
 
-      expect(items[0]?.anchor).toEqual({ x: 9, y: 9 });
-    });
-
-    it("anchors on the first generated structure when no tiles changed", () => {
-      const roundabout: RoadStructure = {
-        kind: "roundabout",
-        id: "rb-1",
-        origin: { x: 7, y: 7 },
-        size: "compact2x2",
-        footprint: [
-          { x: 7, y: 7 },
-          { x: 8, y: 7 },
-          { x: 7, y: 8 },
-          { x: 8, y: 8 },
-        ],
-        ports: [],
-      };
-      const items = itemsOfKind(
-        createTestGameState(),
-        previewUi(previewResponse({ generatedStructures: [roundabout] })),
-        "roadPreview",
-      );
-
-      expect(items[0]?.anchor).toEqual({ x: 7, y: 7 });
-    });
-
-    it("falls back to the origin when a rejection preview has no content", () => {
-      const items = itemsOfKind(
-        createTestGameState(),
-        previewUi(
-          previewResponse({
-            skippedTiles: [{ x: 5, y: 6 }],
-            rejection: { code: "blockedTile", context: {} },
-          }),
-        ),
-        "roadPreview",
-      );
-
-      expect(items[0]?.anchor).toEqual({ x: 0, y: 0 });
+      expect(items[0]?.anchor).toEqual({ x: 2, y: 2 });
     });
 
     it("sorts route impacts by name then kind, keeping stable ties", () => {
@@ -484,13 +451,13 @@ describe("selectMapTextOverlayItems", () => {
             ],
           }),
         ),
-        "roadPreview",
+        "cursorBadge",
       );
 
       // Unknown route ids fall back to the id as the display name; equal
       // (name, kind) pairs keep their authored order.
       expect(items[0]?.text).toBe(
-        "$0 · route-x broken · route-x broken · route-x rerouted",
+        "⦿ Road · $0 · route-x broken · route-x broken · route-x rerouted",
       );
     });
 
@@ -508,14 +475,127 @@ describe("selectMapTextOverlayItems", () => {
             ],
           }),
         ),
-        "roadPreview",
+        "cursorBadge",
       );
 
       // Name ordering first, then kind ordering within a name — regardless of
       // authored order.
       expect(items[0]?.text).toBe(
-        "$0 · route-a broken · route-a rerouted · route-b broken · route-b rerouted",
+        "⦿ Road · $0 · route-a broken · route-a rerouted · route-b broken · route-b rerouted",
       );
+    });
+
+    it("lets an accepted Rust response override the single-tile road heuristic", () => {
+      const state = addTestBusStop(createTestGameState(), { x: 2, y: 2 });
+      const ui: UiState = {
+        ...createUiState(),
+        activeTool: "road",
+        hoverTile: { x: 2, y: 2 },
+      };
+      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road ⊘");
+
+      const accepted = itemsOfKind(
+        state,
+        {
+          ...ui,
+          roadPreviewGeneration: 1,
+          roadMutationPreview: previewResponse({
+            generation: 1,
+            changedTiles: [{ x: 3, y: 2 }],
+            skippedTiles: [{ x: 2, y: 2 }],
+            cost: 100,
+          }),
+        },
+        "cursorBadge",
+      )[0];
+      expect(accepted?.text).toBe("⦿ Road · $100");
+      expect(accepted?.tone).toBeUndefined();
+    });
+
+    it("shows the Rust rejection instead of the nominal cost and local glyph", () => {
+      const state = createTestGameState();
+      const items = itemsOfKind(
+        state,
+        {
+          ...previewUi(
+            previewResponse({
+              cost: 500,
+              rejection: { code: "blockedTile", context: {} },
+            }),
+          ),
+        },
+        "cursorBadge",
+      );
+
+      expect(items[0]?.text).toBe("⦿ Road · That tile is blocked. ⊘");
+      expect(items[0]?.text).not.toContain("$500");
+      expect(items[0]?.tone).toBe("warning");
+    });
+
+    it("suppresses idle remove rejections but shows them during a remove drag", () => {
+      const state = createTestGameState();
+      const rejected = previewResponse({
+        rejection: { code: "blockedTile", context: {} },
+      });
+      const idleUi: UiState = {
+        ...createUiState(),
+        activeTool: "remove",
+        hoverTile: { x: 2, y: 2 },
+        roadPreviewGeneration: rejected.generation,
+        roadMutationPreview: rejected,
+      };
+      expect(itemsOfKind(state, idleUi, "cursorBadge")[0]).toEqual({
+        kind: "cursorBadge",
+        anchor: { x: 2, y: 2 },
+        text: "⦿ Demolish",
+      });
+
+      const duringDrag = itemsOfKind(
+        state,
+        {
+          ...idleUi,
+          drag: {
+            tool: "remove",
+            start: { x: 1, y: 2 },
+            current: { x: 2, y: 2 },
+          },
+        },
+        "cursorBadge",
+      )[0];
+      expect(duringDrag?.text).toBe("⦿ Demolish · That tile is blocked. ⊘");
+      expect(duringDrag?.tone).toBe("warning");
+
+      const acceptedRemoval = itemsOfKind(
+        state,
+        {
+          ...idleUi,
+          roadMutationPreview: previewResponse({
+            generation: rejected.generation,
+            changedTiles: [{ x: 2, y: 2 }],
+            cost: 50,
+          }),
+        },
+        "cursorBadge",
+      )[0];
+      expect(acceptedRemoval?.text).toBe("⦿ Demolish · $50");
+    });
+
+    it("shows Free for accepted previews in Creative economy", () => {
+      const base = createTestGameState();
+      const state = {
+        ...base,
+        rules: { ...base.rules, economyPreset: "creative" as const },
+      };
+      const items = itemsOfKind(
+        state,
+        previewUi(
+          previewResponse({ changedTiles: [{ x: 2, y: 2 }], cost: 500 }),
+        ),
+        "cursorBadge",
+      );
+
+      expect(items[0]?.text).toBe("⦿ Road · Free");
+      expect(items[0]?.text).not.toContain("$500");
     });
   });
 
