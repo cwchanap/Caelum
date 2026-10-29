@@ -7,9 +7,9 @@ function feedback(
   overrides: Partial<ShellActionFeedback> = {},
 ): ShellActionFeedback {
   return {
-    source: "roadImpact",
-    tone: "info",
-    message: "Preview cost $1,200",
+    source: "rejection",
+    tone: "error",
+    message: "Gameplay rejected.",
     details: [],
     dismissible: false,
     announce: false,
@@ -64,7 +64,6 @@ describe("ActionFeedback", () => {
           source: "roadHostError",
           tone: "warning",
           message: "Road preview unavailable: host timed out",
-          details: ["Loop 1 will reroute"],
         }),
         onDismiss: vi.fn(),
       },
@@ -102,34 +101,5 @@ describe("ActionFeedback", () => {
     expect(announce).toHaveTextContent(
       "Shuttle A became broken after this direction change.",
     );
-  });
-
-  it("renders every material-impact detail", () => {
-    render(ActionFeedback, {
-      props: {
-        feedback: feedback({
-          details: ["Loop 1 will reroute", "Metro A will become broken"],
-        }),
-        onDismiss: vi.fn(),
-      },
-    });
-
-    expect(screen.getByRole("list")).toHaveTextContent("Loop 1 will reroute");
-    expect(screen.getByRole("list")).toHaveTextContent(
-      "Metro A will become broken",
-    );
-  });
-
-  it("renders duplicate material-impact detail labels without crashing", () => {
-    render(ActionFeedback, {
-      props: {
-        feedback: feedback({
-          details: ["Loop 1 will reroute", "Loop 1 will reroute"],
-        }),
-        onDismiss: vi.fn(),
-      },
-    });
-
-    expect(screen.getAllByRole("listitem")).toHaveLength(2);
   });
 });

@@ -201,12 +201,7 @@ export interface RoadMutationPreviewView {
 }
 
 export interface ShellActionFeedback {
-  source:
-    | "rejection"
-    | "roadHostError"
-    | "roadRejection"
-    | "roadImpact"
-    | "roadDirection";
+  source: "rejection" | "roadHostError" | "roadDirection";
   tone: "error" | "warning" | "info";
   message: string;
   details: string[];
@@ -244,7 +239,6 @@ export interface ShellState {
   inspector: ShellInspectorState | null;
   routeDraft: RouteEditorView | null;
   routes: ShellRouteListState;
-  roadMutationPreview: RoadMutationPreviewView | null;
   actionFeedback: ShellActionFeedback | null;
 }
 

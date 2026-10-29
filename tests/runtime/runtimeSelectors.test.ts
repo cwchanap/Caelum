@@ -1551,50 +1551,6 @@ describe("route selectors", () => {
     });
   });
 
-  it("maps authoritative road preview cost and route impacts for accessible UI", () => {
-    let state = twoStops();
-    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
-    state = {
-      ...state,
-      transit: {
-        ...state.transit,
-        routes: state.transit.routes.map((route) => ({
-          ...route,
-          name: "Route 1",
-        })),
-      },
-    };
-    const ui = {
-      ...createUiState(),
-      roadPreviewGeneration: 4,
-      roadMutationPreview: {
-        generation: 4,
-        changedTiles: [{ x: 9, y: 8 }],
-        authoredTiles: [],
-        generatedStructures: [],
-        cost: 1_250,
-        skippedTiles: [],
-        routeImpacts: [{ routeId: "route-001", kind: "broken" as const }],
-        warnings: [],
-        rejection: null,
-      },
-    };
-
-    expect(selectShellState(state, ui).roadMutationPreview).toEqual({
-      generation: 4,
-      changedTiles: [{ x: 9, y: 8 }],
-      skippedTiles: [],
-      authoredTiles: [],
-      generatedStructures: [],
-      cost: 1_250,
-      costLabel: "$1,250",
-      routeImpacts: [
-        { routeId: "route-001", routeName: "Route 1", kind: "broken" },
-      ],
-      rejection: null,
-    });
-  });
-
   it("shows an incompatibleRouteNode click error before a stale host error", () => {
     // When a prior preview request failed (host error) and the user then
     // clicks an incompatible node, the click error must surface first so
@@ -1755,7 +1711,7 @@ describe("action feedback selector", () => {
     });
   });
 
-  it("prioritizes a global gameplay rejection over every road outcome", () => {
+  it("keeps a global gameplay rejection in the action strip", () => {
     const state = createTestGameState();
     const rejection = {
       code: "insufficientBudget" as const,
@@ -1866,7 +1822,7 @@ describe("action feedback selector", () => {
     expect(shell.actionFeedback).toBeNull();
   });
 
-  it("prioritizes a road host error over road rejection and impact", () => {
+  it("shows a road preview host error in the action strip", () => {
     const shell = selectShellState(createTestGameState(), {
       ...createUiState(),
       roadPreviewGeneration: 3,
@@ -1891,84 +1847,20 @@ describe("action feedback selector", () => {
     });
   });
 
-  it("prioritizes a road rejection over cost and route impacts", () => {
-    const shell = selectShellState(createTestGameState(), {
-      ...createUiState(),
-      roadPreviewGeneration: 3,
-      roadMutationPreview: roadPreview({
-        cost: 1_200,
-        routeImpacts: [{ routeId: "route-001", kind: "rerouted" as const }],
-        rejection: {
-          code: "blockedTile" as const,
-          context: { point: { x: 9, y: 8 } },
-        },
-      }),
-    });
-
-    expect(shell.actionFeedback).toEqual({
-      source: "roadRejection",
-      tone: "warning",
-      message: "That tile is blocked.",
-      details: [],
-      dismissible: false,
-      announce: false,
-    });
-  });
-
-  it("formats material road cost and every affected route", () => {
-    let state = addTestBusStop(
-      addTestBusStop(createTestGameState(), { x: 7, y: 7 }),
-      { x: 11, y: 7 },
-    );
-    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
-    state = addTestMetroStation(state, { x: 7, y: 2 });
-    state = addTestMetroStation(state, { x: 11, y: 2 });
-    state = addTestMetroLine(state, ["station-001", "station-002"]);
-    state = {
-      ...state,
-      transit: {
-        ...state.transit,
-        routes: state.transit.routes.map((route) => ({
-          ...route,
-          name: "Loop 1",
-        })),
-        metroLines: state.transit.metroLines.map((line) => ({
-          ...line,
-          name: "Metro A",
-        })),
-      },
-    };
-    const shell = selectShellState(state, {
-      ...createUiState(),
-      roadPreviewGeneration: 3,
-      roadMutationPreview: roadPreview({
-        cost: 1_200,
-        routeImpacts: [
-          { routeId: "route-001", kind: "rerouted" as const },
-          { routeId: "metro-001", kind: "broken" as const },
-        ],
-      }),
-    });
-
-    expect(shell.actionFeedback).toEqual({
-      source: "roadImpact",
-      tone: "info",
-      message: "Preview cost $1,200",
-      details: ["Loop 1 will reroute", "Metro A will become broken"],
-      dismissible: false,
-      announce: false,
-    });
-  });
-
-  it("returns no feedback for empty or stale road previews", () => {
+  it("does not add preview-only hover feedback to the action strip", () => {
     const state = createTestGameState();
-    expect(selectShellState(state, createUiState()).actionFeedback).toBeNull();
-
     expect(
       selectShellState(state, {
         ...createUiState(),
-        roadPreviewGeneration: 4,
-        roadMutationPreview: roadPreview({ generation: 3, cost: 1_200 }),
+        roadPreviewGeneration: 3,
+        roadMutationPreview: roadPreview({
+          cost: 1_200,
+          routeImpacts: [{ routeId: "route-001", kind: "rerouted" as const }],
+          rejection: {
+            code: "blockedTile" as const,
+            context: { point: { x: 9, y: 8 } },
+          },
+        }),
       }).actionFeedback,
     ).toBeNull();
   });
