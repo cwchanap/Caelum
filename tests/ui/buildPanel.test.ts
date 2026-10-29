@@ -98,6 +98,51 @@ describe("BuildPanel detail view", () => {
     });
   });
 
+  it("shows the Track shortcut without changing its accessible name", () => {
+    renderPanel({ activeBuildGroup: "transit" });
+    const track = screen.getByRole("button", { name: "Track" });
+    expect(track).toHaveAccessibleName("Track");
+    expect(track).toHaveAttribute("aria-keyshortcuts", "t");
+    expect(track).toHaveAttribute("title", "Track (T)");
+    expect(track.querySelector(".shortcut-chip")).toHaveTextContent("T");
+    expect(track.querySelector(".shortcut-chip")).toHaveAttribute(
+      "aria-hidden",
+      "true",
+    );
+  });
+
+  it("claims road preset shortcuts only while the Road tool is armed", () => {
+    renderPanel({ activeBuildGroup: "roads" });
+    for (const [id, ordinal] of [
+      ["road-twoWay", "01"],
+      ["road-oneWay", "02"],
+      ["road-dual", "03"],
+    ]) {
+      const button = screen.getByTestId(`build-item-${id}`);
+      expect(button).not.toHaveAttribute("aria-keyshortcuts");
+      expect(button).not.toHaveAttribute("title");
+      expect(button.querySelector(".tool-num")).toHaveTextContent(ordinal);
+    }
+  });
+
+  it("sets Road preset shortcut attributes without adding visible chips", () => {
+    renderPanel({ activeBuildGroup: "roads", activeTool: "road" });
+    for (const [id, ordinal, key, title] of [
+      ["road-twoWay", "01", "1", "1-Lane (1)"],
+      ["road-oneWay", "02", "2", "1-Lane One-Way (2)"],
+      ["road-dual", "03", "3", "2-Lane (3)"],
+    ]) {
+      const button = screen.getByTestId(`build-item-${id}`);
+      expect(button).toHaveAttribute("aria-keyshortcuts", key);
+      expect(button).toHaveAttribute("title", title);
+      expect(button).toHaveAccessibleName(
+        title.slice(0, title.lastIndexOf(" (")),
+      );
+      expect(button.querySelector(".shortcut-chip")).toBeNull();
+      expect(button.querySelector(".tool-num")).toHaveTextContent(ordinal);
+    }
+  });
+
   it("includes all six area actions in Zones", () => {
     renderPanel({ activeBuildGroup: "zones" });
     for (const label of [
@@ -137,18 +182,31 @@ describe("BuildPanel detail view", () => {
     expect(screen.getByRole("button", { name: "Small House" })).toBeVisible();
   });
 
-  it("enables Rotate only when a building is armed", () => {
+  it("exposes Rotate R only when a building is armed", () => {
     renderPanel({ activeBuildGroup: "buildings" });
-    expect(
-      screen.getByRole("button", { name: /rotate building/i }),
-    ).toBeDisabled();
+    const disabledRotate = screen.getByRole("button", {
+      name: /rotate building/i,
+    });
+    expect(disabledRotate).toBeDisabled();
+    expect(disabledRotate).not.toHaveAttribute("aria-keyshortcuts");
+    expect(disabledRotate).not.toHaveAttribute("title");
+    expect(disabledRotate.querySelector(".shortcut-chip")).toBeNull();
     renderPanel({
       activeBuildGroup: "buildings",
       selectedBuilding: "smallHouse",
     });
-    expect(
-      screen.getAllByRole("button", { name: /rotate building/i }).at(-1),
-    ).toBeEnabled();
+    const enabledRotate = screen
+      .getAllByRole("button", { name: /rotate building/i })
+      .at(-1)!;
+    expect(enabledRotate).toBeEnabled();
+    expect(enabledRotate).toHaveAccessibleName(
+      "Rotate building, current rotation 0 degrees",
+    );
+    expect(enabledRotate).toHaveAttribute("aria-keyshortcuts", "r");
+    expect(enabledRotate).toHaveAttribute("title", "Rotate (R)");
+    expect(enabledRotate.querySelector(".shortcut-chip")).toHaveTextContent(
+      "R",
+    );
   });
 });
 

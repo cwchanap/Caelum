@@ -2,6 +2,7 @@
   import type { Tool } from "../../domain/types";
   import type { ShellCommandState } from "../../runtime/types";
   import type { CommandDestination } from "../../ui/uiState";
+  import { BUILD_KEY, DEMOLISH_KEY, SELECT_KEY } from "../../ui/shortcuts";
 
   interface Props {
     command: ShellCommandState;
@@ -67,6 +68,10 @@
         class:is-active={command.activeDestination === destination.id}
         aria-expanded={command.activeDestination === destination.id}
         aria-controls={`command-panel-${destination.id}`}
+        aria-keyshortcuts={destination.id === "build" ? BUILD_KEY : undefined}
+        title={destination.id === "build"
+          ? `Build (${BUILD_KEY.toUpperCase()})`
+          : undefined}
         aria-disabled={command.routeDraftActive && destination.id !== "lines"
           ? "true"
           : undefined}
@@ -91,7 +96,10 @@
           <path d={destination.path} />
         </svg>
         <span class="command-shelf__label">
-          {destination.label}{#if destination.id === "lines"}<span
+          {destination.label}{#if destination.id === "build"}<kbd
+              class="command-shelf__shortcut"
+              aria-hidden="true">{BUILD_KEY.toUpperCase()}</kbd
+            >{:else if destination.id === "lines"}<span
               class="command-shelf__badge"
               aria-label={`${command.lineCount} lines`}
               >{command.lineCount}</span
@@ -110,6 +118,8 @@
       class="command-shelf__tool"
       class:is-active={command.selectActive}
       aria-pressed={command.selectActive}
+      aria-keyshortcuts={SELECT_KEY}
+      title={`Select (${SELECT_KEY.toUpperCase()})`}
       aria-disabled={command.routeDraftActive ? "true" : undefined}
       aria-describedby={command.routeDraftActive
         ? "route-draft-shelf-gate"
@@ -119,12 +129,17 @@
     >
       <span class="command-shelf__tool-mark" aria-hidden="true">⌖</span>
       <span>Select</span>
+      <kbd class="command-shelf__shortcut" aria-hidden="true"
+        >{SELECT_KEY.toUpperCase()}</kbd
+      >
     </button>
     <button
       type="button"
       class="command-shelf__tool command-shelf__tool--danger"
       class:is-active={command.demolishActive}
       aria-pressed={command.demolishActive}
+      aria-keyshortcuts={DEMOLISH_KEY}
+      title={`Demolish (${DEMOLISH_KEY.toUpperCase()})`}
       aria-disabled={command.routeDraftActive ? "true" : undefined}
       aria-describedby={command.routeDraftActive
         ? "route-draft-shelf-gate"
@@ -134,6 +149,9 @@
     >
       <span class="command-shelf__tool-mark" aria-hidden="true">⌫</span>
       <span>Demolish</span>
+      <kbd class="command-shelf__shortcut" aria-hidden="true"
+        >{DEMOLISH_KEY.toUpperCase()}</kbd
+      >
     </button>
     <div class="command-shelf__mode" data-testid="command-active-mode">
       <span class="command-shelf__eyebrow">Active mode</span>
@@ -274,6 +292,20 @@
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
+  }
+
+  .command-shelf__shortcut {
+    display: inline-grid;
+    place-items: center;
+    min-width: 18px;
+    padding: 1px 4px;
+    border: 1px solid var(--shelf-line);
+    border-radius: 4px;
+    color: var(--shelf-muted);
+    font-family: var(--font-mono, monospace);
+    font-size: 10px;
+    line-height: 1.2;
+    text-align: center;
   }
 
   .command-shelf__tool {
