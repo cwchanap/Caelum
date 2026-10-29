@@ -20,6 +20,16 @@
     RuntimeSnapshot,
   } from "./runtime/types";
   import type { CommandDestination } from "./ui/uiState";
+  import {
+    BUILD_KEY,
+    DEMOLISH_KEY,
+    ROAD_PRESET_1_KEY,
+    ROAD_PRESET_2_KEY,
+    ROAD_PRESET_3_KEY,
+    ROTATE_KEY,
+    SELECT_KEY,
+    TRACK_KEY,
+  } from "./ui/shortcuts";
   import type {
     BuildGroup,
     BuildItemAction,
@@ -592,13 +602,13 @@
       }
     }
 
-    if (key === "b") {
+    if (key === BUILD_KEY) {
       const next =
         snapshot?.ui.activeCommandDestination === "build" ? null : "build";
       setSnapshot(runtime.setCommandDestination(next));
       return;
     }
-    if (key === "r") {
+    if (key === ROTATE_KEY) {
       if (snapshot?.ui.selectedBuilding != null) {
         setSnapshot(runtime.rotateBuilding());
       } else {
@@ -606,24 +616,30 @@
       }
       return;
     }
-    if (key === "t") {
+    if (key === TRACK_KEY) {
       setSnapshot(runtime.setTool("track"));
       return;
     }
-    if (key === "d") {
+    if (key === DEMOLISH_KEY) {
       setSnapshot(runtime.setTool("remove"));
       return;
     }
-    if (key === "v") {
+    if (key === SELECT_KEY) {
       setSnapshot(runtime.setTool("inspect"));
       return;
     }
     if (
-      (key === "1" || key === "2" || key === "3") &&
+      (key === ROAD_PRESET_1_KEY ||
+        key === ROAD_PRESET_2_KEY ||
+        key === ROAD_PRESET_3_KEY) &&
       snapshot?.ui.activeTool === "road"
     ) {
       const preset =
-        key === "1" ? "twoWay" : key === "2" ? "oneWay" : "dualBidirectional";
+        key === ROAD_PRESET_1_KEY
+          ? "twoWay"
+          : key === ROAD_PRESET_2_KEY
+            ? "oneWay"
+            : "dualBidirectional";
       setSnapshot(runtime.setRoadPreset(preset));
     }
   }

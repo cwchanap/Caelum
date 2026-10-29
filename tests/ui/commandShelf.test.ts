@@ -25,9 +25,53 @@ describe("CommandShelf", () => {
       screen
         .getAllByTestId(/^command-destination-/)
         .map((node) => node.textContent?.trim()),
-    ).toEqual(["Build", "Lines2", "Data", "City"]);
+    ).toEqual(["BuildB", "Lines2", "Data", "City"]);
     expect(screen.getByRole("button", { name: "Select" })).toBeTruthy();
     expect(screen.getByRole("button", { name: "Demolish" })).toBeTruthy();
+  });
+
+  it("shows matching shortcut chips and preserves the buttons' accessible names", () => {
+    render(CommandShelf, {
+      props: {
+        command,
+        onSetDestination: vi.fn(),
+        onSetTool: vi.fn(),
+      },
+    });
+
+    const build = screen.getByTestId("command-destination-build");
+    expect(build).toHaveAccessibleName("Build");
+    expect(build).toHaveAttribute("aria-keyshortcuts", "b");
+    expect(build).toHaveAttribute("title", "Build (B)");
+    expect(build.querySelector(".command-shelf__shortcut")).toHaveTextContent(
+      "B",
+    );
+
+    const select = screen.getByTestId("command-tool-select");
+    expect(select).toHaveAccessibleName("Select");
+    expect(select).toHaveAttribute("aria-keyshortcuts", "v");
+    expect(select).toHaveAttribute("title", "Select (V)");
+    expect(select.querySelector(".command-shelf__shortcut")).toHaveTextContent(
+      "V",
+    );
+
+    const demolish = screen.getByTestId("command-tool-demolish");
+    expect(demolish).toHaveAccessibleName("Demolish");
+    expect(demolish).toHaveAttribute("aria-keyshortcuts", "d");
+    expect(demolish).toHaveAttribute("title", "Demolish (D)");
+    expect(
+      demolish.querySelector(".command-shelf__shortcut"),
+    ).toHaveTextContent("D");
+
+    expect(screen.getByTestId("command-destination-lines")).not.toHaveAttribute(
+      "aria-keyshortcuts",
+    );
+    expect(screen.getByTestId("command-destination-data")).not.toHaveAttribute(
+      "aria-keyshortcuts",
+    );
+    expect(screen.getByTestId("command-destination-city")).not.toHaveAttribute(
+      "aria-keyshortcuts",
+    );
   });
 
   it("keeps Lines operable while gating every other command during a route draft", async () => {

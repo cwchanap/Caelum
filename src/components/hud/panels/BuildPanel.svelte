@@ -23,6 +23,13 @@
   import zonesPlate from "../../../assets/command-plates/zones.webp";
   import buildingsPlate from "../../../assets/command-plates/buildings.webp";
   import { pad2 } from "../../../format";
+  import {
+    ROAD_PRESET_1_KEY,
+    ROAD_PRESET_2_KEY,
+    ROAD_PRESET_3_KEY,
+    ROTATE_KEY,
+    TRACK_KEY,
+  } from "../../../ui/shortcuts";
 
   interface Props {
     activeBuildGroup: BuildGroup | null;
@@ -60,6 +67,9 @@
   ).filter((plate) => BUILD_GROUPS.some((group) => group.id === plate.id));
 
   const activeGroup = $derived(findBuildGroup(activeBuildGroup));
+  const rotateShortcut = $derived(
+    selectedBuilding === null ? undefined : ROTATE_KEY,
+  );
 
   const armedDefinition = $derived(
     selectedBuilding === null ? null : BUILDING_CATALOG[selectedBuilding],
@@ -141,6 +151,16 @@
             aria-label={`${section.label ?? activeGroup.label} items`}
           >
             {#each section.items as item, index (item.id)}
+              {@const shortcut =
+                item.action.kind === "track"
+                  ? TRACK_KEY
+                  : item.action.kind === "road" && activeTool === "road"
+                    ? item.action.roadPreset === "twoWay"
+                      ? ROAD_PRESET_1_KEY
+                      : item.action.roadPreset === "oneWay"
+                        ? ROAD_PRESET_2_KEY
+                        : ROAD_PRESET_3_KEY
+                    : undefined}
               <button
                 type="button"
                 data-build-item={item.id}
@@ -150,13 +170,23 @@
                   : undefined}
                 aria-pressed={isItemActive(item.action)}
                 aria-label={item.label}
+                aria-keyshortcuts={shortcut}
+                title={shortcut === undefined
+                  ? undefined
+                  : `${item.label} (${shortcut.toUpperCase()})`}
                 class:active={isItemActive(item.action)}
+                class:has-shortcut={shortcut !== undefined}
                 onclick={() => onSelectItem(item.action)}
               >
                 <span class="tool-num" aria-hidden="true"
                   >{pad2(index + 1)}</span
                 >
                 <span class="tool-label" aria-hidden="true">{item.label}</span>
+                {#if item.action.kind === "track"}
+                  <kbd class="shortcut-chip" aria-hidden="true"
+                    >{TRACK_KEY.toUpperCase()}</kbd
+                  >
+                {/if}
               </button>
             {/each}
           </div>
@@ -180,12 +210,55 @@
         type="button"
         class="rotate-control"
         aria-label={`Rotate building, current rotation ${buildingRotation} degrees`}
+        aria-keyshortcuts={rotateShortcut}
+        title={rotateShortcut === undefined
+          ? undefined
+          : `Rotate (${rotateShortcut.toUpperCase()})`}
         disabled={selectedBuilding === null}
         onclick={onRotateBuilding}
       >
-        <span>Rotate</span>
+        <span class="rotate-label">
+          <span>Rotate</span>
+          {#if rotateShortcut !== undefined}
+            <kbd class="shortcut-chip" aria-hidden="true"
+              >{rotateShortcut.toUpperCase()}</kbd
+            >
+          {/if}
+        </span>
         <span class="rotate-value">{buildingRotation}</span>
       </button>
     </div>
   {/if}
 </div>
+
+<style>
+  .toolbar button.has-shortcut {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+  }
+
+  .shortcut-chip {
+    display: inline-grid;
+    place-items: center;
+    min-width: 16px;
+    padding: 1px 4px;
+    border: 1px solid var(--line);
+    background: var(--surface-sunk);
+    color: var(--ink-faint);
+    font-family: var(--font-mono);
+    font-size: 9px;
+    font-weight: 600;
+    line-height: 1.3;
+    text-align: center;
+  }
+
+  .toolbar .shortcut-chip {
+    grid-column: 3;
+    grid-row: 1 / span 2;
+  }
+
+  .rotate-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+</style>
