@@ -72,10 +72,7 @@ function previewBadge(
   if (!hasUsefulPreview(preview)) {
     return { text: label };
   }
-  const impacts = [...preview.routeImpacts]
-    .sort(compareRouteImpacts)
-    .map((impact) => `${impact.routeName} ${impact.kind}`)
-    .join(" · ");
+  const impacts = summarizeRouteImpacts(preview.routeImpacts);
   const cost =
     state.rules.economyPreset === "creative" ? "Free" : preview.costLabel;
   return {
@@ -156,15 +153,24 @@ function cursorBadgeText(
   }
 }
 
-function compareRouteImpacts(
-  left: RoadMutationPreviewView["routeImpacts"][number],
-  right: RoadMutationPreviewView["routeImpacts"][number],
-): number {
-  if (left.kind !== right.kind) return left.kind === "broken" ? -1 : 1;
-  if (left.routeName !== right.routeName) {
-    return left.routeName < right.routeName ? -1 : 1;
+/** One impact names its route; several collapse to broken-first counts so the
+ *  badge stays inside the nowrap, clipped overlay regardless of route count
+ *  or player-authored name length. */
+function summarizeRouteImpacts(
+  impacts: RoadMutationPreviewView["routeImpacts"],
+): string {
+  if (impacts.length === 1) {
+    const only = impacts[0]!;
+    return `${only.routeName} ${only.kind}`;
   }
-  return 0;
+  const broken = impacts.filter((impact) => impact.kind === "broken").length;
+  const rerouted = impacts.length - broken;
+  return [
+    broken > 0 ? `${broken} broken` : "",
+    rerouted > 0 ? `${rerouted} rerouted` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
 }
 
 function transitNode(state: GameState, nodeId: string) {

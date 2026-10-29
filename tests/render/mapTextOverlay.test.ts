@@ -178,7 +178,7 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: 7, y: 8 },
-        text: "⦿ Road · $500 · route-z broken · route-a rerouted",
+        text: "⦿ Road · $500 · 1 broken · 1 rerouted",
       },
     ]);
   });
@@ -438,30 +438,23 @@ describe("selectMapTextOverlayItems", () => {
       expect(items[0]?.anchor).toEqual({ x: 2, y: 2 });
     });
 
-    it("sorts broken impacts before reroutes and keeps stable ties", () => {
+    it("names the route when a single impact applies", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
           previewResponse({
             changedTiles: [{ x: 1, y: 1 }],
-            routeImpacts: [
-              { routeId: "route-x", kind: "rerouted" },
-              { routeId: "route-x", kind: "broken" },
-              { routeId: "route-x", kind: "broken" },
-            ],
+            routeImpacts: [{ routeId: "route-b", kind: "broken" }],
           }),
         ),
         "cursorBadge",
       );
 
-      // Unknown route ids fall back to their ids as display names; equal
-      // kind/name pairs keep their authored order.
-      expect(items[0]?.text).toBe(
-        "⦿ Road · $0 · route-x broken · route-x broken · route-x rerouted",
-      );
+      // Unknown route ids fall back to their ids as display names.
+      expect(items[0]?.text).toBe("⦿ Road · $0 · route-b broken");
     });
 
-    it("sorts broken routes first, then sorts each group by name", () => {
+    it("collapses several impacts into broken-first counts", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
@@ -478,10 +471,27 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      // Broken routes precede reroutes regardless of name or authored order.
-      expect(items[0]?.text).toBe(
-        "⦿ Road · $0 · route-a broken · route-b broken · route-a rerouted · route-b rerouted",
+      // The badge cannot wrap or grow past the board, so several impacts
+      // summarize by kind with broken ahead of rerouted.
+      expect(items[0]?.text).toBe("⦿ Road · $0 · 2 broken · 2 rerouted");
+    });
+
+    it("omits the absent kind when every impact shares one kind", () => {
+      const items = itemsOfKind(
+        createTestGameState(),
+        previewUi(
+          previewResponse({
+            changedTiles: [{ x: 1, y: 1 }],
+            routeImpacts: [
+              { routeId: "route-a", kind: "rerouted" },
+              { routeId: "route-b", kind: "rerouted" },
+            ],
+          }),
+        ),
+        "cursorBadge",
       );
+
+      expect(items[0]?.text).toBe("⦿ Road · $0 · 2 rerouted");
     });
 
     it("lets an accepted Rust response override the single-tile road heuristic", () => {
