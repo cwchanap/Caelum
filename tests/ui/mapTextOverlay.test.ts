@@ -46,6 +46,7 @@ describe("MapTextOverlay", () => {
     await renderOverlay();
     const overlay = screen.getByTestId("map-text-overlay");
     expect(overlay.querySelectorAll(".map-text-item")).toHaveLength(0);
+    expect(screen.queryByTestId("map-text-cursor-readout")).toBeNull();
   });
 
   it("renders the armed-tool cursor badge above the hover tile", async () => {
@@ -193,6 +194,34 @@ describe("MapTextOverlay", () => {
     expect(feedback.textContent).toBe("⦿ Road · That tile is blocked. ⊘");
     expect(feedback.textContent).not.toContain("$96");
     expect(feedback.classList.contains("map-text-warning")).toBe(true);
+  });
+
+  it("mirrors the preview badge in a non-live accessible readout", async () => {
+    await renderOverlay(createTestGameState(), {
+      activeTool: "road",
+      hoverTile: { x: 4, y: 4 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 1, y: 4 }],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 96,
+        warnings: [],
+        routeImpacts: [],
+        rejection: null,
+      },
+    });
+
+    // The visual badge sits inside the aria-hidden overlay; this readout
+    // keeps the same preview details reachable for assistive tech without a
+    // live region announcing every hover change.
+    const readout = screen.getByTestId("map-text-cursor-readout");
+    expect(readout.closest('[aria-hidden="true"]')).toBeNull();
+    expect(readout).not.toHaveAttribute("aria-live");
+    expect(readout).not.toHaveAttribute("role", "status");
+    expect(readout.textContent).toBe("⦿ Road · $96");
   });
 
   it("renders numbered route waypoints centered on their nodes", async () => {
