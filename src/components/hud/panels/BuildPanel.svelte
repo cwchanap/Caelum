@@ -24,9 +24,7 @@
   import buildingsPlate from "../../../assets/command-plates/buildings.webp";
   import { pad2 } from "../../../format";
   import {
-    ROAD_PRESET_1_KEY,
-    ROAD_PRESET_2_KEY,
-    ROAD_PRESET_3_KEY,
+    ROAD_PRESET_KEYS,
     ROTATE_KEY,
     TRACK_KEY,
   } from "../../../ui/shortcuts";
@@ -155,12 +153,10 @@
                 item.action.kind === "track"
                   ? TRACK_KEY
                   : item.action.kind === "road" && activeTool === "road"
-                    ? item.action.roadPreset === "twoWay"
-                      ? ROAD_PRESET_1_KEY
-                      : item.action.roadPreset === "oneWay"
-                        ? ROAD_PRESET_2_KEY
-                        : ROAD_PRESET_3_KEY
+                    ? ROAD_PRESET_KEYS[item.action.roadPreset]
                     : undefined}
+              {@const chip =
+                item.action.kind === "track" ? TRACK_KEY : undefined}
               <button
                 type="button"
                 data-build-item={item.id}
@@ -175,16 +171,16 @@
                   ? undefined
                   : `${item.label} (${shortcut.toUpperCase()})`}
                 class:active={isItemActive(item.action)}
-                class:has-shortcut={shortcut !== undefined}
+                class:has-shortcut={chip !== undefined}
                 onclick={() => onSelectItem(item.action)}
               >
                 <span class="tool-num" aria-hidden="true"
                   >{pad2(index + 1)}</span
                 >
                 <span class="tool-label" aria-hidden="true">{item.label}</span>
-                {#if item.action.kind === "track"}
+                {#if chip !== undefined}
                   <kbd class="shortcut-chip" aria-hidden="true"
-                    >{TRACK_KEY.toUpperCase()}</kbd
+                    >{chip.toUpperCase()}</kbd
                   >
                 {/if}
               </button>
@@ -241,9 +237,9 @@
     place-items: center;
     min-width: 16px;
     padding: 1px 4px;
-    border: 1px solid var(--line);
+    border: 1px solid var(--line-strong);
     background: var(--surface-sunk);
-    color: var(--ink-faint);
+    color: var(--ink-mid);
     font-family: var(--font-mono);
     font-size: 9px;
     font-weight: 600;

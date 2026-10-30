@@ -12,9 +12,10 @@
 <!--
   A dedicated polite live region stays mounted permanently so screen readers
   observe a stable announcement container before any rejection text changes.
-  Only `announce: true` feedback updates its text; continuous road-hover
-  feedback (`announce: false`) renders in the visible strip below without
-  live-region semantics, preserving the non-live road-hover contract.
+  Only `announce: true` feedback updates its text; the road preview host
+  error (`announce: false`) renders in the visible strip below without
+  live-region semantics. Continuous road-hover feedback lives at the cursor
+  badge in the map text overlay, not in this strip.
 -->
 <aside class="action-feedback-slot" data-testid="action-feedback-slot">
   <div

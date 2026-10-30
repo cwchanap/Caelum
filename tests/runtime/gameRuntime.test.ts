@@ -1362,6 +1362,83 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
   });
 
+  it("keeps the last resolved road preview while its replacement request is pending", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+    // Moving to another buildable tile invalidates generation 1 and starts
+    // generation 2 — but the resolved preview stays until the replacement
+    // arrives, so the badge does not flash the one-tile fallback (and its
+    // wrong ⊘) on every tile a drag crosses.
+    runtime.setHoverTile({ x: 6, y: 5 });
+    const pending = runtime.getSnapshot();
+    expect(pending.ui.roadPreviewGeneration).toBe(2);
+    expect(pending.ui.roadMutationPreview?.generation).toBe(1);
+
+    previews.resolveRoad(2, roadPreview(2, { x: 6, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
+  });
+
+  it("re-requests the armed road preview when an applied update changes the world", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+    // The setBudget dispatch carries a scene plus a changed budget — either
+    // alone invalidates the resolved preview, which was computed against
+    // the previous world. The runtime re-issues the same mutation inside
+    // the commit instead of leaving the stale cost/rejection on screen.
+    await runtime.debugSetBudget(0);
+    expect(previews.roadRequestGenerations).toContain(2);
+    expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(2);
+    // Keep-last still applies: gen 1 stays visible until gen 2 lands.
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+    previews.resolveRoad(2, roadPreview(2, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
+  });
+
+  it("does not re-request the armed road preview on a frame-only tick", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+
+    // A tick that only advances the clock carries no scene and no budget
+    // change, so the resolved preview stays authoritative.
+    await runtime.tick(1);
+    expect(previews.roadRequestGenerations).toEqual([1]);
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+  });
+
   it("blocks route and road previews while load is busy and drops a pre-load response", async () => {
     const initial = fullRustSnapshot({
       transit: {

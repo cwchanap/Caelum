@@ -12,7 +12,12 @@
   import ActionFeedback from "./components/ActionFeedback.svelte";
   import NewCityScreen from "./components/NewCityScreen.svelte";
   import CityLibraryScreen from "./components/city/CityLibraryScreen.svelte";
-  import type { Overlay, ServicePattern, Tool } from "./domain/types";
+  import type {
+    Overlay,
+    RoadPreset,
+    ServicePattern,
+    Tool,
+  } from "./domain/types";
   import type {
     RouteDraft,
     RuntimeCommandResult,
@@ -23,9 +28,7 @@
   import {
     BUILD_KEY,
     DEMOLISH_KEY,
-    ROAD_PRESET_1_KEY,
-    ROAD_PRESET_2_KEY,
-    ROAD_PRESET_3_KEY,
+    ROAD_PRESET_KEYS,
     ROTATE_KEY,
     SELECT_KEY,
     TRACK_KEY,
@@ -628,19 +631,12 @@
       setSnapshot(runtime.setTool("inspect"));
       return;
     }
-    if (
-      (key === ROAD_PRESET_1_KEY ||
-        key === ROAD_PRESET_2_KEY ||
-        key === ROAD_PRESET_3_KEY) &&
-      snapshot?.ui.activeTool === "road"
-    ) {
-      const preset =
-        key === ROAD_PRESET_1_KEY
-          ? "twoWay"
-          : key === ROAD_PRESET_2_KEY
-            ? "oneWay"
-            : "dualBidirectional";
-      setSnapshot(runtime.setRoadPreset(preset));
+    if (snapshot?.ui.activeTool !== "road") return;
+    const roadPreset = (Object.keys(ROAD_PRESET_KEYS) as RoadPreset[]).find(
+      (preset) => ROAD_PRESET_KEYS[preset] === key,
+    );
+    if (roadPreset !== undefined) {
+      setSnapshot(runtime.setRoadPreset(roadPreset));
     }
   }
 

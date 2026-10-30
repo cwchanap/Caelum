@@ -63,6 +63,7 @@ describe("selectMapTextOverlayItems", () => {
         kind: "cursorBadge",
         anchor: { x: 7, y: 8 },
         text: "⦿ Road →",
+        a11yText: "Road →",
       },
     ]);
   });
@@ -87,6 +88,7 @@ describe("selectMapTextOverlayItems", () => {
         kind: "cursorBadge",
         anchor: { x: 4, y: 2 },
         text: "⦿ Demolish",
+        a11yText: "Demolish",
       },
     ]);
   });
@@ -179,12 +181,13 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: 7, y: 8 },
-        text: "⦿ Road · $500 · 1 broken · 1 rerouted",
+        text: "⦿ Road · $500 · route-z broken · route-a rerouted",
+        a11yText: "Road, $500, route-z will break, route-a will reroute",
       },
     ]);
   });
 
-  it("keeps only the ordinary badge when the preview is stale", () => {
+  it("keeps the last resolved preview while a newer request is pending", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
@@ -208,7 +211,8 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: 5, y: 6 },
-        text: "⦿ Road",
+        text: "⦿ Road · $100",
+        a11yText: "Road, $100",
       },
     ]);
   });
@@ -317,8 +321,11 @@ describe("selectMapTextOverlayItems", () => {
           state,
           { ...ui, roundaboutSize: "compact2x2" },
           "cursorBadge",
-        )[0]?.text,
-      ).toBe("⦿ Roundabout 2×2 …");
+        )[0],
+      ).toMatchObject({
+        text: "⦿ Roundabout 2×2 …",
+        a11yText: "Roundabout 2×2, preview pending",
+      });
       expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe(
         "⦿ Roundabout 3×3 …",
       );
@@ -452,7 +459,8 @@ describe("selectMapTextOverlayItems", () => {
       );
 
       // Unknown route ids fall back to their ids as display names.
-      expect(items[0]?.text).toBe("⦿ Road · $0 · route-b broken");
+      expect(items[0]?.text).toBe("⦿ Road · Free · route-b broken");
+      expect(items[0]?.a11yText).toBe("Road, Free, route-b will break");
     });
 
     it("caps an over-long single route name", () => {
@@ -486,11 +494,44 @@ describe("selectMapTextOverlayItems", () => {
       // Route names are unbounded player input; the badge trims past the cap
       // so the nowrap label cannot overflow the clipped overlay.
       expect(items[0]?.text).toBe(
-        "⦿ Road · $0 · Crosstown Express via t… broken",
+        "⦿ Road · Free · Crosstown Express via t… broken",
       );
     });
 
-    it("collapses several impacts into broken-first counts", () => {
+    it("caps route names on grapheme boundaries so emoji stay whole", () => {
+      let state = addTestBusStop(createTestGameState(), { x: 1, y: 1 });
+      state = addTestBusStop(state, { x: 4, y: 1 });
+      state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+      state = {
+        ...state,
+        transit: {
+          ...state.transit,
+          routes: state.transit.routes.map((route) => ({
+            ...route,
+            name: "🚍".repeat(30),
+          })),
+        },
+      };
+
+      const items = itemsOfKind(
+        state,
+        previewUi(
+          previewResponse({
+            changedTiles: [{ x: 1, y: 1 }],
+            routeImpacts: [
+              { routeId: state.transit.routes[0]!.id, kind: "broken" },
+            ],
+          }),
+        ),
+        "cursorBadge",
+      );
+
+      // A UTF-16 slice could split the surrogate pair; the grapheme cap keeps
+      // 23 whole buses then the ellipsis.
+      expect(items[0]?.text).toBe(`⦿ Road · Free · ${"🚍".repeat(23)}… broken`);
+    });
+
+    it("names the first impacts broken-first and counts the rest", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
@@ -507,12 +548,18 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      // The badge cannot wrap or grow past the board, so several impacts
-      // summarize by kind with broken ahead of rerouted.
-      expect(items[0]?.text).toBe("⦿ Road · $0 · 2 broken · 2 rerouted");
+      // The badge cannot wrap or grow past the board, so it names the two
+      // broken routes first and counts the remainder — while the spoken
+      // readout names every route.
+      expect(items[0]?.text).toBe(
+        "⦿ Road · Free · route-b broken · route-a broken · +2 more",
+      );
+      expect(items[0]?.a11yText).toBe(
+        "Road, Free, route-b will break, route-a will break, route-a will reroute, route-b will reroute",
+      );
     });
 
-    it("omits the absent kind when every impact shares one kind", () => {
+    it("names both impacts when two share one kind", () => {
       const items = itemsOfKind(
         createTestGameState(),
         previewUi(
@@ -527,7 +574,9 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      expect(items[0]?.text).toBe("⦿ Road · $0 · 2 rerouted");
+      expect(items[0]?.text).toBe(
+        "⦿ Road · Free · route-a rerouted · route-b rerouted",
+      );
     });
 
     it("lets an accepted Rust response override the single-tile road heuristic", () => {
@@ -574,6 +623,9 @@ describe("selectMapTextOverlayItems", () => {
 
       expect(items[0]?.text).toBe("⦿ Road · That tile is blocked. ⊘");
       expect(items[0]?.text).not.toContain("$500");
+      expect(items[0]?.a11yText).toBe(
+        "Road, That tile is blocked. Cannot place.",
+      );
       expect(items[0]?.tone).toBe("warning");
     });
 
@@ -593,6 +645,7 @@ describe("selectMapTextOverlayItems", () => {
         kind: "cursorBadge",
         anchor: { x: 2, y: 2 },
         text: "⦿ Demolish",
+        a11yText: "Demolish",
       });
 
       const duringDrag = itemsOfKind(
@@ -608,6 +661,9 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       )[0];
       expect(duringDrag?.text).toBe("⦿ Demolish · That tile is blocked. ⊘");
+      expect(duringDrag?.a11yText).toBe(
+        "Demolish, That tile is blocked. Cannot place.",
+      );
       expect(duringDrag?.tone).toBe("warning");
 
       const acceptedRemoval = itemsOfKind(
@@ -641,6 +697,7 @@ describe("selectMapTextOverlayItems", () => {
 
       expect(items[0]?.text).toBe("⦿ Road · Free");
       expect(items[0]?.text).not.toContain("$500");
+      expect(items[0]?.a11yText).toBe("Road, Free");
     });
   });
 

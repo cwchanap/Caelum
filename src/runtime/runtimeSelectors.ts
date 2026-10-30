@@ -632,12 +632,14 @@ export function buildRoadMutationPreview(
   state: GameState,
   ui: UiState,
 ): RoadMutationPreviewView | null {
+  // `roadMutationPreview` holds the latest *resolved* response. It is shown
+  // even while a newer request is in flight: falling back to the one-tile
+  // local check mid-gesture flashed a wrong ⊘ on strokes Rust accepts.
   const preview = ui.roadMutationPreview;
-  if (preview === null || preview.generation !== ui.roadPreviewGeneration) {
+  if (preview === null) {
     return null;
   }
   return {
-    generation: preview.generation,
     changedTiles: preview.changedTiles,
     skippedTiles: preview.skippedTiles,
     authoredTiles: preview.authoredTiles,

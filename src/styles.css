@@ -434,6 +434,11 @@ body {
   font-size: 12px;
   line-height: 16px;
   white-space: nowrap;
+
+  /* When the inline max-width binds, cut the tail with an ellipsis instead
+   * of letting the clipped overlay hide it silently. */
+  overflow: hidden;
+  text-overflow: ellipsis;
   border-radius: 2px;
 }
 

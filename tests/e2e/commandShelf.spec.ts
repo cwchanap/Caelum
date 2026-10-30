@@ -371,10 +371,15 @@ test("shows road previews at the cursor and a dismissible failed commit", async 
   await page.mouse.up();
   await expect(feedback).toHaveCount(0);
 
-  await debugSetBudget(page, 0);
-  const map = (await runtimeSnapshot(page)).state.map;
-  const rejectedTile = { x: map.width - 1, y: 10 };
+  const rejectedTile = { x: 8, y: 10 };
   await hoverMapTile(canvas, rejectedTile);
+  await expect(badge).toContainText("$100");
+  await expectBadgeAt(rejectedTile);
+
+  // Zeroing the budget changes the world the resolved preview was computed
+  // against: the runtime re-requests the armed mutation and the badge flips
+  // to the rejection on the same tile, without the pointer moving again.
+  await debugSetBudget(page, 0);
   await expect(badge).toHaveClass(/map-text-warning/);
   await expect(badge).toContainText("Needs $100; only $0 is available. ⊘");
   await expectBadgeAt(rejectedTile);
