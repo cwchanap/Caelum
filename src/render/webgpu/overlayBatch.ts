@@ -10,6 +10,7 @@ import {
   buildRoadMutationPreview,
   parseSelectedPoint,
   selectRouteEditorView,
+  staleHeldRoadPreview,
 } from "../../runtime/runtimeSelectors";
 import { getBuildingFootprint } from "../../domain/catalog/buildings";
 import {
@@ -503,7 +504,12 @@ function drawDragPreview(
     return;
   }
 
-  drawRoadMutationPreview(g, state, ui, gesture.tool === "remove");
+  // A held rejection the stroke has outrun reads as pending at the cursor
+  // badge; draw nothing rather than the old stroke's tiles so the channels
+  // agree. Held accepted geometry stays — it still describes the gesture.
+  if (!staleHeldRoadPreview(ui)) {
+    drawRoadMutationPreview(g, state, ui, gesture.tool === "remove");
+  }
 }
 
 function drawBuildingPreview(
@@ -661,8 +667,13 @@ export function buildOverlayRanges(
     ui.activeTool === "roundabout" ||
     ui.activeTool === "remove"
   ) {
-    drawRoadMutationPreview(g, state, ui, ui.activeTool === "remove");
-    previewsRendered = ui.roadMutationPreview !== null;
+    // An idle held response belongs to a different tile: the badge reports
+    // pending, so draw nothing of the old verdict and let the current tile's
+    // hover highlight through instead of suppressing it.
+    if (!staleHeldRoadPreview(ui)) {
+      drawRoadMutationPreview(g, state, ui, ui.activeTool === "remove");
+      previewsRendered = ui.roadMutationPreview !== null;
+    }
   }
 
   if (!previewsRendered) {

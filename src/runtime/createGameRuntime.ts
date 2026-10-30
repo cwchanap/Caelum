@@ -1533,9 +1533,22 @@ export async function createGameRuntime(
       if (tool !== "road" && tool !== "track" && tool !== "remove") {
         return commit(state, ui);
       }
+      // A new gesture is the boundary the held preview can describe: keep it
+      // only when it provably answers this tile — the latest request already
+      // resolved and the press lands on the tile it was for — so pressing at
+      // the hovered tile never flashes the local fallback, while any older
+      // or different-tile verdict cannot pose as this stroke's.
+      const heldPreview =
+        tool !== "track" &&
+        ui.roadMutationPreview !== null &&
+        ui.roadMutationPreview.generation === ui.roadPreviewGeneration &&
+        samePoint(ui.hoverTile, point)
+          ? ui.roadMutationPreview
+          : null;
       return commitWithRoadPreview({
         ...ui,
         drag: { tool, start: point, current: point },
+        roadMutationPreview: heldPreview,
       });
     },
     setDragCurrent(point) {

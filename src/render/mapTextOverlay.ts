@@ -11,6 +11,7 @@ import {
   buildRoadMutationPreview,
   selectRouteEditorView,
   selectRouteFailures,
+  staleHeldRoadPreview,
 } from "../runtime/runtimeSelectors";
 import { rejectionMessage } from "../runtime/rejectionMessages";
 import type { RoadMutationPreviewView } from "../runtime/types";
@@ -126,15 +127,11 @@ function cursorBadgeText(
     return null;
   }
   // A held preview belongs to the request that produced it. During a drag
-  // that request is a prefix of the current stroke, so it still applies —
-  // but idle hover has moved to a different tile entirely, and presenting
-  // the old tile's verdict at the new cursor is a misattribution. Show a
-  // neutral pending badge until the replacement response lands.
-  const staleHeldPreview =
-    preview !== null &&
-    ui.drag === null &&
-    ui.roadMutationPreview !== null &&
-    ui.roadMutationPreview.generation !== ui.roadPreviewGeneration;
+  // that request still describes the in-progress stroke, so a held accepted
+  // answer stays — but idle hover has moved to a different tile entirely,
+  // and a held rejection may blame a tile the stroke no longer reaches.
+  // Both present as a neutral pending badge until the replacement lands.
+  const staleHeldPreview = staleHeldRoadPreview(ui);
   if (ui.selectedBuilding !== null) {
     const def = BUILDING_CATALOG[ui.selectedBuilding];
     const ok =

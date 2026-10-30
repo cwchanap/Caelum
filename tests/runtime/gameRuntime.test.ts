@@ -1390,6 +1390,49 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
   });
 
+  it("drops a held preview that does not answer the drag's start tile", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+    // Pressing at the resolved tile keeps the held answer: it is exactly
+    // what the drag-start request will return, so the badge and overlay
+    // continue seamlessly instead of flashing the local fallback.
+    runtime.startDrag({ x: 5, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+    runtime.cancelDrag();
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+
+    // A press on a tile the pointer never reported (before a pointermove or
+    // via a synthetic call): the resolved answer belongs to tile (6,5) and
+    // cannot pose as this stroke's verdict.
+    runtime.setHoverTile({ x: 6, y: 5 });
+    previews.resolveRoad(3, roadPreview(3, { x: 6, y: 5 }));
+    await flushPromises();
+    runtime.startDrag({ x: 8, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+    runtime.cancelDrag();
+
+    // Moving to a new tile and pressing before its response lands: the held
+    // answer is generation-mismatched and equally cannot pose as current.
+    runtime.setHoverTile({ x: 7, y: 5 });
+    previews.resolveRoad(5, roadPreview(5, { x: 7, y: 5 }));
+    await flushPromises();
+    runtime.setHoverTile({ x: 9, y: 5 });
+    expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(6);
+    runtime.startDrag({ x: 9, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+  });
+
   it("re-requests the armed road preview when an applied update changes the world", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
     const runtime = await createGameRuntime({
