@@ -102,4 +102,29 @@ describe("ActionFeedback", () => {
       "Shuttle A became broken after this direction change.",
     );
   });
+
+  it("renders duplicate detail entries individually", () => {
+    // Route names are not unique: two lines can share a name, so the detail
+    // list must not dedupe identical strings.
+    render(ActionFeedback, {
+      props: {
+        feedback: feedback({
+          source: "rejection",
+          tone: "error",
+          message: "Road removal rejected.",
+          details: [
+            "Downtown Loop became broken after this change.",
+            "Downtown Loop became broken after this change.",
+          ],
+        }),
+        onDismiss: vi.fn(),
+      },
+    });
+
+    const view = screen.getByTestId("action-feedback");
+    const items = view.querySelectorAll("li");
+    expect(items).toHaveLength(2);
+    expect(items[0]).toHaveTextContent("Downtown Loop became broken");
+    expect(items[1]).toHaveTextContent("Downtown Loop became broken");
+  });
 });

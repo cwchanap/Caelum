@@ -64,7 +64,12 @@ describe("MapTextOverlay", () => {
     expect(badge.style.left).toBe(`${2 * tileSize + tileSize / 2}px`);
     expect(badge.style.top).toBe(`${3 * tileSize}px`);
     expect(badge.classList.contains("map-text-below")).toBe(false);
-    expect(badge.classList.contains("map-text-side-left")).toBe(true);
+    // The short badge fits centered around its anchor, so neither edge
+    // side-class applies; max-width is the room a centered label may take
+    // (2 × distance to the nearer edge minus the 8px margin).
+    expect(badge.classList.contains("map-text-side-left")).toBe(false);
+    expect(badge.classList.contains("map-text-side-right")).toBe(false);
+    expect(badge.style.maxWidth).toBe("144px");
   });
 
   it("flips the badge below the tile on the top row", async () => {
@@ -79,7 +84,8 @@ describe("MapTextOverlay", () => {
     // Below-placement anchors at the flipped-to tile bottom (row 0).
     expect(badge.style.top).toBe(`${tileSize}px`);
     expect(badge.classList.contains("map-text-below")).toBe(true);
-    expect(badge.classList.contains("map-text-side-left")).toBe(true);
+    expect(badge.classList.contains("map-text-side-left")).toBe(false);
+    expect(badge.classList.contains("map-text-side-right")).toBe(false);
   });
 
   it("flips a second-row badge whose tile is shorter than the badge", async () => {
@@ -194,6 +200,55 @@ describe("MapTextOverlay", () => {
     expect(feedback.textContent).toBe("⦿ Road · That tile is blocked. ⊘");
     expect(feedback.textContent).not.toContain("$96");
     expect(feedback.classList.contains("map-text-warning")).toBe(true);
+    // The readout speaks the same preview in words, not glyphs.
+    expect(screen.getByTestId("map-text-cursor-readout").textContent).toBe(
+      "Road, That tile is blocked. Cannot place.",
+    );
+  });
+
+  it("hugs the board edge side that leaves the most room for a long badge", async () => {
+    const rejection = {
+      generation: 1,
+      changedTiles: [] as never[],
+      skippedTiles: [] as never[],
+      authoredTiles: [] as never[],
+      generatedStructures: [] as never[],
+      cost: 0,
+      warnings: [] as never[],
+      routeImpacts: [] as never[],
+      rejection: { code: "blockedTile" as const, context: {} },
+    };
+    // Right edge: only 16px of room to the right, so the label ends at the
+    // anchor and stretches left with a bounded max-width.
+    await renderOverlay(createTestGameState(), {
+      activeTool: "road",
+      hoverTile: { x: 27, y: 4 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: rejection,
+    });
+    let badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.style.left).toBe(`${27.5 * tileSize}px`);
+    expect(badge.classList.contains("map-text-side-right")).toBe(true);
+    expect(badge.style.maxWidth).toBe(`${27.5 * tileSize - 8}px`);
+
+    document.body.innerHTML = "";
+    // Left edge: the mirror image — the label starts at the anchor.
+    await renderOverlay(createTestGameState(), {
+      activeTool: "road",
+      hoverTile: { x: 0, y: 4 },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: rejection,
+    });
+    badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.style.left).toBe(`${0.5 * tileSize}px`);
+    expect(badge.classList.contains("map-text-side-left")).toBe(true);
+    expect(badge.style.maxWidth).toBe(
+      `${28 * tileSize - 0.5 * tileSize - 8}px`,
+    );
   });
 
   it("mirrors the preview badge in a non-live accessible readout", async () => {
@@ -216,12 +271,13 @@ describe("MapTextOverlay", () => {
 
     // The visual badge sits inside the aria-hidden overlay; this readout
     // keeps the same preview details reachable for assistive tech without a
-    // live region announcing every hover change.
+    // live region announcing every hover change — and speaks words, not the
+    // decorative glyphs.
     const readout = screen.getByTestId("map-text-cursor-readout");
     expect(readout.closest('[aria-hidden="true"]')).toBeNull();
     expect(readout).not.toHaveAttribute("aria-live");
     expect(readout).not.toHaveAttribute("role", "status");
-    expect(readout.textContent).toBe("⦿ Road · $96");
+    expect(readout.textContent).toBe("Road, $96");
   });
 
   it("renders numbered route waypoints centered on their nodes", async () => {

@@ -449,6 +449,25 @@ export async function createGameRuntime(
         nextUi = { ...nextUi, roadDirectionNotice: notice };
       }
     }
+    // An armed road preview was computed against the previous world. If this
+    // update changed anything the preview reads — a scene update, or the
+    // budget on a frame-only update — re-issue it inside the same commit so
+    // the cursor badge cannot keep reporting a stale cost, rejection, or
+    // route-impact list until the pointer happens to move again.
+    const previewMutation =
+      dead || workingSave.isBusy() ? null : activeRoadMutation;
+    if (
+      previewMutation !== null &&
+      (result.update.scene !== null || nextState.budget !== state.budget)
+    ) {
+      const generation = nextUi.roadPreviewGeneration + 1;
+      const snapshot = commit(nextState, {
+        ...nextUi,
+        roadPreviewGeneration: generation,
+      });
+      sendRoadMutationPreviewRequest(previewMutation, generation);
+      return snapshot;
+    }
     return commit(nextState, nextUi);
   };
 
@@ -1157,21 +1176,23 @@ export async function createGameRuntime(
     mutation: RoadMutation,
   ): RuntimeSnapshot => {
     if (dead || workingSave.isBusy()) return getSnapshot();
+    // The generation bump alone marks the request in flight; the last
+    // resolved preview stays on screen until the answer lands so the cursor
+    // badge does not flash the one-tile fallback (and its wrong ⊘) between
+    // tiles.
     const generation = ui.roadPreviewGeneration + 1;
     const pending = commit(state, {
       ...ui,
       roadPreviewGeneration: generation,
-      roadMutationPreview: null,
-      roadMutationPreviewError: null,
     });
     sendRoadMutationPreviewRequest(mutation, generation);
     return pending;
   };
 
   /** Commit a UI transition and, if the resulting state implies a road mutation,
-   *  fold the preview-generation bump and preview-clear into the SAME commit so
-   *  only one `publish` fires. Replaces the prior pattern of committing the UI,
-   *  then calling `requestRoadMutationPreview` (which committed a second time).
+   *  fold the preview-generation bump into the SAME commit so only one
+   *  `publish` fires. Replaces the prior pattern of committing the UI, then
+   *  calling `requestRoadMutationPreview` (which committed a second time).
    *  Used by tool/preset/arm/drag transitions that may trigger a road preview. */
   const commitWithRoadPreview = (nextUi: UiState): RuntimeSnapshot => {
     if (workingSave.isBusy()) return getSnapshot();
@@ -1183,8 +1204,6 @@ export async function createGameRuntime(
     const snapshot = commit(state, {
       ...nextUi,
       roadPreviewGeneration: generation,
-      roadMutationPreview: null,
-      roadMutationPreviewError: null,
     });
     sendRoadMutationPreviewRequest(mutation, generation);
     return snapshot;
@@ -1929,22 +1948,28 @@ export async function createGameRuntime(
       }
       clearHoverPreviewTimer();
       invalidateRoadPreview();
-      // Every hover change (including non-null moves) invalidates generation and
-      // clears the cached overlay so a resolved preview cannot stick on a tile
-      // with no mutation, and late responses cannot pass a stale generation.
+      // Every hover change (including non-null moves) invalidates generation
+      // so late responses cannot pass a stale generation. When the new hover
+      // still implies a mutation, the last resolved preview stays on screen
+      // until its replacement arrives — clearing it made the badge flash the
+      // one-tile fallback (and its wrong ⊘) on every tile the drag crosses.
+      // When no mutation applies, the stale overlay must clear.
       const generation = ui.roadPreviewGeneration + 1;
       const nextUi: UiState = {
         ...ui,
         hoverTile: point,
         roadPreviewGeneration: generation,
-        roadMutationPreview: null,
-        roadMutationPreviewError: null,
       };
-      if (point === null || dead) {
-        return commit(state, nextUi);
-      }
-      const mutation = roadMutationForUi(nextUi);
+      const mutation =
+        point === null || dead ? null : roadMutationForUi(nextUi);
       if (mutation === null) {
+        return commit(state, {
+          ...nextUi,
+          roadMutationPreview: null,
+          roadMutationPreviewError: null,
+        });
+      }
+      if (point === null || dead) {
         return commit(state, nextUi);
       }
       // Debounce the hover-triggered preview so rapid pointermove events

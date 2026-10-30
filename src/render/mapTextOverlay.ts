@@ -35,12 +35,18 @@ export type MapTextOverlayItem =
       kind: "cursorBadge";
       anchor: Point;
       text: string;
+      /** Spoken form of `text`: decorative glyphs (⦿, ⊘, …) are dropped or
+       *  spelled out so the mirrored readout announces words, not symbols. */
+      a11yText: string;
       tone?: "warning";
     }
   | { kind: "routeWaypoint"; anchor: TripPosition; text: string }
   | { kind: "routeFailure"; anchor: TripPosition; text: string };
 
-type CursorBadge = { text: string; tone?: "warning" };
+type CursorBadge = Omit<
+  Extract<MapTextOverlayItem, { kind: "cursorBadge" }>,
+  "kind" | "anchor"
+>;
 
 /** The tile under the pointer: the drag's current tile while a gesture is
  *  active, otherwise the idle hover tile. */
@@ -58,25 +64,46 @@ function hasUsefulPreview(preview: RoadMutationPreviewView): boolean {
   );
 }
 
+/** The badge's spoken label: the decorative ⦿ marker is visual-only. */
+function a11yLabel(label: string): string {
+  return label.replace(/^⦿\s*/, "");
+}
+
+/** Local placement check rendered as a badge: ⊘ visually, "cannot place"
+ *  when spoken. */
+function placementBadge(label: string, ok: boolean): CursorBadge {
+  return {
+    text: `${label}${ok ? "" : " ⊘"}`,
+    a11yText: `${a11yLabel(label)}${ok ? "" : ", cannot place"}`,
+  };
+}
+
 function previewBadge(
   label: string,
   state: GameState,
   preview: RoadMutationPreviewView,
 ): CursorBadge {
+  const name = a11yLabel(label);
   if (preview.rejection !== null) {
+    const message = rejectionMessage(preview.rejection);
     return {
-      text: `${label} · ${rejectionMessage(preview.rejection)} ⊘`,
+      text: `${label} · ${message} ⊘`,
+      a11yText: `${name}, ${message} Cannot place.`,
       tone: "warning",
     };
   }
   if (!hasUsefulPreview(preview)) {
-    return { text: label };
+    return { text: label, a11yText: name };
   }
   const impacts = summarizeRouteImpacts(preview.routeImpacts);
+  const spokenImpacts = describeRouteImpacts(preview.routeImpacts);
   const cost =
-    state.rules.economyPreset === "creative" ? "Free" : preview.costLabel;
+    preview.cost === 0 || state.rules.economyPreset === "creative"
+      ? "Free"
+      : preview.costLabel;
   return {
     text: `${label} · ${cost}${impacts.length === 0 ? "" : ` · ${impacts}`}`,
+    a11yText: `${name}, ${cost}${spokenImpacts.length === 0 ? "" : `, ${spokenImpacts}`}`,
   };
 }
 
@@ -95,7 +122,7 @@ function cursorBadgeText(
     const ok =
       isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
       canPlaceBuilding(state, ui.selectedBuilding, cursor, ui.buildingRotation);
-    return { text: `⦿ ${def.label} ${ui.buildingRotation}°${ok ? "" : " ⊘"}` };
+    return placementBadge(`⦿ ${def.label} ${ui.buildingRotation}°`, ok);
   }
   switch (ui.activeTool) {
     case "road": {
@@ -115,17 +142,18 @@ function cursorBadgeText(
       const ok =
         isValidRoadPlacement(state, cursor) ||
         (tile?.kind === "road" && tile.roadStructureId === undefined);
-      return { text: `${label}${ok ? "" : " ⊘"}` };
+      return placementBadge(label, ok);
     }
     case "track":
-      return {
-        text: `⦿ Track${isValidTrackPlacement(state, cursor) ? "" : " ⊘"}`,
-      };
+      return placementBadge("⦿ Track", isValidTrackPlacement(state, cursor));
     case "roundabout": {
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
       const label = `⦿ Roundabout ${sizeLabel}`;
       if (preview === null) {
-        return { text: `${label} …` };
+        return {
+          text: `${label} …`,
+          a11yText: `${a11yLabel(label)}, preview pending`,
+        };
       }
       return previewBadge(label, state, preview);
     }
@@ -133,18 +161,22 @@ function cursorBadgeText(
       if (ui.selectedArea === null) {
         return null;
       }
-      const ok = isAreaPaintable(state, cursor);
-      return {
-        text: `⦿ Area ${AREA_LABELS[ui.selectedArea]}${ok ? "" : " ⊘"}`,
-      };
+      return placementBadge(
+        `⦿ Area ${AREA_LABELS[ui.selectedArea]}`,
+        isAreaPaintable(state, cursor),
+      );
     }
     case "remove": {
       const label = "⦿ Demolish";
+      // Idle hover suppresses demolish rejections; during a remove drag the
+      // verdict is what the stroke will do, so it stays visible. A drag under
+      // the remove tool is always a remove drag (tool switches clear the
+      // gesture), so `drag === null` is the whole idle check.
       if (
         preview === null ||
-        (preview.rejection !== null && ui.drag?.tool !== "remove")
+        (preview.rejection !== null && ui.drag === null)
       ) {
-        return { text: label };
+        return { text: label, a11yText: a11yLabel(label) };
       }
       return previewBadge(label, state, preview);
     }
@@ -153,32 +185,71 @@ function cursorBadgeText(
   }
 }
 
-/** Player-authored route names are unbounded, so even a single named impact
- *  is capped before it can push the nowrap badge past the clipped overlay. */
-const MAX_IMPACT_ROUTE_NAME = 24;
+const graphemeSegmenter = new Intl.Segmenter("en", {
+  granularity: "grapheme",
+});
 
-/** One impact names its route; several collapse to broken-first counts so the
- *  badge stays inside the nowrap, clipped overlay regardless of route count
- *  or player-authored name length. */
+/** Player-authored route names are unbounded; cap on grapheme boundaries so
+ *  the nowrap badge cannot overflow the clipped overlay *and* the cap never
+ *  splits a surrogate pair or emoji sequence mid-glyph. */
+function truncateGraphemes(text: string, max: number): string {
+  const graphemes = Array.from(
+    graphemeSegmenter.segment(text),
+    (entry) => entry.segment,
+  );
+  return graphemes.length > max
+    ? `${graphemes.slice(0, max - 1).join("")}…`
+    : text;
+}
+
+/** Single impacts get the full cap; each name in a multi-impact row shares
+ *  the badge, so it gets less room. */
+const MAX_IMPACT_ROUTE_NAME = 24;
+const MAX_MULTI_IMPACT_ROUTE_NAME = 16;
+const MAX_NAMED_IMPACTS = 2;
+
+function brokenFirst(
+  impacts: RoadMutationPreviewView["routeImpacts"],
+): RoadMutationPreviewView["routeImpacts"] {
+  return [...impacts].sort(
+    (a, b) => (a.kind === "broken" ? 0 : 1) - (b.kind === "broken" ? 0 : 1),
+  );
+}
+
+/** Names the routes a stroke touches so the player can see which lines break
+ *  before committing: a lone impact always fits its name; several name the
+ *  first few (broken first) and count the rest to stay bounded. */
 function summarizeRouteImpacts(
   impacts: RoadMutationPreviewView["routeImpacts"],
 ): string {
   if (impacts.length === 1) {
     const only = impacts[0]!;
-    const name =
-      only.routeName.length > MAX_IMPACT_ROUTE_NAME
-        ? `${only.routeName.slice(0, MAX_IMPACT_ROUTE_NAME - 1)}…`
-        : only.routeName;
-    return `${name} ${only.kind}`;
+    return `${truncateGraphemes(only.routeName, MAX_IMPACT_ROUTE_NAME)} ${only.kind}`;
   }
-  const broken = impacts.filter((impact) => impact.kind === "broken").length;
-  const rerouted = impacts.length - broken;
-  return [
-    broken > 0 ? `${broken} broken` : "",
-    rerouted > 0 ? `${rerouted} rerouted` : "",
-  ]
-    .filter(Boolean)
+  const sorted = brokenFirst(impacts);
+  const named = sorted
+    .slice(0, MAX_NAMED_IMPACTS)
+    .map(
+      (impact) =>
+        `${truncateGraphemes(impact.routeName, MAX_MULTI_IMPACT_ROUTE_NAME)} ${impact.kind}`,
+    )
     .join(" · ");
+  const rest = sorted.length - MAX_NAMED_IMPACTS;
+  return rest > 0 ? `${named} · +${rest} more` : named;
+}
+
+/** Spoken impact list: names every affected route in plain words. The
+ *  readout has no width bound, and counts alone would not say which lines
+ *  break. */
+function describeRouteImpacts(
+  impacts: RoadMutationPreviewView["routeImpacts"],
+): string {
+  return brokenFirst(impacts)
+    .map(
+      (impact) =>
+        `${impact.routeName} will ${impact.kind === "broken" ? "break" : "reroute"}`,
+    )
+    .join(", ");
 }
 
 function transitNode(state: GameState, nodeId: string) {

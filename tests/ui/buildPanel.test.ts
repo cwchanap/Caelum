@@ -109,6 +109,7 @@ describe("BuildPanel detail view", () => {
       "aria-hidden",
       "true",
     );
+    expect(track).toHaveClass("has-shortcut");
   });
 
   it("claims road preset shortcuts only while the Road tool is armed", () => {
@@ -121,6 +122,7 @@ describe("BuildPanel detail view", () => {
       const button = screen.getByTestId(`build-item-${id}`);
       expect(button).not.toHaveAttribute("aria-keyshortcuts");
       expect(button).not.toHaveAttribute("title");
+      expect(button).not.toHaveClass("has-shortcut");
       expect(button.querySelector(".tool-num")).toHaveTextContent(ordinal);
     }
   });
@@ -139,6 +141,10 @@ describe("BuildPanel detail view", () => {
         title.slice(0, title.lastIndexOf(" (")),
       );
       expect(button.querySelector(".shortcut-chip")).toBeNull();
+      // No chip renders for road presets, so the button must not claim the
+      // extra shortcut grid column — that reflowed the buttons when the
+      // Road tool armed.
+      expect(button).not.toHaveClass("has-shortcut");
       expect(button.querySelector(".tool-num")).toHaveTextContent(ordinal);
     }
   });
