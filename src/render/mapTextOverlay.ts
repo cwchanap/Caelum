@@ -78,6 +78,14 @@ function placementBadge(label: string, ok: boolean): CursorBadge {
   };
 }
 
+/** Neutral badge while Rust's answer is still in flight: no verdict yet. */
+function pendingBadge(label: string): CursorBadge {
+  return {
+    text: `${label} …`,
+    a11yText: `${a11yLabel(label)}, preview pending`,
+  };
+}
+
 function previewBadge(
   label: string,
   state: GameState,
@@ -117,6 +125,16 @@ function cursorBadgeText(
   if (cursor === null) {
     return null;
   }
+  // A held preview belongs to the request that produced it. During a drag
+  // that request is a prefix of the current stroke, so it still applies —
+  // but idle hover has moved to a different tile entirely, and presenting
+  // the old tile's verdict at the new cursor is a misattribution. Show a
+  // neutral pending badge until the replacement response lands.
+  const staleHeldPreview =
+    preview !== null &&
+    ui.drag === null &&
+    ui.roadMutationPreview !== null &&
+    ui.roadMutationPreview.generation !== ui.roadPreviewGeneration;
   if (ui.selectedBuilding !== null) {
     const def = BUILDING_CATALOG[ui.selectedBuilding];
     const ok =
@@ -133,6 +151,9 @@ function cursorBadgeText(
             ? " ⇄"
             : "";
       const label = `⦿ Road${glyph}`;
+      if (staleHeldPreview) {
+        return pendingBadge(label);
+      }
       if (preview !== null) {
         return previewBadge(label, state, preview);
       }
@@ -149,11 +170,8 @@ function cursorBadgeText(
     case "roundabout": {
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
       const label = `⦿ Roundabout ${sizeLabel}`;
-      if (preview === null) {
-        return {
-          text: `${label} …`,
-          a11yText: `${a11yLabel(label)}, preview pending`,
-        };
+      if (preview === null || staleHeldPreview) {
+        return pendingBadge(label);
       }
       return previewBadge(label, state, preview);
     }
@@ -172,6 +190,9 @@ function cursorBadgeText(
       // verdict is what the stroke will do, so it stays visible. A drag under
       // the remove tool is always a remove drag (tool switches clear the
       // gesture), so `drag === null` is the whole idle check.
+      if (staleHeldPreview) {
+        return pendingBadge(label);
+      }
       if (
         preview === null ||
         (preview.rejection !== null && ui.drag === null)
