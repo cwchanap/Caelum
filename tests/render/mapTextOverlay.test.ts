@@ -187,12 +187,17 @@ describe("selectMapTextOverlayItems", () => {
     ]);
   });
 
-  it("keeps the last resolved preview while a newer request is pending", () => {
+  it("keeps the last resolved preview during a drag while a newer request is pending", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "road" as const,
       hoverTile: { x: 5, y: 6 },
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 6 },
+        current: { x: 5, y: 6 },
+      },
       roadPreviewGeneration: 2,
       roadMutationPreview: {
         generation: 1,
@@ -215,6 +220,61 @@ describe("selectMapTextOverlayItems", () => {
         a11yText: "Road, $100",
       },
     ]);
+  });
+
+  it("shows neutral pending instead of a held preview's verdict at idle hover", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 6 },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 4, y: 6 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+
+    expect(itemsOfKind(state, ui, "cursorBadge")).toEqual([
+      {
+        kind: "cursorBadge",
+        anchor: { x: 5, y: 6 },
+        text: "⦿ Road …",
+        a11yText: "Road, preview pending",
+      },
+    ]);
+  });
+
+  it("does not present a held rejection as the new idle tile's verdict", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 6 },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: { code: "blockedTile" as const, context: {} },
+      },
+    };
+
+    const items = itemsOfKind(state, ui, "cursorBadge");
+    expect(items[0]?.text).toBe("⦿ Road …");
+    expect(items[0]?.tone).toBeUndefined();
   });
 
   describe("cursor badge wording", () => {
