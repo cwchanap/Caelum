@@ -153,6 +153,10 @@ function cursorBadgeText(
   }
 }
 
+/** Player-authored route names are unbounded, so even a single named impact
+ *  is capped before it can push the nowrap badge past the clipped overlay. */
+const MAX_IMPACT_ROUTE_NAME = 24;
+
 /** One impact names its route; several collapse to broken-first counts so the
  *  badge stays inside the nowrap, clipped overlay regardless of route count
  *  or player-authored name length. */
@@ -161,7 +165,11 @@ function summarizeRouteImpacts(
 ): string {
   if (impacts.length === 1) {
     const only = impacts[0]!;
-    return `${only.routeName} ${only.kind}`;
+    const name =
+      only.routeName.length > MAX_IMPACT_ROUTE_NAME
+        ? `${only.routeName.slice(0, MAX_IMPACT_ROUTE_NAME - 1)}…`
+        : only.routeName;
+    return `${name} ${only.kind}`;
   }
   const broken = impacts.filter((impact) => impact.kind === "broken").length;
   const rerouted = impacts.length - broken;

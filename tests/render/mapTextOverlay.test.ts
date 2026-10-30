@@ -5,6 +5,7 @@ import type { RoadMutationPreviewResponse } from "../../src/runtime/backend/type
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import {
+  addTestBusRoute,
   addTestBusStop,
   addTestMetroStation,
   createTestGameState,
@@ -452,6 +453,41 @@ describe("selectMapTextOverlayItems", () => {
 
       // Unknown route ids fall back to their ids as display names.
       expect(items[0]?.text).toBe("⦿ Road · $0 · route-b broken");
+    });
+
+    it("caps an over-long single route name", () => {
+      let state = addTestBusStop(createTestGameState(), { x: 1, y: 1 });
+      state = addTestBusStop(state, { x: 4, y: 1 });
+      state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+      state = {
+        ...state,
+        transit: {
+          ...state.transit,
+          routes: state.transit.routes.map((route) => ({
+            ...route,
+            name: "Crosstown Express via the Old Harbor Loop and Back",
+          })),
+        },
+      };
+
+      const items = itemsOfKind(
+        state,
+        previewUi(
+          previewResponse({
+            changedTiles: [{ x: 1, y: 1 }],
+            routeImpacts: [
+              { routeId: state.transit.routes[0]!.id, kind: "broken" },
+            ],
+          }),
+        ),
+        "cursorBadge",
+      );
+
+      // Route names are unbounded player input; the badge trims past the cap
+      // so the nowrap label cannot overflow the clipped overlay.
+      expect(items[0]?.text).toBe(
+        "⦿ Road · $0 · Crosstown Express via t… broken",
+      );
     });
 
     it("collapses several impacts into broken-first counts", () => {
