@@ -222,6 +222,43 @@ describe("selectMapTextOverlayItems", () => {
     ]);
   });
 
+  it("shows neutral pending instead of a held rejection mid-drag", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 6, y: 6 },
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 6 },
+        current: { x: 4, y: 6 },
+      },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        skippedTiles: [{ x: 6, y: 6 }],
+        routeImpacts: [],
+        warnings: [],
+        rejection: { code: "blockedTile" as const, context: {} },
+      },
+    };
+
+    // The player retracted the stroke below the blocked tile; the old
+    // rejection cannot keep claiming this stroke is blocked.
+    expect(itemsOfKind(state, ui, "cursorBadge")).toEqual([
+      {
+        kind: "cursorBadge",
+        anchor: { x: 4, y: 6 },
+        text: "⦿ Road …",
+        a11yText: "Road, preview pending",
+      },
+    ]);
+  });
+
   it("shows neutral pending instead of a held preview's verdict at idle hover", () => {
     const state = createTestGameState();
     const ui = {

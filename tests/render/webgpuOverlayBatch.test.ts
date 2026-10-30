@@ -745,6 +745,112 @@ describe("buildOverlayRanges placement and mutation previews", () => {
     expect(hasVertexNear(underRoutes, colors.oneWayArrow, 88, 81)).toBe(true);
   });
 
+  it("lets the hover highlight through while an idle held preview is stale", () => {
+    const state = createTestGameState();
+    // Generation 1 resolved at tile (5,5); the cursor moved to (6,5) and
+    // generation 2 is still in flight. The badge already reports pending,
+    // so the old verdict must not keep drawing — nor suppress the new
+    // tile's highlight.
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 6, y: 5 },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [{ x: 5, y: 5 }],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(hasVertexNear(underRoutes, colors.previewValid, 160, 160)).toBe(
+      false,
+    );
+    // Tile (6,5) highlight: strokeRect insets to (194,162)..(222,190), so
+    // the top edge's quad has corners at (194,161) and (222,163).
+    expect(hasVertexNear(underRoutes, colors.hover, 194, 161)).toBe(true);
+    expect(hasVertexNear(underRoutes, colors.hover, 222, 163)).toBe(true);
+  });
+
+  it("keeps a held accepted preview mid-drag while the replacement is pending", () => {
+    const state = createTestGameState();
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeTool: "road" as const,
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 5 },
+        current: { x: 6, y: 5 },
+      },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [
+          { x: 4, y: 5 },
+          { x: 5, y: 5 },
+        ],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 200,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    // The held accepted answer still describes the in-progress stroke.
+    expect(hasVertexNear(underRoutes, colors.previewValid, 128, 160)).toBe(
+      true,
+    );
+    expect(hasVertexNear(underRoutes, colors.previewValid, 160, 160)).toBe(
+      true,
+    );
+  });
+
+  it("suppresses a held rejection mid-drag while the replacement is pending", () => {
+    const state = createTestGameState();
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeTool: "road" as const,
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 5 },
+        current: { x: 4, y: 5 },
+      },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        changedTiles: [
+          { x: 4, y: 5 },
+          { x: 6, y: 5 },
+        ],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 0,
+        routeImpacts: [],
+        warnings: [],
+        rejection: { code: "blockedTile" as const, context: {} },
+      },
+    });
+
+    // The rejection belonged to the longer stroke the player retracted;
+    // neither tile may keep its invalid marking while the badge says pending.
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 128, 160)).toBe(
+      false,
+    );
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 192, 160)).toBe(
+      false,
+    );
+  });
+
   it("previews a generated roundabout: ring fill, island, and port ticks", () => {
     const state = createTestGameState();
     // 3x3 roundabout at origin (4,4): footprint is the eight carriageway

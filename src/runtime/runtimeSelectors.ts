@@ -628,6 +628,21 @@ function selectRouteRow(
   };
 }
 
+/** A held road-mutation response misattributes its verdict once the pointer
+ *  context outruns it. Idle hover has moved to a different tile entirely, so
+ *  any generation-mismatched held answer describes the wrong tile. Mid-drag
+ *  the request covers the whole stroke, so a mismatched *accepted* answer
+ *  still applies — but a mismatched *rejection* may blame a tile the
+ *  retracted stroke no longer reaches. Consumers present a stale held
+ *  answer as pending instead. */
+export function staleHeldRoadPreview(ui: UiState): boolean {
+  const held = ui.roadMutationPreview;
+  if (held === null || held.generation === ui.roadPreviewGeneration) {
+    return false;
+  }
+  return ui.drag === null || held.rejection !== null;
+}
+
 export function buildRoadMutationPreview(
   state: GameState,
   ui: UiState,
@@ -635,6 +650,7 @@ export function buildRoadMutationPreview(
   // `roadMutationPreview` holds the latest *resolved* response. It is shown
   // even while a newer request is in flight: falling back to the one-tile
   // local check mid-gesture flashed a wrong ⊘ on strokes Rust accepts.
+  // Consumers that turn it into a verdict gate on `staleHeldRoadPreview`.
   const preview = ui.roadMutationPreview;
   if (preview === null) {
     return null;
