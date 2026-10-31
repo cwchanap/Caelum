@@ -2,88 +2,89 @@
 
 > **Design:** [2026-10-30-hpa-287-map-vehicle-line-inspection-design.md](../specs/2026-10-30-hpa-287-map-vehicle-line-inspection-design.md)  
 > **Linear:** [HPA-287](https://linear.app/cwchanap/issue/HPA-287/click-vehicles-and-lines-on-the-map)  
-> **PR policy:** Implement, review, and merge **within this one draft PR**. The planning docs are the initial commit; do not create a second coding PR.
+> **PR policy:** Design, implementation, tests and review belong in **this single draft PR**. Do not create a coding follow-up PR.
 
 ## Working agreement
 
-Keep the current Rust simulation authoritative, WASM/Tauri wrappers thin, Svelte presentational, and WebGPU host responsible for pointer coordinates. No schema migration, new gameplay intent, generic pick registry, independent model of vehicle movement, art or SFX. Because development builds have no compatibility requirement, update the frontend vehicle type to match the real compact projection in place.
+Caelum is a hobby transport sandbox. Keep the existing Rust gameplay authority and the shared WASM/Tauri projection. The WebGPU host determines **geometry candidates**, not whether a click should select, build or navigate. The runtime and pure UI action own policy. No gameplay intent, persisted field, save-schema change, new visual/SFX work, picker framework or new commands.
 
-## Task 1 — Publish vehicle load on the current frame
+Implement as **three visible vertical slices**, each functional and testable before the next one. Do not split them into multiple PRs.
 
-**Files:** `crates/caelum-core/src/presentation.rs`, `src/runtime/backend/types.ts`, `src/domain/types.ts` (**required** for a distinct live `PresentedVehicle` type), `src/runtime/presentationView.ts`, existing presentation/frame fixtures and tests.
+## Slice A — Load projection → vehicle click → Inspect
 
-1. First add/update Rust projection test: a vehicle with two `passenger_ids`, known capacity and deterministic cursor emits only `passengerCount: 2` / `capacity`, not IDs. Test empty vehicle too, with no new deep fixture hierarchy.
-2. Add the two numeric fields to `VehiclePresentation` and derive from the existing `snapshot.transit.vehicles` pass. Bound the conversion to the chosen numeric type (or use `usize` if already conventional); do **not** serialize passenger IDs or durable snapshot changes.
-3. The current `Vehicle` and `PresentationVehicle` types correctly carry cursor fields and **already omit** `passengerIds` and `capacity`. Add `passengerCount: number` and `capacity: number` to `PresentationVehicle` **additively**. In `src/domain/types.ts`, define `PresentedVehicle extends Vehicle` with the two scalar fields; type the live `GameState.transit.vehicles` as `PresentedVehicle[]` using an `Omit<TransitNetwork, "vehicles">` intersection. Leave `Vehicle`, `TransitNetwork` and saved `RustVehicle` unchanged; `presentationView.ts` maps frame scalars into the new live view. Update affected fixture types rather than inventing passenger arrays.
-4. Adjust existing WASM/native wire fixture or deserialization assertions only where the contract actually changes. Since both adapters consume core `PresentationUpdate`, don't create separate feature implementations.
+**Change:** `crates/caelum-core/src/presentation.rs`, `src/domain/types.ts`, `src/runtime/backend/types.ts`, `src/render/webgpu/vehicleInstances.ts`, `src/render/webgpu/pickMapTarget.ts` (small new pure helper), `src/runtime/createWebGpuHost.ts`, `src/ui/uiState.ts`, `src/ui/actions.ts`, `src/runtime/createGameRuntime.ts`, `src/runtime/types.ts`, `src/runtime/runtimeSelectors.ts`, `src/components/hud/panels/InspectPanel.svelte`; extend the existing tests for those components.
 
-**Gate:** `cargo test -p caelum-core`, `bun run check`, and targeted runtime presentation tests.
+### A1 — Extend exactly the existing Rust frame
 
-## Task 2 — Share vehicle sampling and hit-test only on click
+1. In the existing vehicle projection test at `presentation.rs` (the no-passenger-IDs assertion), also assert `passengerCount` and `capacity` from a fixture with known passenger IDs/capacity. Do not add another empty-vehicle test.
+2. Add `passenger_count: usize` and `capacity: u16` to `VehiclePresentation`. Populate them with `vehicle.passenger_ids.len()` and `vehicle.capacity` in `project_frame`. Do **not** expose passenger IDs on the frame.
+3. Add `passengerCount: number` and `capacity: number` to the **existing** `Vehicle` in `src/domain/types.ts`. Do not add `PresentedVehicle` or change `GameState.transit` to an intersection type.
+4. In `RustVehicle extends Omit<Vehicle, ...>` add **`"passengerCount"`** to the omitted fields; its existing `capacity`/durable `passengerIds` declaration remains the authority for saved vehicles. `PresentationVehicle` inherits both scalars without an explicit override. `src/runtime/presentationView.ts` **does not change**, because it already spreads the frame vehicle and normalizes `parkedPosition`.
+5. Adjust only fixtures affected by the now-required live vehicle scalars. No migrations, wrappers or host-specific branches.
 
-**Files:** `src/render/webgpu/vehicleInstances.ts`, `src/runtime/createWebGpuHost.ts`; optionally one small `src/render/webgpu/pickMapTarget.ts` for pure geometry if it improves testability; existing WebGPU/vehicle tests.
+**Check:** `cargo test -p caelum-core`, `bun run check`, targeted runtime presentation tests.
 
-1. Refactor `vehicleInstances.ts` minimally to expose the actual sampled vehicle ID + current presented world-pixel position while keeping `encodeVehicleInstances` as the rendering entrypoint. The same `latestSample`/`interpolateSample` and corridor offsets must power both rendering and picking.
-2. Cache or capture the latest draw's observation pair/alpha for the ensuing click; do not substitute authoritative positions for interpolated rendered positions. During pause/scene change, preserve current snap behavior.
-3. Convert click CSS coordinates into world pixels via `getBoardTransform`; in Select mode, choose the nearest displayed vehicle with squared distance <= `(tileSize / 2)^2`. Tie-break by ID. Don't pick culled/invisible vehicles.
-4. Add a narrowly named `WebGpuHostContext.onVehicleClick(id)` callback. For non-Select tools/drafts and after pan suppression, retain existing `onTileClick` behavior unchanged.
-5. Tests should pin moving, parked, zero-step terminal, shared-corridor, paused, zoomed, missed-click and competing-vehicle results. Prefer extending `tests/render/webGpuHost.test.ts` and existing vehicle-instance tests over a new general test suite.
+### A2 — Reuse last rendered vehicle samples
 
-**Gate:** `bun run test:unit` (or targeted Vitest projects).
+1. In `vehicleInstances.ts`, have the existing interpolation → cull → instance-encoding loop expose the post-cull `{ id, point }` samples **from that exact pass**, without a second vehicle-position calculation. Keep current paused, parked, terminal, corridor-offset and continuity behavior unchanged.
+2. `createWebGpuHost.ts` retains the latest **on-screen drawn** samples (and the matching drawing transform, when relevant to coordinate conversion); refresh on actual `drawFrame`. An offscreen capture must not replace the screen's hit-target list. Clear on detach.
+3. Add a small pure `pickMapTarget.ts` helper that finds the nearest point within `tileSize / 2`, squared distance then ID, from the drawn samples. The host converts click CSS to world pixels using `getBoardTransform` and keeps the current drag/pan click-suppression guards. Do not introduce a spatial index, GPU readback or new gesture state.
+4. Extend existing `WebGpuHostContext.onTileClick` to accept an optional, narrow `pick: { vehicleId: string | null; lineId: string | null }`. For this slice `lineId` is null. **No** `onVehicleClick` or `onLineClick` callback; don't duplicate the Select gate in the host. Extend `RuntimeController.handleTileClick` to receive the candidate. The current busy gate, edit-draft waypoint interception and existing non-Select intent path stay in charge.
 
-## Task 3 — Select line path while preserving tile inspection
+**Tests:** pure picker zoom/pan hit, miss, nearest-of-two; one host callback wiring/pan-suppression test. Existing `tests/render/webgpuVehicleInstances.test.ts` already tests paused, parked, terminal and shared-corridor sampling; do not repeat those scenarios in DOM click tests.
 
-**Files:** `src/render/webgpu/transitBatch.ts` (reuse helpers, only extract if needed), `src/render/pathGeometry.ts` (reuse), `src/runtime/createWebGpuHost.ts`, `src/runtime/createGameRuntime.ts`, relevant host/runtime tests.
+### A3 — Decide Select policy in the existing pure action
 
-1. Implement a click-only nearest presented-path proximity check for Bus/Metro routes. Use `presentationPath`, current shared-corridor geometry/offset and existing geometry sampling; avoid mismatches with rendered paths. Bound the pick radius to roughly half a tile and use stable ID ties.
-2. Resolve hit priority in one place: vehicle > existing present stop/station > visible line path on a non-stop tile > existing ordinary tile/building selection. Call the **already exported** `resolveNodesAtTile(state, point)` from `src/ui/actions.ts` for present-node precedence, since it already excludes tombstones. Do not export `presentNodeAt` (which resolves by ID, not tile), reimplement presence rules, swallow building clicks, change route-draft handles, or add a generic hit-target pipeline.
-3. Add one narrow `WebGpuHostContext.onLineClick(routeId)` callback (parallel to `onVehicleClick(vehicleId)`) and wire it in `createGameRuntime.ts` directly to the existing `api.openServiceControls(routeId)`. Unlike `selectRoute`, this operation should not toggle off an already selected line. Do not open route editing or introduce a combined pick-result framework.
-4. Test distinct route paths, overlapping corridors, station/stop precedence, no valid line hit, and click-after-pan suppression; include an assertion that selected line and Lines destination update together.
+1. Add `selectedVehicleId: string | null` to `UiState`, initialized to null. No selection union, independent selector manager, save field or new public `selectVehicle()` controller method.
+2. Extend `applyUiTileClick(state, ui, point, pick)` to accept the optional geometry candidate. **Only** the `handleTileClick` branch with `ui.activeTool === "inspect" && ui.selectedBuilding === null` (and after `workingSave.isBusy()`) passes the pick to Select resolution. Keep route drafts and building-placement intent paths unchanged.
+3. For a live vehicle ID hit, set `selectedVehicleId`, `selectedId` to the clicked tile for repeat-click detection, `selectedNodeKind: null` and the existing contextual Inspect destination. Never cache vehicle load. If a present stop or station is under that vehicle and the player repeats the click on the same tile, select the node instead of the vehicle; subsequent same-tile clicks continue the existing stop↔station cycling. Validation uses existing `resolveNodesAtTile(state, point)` only inside the action, not the WebGPU host. A candidate missing from the latest state falls through.
+4. Clear `selectedVehicleId` wherever ordinary selection is replaced. The **seven runtime locations** are `nextToolUiState` (~149), `nextAreaUiState` (~184), `nextBuildingUiState` (~212), the `openRouteEdit` transition (~803), the explicit UI reset/selection transitions (~915 and ~1022), and `focusWaitLocation` (~1875). Also clear it in the **two tile-selection returns** in `src/ui/actions.ts` (~137 and ~156). `resetUi()` already reconstructs `createUiState()`; don't add redundant branches. Inspect also returns null if the chosen ID disappears from a later frame.
+5. Add `ShellInspectorState.kind = "vehicle"`; from the **current** vehicle and route/line derive name/color, riders/capacity and the leg destination label via `legs[itineraryIndex % legs.length].toWaypointId`. Missing leg/line/node or broken path shows `—`. Add a compact vehicle branch to existing `InspectPanel.svelte`; its line chip reuses `onOpenServiceControls(lineId)`.
 
-**Gate:** focused `tests/render/webGpuHost.test.ts`, `tests/runtime/gameRuntime.test.ts`, and UI shell tests.
+**Tests:** use `tests/ui/actions.test.ts` for Select/placement gate and vehicle→same-tile node, `tests/runtime/gameRuntime.test.ts` for busy gate, and existing selector/Inspect tests for numeric load and next-stop display. Pin **one** clearing invariant: a vehicle selection followed by an ordinary tile click and a tool switch clears vehicle Inspect. Cover stale/removed vehicle with one focused test; no exhaustive state-transition matrix.
 
-## Task 4 — Add transient vehicle Inspect projection
+**Slice A done:** clicking a paused or moving visible Bus/Metro vehicle opens real Inspect with its line, live numeric load and next stop, without hijacking a house placement or route-draft click.
 
-**Files:** `src/ui/uiState.ts`, `src/runtime/types.ts`, `src/runtime/createGameRuntime.ts`, `src/runtime/runtimeSelectors.ts`, `src/components/hud/panels/InspectPanel.svelte`, `src/App.svelte` only for existing callback wiring, and corresponding existing tests.
+## Slice B — Line-path click in the same Select flow
 
-1. Add `selectedVehicleId: string | null` to `UiState`; initialize/reset/clear it alongside conflicting tile selections. Add a small `selectVehicle(id)` runtime method that validates current presence and opens contextual Inspect without a backend dispatch. Keep it out of saved state.
-2. Extend `ShellInspectorState` to `kind: "vehicle"`. From the latest frame vehicle and line/leg scene data derive line name/color, rider count/capacity, and the current leg's destination waypoint label. A missing/broken route shows `—`; never infer a stop from raw vehicle coordinates. Selectors return null when the vehicle vanishes.
-3. Add one accessible Svelte vehicle inspector section with a colored line chip that uses the existing `onOpenServiceControls(lineId)` callback. Reuse existing typography and feedback patterns.
-4. Assert one bus and one metro case; live load changes; vehicle disappearance; selecting a stop/building afterward replaces vehicle inspect; and opening its line controls switches to Lines without a new route draft.
-5. Review `handleEscape`, `resetUi`, create/load and route-delete flows for stale transient selection. Change only paths that actually keep the invalid vehicle ID visible.
+**Change:** `src/render/webgpu/pickMapTarget.ts`, `src/runtime/createWebGpuHost.ts`, `src/ui/actions.ts`, `src/runtime/createGameRuntime.ts`, extend existing pure picker/Select/host tests.
 
-**Gate:** `bun run check`, targeted selectors/runtime/UI tests.
+1. From `renderableLines(state)` and `buildCorridorGroups`, sample the **displayed** `presentationPath` steps after `presentationForRoute` offsets; reuse `pointAt`/`pointAndTangentAt` from `pathGeometry.ts`. No second route model or continuously computed path hit index.
+2. **Hard tile gate:** a line is eligible **only if its presented path has a step on the clicked tile**, not merely within 16 world pixels of a nearby tile. This prevents the shared-corridor (4px offset) proximity radius from stealing clicks on neighboring building tiles. Within eligible steps, choose nearest within ~16 world px, then stable line ID. Preserve existing broken/last-valid presentation semantics.
+3. `onTileClick(point, { vehicleId, lineId })` now carries both geometry candidates; the host still does not decide click priority. In the Select branch, `applyUiTileClick` resolves vehicle (except same-tile node repeat) > present node > tile-gated line > ordinary tile. For line hits, return a narrow `lineIdToOpen` decision alongside UI state and have `handleTileClick` call the **existing** idempotent `api.openServiceControls(lineId)` after its current busy/tool gates. Do not reproduce or toggle Lines state in the host/action, and don't open route edit.
+4. Preserve existing ordinary empty/building inspector selection and suppression of click events following pan/drag.
 
-## Task 5 — Focus camera from existing wait-location actions
+**Tests:** pure picker verifies tile-gated route hit vs adjacent building tile and nearest of shared lines; pure UI action verifies node wins over route and placement tools ignore picks; host test verifies callback forwarding. Keep one concise runtime assertion that a valid line hit opens Lines with the chosen route (even if already selected).
 
-**Files:** `src/render/boardTransform.ts`, `src/runtime/createGameRuntime.ts`, existing board-transform/Lines runtime UI tests.
+**Slice B done:** click a visible Bus/Metro path away from a station/stop to manage that line, while nearby buildings and stop inspectors keep their old behavior.
 
-1. Add `CameraAction.kind = "centerOn"` with `point: Point`, and `applyCameraAction` behavior that preserves active zoom, starts a fitted camera at a modest 2× if possible, and clamps the requested center. Keep `null` as fit.
-2. Only after `focusWaitLocation` validates the route, node, and no-route-draft gate, invoke `gameHost.adjustCamera({ kind: "centerOn", point: node.position })` using the existing host callback. Preserve the current selected route/node and contextual Inspector. If camera update causes one additional publication, prefer that simple behavior to a new transaction abstraction.
-3. Test centered zoomed view, initial fit view, edge clamping, missing/deleted wait node, and route-draft no-op; extend existing Lines wait-location button test rather than adding a new prop.
-4. Ensure the host still clamps camera against the actual CSS board dimensions.
+## Slice C — Camera focus on Lines wait-location click
 
-**Gate:** targeted board transform/runtime/Lines tests.
+**Change:** `src/render/boardTransform.ts`, `src/runtime/createGameRuntime.ts`, existing board-transform/runtime/fake-host tests.
 
-## Final player-flow verification
+1. Add `{ kind: "centerOn"; point: Point }` to `CameraAction` and `applyCameraAction`. Preserve current zoom, clamp the center against the actual board; from `null` fitted view, start at bounded **2×** zoom so a center request has a visible effect (or remain fitted if no zoom possible). Camera remains local/unpersisted.
+2. In existing `focusWaitLocation(routeId, nodeId)`, **after** validation of route + present node + inactive route draft, call `gameHost.adjustCamera({ kind: "centerOn", point: node.position })`. Preserve its existing route selection, node Inspect and no-op invalid cases. No extra Lines button callback or center service.
+3. Tests: active-zoom centering, fit→2× centering, and one missing-node no-op in existing unit/runtime tests, using `tests/helpers/gameHost.ts` to observe camera actions. Edge clamping is already covered by existing `clampCamera` tests.
 
-- `cargo fmt --all --check`
-- `cargo test -p caelum-core`
-- `bun run check`
-- `bun run test:unit`
-- `bun run test:e2e -- --project=chromium` (or the smallest relevant Playwright suite while iterating)
+**Slice C done:** a wait-location click centers the actual map camera and still opens that stop/station's contextual Inspect.
+
+## Final verification and merge gate
+
+Run targeted checks during each slice; before marking this **same PR** ready:
+
+- `cargo fmt --all --check` and `cargo test -p caelum-core`
+- `bun run check` and `bun run test:unit`
 - `bun run lint` and `bun run format:check`
+- Browser Playwright: **pause**, click displayed vehicle, assert line and `0 / capacity`; click a line-path tile away from stops, assert Lines opens. No changed-load E2E or manufactured at-risk commuter scene.
+- Wait-location center is covered by runtime fake-host tests; verify both adapters share the same core projection without a second UI implementation.
 
-One browser Playwright scenario should create/run a small Bus route, click a visible vehicle, assert the line and `0/capacity` then a changed load if practical, select the route from a path tile away from stops, and click an at-risk waiting node to verify the camera/Inspector. Add a Metro scenario in the cheapest existing real-Rust unit/integration tests rather than duplicating a heavy end-to-end setup. Confirm Tauri uses the shared wire and can still start; no separate UI implementation.
+## Risks worth checking (and nothing more)
 
-## Review-sensitive risks
+- **Policy bypass:** building placement also uses `activeTool: "inspect"`; host-picked candidates must not intercept `selectedBuilding` or `workingSave.isBusy()`.
+- **Pixel parity:** choose from last on-screen post-cull instances, not recomputed snapshots; do not let debug capture silently update picking state.
+- **Station accessibility:** first click over train picks the train, second same-tile click reaches station, further stop/station clicks retain their cycle.
+- **Adjacent building safety:** tile-gated path candidates, not just nearest geometry.
+- **Transient state cleanup:** clear selected vehicle at the nine existing selection-write sites and re-derive Inspect from current frame.
+- **Types:** add scalars to live `Vehicle`, omit `passengerCount` on saved `RustVehicle`, no new `PresentedVehicle`, no fold or schema changes.
 
-- **Live vs saved type:** the current frame type is already correct (cursor-only); add numeric fields to the frame and a dedicated live `PresentedVehicle` type without adding frame-only fields to durable `RustVehicle` or the cursor-only domain base.
-- **Picking drift:** position and corridor offsets must match rendered vehicles/routes, especially during interpolation and zoom.
-- **UX precedence:** a vehicle on top of a stop takes precedence; a stop takes precedence over its line. Preserve prior building/empty-tile behavior elsewhere.
-- **Camera fit:** centering at zoom 1 is visually ineffectual, so use bounded 2× from fit; do not alter persisted map state.
-- **Work scope:** no animations, tracking camera, per-rider details, route selection menu, general spatial index, full test matrices, or art/SFX ticket.
-
-## Done when
-
-The design acceptance scenarios pass; the PR contains the actual implementation plus these docs; tests and both host contracts pass; and **this same PR** can be marked ready, merged, and used to close HPA-287. Do not create a second PR for implementation.
+No new assets, sound, routing rules, persistent camera, generic picker or separate implementation PR.
