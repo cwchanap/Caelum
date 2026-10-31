@@ -791,6 +791,16 @@ describe("buildOverlayRanges placement and mutation previews", () => {
       roadPreviewGeneration: 2,
       roadMutationPreview: {
         generation: 1,
+        // The held answer resolved for the shorter (4,5)→(5,5) stroke: a
+        // prefix of the stroke the drag now implies, so it may stay.
+        mutation: {
+          type: "layRoadLine" as const,
+          points: [
+            { x: 4, y: 5 },
+            { x: 5, y: 5 },
+          ],
+          preset: "twoWay" as const,
+        },
         changedTiles: [
           { x: 4, y: 5 },
           { x: 5, y: 5 },
@@ -805,12 +815,69 @@ describe("buildOverlayRanges placement and mutation previews", () => {
       },
     });
 
-    // The held accepted answer still describes the in-progress stroke.
+    // The held accepted answer still describes a prefix of the in-progress
+    // stroke.
     expect(hasVertexNear(underRoutes, colors.previewValid, 128, 160)).toBe(
       true,
     );
     expect(hasVertexNear(underRoutes, colors.previewValid, 160, 160)).toBe(
       true,
+    );
+  });
+
+  it("drops a held accepted answer the retracted stroke is no longer a prefix of", () => {
+    const state = createTestGameState();
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeTool: "road" as const,
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 5 },
+        current: { x: 5, y: 5 },
+      },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        // The held answer resolved for the longer (4,5)→(7,5) stroke; the
+        // retracted stroke only commits (4,5) and (5,5), so neither tail
+        // tile may keep its valid marking.
+        mutation: {
+          type: "layRoadLine" as const,
+          points: [
+            { x: 4, y: 5 },
+            { x: 5, y: 5 },
+            { x: 6, y: 5 },
+            { x: 7, y: 5 },
+          ],
+          preset: "twoWay" as const,
+        },
+        changedTiles: [
+          { x: 4, y: 5 },
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+          { x: 7, y: 5 },
+        ],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 400,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(hasVertexNear(underRoutes, colors.previewValid, 128, 160)).toBe(
+      false,
+    );
+    expect(hasVertexNear(underRoutes, colors.previewValid, 160, 160)).toBe(
+      false,
+    );
+    expect(hasVertexNear(underRoutes, colors.previewValid, 192, 160)).toBe(
+      false,
+    );
+    expect(hasVertexNear(underRoutes, colors.previewValid, 224, 160)).toBe(
+      false,
     );
   });
 

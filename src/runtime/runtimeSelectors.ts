@@ -21,6 +21,7 @@ import {
   warningMessage,
 } from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
+import { roadMutationForUi, roadMutationIsPrefix } from "./roadMutations";
 import type {
   ShellCommandState,
   ShellInspectorState,
@@ -630,17 +631,27 @@ function selectRouteRow(
 
 /** A held road-mutation response misattributes its verdict once the pointer
  *  context outruns it. Idle hover has moved to a different tile entirely, so
- *  any generation-mismatched held answer describes the wrong tile. Mid-drag
- *  the request covers the whole stroke, so a mismatched *accepted* answer
- *  still applies — but a mismatched *rejection* may blame a tile the
- *  retracted stroke no longer reaches. Consumers present a stale held
- *  answer as pending instead. */
-export function staleHeldRoadPreview(ui: UiState): boolean {
+ *  any generation-mismatched held answer describes the wrong tile. Mid-drag a
+ *  mismatched *rejection* may blame a tile the retracted stroke no longer
+ *  reaches, and a mismatched *accepted* answer applies only while its request
+ *  demonstrably describes a prefix of the stroke now implied — extension
+ *  keeps the earlier tiles' verdict, but retraction, an axis switch, or a
+ *  preset swap invalidates it. Consumers present a stale held answer as
+ *  pending instead. */
+export function staleHeldRoadPreview(state: GameState, ui: UiState): boolean {
   const held = ui.roadMutationPreview;
   if (held === null || held.generation === ui.roadPreviewGeneration) {
     return false;
   }
-  return ui.drag === null || held.rejection !== null;
+  if (ui.drag === null || held.rejection !== null) {
+    return true;
+  }
+  const current = roadMutationForUi(state, ui);
+  return (
+    current === null ||
+    held.mutation === undefined ||
+    !roadMutationIsPrefix(held.mutation, current)
+  );
 }
 
 export function buildRoadMutationPreview(

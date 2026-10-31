@@ -131,7 +131,7 @@ function cursorBadgeText(
   // answer stays — but idle hover has moved to a different tile entirely,
   // and a held rejection may blame a tile the stroke no longer reaches.
   // Both present as a neutral pending badge until the replacement lands.
-  const staleHeldPreview = staleHeldRoadPreview(ui);
+  const staleHeldPreview = staleHeldRoadPreview(state, ui);
   if (ui.selectedBuilding !== null) {
     const def = BUILDING_CATALOG[ui.selectedBuilding];
     const ok =

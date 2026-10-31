@@ -201,6 +201,16 @@ describe("selectMapTextOverlayItems", () => {
       roadPreviewGeneration: 2,
       roadMutationPreview: {
         generation: 1,
+        // The held answer resolved for this same (4,6)→(5,6) stroke, so its
+        // verdict still describes a prefix of the pending request's stroke.
+        mutation: {
+          type: "layRoadLine" as const,
+          points: [
+            { x: 4, y: 6 },
+            { x: 5, y: 6 },
+          ],
+          preset: "twoWay" as const,
+        },
         changedTiles: [{ x: 5, y: 6 }],
         authoredTiles: [],
         generatedStructures: [],
@@ -218,6 +228,59 @@ describe("selectMapTextOverlayItems", () => {
         anchor: { x: 5, y: 6 },
         text: "⦿ Road · $100",
         a11yText: "Road, $100",
+      },
+    ]);
+  });
+
+  it("shows neutral pending instead of a held accepted verdict the stroke retracted past", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      hoverTile: { x: 5, y: 6 },
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 6 },
+        current: { x: 5, y: 6 },
+      },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 1,
+        // The held answer resolved for the longer (4,6)→(7,6) stroke; the
+        // retracted stroke commits only its first two tiles, so the old
+        // cost cannot stand in as this stroke's verdict.
+        mutation: {
+          type: "layRoadLine" as const,
+          points: [
+            { x: 4, y: 6 },
+            { x: 5, y: 6 },
+            { x: 6, y: 6 },
+            { x: 7, y: 6 },
+          ],
+          preset: "twoWay" as const,
+        },
+        changedTiles: [
+          { x: 4, y: 6 },
+          { x: 5, y: 6 },
+          { x: 6, y: 6 },
+          { x: 7, y: 6 },
+        ],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 400,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+
+    expect(itemsOfKind(state, ui, "cursorBadge")).toEqual([
+      {
+        kind: "cursorBadge",
+        anchor: { x: 5, y: 6 },
+        text: "⦿ Road …",
+        a11yText: "Road, preview pending",
       },
     ]);
   });

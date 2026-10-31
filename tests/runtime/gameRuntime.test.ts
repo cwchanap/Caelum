@@ -22,6 +22,8 @@ import type {
 } from "../../src/runtime/backend/types";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { selectMapTextOverlayItems } from "../../src/render/mapTextOverlay";
+import { staleHeldRoadPreview } from "../../src/runtime/runtimeSelectors";
 import type {
   CreateGameHost,
   GameHost,
@@ -1431,6 +1433,134 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(6);
     runtime.startDrag({ x: 9, y: 5 });
     expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+  });
+
+  it("drops accepted preview geometry when the stroke retracts before the replacement resolves", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.startDrag({ x: 4, y: 5 });
+    runtime.setDragCurrent({ x: 7, y: 5 });
+    const generation = runtime.getSnapshot().ui.roadPreviewGeneration;
+    previews.resolveRoad(generation, {
+      generation,
+      changedTiles: [
+        { x: 4, y: 5 },
+        { x: 5, y: 5 },
+        { x: 6, y: 5 },
+        { x: 7, y: 5 },
+      ],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 400,
+      skippedTiles: [],
+      routeImpacts: [],
+      warnings: [],
+      rejection: null,
+    });
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(
+      generation,
+    );
+
+    // Retracting to (5,5) bumps the generation, but the held answer's longer
+    // stroke is not a prefix of the mutation the drag now implies: the badge
+    // must read pending instead of claiming the four-tile cost, and the
+    // commit carries only the retracted tiles.
+    runtime.setDragCurrent({ x: 5, y: 5 });
+    const pending = runtime.getSnapshot();
+    expect(staleHeldRoadPreview(pending.state, pending.ui)).toBe(true);
+    expect(
+      selectMapTextOverlayItems(pending.state, pending.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road …");
+
+    await runtime.commitDrag();
+    expect(previews.backend.intents.at(-1)).toEqual({
+      type: "layRoadLine",
+      points: [
+        { x: 4, y: 5 },
+        { x: 5, y: 5 },
+      ],
+      preset: "twoWay",
+    });
+  });
+
+  it("keeps a held accepted verdict only while it prefixes the stroke — not after an axis switch or preset swap", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.startDrag({ x: 4, y: 5 });
+    runtime.setDragCurrent({ x: 5, y: 5 });
+    const first = runtime.getSnapshot().ui.roadPreviewGeneration;
+    previews.resolveRoad(first, {
+      generation: first,
+      changedTiles: [
+        { x: 4, y: 5 },
+        { x: 5, y: 5 },
+      ],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 200,
+      skippedTiles: [],
+      routeImpacts: [],
+      warnings: [],
+      rejection: null,
+    });
+    await flushPromises();
+
+    // Extending past the held answer's stroke keeps it: its request is a
+    // prefix of the stroke now implied, so the badge may keep the verdict.
+    runtime.setDragCurrent({ x: 7, y: 5 });
+    let snap = runtime.getSnapshot();
+    expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(false);
+    expect(
+      selectMapTextOverlayItems(snap.state, snap.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road · $200");
+
+    // An axis switch is not a prefix — the held answer drops to pending.
+    runtime.setDragCurrent({ x: 4, y: 7 });
+    snap = runtime.getSnapshot();
+    expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(true);
+
+    // Resolve the vertical stroke, then swap only the preset: the held
+    // answer's tiles still prefix the stroke but its mutation no longer
+    // matches, so it drops to pending too.
+    const second = runtime.getSnapshot().ui.roadPreviewGeneration;
+    previews.resolveRoad(second, {
+      generation: second,
+      changedTiles: [
+        { x: 4, y: 5 },
+        { x: 4, y: 6 },
+        { x: 4, y: 7 },
+      ],
+      authoredTiles: [],
+      generatedStructures: [],
+      cost: 300,
+      skippedTiles: [],
+      routeImpacts: [],
+      warnings: [],
+      rejection: null,
+    });
+    await flushPromises();
+    snap = runtime.getSnapshot();
+    expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(false);
+    runtime.setRoadPreset("oneWay");
+    snap = runtime.getSnapshot();
+    expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(true);
   });
 
   it("re-requests the armed road preview when an applied update changes the world", async () => {
