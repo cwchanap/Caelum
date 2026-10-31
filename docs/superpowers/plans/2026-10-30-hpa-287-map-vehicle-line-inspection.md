@@ -10,11 +10,11 @@ Keep the current Rust simulation authoritative, WASM/Tauri wrappers thin, Svelte
 
 ## Task 1 — Publish vehicle load on the current frame
 
-**Files:** `crates/caelum-core/src/presentation.rs`, `src/runtime/backend/types.ts`, `src/domain/types.ts` (only if GameState's presented vehicle type needs to diverge from saved Rust `Vehicle`), `src/runtime/presentationView.ts`, existing presentation/frame fixtures and tests.
+**Files:** `crates/caelum-core/src/presentation.rs`, `src/runtime/backend/types.ts`, `src/domain/types.ts` (**required** for a distinct live `PresentedVehicle` type), `src/runtime/presentationView.ts`, existing presentation/frame fixtures and tests.
 
 1. First add/update Rust projection test: a vehicle with two `passenger_ids`, known capacity and deterministic cursor emits only `passengerCount: 2` / `capacity`, not IDs. Test empty vehicle too, with no new deep fixture hierarchy.
 2. Add the two numeric fields to `VehiclePresentation` and derive from the existing `snapshot.transit.vehicles` pass. Bound the conversion to the chosen numeric type (or use `usize` if already conventional); do **not** serialize passenger IDs or durable snapshot changes.
-3. Make `PresentationVehicle` model the actual frame: omit `passengerIds`, retain cursor and capacity, add `passengerCount`. Update the frontend `GameState` transit view type and `presentationView` mapping explicitly so tests cannot accidentally fabricate passenger lists.
+3. The current `Vehicle` and `PresentationVehicle` types correctly carry cursor fields and **already omit** `passengerIds` and `capacity`. Add `passengerCount: number` and `capacity: number` to `PresentationVehicle` **additively**. In `src/domain/types.ts`, define `PresentedVehicle extends Vehicle` with the two scalar fields; type the live `GameState.transit.vehicles` as `PresentedVehicle[]` using an `Omit<TransitNetwork, "vehicles">` intersection. Leave `Vehicle`, `TransitNetwork` and saved `RustVehicle` unchanged; `presentationView.ts` maps frame scalars into the new live view. Update affected fixture types rather than inventing passenger arrays.
 4. Adjust existing WASM/native wire fixture or deserialization assertions only where the contract actually changes. Since both adapters consume core `PresentationUpdate`, don't create separate feature implementations.
 
 **Gate:** `cargo test -p caelum-core`, `bun run check`, and targeted runtime presentation tests.
@@ -36,8 +36,8 @@ Keep the current Rust simulation authoritative, WASM/Tauri wrappers thin, Svelte
 **Files:** `src/render/webgpu/transitBatch.ts` (reuse helpers, only extract if needed), `src/render/pathGeometry.ts` (reuse), `src/runtime/createWebGpuHost.ts`, `src/runtime/createGameRuntime.ts`, relevant host/runtime tests.
 
 1. Implement a click-only nearest presented-path proximity check for Bus/Metro routes. Use `presentationPath`, current shared-corridor geometry/offset and existing geometry sampling; avoid mismatches with rendered paths. Bound the pick radius to roughly half a tile and use stable ID ties.
-2. Resolve hit priority in one place: vehicle > existing present stop/station > visible line path on a non-stop tile > existing ordinary tile/building selection. Do not swallow clicks on buildings, change route-draft handles, or turn this into a generic hit-target pipeline.
-3. Forward a selected line ID to the runtime's existing `openServiceControls(routeId)`. Unlike `selectRoute`, this operation should not toggle off an already selected line. Do not open route editing.
+2. Resolve hit priority in one place: vehicle > existing present stop/station > visible line path on a non-stop tile > existing ordinary tile/building selection. Call the **already exported** `resolveNodesAtTile(state, point)` from `src/ui/actions.ts` for present-node precedence, since it already excludes tombstones. Do not export `presentNodeAt` (which resolves by ID, not tile), reimplement presence rules, swallow building clicks, change route-draft handles, or add a generic hit-target pipeline.
+3. Add one narrow `WebGpuHostContext.onLineClick(routeId)` callback (parallel to `onVehicleClick(vehicleId)`) and wire it in `createGameRuntime.ts` directly to the existing `api.openServiceControls(routeId)`. Unlike `selectRoute`, this operation should not toggle off an already selected line. Do not open route editing or introduce a combined pick-result framework.
 4. Test distinct route paths, overlapping corridors, station/stop precedence, no valid line hit, and click-after-pan suppression; include an assertion that selected line and Lines destination update together.
 
 **Gate:** focused `tests/render/webGpuHost.test.ts`, `tests/runtime/gameRuntime.test.ts`, and UI shell tests.
@@ -78,7 +78,7 @@ One browser Playwright scenario should create/run a small Bus route, click a vis
 
 ## Review-sensitive risks
 
-- **Type mismatch:** current frame type inherits passenger IDs even though Rust omits them. Fix the contract, not the symptoms.
+- **Live vs saved type:** the current frame type is already correct (cursor-only); add numeric fields to the frame and a dedicated live `PresentedVehicle` type without adding frame-only fields to durable `RustVehicle` or the cursor-only domain base.
 - **Picking drift:** position and corridor offsets must match rendered vehicles/routes, especially during interpolation and zoom.
 - **UX precedence:** a vehicle on top of a stop takes precedence; a stop takes precedence over its line. Preserve prior building/empty-tile behavior elsewhere.
 - **Camera fit:** centering at zoom 1 is visually ineffectual, so use bounded 2× from fit; do not alter persisted map state.
