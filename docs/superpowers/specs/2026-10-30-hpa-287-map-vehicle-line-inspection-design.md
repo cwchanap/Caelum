@@ -13,14 +13,14 @@ No new art, SFX, gameplay intent, persistence field, generic picking engine, or 
 ## Existing ownership and constraints
 
 - Rust `crates/caelum-core/src/model.rs` owns `Vehicle.capacity` and `Vehicle.passenger_ids`; `presentation.rs::VehiclePresentation` projects cursor data but deliberately omits load today. Both WASM and Tauri call this same Rust projection.
-- The frontend's `src/runtime/backend/types.ts::PresentationVehicle` currently inherits `Vehicle` fields too broadly even though Rust does not send capacity/passenger IDs; correct that contract as part of this feature rather than pretend those arrays exist.
+- The frontend's `src/domain/types.ts::Vehicle` is already a cursor-only type: it has neither `capacity` nor `passengerIds`. `src/runtime/backend/types.ts::PresentationVehicle` matches that current minimal frame, while the durable `RustVehicle` separately has capacity and passenger IDs. The change here is **additive**, not a correction of an existing frame contract.
 - `src/render/webgpu/vehicleInstances.ts` already knows how to sample latest/interpolated world-space positions, including parked vehicles, zero-step terminal reversals, shared-corridor offsets and discontinuity snaps. `createWebGpuHost.ts` already gates ordinary clicks after pan/drag gestures.
 - `src/runtime/createGameRuntime.ts` owns local selection and `focusWaitLocation`; `src/runtime/runtimeSelectors.ts` projects an inspector; `src/components/hud/panels/InspectPanel.svelte` renders it. `openServiceControls(routeId)` already opens Lines with that route selected.
 - `src/render/boardTransform.ts` is the one camera/coordinate authority, and the GPU host owns actual board dimensions.
 
 ## 1. Vehicle load: one scalar on the existing Rust frame
 
-Add `passenger_count: u16` and `capacity: u16` to Rust `VehiclePresentation` (camelCase JSON: `passengerCount`, `capacity`). Set them to `vehicle.passenger_ids.len()` (convert safely to the bounded vehicle capacity/type) and `vehicle.capacity` when `project_frame` already iterates the vehicles. Keep `passenger_ids` private to Rust: no trip rows or rider identities on the frame. Update the **one** frontend presentation type and its `GameState` projection to reflect those exact fields; do not claim frame vehicles have `passengerIds`.
+Add `passenger_count: u16` and `capacity: u16` to Rust `VehiclePresentation` (camelCase JSON: `passengerCount`, `capacity`). Set them to `vehicle.passenger_ids.len()` (convert safely to the bounded vehicle capacity/type) and `vehicle.capacity` when `project_frame` already iterates the vehicles. Keep `passenger_ids` private to Rust: no trip rows or rider identities on the frame. Add `passengerCount: number` and `capacity: number` to `PresentationVehicle` in `src/runtime/backend/types.ts`. Define `PresentedVehicle extends Vehicle` with those two numeric fields in `src/domain/types.ts`, and type **only the live view** `GameState.transit.vehicles` as `PresentedVehicle[]` (e.g. `Omit<TransitNetwork, "vehicles"> & { vehicles: PresentedVehicle[] }`). Leave cursor-only `Vehicle`, base `TransitNetwork`, and durable-snapshot `RustVehicle` unchanged. `presentationView.ts` copies the frame scalars into the live view; no `passengerIds` array crosses the presentation wire.
 
 This is a presentation-wire change, not a durable save-schema change. WASM and Tauri receive it through their existing shared core projection and adapters; no extra host-specific command or parity framework.
 
@@ -34,7 +34,7 @@ Re-evaluate the selected vehicle each projected frame by ID. If it disappears, I
 
 ## 3. Route path click and click priority
 
-Only under Select, and only when no route draft is active, use the current scene's **presented** Bus/Metro paths (the same connected/last-valid geometry and shared-corridor offsets used by `transitBatch.ts`) for a small proximity test on the clicked route-path tile. Use existing `pathGeometry` helpers and a bounded point-to-curve/segment approximation where needed; no GPU readback or general spatial index. Choose nearest visible line within about half a tile, breaking equal-distance ties by line ID.
+Only under Select, and only when no route draft is active, use the current scene's **presented** Bus/Metro paths (the same connected/last-valid geometry and shared-corridor offsets used by `transitBatch.ts`) for a small proximity test on the clicked route-path tile. For stop/station precedence use the existing exported `resolveNodesAtTile(state, point)` from `src/ui/actions.ts`, which already filters out tombstones; do not export a second node predicate or duplicate its presence rules in the host. Use existing `pathGeometry` helpers and a bounded point-to-curve/segment approximation where needed; no GPU readback or general spatial index. Choose nearest visible line within about half a tile, breaking equal-distance ties by line ID.
 
 The click priority is:
 1. rendered vehicle within hit radius;
@@ -42,7 +42,7 @@ The click priority is:
 3. a route path on a non-stop/station tile;
 4. ordinary existing tile selection, including buildings and empty tiles.
 
-When a line is hit, delegate to the existing `openServiceControls(lineId)` runtime operation (idempotent selection, **not** toggle, **not** route editing). Do not alter click behavior for road/build/route-draft tools, Space/middle pan, or any drag. A shared corridor needs one deterministic picked line; changing selection can still use the Lines list.
+When a line is hit, the WebGPU host calls its narrow `onLineClick(routeId)` callback; `createGameRuntime.ts` wires it directly to the existing `openServiceControls(routeId)` operation (idempotent selection, **not** toggle, **not** route editing). This parallels the separate `onVehicleClick(vehicleId)` callback without a generic target registry. Do not alter click behavior for road/build/route-draft tools, Space/middle pan, or any drag. A shared corridor needs one deterministic picked line; changing selection can still use the Lines list.
 
 ## 4. Vehicle inspector projection
 
@@ -59,7 +59,7 @@ After the existing successful `focusWaitLocation(routeId, nodeId)` validates bot
 ## State and boundaries
 
 - Rust: add only the two numeric vehicle frame fields; no gameplay changes.
-- Presentation view: frame vehicles include load/capacity, still no passenger IDs.
+- Presentation view: a dedicated `PresentedVehicle` live type includes numeric load/capacity, while saved `RustVehicle` retains passenger IDs privately; no new save fields.
 - Host: one shared visual sampling path, two narrow click outcomes, existing pan/camera system.
 - Runtime: one transient selected vehicle ID and narrow selection methods; the shell selector does not call Rust or own mutable copies.
 - UI: one additional Inspect branch, existing Lines controls.
