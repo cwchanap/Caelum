@@ -504,10 +504,11 @@ function drawDragPreview(
     return;
   }
 
-  // A held rejection the stroke has outrun reads as pending at the cursor
+  // A held answer the stroke has outrun reads as pending at the cursor
   // badge; draw nothing rather than the old stroke's tiles so the channels
-  // agree. Held accepted geometry stays — it still describes the gesture.
-  if (!staleHeldRoadPreview(ui)) {
+  // agree. Held accepted geometry stays only while its request still
+  // describes a prefix of the gesture.
+  if (!staleHeldRoadPreview(state, ui)) {
     drawRoadMutationPreview(g, state, ui, gesture.tool === "remove");
   }
 }
@@ -670,7 +671,7 @@ export function buildOverlayRanges(
     // An idle held response belongs to a different tile: the badge reports
     // pending, so draw nothing of the old verdict and let the current tile's
     // hover highlight through instead of suppressing it.
-    if (!staleHeldRoadPreview(ui)) {
+    if (!staleHeldRoadPreview(state, ui)) {
       drawRoadMutationPreview(g, state, ui, ui.activeTool === "remove");
       previewsRendered = ui.roadMutationPreview !== null;
     }

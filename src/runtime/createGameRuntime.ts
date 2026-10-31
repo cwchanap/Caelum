@@ -29,7 +29,11 @@ import {
   type RouteDraft,
   type RouteDraftInteractionError,
 } from "../ui/routeDraft";
-import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
+import {
+  dragMutationPoints,
+  roadClickIntent,
+  roadMutationForUi,
+} from "./roadMutations";
 import {
   createUiState,
   type CommandDestination,
@@ -102,16 +106,6 @@ function restoreRouteDraftCheckpoint(
     previewPending: true,
     preview: null,
   };
-}
-
-function dragMutationPoints(
-  tool: "road" | "track" | "remove",
-  start: Point,
-  current: Point,
-): Point[] {
-  return tool === "remove"
-    ? rectanglePoints(start, current)
-    : axisLockedLine(start, current);
 }
 
 /** Resolves a physically present stop/station by id, so focused navigation
@@ -1150,7 +1144,7 @@ export async function createGameRuntime(
         }
         commit(state, {
           ...ui,
-          roadMutationPreview: response,
+          roadMutationPreview: { ...response, mutation },
           roadMutationPreviewError: null,
         });
       })
@@ -1196,7 +1190,7 @@ export async function createGameRuntime(
    *  Used by tool/preset/arm/drag transitions that may trigger a road preview. */
   const commitWithRoadPreview = (nextUi: UiState): RuntimeSnapshot => {
     if (workingSave.isBusy()) return getSnapshot();
-    const mutation = dead ? null : roadMutationForUi(nextUi);
+    const mutation = dead ? null : roadMutationForUi(state, nextUi);
     if (mutation === null) {
       return commit(state, nextUi);
     }
@@ -1245,66 +1239,12 @@ export async function createGameRuntime(
     isRuntimeDead: () => dead,
   });
 
-  // Road clicks defer the lay-vs-cycle decision to execution time. An earlier
-  // queued dispatch (e.g. a road drag still draining, or a prior click) may
-  // have turned the clicked tile into a road by the time this closure runs, so
-  // re-read `state.map` inside the queued handler rather than capturing the
-  // tile kind up front. The point is captured from the click; only the kind
-  // lookup is deferred, so a tile that has become road routes to
-  // cycleRoadDirection instead of layRoad.
-  const roadClickIntent = (point: Point): GameIntent => {
-    const tile = state.map.tiles.find(
-      (candidate) => candidate.x === point.x && candidate.y === point.y,
-    );
-    return tile?.kind === "road"
-      ? { type: "cycleRoadDirection", point }
-      : { type: "layRoad", point };
-  };
-
-  const roadClickMutation = (point: Point): RoadMutation => {
-    const intent = roadClickIntent(point);
-    return intent.type === "cycleRoadDirection"
-      ? intent
-      : { type: "layRoad", point };
-  };
-
-  const roadMutationForUi = (candidate: UiState): RoadMutation | null => {
-    const gesture = candidate.drag;
-    if (
-      gesture !== null &&
-      (gesture.tool === "road" || gesture.tool === "remove")
-    ) {
-      const points = dragMutationPoints(
-        gesture.tool,
-        gesture.start,
-        gesture.current,
-      );
-      if (gesture.tool === "remove") {
-        return points.length === 1
-          ? { type: "removeAtTile", point: points[0] }
-          : { type: "removeAtTiles", points };
-      }
-      return points.length === 1
-        ? roadClickMutation(points[0])
-        : { type: "layRoadLine", points, preset: candidate.roadPreset };
-    }
-    if (candidate.hoverTile === null) return null;
-    if (candidate.activeTool === "road") {
-      return roadClickMutation(candidate.hoverTile);
-    }
-    if (candidate.activeTool === "roundabout") {
-      return {
-        type: "placeRoundabout",
-        origin: candidate.hoverTile,
-        size: candidate.roundaboutSize,
-      };
-    }
-    if (candidate.activeTool === "remove") {
-      return { type: "removeAtTile", point: candidate.hoverTile };
-    }
-    return null;
-  };
-
+  // Road clicks defer the lay-vs-cycle decision to execution time via
+  // `enqueueComputedDispatch` below: an earlier queued dispatch (e.g. a road
+  // drag still draining, or a prior click) may have turned the clicked tile
+  // into a road by the time that closure runs, so `roadClickIntent` re-reads
+  // `state.map` inside the queued handler rather than capturing the tile kind
+  // up front.
   const intentForToolClick = (point: Point): GameIntent | null => {
     if (ui.selectedBuilding !== null) {
       return {
@@ -1620,7 +1560,9 @@ export async function createGameRuntime(
         if (gesture.tool === "road") {
           // A zero-length road drag is a tap: defer the lay-vs-cycle decision
           // to execution time so the tile kind reflects drained queued updates.
-          return enqueueComputedDispatch(() => roadClickIntent(points[0]));
+          return enqueueComputedDispatch(() =>
+            roadClickIntent(state, points[0]),
+          );
         }
         const intent = intentForToolClick(points[0]);
         return intent === null ? commit(state, ui) : enqueueDispatch(intent);
@@ -1713,7 +1655,7 @@ export async function createGameRuntime(
           roadMutationPreview: null,
           roadMutationPreviewError: null,
         });
-        return enqueueComputedDispatch(() => roadClickIntent(point));
+        return enqueueComputedDispatch(() => roadClickIntent(state, point));
       }
 
       if (ui.activeTool === "roundabout") {
@@ -1974,7 +1916,7 @@ export async function createGameRuntime(
         roadPreviewGeneration: generation,
       };
       const mutation =
-        point === null || dead ? null : roadMutationForUi(nextUi);
+        point === null || dead ? null : roadMutationForUi(state, nextUi);
       if (mutation === null) {
         return commit(state, {
           ...nextUi,
@@ -2004,7 +1946,7 @@ export async function createGameRuntime(
           ui.roadPreviewGeneration !== generation
         )
           return;
-        const currentMutation = roadMutationForUi(ui);
+        const currentMutation = roadMutationForUi(state, ui);
         if (currentMutation === null) return;
         sendRoadMutationPreviewRequest(currentMutation, generation);
       }, hoverPreviewDebounceMs);

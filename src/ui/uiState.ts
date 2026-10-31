@@ -10,7 +10,10 @@ import type {
   Tool,
 } from "../domain/types";
 import type { BuildGroup } from "../domain/catalog/buildGroups";
-import type { RoadMutationPreviewResponse } from "../runtime/backend/types";
+import type {
+  RoadMutation,
+  RoadMutationPreviewResponse,
+} from "../runtime/backend/types";
 import type { RouteDraft, RouteDraftError } from "./routeDraft";
 
 export type RouteDraftCheckpoint = Pick<
@@ -34,6 +37,14 @@ export type RouteDraftNotice = {
 };
 
 export type CommandDestination = "build" | "lines" | "data" | "city";
+
+/** The last resolved road-mutation preview, kept on screen until its
+ *  replacement lands. `mutation` records which request produced it so a
+ *  generation-mismatched answer can prove it still describes the pointer's
+ *  current mutation instead of posing as it — a record without one cannot. */
+export type HeldRoadMutationPreview = RoadMutationPreviewResponse & {
+  mutation?: RoadMutation;
+};
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 export type DragTool = "road" | "track" | "remove" | "area";
@@ -83,7 +94,7 @@ export interface UiState {
   /** Recoverable host failure for the current route preview request. */
   routePreviewHostError: string | null;
   roadPreviewGeneration: number;
-  roadMutationPreview: RoadMutationPreviewResponse | null;
+  roadMutationPreview: HeldRoadMutationPreview | null;
   /** Recoverable host failure for the current road preview request. */
   roadMutationPreviewError: string | null;
   roadDirectionNotice: {
