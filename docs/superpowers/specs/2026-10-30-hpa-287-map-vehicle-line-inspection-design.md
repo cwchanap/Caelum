@@ -44,7 +44,7 @@ The existing Select branch decides in this order:
 
 1. Rendered vehicle hit (except same-tile repeat selection of a present node).
 2. Present stop/station via existing `resolveNodesAtTile(state, point)`, including same-tile cycling; no tombstone is selectable.
-3. Tile-gated line hit; return the line ID as a small decision from `applyUiTileClick` so `handleTileClick` can call existing non-toggle `openServiceControls(routeId)` **after** the busy/tool gates.
+3. Tile-gated line hit; clear any previous vehicle Inspect, and return the line ID as a small decision from `applyUiTileClick` so `handleTileClick` can call existing non-toggle `openServiceControls(routeId)` **after** the busy/tool gates.
 4. Existing building/ordinary tile selection.
 
 The host does **not** call `onVehicleClick`, `onLineClick` or `openServiceControls` itself. Building placement, route editing, click-to-pan/drag and other tools retain their existing precedence.
@@ -60,7 +60,7 @@ After `focusWaitLocation` successfully validates the line, present node and rout
 Implement and review in three **vertical slices in this same PR**: (A) frame + vehicle pick + vehicle Inspect, (B) line path pick, (C) wait-location camera focus. Each slice ends with a working player click.
 
 - Rust's existing no-passenger-IDs projection test also asserts numeric load/capacity; no redundant empty-vehicle fixture.
-- Pure picker tests: zoom/pan hit, miss, nearest of two, and tile-gated line precedence; existing sampler tests cover parked, terminal, corridor and paused positions.
+- Pure picker tests: hit, miss, nearest of two, and tile-gated line precedence; one host test covers zoom/pan coordinate conversion and click-after-pan suppression. Existing sampler tests cover parked, terminal, corridor and paused positions.
 - Pure Select tests: building placement cannot be hijacked, save busy / route draft remain gated, vehicle → same-tile node → stop/station cycle, node wins over line, and vehicle selection clears on tile/tool switch.
 - Selector/UI tests: Bus and Metro labels, current frame load, missing vehicle or broken leg, and opening Lines.
 - Camera tests: active-zoom center, fitted→2× center and one invalid-node no-op. Existing clamp tests cover edges.
