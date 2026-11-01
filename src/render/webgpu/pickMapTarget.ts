@@ -1,4 +1,4 @@
-import type { GameState, Point } from "../../domain/types";
+import type { GameState, PathGeometry, Point } from "../../domain/types";
 import { tileSize } from "../boardTransform";
 import { pointAt } from "../pathGeometry";
 import {
@@ -34,6 +34,22 @@ function center(point: Point): Point {
   };
 }
 
+function stepTiles(position: Point, geometry: PathGeometry): Point[] {
+  const tiles = [position];
+  if (geometry.kind === "line" || geometry.kind === "quadraticBezier") {
+    for (const endpoint of [geometry.from, geometry.to]) {
+      const tile = {
+        x: Math.floor(endpoint.x),
+        y: Math.floor(endpoint.y),
+      };
+      if (!tiles.some((entry) => entry.x === tile.x && entry.y === tile.y)) {
+        tiles.push(tile);
+      }
+    }
+  }
+  return tiles;
+}
+
 function linePickSteps(state: GameState): LinePickStep[] {
   const lines = renderableLines(state);
   const corridors = buildCorridorGroups(lines);
@@ -48,22 +64,10 @@ function linePickSteps(state: GameState): LinePickStep[] {
           line.id,
           corridors,
         ).geometry;
-        const tiles = [step.position];
+        const tiles = stepTiles(step.position, step.geometry);
         const points: Point[] = [];
         for (let index = 0; index <= LINE_STEP_SAMPLES; index += 1) {
-          const point = center(pointAt(presented, index / LINE_STEP_SAMPLES));
-          points.push(point);
-          const stepTile = {
-            x: Math.floor(point.x / tileSize),
-            y: Math.floor(point.y / tileSize),
-          };
-          if (
-            !tiles.some(
-              (entry) => entry.x === stepTile.x && entry.y === stepTile.y,
-            )
-          ) {
-            tiles.push(stepTile);
-          }
+          points.push(center(pointAt(presented, index / LINE_STEP_SAMPLES)));
         }
         steps.push({ lineId: line.id, tiles, points });
       }
