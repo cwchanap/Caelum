@@ -165,7 +165,7 @@ describe("camera", () => {
     );
   });
 
-  it("centers on a world point while preserving the active zoom", () => {
+  it("centers the focused tile's marker while preserving the active zoom", () => {
     const camera = applyCameraAction(
       board,
       map,
@@ -173,12 +173,12 @@ describe("camera", () => {
       { kind: "centerOn", point: { x: 30, y: 20 } },
     );
 
-    expect(camera).toEqual({ zoom: 3, center: { x: 30, y: 20 } });
+    expect(camera).toEqual({ zoom: 3, center: { x: 30.5, y: 20.5 } });
     const transform = getBoardTransform(board, map, camera);
-    expect(transform.offsetX + 30 * tileSize * transform.scale).toBeCloseTo(
+    expect(transform.offsetX + 30.5 * tileSize * transform.scale).toBeCloseTo(
       board.width / 2,
     );
-    expect(transform.offsetY + 20 * tileSize * transform.scale).toBeCloseTo(
+    expect(transform.offsetY + 20.5 * tileSize * transform.scale).toBeCloseTo(
       board.height / 2,
     );
   });
@@ -190,7 +190,7 @@ describe("camera", () => {
       point,
     });
 
-    expect(camera).toEqual({ zoom: 2, center: point });
+    expect(camera).toEqual({ zoom: 2, center: { x: 30.5, y: 20.5 } });
     expect(
       applyCameraAction(
         board,
@@ -198,7 +198,7 @@ describe("camera", () => {
         { zoom: 1, center: { x: 42, y: 27 } },
         { kind: "centerOn", point },
       ),
-    ).toEqual({ zoom: 2, center: point });
+    ).toEqual({ zoom: 2, center: { x: 30.5, y: 20.5 } });
     expect(
       applyCameraAction({ width: 8064, height: 5184 }, map, null, {
         kind: "centerOn",

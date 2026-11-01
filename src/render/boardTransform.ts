@@ -245,7 +245,7 @@ export function applyCameraAction(
       return fittedAsNull(
         clampCamera(board, map, {
           zoom,
-          center: { x: action.point.x, y: action.point.y },
+          center: { x: action.point.x + 0.5, y: action.point.y + 0.5 },
         }),
       );
     }
