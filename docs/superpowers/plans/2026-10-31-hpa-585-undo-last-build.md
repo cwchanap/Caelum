@@ -6,37 +6,43 @@
 
 ## Goal and approach
 
-Deliver Ctrl/Cmd+Z for the most recent successful construction action, exactly once, inside one game hour, with full **actual** refund and conservative route/tile conflict checks. Keep Rust authoritative, WASM and Tauri thin, and use the existing serial gameplay queue, action-feedback banner and keyboard handler. No redo, generalized history or persistence schema bump.
+Deliver one-level Ctrl/Cmd+Z for the most recent successful build, within one in-game hour, refunding **actual spent budget** while preserving running simulation state. Reuse `caelum-core`, the existing network preparation/commit path, generic WASM/Tauri `dispatch`, the gameplay queue, the rejection banner, and existing route-draft keyboard precedence. No command/history framework or persisted undo field.
 
-**Critical clock fact:** one day is `clock::GAME_DAY_SECONDS = 1_200.0` in `GameSnapshot.time`; the undo window is `GAME_DAY_SECONDS / 24.0` (50 engine-time seconds), **not 3,600**.
+**Clock:** `clock::GAME_DAY_SECONDS == 1200.0`; one in-game hour is `GAME_DAY_SECONDS / 24.0 == 50` engine-time units, not 3,600.
 
-## 1. Core tests first: structural undo and the one-hour gate
+**Review resolution:** [PR design review](https://github.com/cwchanap/Caelum/pull/76#issuecomment-6554853715) F1–F5 are incorporated: route outcome check instead of scanning dependent paths; whole-map inverse for map builds; reuse of `transit::remove_at_tile` for placements; candidate preparation split; and an exhaustive intent classifier. The zone conflict check specifically compares changed `area` fields to avoid a false rejection when an existing metro station occupies a road whose direction was changed.
 
-**Files:** new `crates/caelum-core/tests/build_undo.rs` (or extend `engine_topology.rs` if smaller), existing `crates/caelum-core/tests/common/mod.rs`, plus a small `engine.rs` unit test if private ECS inspection is needed.
+## 1. Core tests first: eight representative Rust scenarios
 
-Add player-level tests using `GameEngine::dispatch` and current snapshot/budget, not internal undo internals:
+**Files:** `crates/caelum-core/tests/build_undo.rs` (or existing engine tests if shorter). Use actual `GameEngine::dispatch`, `GameplayUpdateResult.applied`, and snapshots; avoid a test fixture matrix for every construction intent.
 
-1. Build a multi-point road stroke near an existing road. Assert undo restores original tile connections, any automatic-junction structures and exact paid budget; assert the second undo returns an unapplied rejection. A partial stroke must refund only successfully constructed/charged points.
-2. Test representative track, standalone Bus Stop, Metro Station, roundabout, placed building (one multi-tile and one transit-node-creating placement), and zoning rectangle. Check exactly restored authored footprint, with unrelated map/buildings kept. For tombstone restoration, verify pre-build tombstone state is restored rather than deleting an old logical node.
-3. Set Creative mode through a sandbox snapshot/request; assert successful undo leaves budget unchanged rather than adding nominal cost. For Standard, permit time/income between construction and undo and assert refund is added to the *current* budget.
-4. Advance game time just inside, exactly at, and beyond `GAME_DAY_SECONDS / 24.0` (respect pause/speed). Expiry is an unapplied rejection and cannot be used to extract a refund.
-5. Create a route after constructing a needed road, or a line referencing a newly activated stop/station; assert undo rejects with original budget and map retained. Also test a conflicting footprint occupied by later automatic growth/changed entity.
-6. A second successful build replaces the first undo; a successful demolish clears it; a rejected/no-op build preserves the old record. Test the save-capture, restore and reset boundaries.
-7. For an occupied residential building undo, assert the existing ECS building reconciliation keeps population/trips valid; do not copy/rewind an old citizen snapshot.
+1. A road stroke changes nearby connections/automatic junctions; undo restores the whole pre-build `GameMap` and actual budget debit. A second undo returns `NothingToUndo`.
+2. A partially affordable stroke refunds only its actual charged amount, not attempted or skipped tiles.
+3. Undo `PlaceBuilding` for a transit-node building, using existing demolition to remove both building and node and return the actual cost.
+4. At **exactly 50** elapsed simulation-time units undo succeeds; just beyond 50 returns `UndoExpired` without refund. Use the compressed clock, not a wall timer.
+5. A newly authored route/line relies on the new road and would become `path_broken`: undo yields `UndoConflict`, preserving current snapshot, budget and ECS.
+6. Seed time just before a six-game-hour growth boundary, paint zoned land and allow growth onto a changed zone tile within the one-hour undo window. Undo rejects without disturbing the grown building.
+7. Existing connected bus line takes an automatically recomputed shortcut through a newly built road; undo succeeds and the line remains connected using its earlier route. This is the high-value regression guard against the old path-scanner rule.
+8. Save capture consumes the record; subsequent undo is `NothingToUndo` and no undo fields appear in saved JSON.
 
-Tests must exercise the real existing `GameIntent` dispatch path and its `GameplayUpdateResult.applied` behavior. Avoid a combinatorial test matrix for every road preset or rejection branch.
+Reuse `crates/caelum-core/tests/population.rs` for building/ECS demolition behavior and existing route/roundabout tests. Do **not** add redundant per-kind track/stop/roundabout cases, separate Creative-mode cases, tombstone-state equality, restore/reset matrix, or branch-only tests unless a real bug is reproduced.
 
-## 2. Implement a single transient core record
+## 2. Implement the small Rust inverse and candidate-validation seam
 
-**Files:** `crates/caelum-core/src/engine.rs`, a small `crates/caelum-core/src/build_undo.rs` if warranted, `crates/caelum-core/src/lib.rs`, `crates/caelum-core/src/intent.rs`, `crates/caelum-core/src/rejection.rs`.
+**Files:** `crates/caelum-core/src/engine.rs`, `crates/caelum-core/src/intent.rs`, `crates/caelum-core/src/rejection.rs`; `crates/caelum-core/src/build_undo.rs` and `lib.rs` only if a separate tiny module improves readability.
 
-1. Define private `BuildUndo` and `Option<BuildUndo>` on `GameEngine`; initialize to `None` in `from_parts`. The record is not in `GameSnapshot` and is not serialized. Store creation time, amount **actually deducted**, all differing before/after map tiles (including neighbor changes), before/after `road_structures` only when modified, and before/after *authored* additions/reactivations to buildings and transit nodes. Compute the touched footprint from tile and entity deltas. Do not retain full snapshots after capture.
-2. Add the `UndoLastBuild` intent and `NothingToUndo`, `UndoExpired`, `UndoConflict` rejections (names consistent in Rust + TS). If useful, populate `context.point` with the first changed/conflicting tile.
-3. Wrap the current `dispatch` body with a tiny classifier: candidate capture for the ten construction intent variants; record only after an applied commit; successful removal clears without becoming undoable; other intents leave it alone. Preserve the existing `commit_result` versus `commit_network_mutation` behavior for ordinary builds. Do **not** duplicate build rules in the undo module.
-4. Build the inverse against the **current** `GameSnapshot`, not an old snapshot. Before creating it, compare tracked post-build tiles/structure/entities to current values, check footprint occupancy and route/node/service-path dependencies, and check `budget.checked_add(refund)`. Reject atomically on failure. Restore only the changed authored layers and add refund. Use the existing network commit path to compile topology, normalize stop access, recompute routes and reconcile buildings with ECS; clear the record only on success.
-5. A no-op or rejection must not mark gameplay dirty or mutate `self.world`. The core `GameplayUpdateResult` and presentation/scene update continue to supply the existing UI refresh and invalidation logic.
+1. Add private `last_build: Option<BuildUndo>` to `GameEngine`, default `None` in `from_parts`. Store `built_at: f64`, `refund: i32`, and one of two inverses: `RestoreMap(GameMap)` or `Demolish(Point)`. No full GameSnapshot backup, per-tile before/after records, entity diff, route scanner or serialized field.
+2. Add `GameIntent::UndoLastBuild` and Rust rejection codes `NothingToUndo`, `UndoExpired`, `UndoConflict` using the existing tagged/camelCase wire behavior.
+3. **Exhaustively** classify `&GameIntent` with `match` (no wildcard) into map construction, placement construction, demolition, undo and other. A new gameplay intent must force an explicit classification choice at compile time. For an applied map build, retain a clone of the pre-build `self.snapshot.map`; for an applied placement build, retain its point/origin; either stores the **actual** `budget_before - budget_after` refund and the final `self.snapshot.time`. Rejected/no-op builds preserve the previous record. Successful `RemoveAtTile(s)` clear it; other actions leave it alone.
+4. Extract `prepare_network_candidate(&self, snapshot: GameSnapshot) -> GameplayResult<(GameSnapshot, RoadTopology)>` from `commit_network_mutation`: keep the existing stop-access normalization, conditional topology compilation and route recomputation unchanged. Ordinary builds call prepare then `commit_snapshot_and_topology`; undo uses the same preparation before its extra validation. Keep any ECS `reconcile_buildings` call **after** the no-op guard and behind the successful commit.
+5. Undo checks record and elapsed time; expiration drops the record and returns `UndoExpired`. Otherwise clone the **current** snapshot:
+   - For `RestoreMap(before_map)`, reject `UndoConflict` if **a building now occupies a tile whose zone (`area`) would be changed back**, then set only `candidate.map = before_map`. This prevents overwriting autonomous growth but does not falsely reject direction edits under an already placed metro station.
+   - For `Demolish(point)`, call `transit::remove_at_tile` on the current candidate. It already removes a building plus its node (or a standalone stop/station) and uses Missing tombstones where appropriate. A failed demolition is `UndoConflict`. Do not clone or restore old node metadata.
+   - Add refund with `candidate.budget.checked_add(refund)`, rejecting overflow as `UndoConflict`; do not reset budget to its old value.
+6. Run `prepare_network_candidate` **before** any ECS/live-shell mutation. Reject `UndoConflict` only when a bus route/metro line that was `path_broken == false` in the live shell becomes `path_broken == true` after preparation. A route that simply switches back to a different connected path is allowed. Use existing route IDs / flags: no new path or platform dependency scanner.
+7. Only after all checks pass call `commit_snapshot_and_topology` exactly once and clear `last_build`. Rejected conflicts retain the record until expiration. Undo never creates another record.
 
-**Review gate:** verify generated roundabouts/junctions and dual-road-adjacent tile changes are covered by the *authoritative before/after diff*, not only requested stroke points. Verify the station and bus-terminal `PlaceBuilding` paths undo the associated node, including tombstone reuse. Keep this one code path for both hosts.
+**Review gate:** both network and placement inverses operate on **current state**, so they cannot rewind time, vehicles, citizen activity, unrelated buildings or income. A rejected undo must not change topology, world, budget or scene. Tests cover the one meaningful growth overlap and the connected→broken route transition; no speculative stale-map equality tests.
 
 ## 3. Save/restore semantics and shared wire contract
 
@@ -47,7 +53,7 @@ Tests must exercise the real existing `GameIntent` dispatch path and its `Gamepl
 3. Extend the TypeScript `GameIntent` union with `undoLastBuild` and the rejection-code union with the three new cases. Add clear, concise messages in the existing `rejectionMessage`: nothing to undo, expired, and changed footprint/dependent route. Use existing `GameplayRejection` context rather than a new feedback channel.
 4. Verify WASM/JS and Tauri/serde use the same tagged camelCase intent; no extra backend interface, save field or schema version. Existing generic `dispatch` adapters require no branching.
 
-**Review gate:** fail closed on any runtime epoch mismatch before touching last-build state. Preserve candidate-first restore. Save/load with a preexisting last-build record cannot resurrect it.
+**Review gate:** reuse the **existing** Tauri runtime-epoch check before taking/clearing the record; do not add a new epoch mechanism. `from_parts` automatically clears undo on restore/reset; no extra test matrix. Save/load cannot resurrect the record.
 
 ## 4. Add only the world-undo keyboard action
 
@@ -60,14 +66,14 @@ Tests must exercise the real existing `GameIntent` dispatch path and its `Gamepl
 
 **Review gate:** rejected undo returns the existing game scene/budget, surfaces one message and does not accidentally bypass the active-city or save busy guards.
 
-## 5. Focused tests, verification and finish on the same PR
+## 5. Focused UI checks and verification on this PR
 
-**Files:** `tests/runtime/gameRuntime.test.ts`, `tests/runtime/rejectionMessages.test.ts`, `tests/ui/appShell.test.ts` (and existing `tests/ui/routeDraft.test.ts` only if necessary); optional concise `tests/e2e/routes.spec.ts` or a small construction flow if a browser test adds unique value.
+**Files:** `tests/runtime/gameRuntime.test.ts`, `tests/runtime/rejectionMessages.test.ts`, `tests/ui/appShell.test.ts` (plus existing route-draft tests only if needed).
 
-- Runtime fake backend: Ctrl/Cmd+Z world path dispatches exactly one `undoLastBuild`, respects queue/busy, keeps route editor undo priority, and publishes the returned Rust rejection. Do not duplicate the whole Rust inverse matrix in TS tests.
-- App keyboard: input/contenteditable native undo unchanged; route-draft redo unchanged; no active city/New City overlay never issues a world undo.
-- Rejection message cases for the three codes. One browser smoke test may place and undo a road with budget feedback if deterministic; Rust covers structural correctness.
-- Confirm temporary undo does not leak into durable save JSON and both native/browser adapters remain thin.
+- A narrow runtime test confirms that world Ctrl/Cmd+Z dispatches exactly one `undoLastBuild` through the existing queue/busy guard, and rejected results surface through existing feedback.
+- Keyboard assertions preserve route-draft undo/redo, editable input/contenteditable native undo, New City/absent-city gates. No worldwide redo action.
+- Cover three rejection-message cases, reusing current UI components. An optional one-path browser smoke is enough; Rust tests prove the inverse.
+- Save capture does not persist the undo record; both thin adapters dispatch the same Rust intent without special-case host logic.
 
 Run before marking **this PR** ready:
 
@@ -81,18 +87,19 @@ bun run lint
 bun run format:check
 ```
 
-Where useful, run one focused Playwright construction smoke (`bun run test:e2e -- <test-file>`) after the WASM build is current. Do not create a new visual/audio asset task: no new art or SFX is required.
+Only run a focused `bun run test:e2e -- <test-file>` if it adds coverage beyond Rust/runtime. No new image art or SFX task: none is needed.
 
 ## Scope and completion checklist
 
-- [ ] Exactly one undoable successful construction gesture; previous gesture is not still undoable
-- [ ] Actual cash refund, including partial affordability, free edits and Creative mode
-- [ ] One **game** hour, derived from the compressed clock
-- [ ] Structural and route dependency conflicts reject atomically
-- [ ] Unrelated ticks, income, active vehicles, trips and autonomous growth preserved
-- [ ] Successful demolition, reset, save capture and restore invalidate the record
-- [ ] Existing route-draft undo and editable-field native undo unaffected
-- [ ] Browser/WASM + native Tauri use the same core intent; no save schema or backend expansion
-- [ ] Targeted Rust/TS tests pass and this **same** PR is reviewed before implementation is declared done
+- [ ] One temporary `RestoreMap` or `Demolish` record, replaced by the next applied build and cleared by successful demolition
+- [ ] Actual refund (including partial strokes and zero-cost actions) applied to the current budget
+- [ ] One **game** hour (50 engine-time units) with inclusive boundary
+- [ ] Growth on reverted zone and healthy→broken route conflict rejected **before commit**
+- [ ] Existing connected route auto-reroute can be reversed successfully
+- [ ] Time, vehicles, trips, population, other buildings and unrelated money preserved
+- [ ] Save capture, reset, restore and New City clear the record through existing engine lifecycle
+- [ ] Route-draft undo and native text undo unaffected; no redo button/history
+- [ ] WASM/Tauri share one core intent; no schema/version/backend expansion
+- [ ] Eight focused Rust cases and minimal TS smoke/feedback checks pass on **this same PR**
 
 **Explicitly not doing:** generalized reversible commands, deep history, undo demolition, redo, migration/backward compatibility, extra state owners, autosave redesign, new image art/SFX, or a second implementation PR.
