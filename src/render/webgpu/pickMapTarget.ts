@@ -1,23 +1,16 @@
 import type { Point } from "../../domain/types";
 import { tileSize } from "../boardTransform";
 
-/** A drawn world-pixel point a map click can pick: post-cull output of the
- *  frame's vehicle sampling pass. `id` is the presented vehicle id. */
 export interface MapPickSample {
   id: string;
   point: Point;
 }
 
-/** Geometry candidate under a map click; the WebGPU host resolves it from
- *  drawn samples and the runtime decides what it selects or builds.
- *  `lineId` stays null until line geometry joins the candidate. */
 export interface MapPick {
   vehicleId: string | null;
   lineId: string | null;
 }
 
-/** Nearest drawn sample within half a tile of `point`, ordered by squared
- *  distance then id so a pixel-exact tie resolves deterministically. */
 export function pickMapTarget(
   samples: readonly MapPickSample[],
   point: Point,

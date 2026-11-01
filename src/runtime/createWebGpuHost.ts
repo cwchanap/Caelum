@@ -7,6 +7,7 @@ import {
   getBoardTransform,
   panCamera,
   syncCanvasSize,
+  tileSize,
   visibleWorldRect,
   zoomCameraAt,
   type BoardTransform,
@@ -69,8 +70,6 @@ export interface WebGpuHostContext {
   /** Runtime-owned scene revision (bumped by `acceptPresentationUpdate`). */
   getSceneRevision: () => number;
   onTick: (deltaSeconds: number) => unknown;
-  /** Click on a map tile; `pick` is the drawn-geometry candidate the host
-   *  resolved (if any) — the runtime decides what it selects or builds. */
   onTileClick: (point: Point, pick?: MapPick | null) => void;
   onHoverTile: (point: Point | null) => void;
   /** Handle a route-draft context menu. Return true to consume the browser menu. */
@@ -175,10 +174,6 @@ export function createWebGpuHostWithRenderer(
 
   let transform: ClipTransform | null = null;
 
-  // Hit targets of the latest on-screen draw: the post-cull vehicle samples
-  // and the board transform they were drawn with. Only a real drawFrame
-  // refreshes them — an offscreen captureFrame must not replace the screen's
-  // pick list — and detach clears them.
   let drawnTargets: {
     samples: MapPickSample[];
     transform: BoardTransform;
@@ -339,9 +334,8 @@ export function createWebGpuHostWithRenderer(
     return out;
   };
 
-  /** Assembles the frame's batches and pick samples from the observed state —
-   *  the frame is the exact input both drawFrame and captureFrame hand to the
-   *  renderer; only drawFrame retains the samples. */
+  /** Assembles the frame's batches from the observed state — the exact input
+   *  both drawFrame and captureFrame hand to the renderer. */
   const buildFrame = (
     nowMs: number,
   ): { frame: WebGpuRenderFrame; samples: MapPickSample[] } => {
@@ -719,24 +713,6 @@ export function createWebGpuHostWithRenderer(
       if (pan === null) nextCanvas.style.cursor = "";
     };
 
-    // Convert click CSS px to world px through the transform the last
-    // presented frame was drawn with, then pick the nearest drawn sample.
-    const pickAt = (event: MouseEvent): MapPick | null => {
-      const targets = drawnTargets;
-      if (targets === null || !(targets.transform.scale > 0)) {
-        return null;
-      }
-      const rect = boardRect();
-      return pickMapTarget(targets.samples, {
-        x:
-          (event.clientX - rect.left - targets.transform.offsetX) /
-          targets.transform.scale,
-        y:
-          (event.clientY - rect.top - targets.transform.offsetY) /
-          targets.transform.scale,
-      });
-    };
-
     const handleClick = (event: MouseEvent): void => {
       if (suppressClick) {
         suppressClick = false;
@@ -746,17 +722,36 @@ export function createWebGpuHostWithRenderer(
         return; // drag tools are driven by pointerdown/up below.
       }
 
-      const point = canvasToTile(
-        nextCanvas,
-        event.clientX,
-        event.clientY,
-        ctx.getState().map,
-        ctx.getCamera(),
-      );
-
-      if (point !== null) {
-        ctx.onTileClick(point, pickAt(event));
+      const rect = boardRect();
+      const cssX = event.clientX - rect.left;
+      const cssY = event.clientY - rect.top;
+      if (cssX < 0 || cssX >= rect.width || cssY < 0 || cssY >= rect.height) {
+        return;
       }
+      const board =
+        drawnTargets?.transform ??
+        getBoardTransform(rect, ctx.getState().map, ctx.getCamera());
+      if (!(board.scale > 0)) {
+        return;
+      }
+      const world = {
+        x: (cssX - board.offsetX) / board.scale,
+        y: (cssY - board.offsetY) / board.scale,
+      };
+      const map = ctx.getState().map;
+      const point = {
+        x: Math.floor(world.x / tileSize),
+        y: Math.floor(world.y / tileSize),
+      };
+      if (
+        point.x < 0 ||
+        point.x >= map.width ||
+        point.y < 0 ||
+        point.y >= map.height
+      ) {
+        return;
+      }
+      ctx.onTileClick(point, pickMapTarget(drawnTargets?.samples ?? [], world));
     };
 
     const handleContextMenu = (event: MouseEvent): void => {

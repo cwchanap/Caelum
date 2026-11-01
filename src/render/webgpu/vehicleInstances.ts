@@ -230,9 +230,7 @@ export interface EncodeVehicleInstancesInput {
 
 /** Interpolates the latest presented vehicles in path space against the
  *  previous accepted state, culls to the viewport plus one tile margin, and
- *  encodes visible instances in the presented (stable vehicle) order. The
- *  `samples` output exposes the same post-cull draw points so a click pick
- *  never needs a second vehicle-position pass. */
+ *  encodes visible instances in the presented (stable vehicle) order. */
 export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
   instances: Float32Array<ArrayBuffer>;
   samples: MapPickSample[];
