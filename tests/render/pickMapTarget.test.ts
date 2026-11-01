@@ -150,6 +150,51 @@ function reconnectingLeg(from: Point): RouteLegPath {
   };
 }
 
+function turningLeg(): RouteLegPath {
+  const path: TransitPath = {
+    kind: "road",
+    steps: [
+      {
+        position: { x: 9, y: 8 },
+        enteringHeading: "east",
+        leavingHeading: "south",
+        movement: "rightTurn",
+        geometry: {
+          kind: "quadraticBezier",
+          from: { x: 9, y: 8 },
+          control: { x: 9.5, y: 8 },
+          to: { x: 9, y: 9 },
+        },
+        travelSeconds: 0.5,
+      },
+      {
+        position: { x: 9, y: 9 },
+        enteringHeading: "south",
+        leavingHeading: "south",
+        movement: "straight",
+        geometry: {
+          kind: "line",
+          from: { x: 9, y: 9 },
+          to: { x: 9, y: 10 },
+        },
+        travelSeconds: 1.25,
+      },
+    ],
+    totalTravelSeconds: 1.75,
+  };
+  return {
+    fromWaypointId: "stop-001",
+    toWaypointId: "stop-002",
+    direction: "outbound",
+    kind: "service",
+    status: "connected",
+    currentPath: path,
+    lastValidPath: path,
+    estimatedSeconds: 1.75,
+    failureReason: null,
+  };
+}
+
 describe("pickMapTarget", () => {
   it("picks the sample inside half a tile", () => {
     const pick = pickMapTarget(
@@ -339,6 +384,24 @@ describe("pickMapTarget line paths", () => {
     ).toEqual({ vehicleId: null, lineId: "route-001" });
     expect(
       pickMapTarget([], state, { x: 490, y: 304 }, { x: 15, y: 9 }),
+    ).toEqual({ vehicleId: null, lineId: "route-001" });
+  });
+
+  it("measures an eligible line's displayed geometry across incoming step curves", () => {
+    let state = corridorState();
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          legs: [turningLeg()],
+        })),
+      },
+    };
+
+    expect(
+      pickMapTarget([], state, { x: 311, y: 289 }, { x: 9, y: 9 }),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 });
