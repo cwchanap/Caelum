@@ -164,4 +164,46 @@ describe("camera", () => {
       null,
     );
   });
+
+  it("centers on a world point while preserving the active zoom", () => {
+    const camera = applyCameraAction(
+      board,
+      map,
+      { zoom: 3, center: { x: 40, y: 30 } },
+      { kind: "centerOn", point: { x: 30, y: 20 } },
+    );
+
+    expect(camera).toEqual({ zoom: 3, center: { x: 30, y: 20 } });
+    const transform = getBoardTransform(board, map, camera);
+    expect(transform.offsetX + 30 * tileSize * transform.scale).toBeCloseTo(
+      board.width / 2,
+    );
+    expect(transform.offsetY + 20 * tileSize * transform.scale).toBeCloseTo(
+      board.height / 2,
+    );
+  });
+
+  it("centers at a bounded 2x zoom from the fitted view", () => {
+    const point = { x: 30, y: 20 };
+    const camera = applyCameraAction(board, map, null, {
+      kind: "centerOn",
+      point,
+    });
+
+    expect(camera).toEqual({ zoom: 2, center: point });
+    expect(
+      applyCameraAction(
+        board,
+        map,
+        { zoom: 1, center: { x: 42, y: 27 } },
+        { kind: "centerOn", point },
+      ),
+    ).toEqual({ zoom: 2, center: point });
+    expect(
+      applyCameraAction({ width: 8064, height: 5184 }, map, null, {
+        kind: "centerOn",
+        point,
+      }),
+    ).toBeNull();
+  });
 });

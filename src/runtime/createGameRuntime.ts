@@ -1886,6 +1886,7 @@ export async function createGameRuntime(
       if (route === undefined) return commit(state, ui);
       const node = presentNodeAt(state, nodeId);
       if (node === null) return commit(state, ui);
+      gameHost.adjustCamera({ kind: "centerOn", point: node.position });
       return commit(state, {
         ...ui,
         activeTool: "inspect",

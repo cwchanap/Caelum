@@ -5762,6 +5762,18 @@ describe("route creation and management", () => {
       expect(backend.intents).toEqual([]);
     });
 
+    it("centers the map camera on the focused wait location", async () => {
+      const { runtime } = await navigationRuntime();
+
+      runtime.focusWaitLocation("route-001", "stop-001");
+
+      expect(lastFakeHost()!.adjustCamera).toHaveBeenCalledTimes(1);
+      expect(lastFakeHost()!.adjustCamera).toHaveBeenCalledWith({
+        kind: "centerOn",
+        point: { x: 14, y: 7 },
+      });
+    });
+
     it("disarms an armed building or area when focusing a wait location", async () => {
       const { backend, runtime } = await navigationRuntime();
 
@@ -5808,6 +5820,7 @@ describe("route creation and management", () => {
 
       expect(snapshot.ui).toBe(before.ui);
       expect(snapshot.ui.routeDraft).not.toBeNull();
+      expect(lastFakeHost()!.adjustCamera).not.toHaveBeenCalled();
     });
 
     it("no-ops focusWaitLocation for a missing route, node, or tombstone", async () => {
@@ -5831,6 +5844,7 @@ describe("route creation and management", () => {
       expect(runtime.focusWaitLocation("route-001", "stop-tomb").ui).toBe(
         before.ui,
       );
+      expect(lastFakeHost()!.adjustCamera).not.toHaveBeenCalled();
     });
 
     it("clears the focused route and stop when the city is replaced", async () => {
