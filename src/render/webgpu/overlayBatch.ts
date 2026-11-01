@@ -197,6 +197,7 @@ function findSelectedBuilding(
   ui: UiState,
 ): GameState["buildings"][number] | undefined {
   if (ui.selectedNodeKind !== null) return undefined;
+  if (ui.selectedVehicleId !== null) return undefined;
   const point = parseSelectedPoint(ui.selectedId);
   if (point === null) return undefined;
   return state.buildings.find((building) =>

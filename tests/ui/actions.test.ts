@@ -14,8 +14,10 @@ import {
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createDraft, selectWaypoint } from "../../src/ui/routeDraft";
 import {
+  addTestBusRoute,
   addTestBusStop,
   addTestMetroStation,
+  assignTestVehicle,
   createTestGameState,
   placeTestBuilding,
 } from "../helpers/gameState";
@@ -195,6 +197,157 @@ describe("applyUiTileClick inspect", () => {
     expect(result.ui.activeCommandDestination).toBeNull();
     expect(result.ui.selectedId).toBe("7,7");
     expect(result.ui.selectedNodeKind).toBe("stop");
+  });
+});
+
+describe("applyUiTileClick vehicle pick", () => {
+  function vehicleState(): GameState {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignTestVehicle(state, "bus", "route-001");
+    return state;
+  }
+
+  function colocatedVehicleState(): GameState {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = withColocatedStopAndStation(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignTestVehicle(state, "bus", "route-001");
+    state = assignTestVehicle(state, "bus", "route-001");
+    return state;
+  }
+
+  const pick = (vehicleId: string | null) => ({ vehicleId, lineId: null });
+
+  it("selects a live vehicle candidate on the clicked tile", () => {
+    const state = vehicleState();
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("vehicle-001"),
+    );
+
+    expect(result.state).toBe(state);
+    expect(result.ui.selectedVehicleId).toBe("vehicle-001");
+    expect(result.ui.selectedId).toBe("10,8");
+    expect(result.ui.selectedNodeKind).toBeNull();
+  });
+
+  it("prefers the vehicle over a present node on the first click, then resumes node cycling on repeats", () => {
+    const state = colocatedVehicleState();
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    let result = applyUiTileClick(
+      state,
+      ui,
+      { x: 7, y: 8 },
+      pick("vehicle-001"),
+    );
+    expect(result.ui.selectedVehicleId).toBe("vehicle-001");
+    expect(result.ui.selectedNodeKind).toBeNull();
+
+    result = applyUiTileClick(
+      state,
+      result.ui,
+      { x: 7, y: 8 },
+      pick("vehicle-002"),
+    );
+    expect(result.ui.selectedVehicleId).toBeNull();
+    expect(result.ui.selectedId).toBe("7,8");
+    expect(result.ui.selectedNodeKind).toBe("stop");
+
+    result = applyUiTileClick(
+      state,
+      result.ui,
+      { x: 7, y: 8 },
+      pick("vehicle-001"),
+    );
+    expect(result.ui.selectedVehicleId).toBeNull();
+    expect(result.ui.selectedNodeKind).toBe("station");
+
+    result = applyUiTileClick(
+      state,
+      result.ui,
+      { x: 7, y: 8 },
+      pick("vehicle-001"),
+    );
+    expect(result.ui.selectedNodeKind).toBe("stop");
+  });
+
+  it("does not select a vehicle while a building placement is armed", () => {
+    const state = vehicleState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedBuilding: "smallHouse" as const,
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("vehicle-001"),
+    );
+
+    expect(result.ui.selectedVehicleId).toBeNull();
+  });
+
+  it("keeps a supplied pick out of route-draft resolution", () => {
+    const state = vehicleState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: createDraft("bus", 1),
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 7, y: 8 },
+      pick("vehicle-001"),
+    );
+
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-001"]);
+    expect(result.ui.selectedVehicleId).toBeNull();
+  });
+
+  it("falls through to ordinary tile selection when the candidate is missing from state", () => {
+    const state = vehicleState();
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 3, y: 3 },
+      pick("vehicle-999"),
+    );
+
+    expect(result.ui.selectedVehicleId).toBeNull();
+    expect(result.ui.selectedId).toBe("3,3");
+    expect(result.ui.selectedNodeKind).toBeNull();
+  });
+
+  it("clears a vehicle selection on an ordinary tile click", () => {
+    const state = vehicleState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedId: "10,8",
+      selectedVehicleId: "vehicle-001",
+    };
+
+    const result = applyUiTileClick(state, ui, { x: 3, y: 3 });
+
+    expect(result.ui.selectedVehicleId).toBeNull();
+    expect(result.ui.selectedId).toBe("3,3");
   });
 });
 

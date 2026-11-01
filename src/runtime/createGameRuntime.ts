@@ -149,6 +149,8 @@ function nextToolUiState(activeTool: Tool, current = createUiState()): UiState {
     selectedId: activeTool === "inspect" ? current.selectedId : null,
     selectedNodeKind:
       activeTool === "inspect" ? current.selectedNodeKind : null,
+    selectedVehicleId:
+      activeTool === "inspect" ? current.selectedVehicleId : null,
     selectedBuilding: null,
     selectedArea: null,
     activeBuildGroup: null,
@@ -183,6 +185,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()): UiState {
     activeTool: "area" as const,
     selectedId: null,
     selectedNodeKind: null,
+    selectedVehicleId: null,
     selectedBuilding: null,
     selectedArea: area,
     activeBuildGroup: null,
@@ -211,6 +214,7 @@ function nextBuildingUiState(
     activeTool: "inspect" as const,
     selectedId: null,
     selectedNodeKind: null,
+    selectedVehicleId: null,
     selectedBuilding,
     selectedArea: null,
     activeBuildGroup: null,
@@ -796,6 +800,7 @@ export async function createGameRuntime(
       ...ui,
       activeTool: route === undefined ? "metroLine" : "busRoute",
       selectedNodeKind: null,
+      selectedVehicleId: null,
       selectedBuilding: null,
       selectedArea: null,
       activeBuildGroup: null,
@@ -914,6 +919,7 @@ export async function createGameRuntime(
               activeTool: "inspect",
               selectedId: null,
               selectedNodeKind: null,
+              selectedVehicleId: null,
               selectedBuilding: null,
               selectedArea: null,
               activeBuildGroup: null,
@@ -1021,6 +1027,7 @@ export async function createGameRuntime(
       activeTool: "inspect",
       selectedId: null,
       selectedNodeKind: null,
+      selectedVehicleId: null,
       selectedBuilding: null,
       selectedArea: null,
       activeBuildGroup: null,
@@ -1608,7 +1615,7 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setSpeed", speed });
     },
-    handleTileClick(point, _pick) {
+    handleTileClick(point, pick) {
       if (dead) return Promise.resolve(getSnapshot());
       if (workingSave.isBusy()) return Promise.resolve(getSnapshot());
       if (ui.routeDraft?.source.kind === "edit") {
@@ -1624,13 +1631,20 @@ export async function createGameRuntime(
             : commitRouteDraft(routeDraft);
         }
       }
+      const isSelectClick =
+        ui.activeTool === "inspect" && ui.selectedBuilding === null;
       if (
-        (ui.activeTool === "inspect" && ui.selectedBuilding === null) ||
+        isSelectClick ||
         ui.activeTool === "busRoute" ||
         ui.activeTool === "metroLine"
       ) {
         const previousDraft = ui.routeDraft;
-        const result = applyUiTileClick(state, ui, point);
+        const result = applyUiTileClick(
+          state,
+          ui,
+          point,
+          isSelectClick ? pick : undefined,
+        );
         if (
           hasPreviewRelevantChange(previousDraft, result.ui.routeDraft) &&
           result.ui.routePreviewError === null
@@ -1874,6 +1888,7 @@ export async function createGameRuntime(
         activeCommandDestination: null,
         selectedId: `${node.position.x},${node.position.y}`,
         selectedNodeKind: node.kind,
+        selectedVehicleId: null,
         selectedRouteId: routeId,
         routeFailureFocus: null,
         selectedBuilding: null,

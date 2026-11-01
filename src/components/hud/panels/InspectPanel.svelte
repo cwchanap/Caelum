@@ -86,6 +86,40 @@
         </div>
       {/each}
     </section>
+  {:else if inspector.kind === "vehicle"}
+    <section class="panel-section vehicle-panel" data-testid="vehicle-panel">
+      <h3 class="section-head"><span class="num">07</span> Vehicle</h3>
+      <p class="brief-id">{inspector.vehicleLabel}</p>
+      <div class="platform-route">
+        <button
+          type="button"
+          class="route-chip"
+          style={`--route-color: ${inspector.lineColor}`}
+          aria-label={`Open service controls for ${inspector.lineName}`}
+          data-testid={`open-service-${inspector.lineId}`}
+          onclick={() => onOpenServiceControls(inspector.lineId)}
+        >
+          {inspector.lineName}
+        </button>
+      </div>
+      <dl>
+        <div class="dispatch-row">
+          <dt class="dispatch-key">Load</dt>
+          <dd
+            class="dispatch-val dispatch-val--mono"
+            data-testid="vehicle-load"
+          >
+            {inspector.riders} / {inspector.capacity}
+          </dd>
+        </div>
+        <div class="dispatch-row">
+          <dt class="dispatch-key">Next</dt>
+          <dd class="dispatch-val" data-testid="vehicle-destination">
+            {inspector.destinationLabel}
+          </dd>
+        </div>
+      </dl>
+    </section>
   {:else}
     <section class="panel-section building-panel" data-testid="building-panel">
       <h3 class="section-head"><span class="num">07</span> Building</h3>
