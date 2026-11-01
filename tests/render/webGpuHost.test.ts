@@ -1382,7 +1382,7 @@ describe("createWebGpuHost map target picking", () => {
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
       { x: 2, y: 2 },
-      { vehicleId: "vehicle-001", lineId: null },
+      { vehicleId: "vehicle-001", lineId: "route-001" },
     );
 
     fx.canvas.dispatchEvent(
@@ -1399,7 +1399,7 @@ describe("createWebGpuHost map target picking", () => {
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 2, y: 2 },
-      { vehicleId: "vehicle-001", lineId: null },
+      { vehicleId: "vehicle-001", lineId: "route-001" },
     );
 
     dispatchPointer(fx.canvas, "pointerdown", { clientX: 160, clientY: 160 });
@@ -1409,6 +1409,30 @@ describe("createWebGpuHost map target picking", () => {
       new MouseEvent("click", { clientX: 200, clientY: 160, bubbles: true }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledTimes(3);
+  });
+
+  it("forwards a tile-gated line candidate, and null on a neighboring tile", () => {
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect" },
+    });
+    fx.fireFrame(0);
+
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 170, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 5, y: 2 },
+      { vehicleId: null, lineId: "route-001" },
+    );
+
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 116, clientY: 96, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 3, y: 3 },
+      null,
+    );
   });
 
   it("still resolves a click the live camera maps off the drawn map", () => {
@@ -1437,7 +1461,7 @@ describe("createWebGpuHost map target picking", () => {
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
       { x: 2, y: 2 },
-      { vehicleId: "vehicle-001", lineId: null },
+      { vehicleId: "vehicle-001", lineId: "route-001" },
     );
   });
 
@@ -1456,7 +1480,7 @@ describe("createWebGpuHost map target picking", () => {
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
       { x: 2, y: 2 },
-      { vehicleId: "vehicle-001", lineId: null },
+      { vehicleId: "vehicle-001", lineId: "route-001" },
     );
   });
 

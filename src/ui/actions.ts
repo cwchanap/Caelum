@@ -80,7 +80,7 @@ export function applyUiTileClick(
   ui: UiState,
   point: Point,
   pick?: MapPick | null,
-): { state: GameState; ui: UiState } {
+): { state: GameState; ui: UiState; lineIdToOpen: string | null } {
   if (
     (ui.activeTool === "busRoute" || ui.activeTool === "metroLine") &&
     ui.routeDraft !== null
@@ -88,7 +88,7 @@ export function applyUiTileClick(
     const preferredKind =
       ui.routeDraft.mode === "bus" ? ("stop" as const) : ("station" as const);
     const resolved = resolveNodeAtTile(state, point, preferredKind);
-    if (resolved === null) return { state, ui };
+    if (resolved === null) return { state, ui, lineIdToOpen: null };
     const result = applyRouteNodeClick(ui.routeDraft, resolved.node);
     const routeDraftNotice = result.notice ?? null;
     // Generation-stable selection updates preserve persistent preview/host
@@ -126,6 +126,7 @@ export function applyUiTileClick(
               routePreviewError,
               routePreviewHostError,
             },
+      lineIdToOpen: null,
     };
   }
 
@@ -148,10 +149,29 @@ export function applyUiTileClick(
           selectedVehicleId: vehicle.id,
           activeCommandDestination: null,
         },
+        lineIdToOpen: null,
       };
     }
 
     if (nodes.length === 0) {
+      const pickedLineId = ui.selectedBuilding === null ? pick?.lineId : null;
+      const lineIdToOpen =
+        pickedLineId !== null &&
+        pickedLineId !== undefined &&
+        (state.transit.routes.some((route) => route.id === pickedLineId) ||
+          state.transit.metroLines.some((line) => line.id === pickedLineId))
+          ? pickedLineId
+          : null;
+      if (lineIdToOpen !== null) {
+        return {
+          state,
+          ui:
+            ui.selectedVehicleId === null
+              ? ui
+              : { ...ui, selectedVehicleId: null },
+          lineIdToOpen,
+        };
+      }
       return {
         state,
         ui: {
@@ -160,6 +180,7 @@ export function applyUiTileClick(
           selectedNodeKind: null,
           selectedVehicleId: null,
         },
+        lineIdToOpen: null,
       };
     }
 
@@ -179,10 +200,11 @@ export function applyUiTileClick(
         selectedNodeKind,
         selectedVehicleId: null,
       },
+      lineIdToOpen: null,
     };
   }
 
-  return { state, ui };
+  return { state, ui, lineIdToOpen: null };
 }
 
 export { cancelDraftRoute, resolveStationAtTile, resolveStopAtTile };

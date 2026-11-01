@@ -370,6 +370,130 @@ describe("applyUiTileClick vehicle pick", () => {
   });
 });
 
+describe("applyUiTileClick line pick", () => {
+  function lineState(): GameState {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    return state;
+  }
+
+  const pick = (lineId: string | null, vehicleId: string | null = null) => ({
+    vehicleId,
+    lineId,
+  });
+
+  it("returns a line-open decision and clears vehicle Inspect on a line-path tile", () => {
+    const state = lineState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedId: "10,8",
+      selectedVehicleId: "vehicle-001",
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("route-001"),
+    );
+
+    expect(result.lineIdToOpen).toBe("route-001");
+    expect(result.ui.selectedVehicleId).toBeNull();
+    expect(result.state).toBe(state);
+  });
+
+  it("lets a vehicle candidate win over a line candidate", () => {
+    let state = lineState();
+    state = assignTestVehicle(state, "bus", "route-001");
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("route-001", "vehicle-001"),
+    );
+
+    expect(result.lineIdToOpen).toBeNull();
+    expect(result.ui.selectedVehicleId).toBe("vehicle-001");
+  });
+
+  it("lets a present node win over a line candidate on the same tile", () => {
+    const state = lineState();
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 7, y: 8 },
+      pick("route-001"),
+    );
+
+    expect(result.lineIdToOpen).toBeNull();
+    expect(result.ui.selectedId).toBe("7,8");
+    expect(result.ui.selectedNodeKind).toBe("stop");
+  });
+
+  it("ignores a line candidate while a building placement is armed", () => {
+    const state = lineState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedBuilding: "smallHouse" as const,
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("route-001"),
+    );
+
+    expect(result.lineIdToOpen).toBeNull();
+    expect(result.ui.selectedId).toBe("10,8");
+    expect(result.ui.selectedVehicleId).toBeNull();
+  });
+
+  it("keeps a supplied line pick out of route-draft resolution", () => {
+    const state = lineState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: createDraft("bus", 1),
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 15, y: 8 },
+      pick("route-001"),
+    );
+
+    expect(result.lineIdToOpen).toBeNull();
+    expect(result.ui.routeDraft?.waypointIds).toEqual(["stop-002"]);
+  });
+
+  it("falls through to ordinary tile selection on a stale line candidate", () => {
+    const state = lineState();
+    const ui = { ...createUiState(), activeTool: "inspect" as const };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("route-999"),
+    );
+
+    expect(result.lineIdToOpen).toBeNull();
+    expect(result.ui.selectedId).toBe("10,8");
+    expect(result.ui.selectedNodeKind).toBeNull();
+  });
+});
+
 describe("applyUiTileClick route drafts", () => {
   function busDraftState(): { state: GameState; ui: UiState } {
     let state = createTestGameState();

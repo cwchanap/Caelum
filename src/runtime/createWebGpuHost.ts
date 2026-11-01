@@ -176,6 +176,7 @@ export function createWebGpuHostWithRenderer(
 
   let drawnTargets: {
     samples: MapPickSample[];
+    state: GameState;
     transform: BoardTransform;
   } | null = null;
 
@@ -338,7 +339,11 @@ export function createWebGpuHostWithRenderer(
    *  both drawFrame and captureFrame hand to the renderer. */
   const buildFrame = (
     nowMs: number,
-  ): { frame: WebGpuRenderFrame; samples: MapPickSample[] } => {
+  ): {
+    frame: WebGpuRenderFrame;
+    samples: MapPickSample[];
+    state: GameState;
+  } => {
     const { latest, previous, alpha } = observeState(nowMs);
     const ui = ctx.getUi();
     const revision = ctx.getSceneRevision();
@@ -386,6 +391,7 @@ export function createWebGpuHostWithRenderer(
         ],
       },
       samples,
+      state: latest,
     };
   };
 
@@ -394,9 +400,9 @@ export function createWebGpuHostWithRenderer(
       return;
     }
     const board = syncSize(canvas);
-    const { frame, samples } = buildFrame(nowMs);
+    const { frame, samples, state: drawn } = buildFrame(nowMs);
     renderer.render(frame);
-    drawnTargets = { samples, transform: board };
+    drawnTargets = { samples, state: drawn, transform: board };
   };
 
   const captureFrame = (): Promise<WebGpuCapturedFrame | null> => {
@@ -751,7 +757,15 @@ export function createWebGpuHostWithRenderer(
       ) {
         return;
       }
-      ctx.onTileClick(point, pickMapTarget(drawnTargets?.samples ?? [], world));
+      ctx.onTileClick(
+        point,
+        pickMapTarget(
+          drawnTargets?.samples ?? [],
+          drawnTargets?.state ?? null,
+          world,
+          point,
+        ),
+      );
     };
 
     const handleContextMenu = (event: MouseEvent): void => {
