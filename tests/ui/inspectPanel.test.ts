@@ -6,6 +6,7 @@ import type {
   ShellBuildingInspectorState,
   ShellInspectorState,
   ShellTransitInspectorState,
+  ShellVehicleInspectorState,
 } from "../../src/runtime/types";
 
 const OFFICE_PATTERN = BUILDING_CATALOG.officeTower.workPattern ?? null;
@@ -218,5 +219,71 @@ describe("InspectPanel platform wait evidence", () => {
       "route-001",
       "stop-001-p1",
     );
+  });
+});
+
+describe("InspectPanel vehicle", () => {
+  function vehicleInspector(
+    overrides: Partial<ShellVehicleInspectorState> = {},
+  ): ShellVehicleInspectorState {
+    return {
+      kind: "vehicle",
+      vehicleId: "vehicle-001",
+      vehicleLabel: "Bus",
+      lineId: "route-001",
+      lineName: "Bus 1",
+      lineColor: "#2563eb",
+      riders: 4,
+      capacity: 30,
+      destinationLabel: "Stop B",
+      ...overrides,
+    };
+  }
+
+  it("shows the bus line, live load and next stop", () => {
+    renderPanel(vehicleInspector());
+
+    expect(screen.getByTestId("vehicle-panel")).toHaveTextContent("Bus");
+    expect(
+      screen.getByRole("button", { name: "Open service controls for Bus 1" }),
+    ).toHaveTextContent("Bus 1");
+    expect(screen.getByTestId("vehicle-load")).toHaveTextContent("4 / 30");
+    expect(screen.getByTestId("vehicle-destination")).toHaveTextContent(
+      "Stop B",
+    );
+  });
+
+  it("shows metro display", () => {
+    renderPanel(
+      vehicleInspector({
+        vehicleLabel: "Metro",
+        lineId: "metro-001",
+        lineName: "Metro 1",
+        destinationLabel: "Station B",
+      }),
+    );
+
+    expect(screen.getByTestId("vehicle-panel")).toHaveTextContent("Metro");
+    expect(screen.getByTestId("vehicle-destination")).toHaveTextContent(
+      "Station B",
+    );
+  });
+
+  it("shows an em dash for an unavailable destination", () => {
+    renderPanel(vehicleInspector({ destinationLabel: "—" }));
+
+    expect(screen.getByTestId("vehicle-destination")).toHaveTextContent("—");
+  });
+
+  it("opens Lines via the line chip", async () => {
+    const onOpenServiceControls = vi.fn();
+    renderPanel(vehicleInspector(), { onOpenServiceControls });
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Open service controls for Bus 1" }),
+    );
+
+    expect(onOpenServiceControls).toHaveBeenCalledTimes(1);
+    expect(onOpenServiceControls).toHaveBeenCalledWith("route-001");
   });
 });

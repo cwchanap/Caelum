@@ -80,6 +80,7 @@ export interface UiState {
   activeOverlay: Overlay | null;
   selectedId: string | null;
   selectedNodeKind: "stop" | "station" | null;
+  selectedVehicleId: string | null;
   selectedBuilding: BuildingType | null;
   selectedArea: AreaKind | null;
   /** Open Build drill-down group, or null when showing the command plates. */
@@ -115,6 +116,7 @@ export function createUiState(): UiState {
     activeOverlay: null,
     selectedId: null,
     selectedNodeKind: null,
+    selectedVehicleId: null,
     selectedBuilding: null,
     selectedArea: null,
     activeBuildGroup: null,

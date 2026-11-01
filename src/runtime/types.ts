@@ -117,9 +117,22 @@ export interface ShellBuildingInspectorState {
   currentDestinationDemand: number | null;
 }
 
+export interface ShellVehicleInspectorState {
+  kind: "vehicle";
+  vehicleId: string;
+  vehicleLabel: string;
+  lineId: string;
+  lineName: string;
+  lineColor: string;
+  riders: number;
+  capacity: number;
+  destinationLabel: string;
+}
+
 export type ShellInspectorState =
   | ShellTransitInspectorState
-  | ShellBuildingInspectorState;
+  | ShellBuildingInspectorState
+  | ShellVehicleInspectorState;
 
 export interface RouteEditorWaypointView {
   id: string;

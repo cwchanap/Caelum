@@ -1,5 +1,6 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
 import { isPresentTransitNode } from "../runtime/presentationView";
+import type { MapPick } from "../render/webgpu/pickMapTarget";
 import {
   applyRouteNodeClick,
   cancelDraftRoute,
@@ -78,6 +79,7 @@ export function applyUiTileClick(
   state: GameState,
   ui: UiState,
   point: Point,
+  pick?: MapPick | null,
 ): { state: GameState; ui: UiState } {
   if (
     (ui.activeTool === "busRoute" || ui.activeTool === "metroLine") &&
@@ -129,6 +131,25 @@ export function applyUiTileClick(
 
   if (ui.activeTool === "inspect") {
     const nodes = resolveNodesAtTile(state, point);
+    const isSameTile = ui.selectedId === `${point.x},${point.y}`;
+    const vehicle =
+      ui.selectedBuilding === null && !(isSameTile && nodes.length > 0)
+        ? state.transit.vehicles.find(
+            (candidate) => candidate.id === pick?.vehicleId,
+          )
+        : undefined;
+    if (vehicle !== undefined) {
+      return {
+        state,
+        ui: {
+          ...ui,
+          selectedId: `${point.x},${point.y}`,
+          selectedNodeKind: null,
+          selectedVehicleId: vehicle.id,
+        },
+      };
+    }
+
     if (nodes.length === 0) {
       return {
         state,
@@ -136,11 +157,11 @@ export function applyUiTileClick(
           ...ui,
           selectedId: `${point.x},${point.y}`,
           selectedNodeKind: null,
+          selectedVehicleId: null,
         },
       };
     }
 
-    const isSameTile = ui.selectedId === `${point.x},${point.y}`;
     let selectedNodeKind: "stop" | "station";
     if (isSameTile && nodes.length > 1) {
       const otherNode = nodes.find((n) => n.kind !== ui.selectedNodeKind);
@@ -155,6 +176,7 @@ export function applyUiTileClick(
         ...ui,
         selectedId: `${point.x},${point.y}`,
         selectedNodeKind,
+        selectedVehicleId: null,
       },
     };
   }

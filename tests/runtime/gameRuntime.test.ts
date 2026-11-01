@@ -210,6 +210,68 @@ function snapshotWithColocatedStopAndStation(): RustGameSnapshot {
   });
 }
 
+function snapshotWithVehicle(): RustGameSnapshot {
+  return fullRustSnapshot({
+    transit: {
+      stops: [
+        createStop("stop-001", { x: 14, y: 7 }),
+        createStop("stop-002", { x: 14, y: 8 }),
+      ],
+      stations: [],
+      routes: [
+        {
+          id: "route-001",
+          name: "Bus 1",
+          color: "#2563eb",
+          stopIds: ["stop-001", "stop-002"],
+          vehicleIds: ["vehicle-001"],
+          active: true,
+          pattern: "loop",
+          revision: 0,
+          legs: [
+            {
+              fromWaypointId: "stop-001",
+              toWaypointId: "stop-002",
+              direction: "loop",
+              kind: "service",
+              status: "connected",
+              currentPath: null,
+              lastValidPath: null,
+              estimatedSeconds: 1,
+            },
+            {
+              fromWaypointId: "stop-002",
+              toWaypointId: "stop-001",
+              direction: "loop",
+              kind: "service",
+              status: "connected",
+              currentPath: null,
+              lastValidPath: null,
+              estimatedSeconds: 1,
+            },
+          ],
+          pathBroken: false,
+          targetHeadwaySeconds: null,
+        },
+      ],
+      metroLines: [],
+      vehicles: [
+        {
+          id: "vehicle-001",
+          mode: "bus",
+          lineId: "route-001",
+          capacity: 30,
+          passengerIds: [],
+          itineraryIndex: 0,
+          pathStepIndex: 0,
+          stepProgress: 0,
+          parkedPosition: null,
+        },
+      ],
+    },
+  });
+}
+
 function updateTile(
   map: GameMap,
   point: Point,
@@ -2931,6 +2993,132 @@ describe("Game Runtime", () => {
 
     const onEmpty = await runtime.handleTileClick({ x: 20, y: 20 });
     expect(onEmpty.ui.activeCommandDestination).toBeNull();
+  });
+
+  it("opens vehicle Inspect from a map pick without a backend dispatch", async () => {
+    const backend = backendSpy(snapshotWithVehicle());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("inspect");
+    const snapshot = await runtime.handleTileClick(
+      { x: 5, y: 5 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+
+    expect(snapshot.ui.selectedVehicleId).toBe("vehicle-001");
+    expect(snapshot.ui.selectedId).toBe("5,5");
+    expect(snapshot.ui.selectedNodeKind).toBeNull();
+    expect(backend.intents).toEqual([]);
+    const inspector = snapshot.shell.inspector;
+    if (inspector?.kind !== "vehicle") {
+      throw new Error("expected vehicle inspector");
+    }
+    expect(inspector.lineId).toBe("route-001");
+    expect(inspector.lineName).toBe("Bus 1");
+    expect(inspector.riders).toBe(0);
+    expect(inspector.capacity).toBe(30);
+    expect(inspector.destinationLabel).toBe("Stop B");
+  });
+
+  it("ignores a vehicle pick while a save is busy", async () => {
+    const initial = snapshotWithVehicle();
+    const delegate = createMemoryCitySaveStore();
+    const city = {
+      id: "city-busy-pick",
+      name: "Busy City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    await delegate.createCity({
+      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      savedAt: city.savedAt,
+      snapshot: initial,
+    });
+    const store = createDelayedCitySaveStore(delegate);
+    store.defer("updateCity");
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(initial),
+      saveStore: store,
+      initialCity: city,
+      now: () => "2026-08-08T10:00:00.000Z",
+    });
+
+    const save = runtime.persistence.save();
+    await store.waitForActive("updateCity");
+    expect(runtime.getSnapshot().persistence.busy).toBe(true);
+
+    await runtime.handleTileClick(
+      { x: 5, y: 5 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+
+    expect(runtime.getSnapshot().ui.selectedVehicleId).toBeNull();
+    expect(runtime.getSnapshot().shell.inspector).toBeNull();
+
+    store.releaseNext("updateCity");
+    await save;
+  });
+
+  it("clears vehicle Inspect on an ordinary tile click and a tool switch", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithVehicle()),
+    });
+
+    runtime.setTool("inspect");
+    await runtime.handleTileClick(
+      { x: 5, y: 5 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+    expect(runtime.getSnapshot().ui.selectedVehicleId).toBe("vehicle-001");
+    expect(runtime.getSnapshot().shell.inspector?.kind).toBe("vehicle");
+
+    const tile = await runtime.handleTileClick({ x: 3, y: 3 });
+    expect(tile.ui.selectedVehicleId).toBeNull();
+    expect(tile.shell.inspector).toBeNull();
+
+    await runtime.handleTileClick(
+      { x: 5, y: 5 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+    const switched = runtime.setTool("road");
+    expect(switched.ui.selectedVehicleId).toBeNull();
+    expect(switched.shell.inspector).toBeNull();
+  });
+
+  it("closes vehicle Inspect when the selected vehicle leaves the frame", async () => {
+    const backend = backendSpy({ ...snapshotWithVehicle(), paused: false });
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("inspect");
+    await runtime.handleTileClick(
+      { x: 5, y: 5 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+    expect(runtime.getSnapshot().shell.inspector?.kind).toBe("vehicle");
+
+    backend.setSnapshot({
+      ...snapshotWithVehicle(),
+      paused: false,
+      transit: {
+        ...snapshotWithVehicle().transit,
+        vehicles: [],
+      },
+    });
+    await runtime.tick(0.016);
+
+    expect(runtime.getSnapshot().shell.inspector).toBeNull();
   });
 });
 

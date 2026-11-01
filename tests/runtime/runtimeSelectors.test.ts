@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import { COSTS } from "../../src/domain/catalog/transit";
 import type {
+  GameState,
   ServiceMetrics,
   LegFailureReason,
   RouteLegPath,
@@ -399,6 +400,118 @@ describe("selectShellState inspector", () => {
     const state = createTestGameState();
     const ui = { ...createUiState(), selectedId: "0,0" };
     expect(selectShellState(state, ui).inspector).toBeNull();
+  });
+
+  function inspectVehicle(vehicleId: string) {
+    return {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedId: "10,8",
+      selectedVehicleId: vehicleId,
+    };
+  }
+
+  function busVehicleState(): GameState {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(8, 7, 15));
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignTestVehicle(state, "bus", "route-001");
+    return state;
+  }
+
+  it("emits a bus vehicle inspector with its line, live load and next stop", () => {
+    let state = busVehicleState();
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        vehicles: state.transit.vehicles.map((vehicle) => ({
+          ...vehicle,
+          passengerCount: 5,
+        })),
+      },
+    };
+
+    const inspector = selectShellState(
+      state,
+      inspectVehicle("vehicle-001"),
+    ).inspector;
+
+    expect(inspector).toEqual({
+      kind: "vehicle",
+      vehicleId: "vehicle-001",
+      vehicleLabel: "Bus",
+      lineId: "route-001",
+      lineName: "Bus 1",
+      lineColor: "#e04f39",
+      riders: 5,
+      capacity: 18,
+      destinationLabel: "Stop B",
+    });
+  });
+
+  it("emits a metro vehicle inspector with its line, live load and next station", () => {
+    let state = createTestGameState();
+    state = withTracks(state, pointsOnRow(8, 7, 15));
+    state = addTestMetroStation(state, { x: 7, y: 8 });
+    state = addTestMetroStation(state, { x: 15, y: 8 });
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+    state = assignTestVehicle(state, "metro", "metro-001");
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        vehicles: state.transit.vehicles.map((vehicle) => ({
+          ...vehicle,
+          passengerCount: 12,
+        })),
+      },
+    };
+
+    const inspector = selectShellState(
+      state,
+      inspectVehicle("vehicle-001"),
+    ).inspector;
+
+    expect(inspector).toEqual({
+      kind: "vehicle",
+      vehicleId: "vehicle-001",
+      vehicleLabel: "Metro",
+      lineId: "metro-001",
+      lineName: "Metro 1",
+      lineColor: "#2867b2",
+      riders: 12,
+      capacity: 90,
+      destinationLabel: "Station B",
+    });
+  });
+
+  it("shows an em dash destination when the current leg path is broken", () => {
+    let state = createTestGameState();
+    state = addTestBusStop(state, { x: 7, y: 8 });
+    state = addTestBusStop(state, { x: 15, y: 8 });
+    state = addTestBusRoute(state, ["stop-001", "stop-002"]);
+    state = assignTestVehicle(state, "bus", "route-001");
+
+    const inspector = selectShellState(
+      state,
+      inspectVehicle("vehicle-001"),
+    ).inspector;
+
+    if (inspector?.kind !== "vehicle") {
+      throw new Error("expected vehicle inspector");
+    }
+    expect(inspector.destinationLabel).toBe("—");
+  });
+
+  it("returns null inspector when the selected vehicle is absent", () => {
+    const state = busVehicleState();
+
+    expect(
+      selectShellState(state, inspectVehicle("vehicle-999")).inspector,
+    ).toBeNull();
   });
 });
 
