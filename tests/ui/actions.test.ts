@@ -282,6 +282,25 @@ describe("applyUiTileClick vehicle pick", () => {
     expect(result.ui.selectedNodeKind).toBe("stop");
   });
 
+  it("closes an open command destination so vehicle Inspect mounts", () => {
+    const state = vehicleState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      activeCommandDestination: "data" as const,
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("vehicle-001"),
+    );
+
+    expect(result.ui.selectedVehicleId).toBe("vehicle-001");
+    expect(result.ui.activeCommandDestination).toBeNull();
+  });
+
   it("does not select a vehicle while a building placement is armed", () => {
     const state = vehicleState();
     const ui = {
