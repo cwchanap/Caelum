@@ -1,14 +1,21 @@
 import { describe, expect, it } from "vitest";
 import { pickMapTarget } from "../../src/render/webgpu/pickMapTarget";
 import { tileSize } from "../../src/render/boardTransform";
-import type { GameState } from "../../src/domain/types";
+import type {
+  GameState,
+  Point,
+  RouteLegPath,
+  TransitPath,
+} from "../../src/domain/types";
 import {
   addTestBusRoute,
   addTestBusStop,
+  addTestMetroLine,
+  addTestMetroStation,
   createTestGameState,
   placeTestBuilding,
 } from "../helpers/gameState";
-import { pointsOnRow, withRoads } from "../helpers/mapFixtures";
+import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 
 function corridorState(routeCount = 1): GameState {
   let state = createTestGameState();
@@ -19,6 +26,63 @@ function corridorState(routeCount = 1): GameState {
     state = addTestBusRoute(state, ["stop-001", "stop-002"]);
   }
   return state;
+}
+
+function metroCorridorState(lineCount: number): GameState {
+  let state = createTestGameState();
+  state = withTracks(state, pointsOnRow(8, 7, 15));
+  state = addTestMetroStation(state, { x: 7, y: 8 });
+  state = addTestMetroStation(state, { x: 15, y: 8 });
+  for (let index = 0; index < lineCount; index += 1) {
+    state = addTestMetroLine(state, ["station-001", "station-002"]);
+  }
+  return state;
+}
+
+function uTurnTerminalLeg(terminal: Point): RouteLegPath {
+  const path: TransitPath = {
+    kind: "road",
+    steps: [
+      {
+        position: { x: terminal.x, y: terminal.y },
+        enteringHeading: "east",
+        leavingHeading: "west",
+        movement: "uTurn",
+        geometry: {
+          kind: "quadraticBezier",
+          from: { x: terminal.x, y: terminal.y },
+          control: { x: terminal.x + 0.5, y: terminal.y - 1 },
+          to: { x: terminal.x, y: terminal.y },
+        },
+        travelSeconds: 0.5,
+      },
+    ],
+    totalTravelSeconds: 0.5,
+  };
+  return {
+    fromWaypointId: "stop-002",
+    toWaypointId: "stop-002",
+    direction: "loop",
+    kind: "terminalReversal",
+    status: "connected",
+    currentPath: path,
+    lastValidPath: path,
+    estimatedSeconds: 0.5,
+    failureReason: null,
+  };
+}
+
+function withTerminalUTurn(state: GameState, terminal: Point): GameState {
+  return {
+    ...state,
+    transit: {
+      ...state.transit,
+      routes: state.transit.routes.map((route) => ({
+        ...route,
+        legs: [...route.legs, uTurnTerminalLeg(terminal)],
+      })),
+    },
+  };
 }
 
 describe("pickMapTarget", () => {
@@ -146,5 +210,42 @@ describe("pickMapTarget line paths", () => {
     );
 
     expect(pick).toEqual({ vehicleId: "vehicle-001", lineId: "route-001" });
+  });
+
+  it("does not let an offset terminal U-turn curve claim the neighboring tile", () => {
+    let state = corridorState(2);
+    state = withTerminalUTurn(state, { x: 15, y: 8 });
+    state = placeTestBuilding(state, "smallHouse", { x: 15, y: 7 }, 0);
+
+    expect(
+      pickMapTarget([], state, { x: 502, y: 255 }, { x: 15, y: 7 }),
+    ).toBeNull();
+    expect(
+      pickMapTarget([], state, { x: 502, y: 258 }, { x: 15, y: 8 }),
+    ).toEqual({ vehicleId: null, lineId: "route-001" });
+  });
+
+  it("does not let a wide shared bus corridor's offset lane claim the neighboring tile", () => {
+    let state = corridorState(10);
+    state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
+
+    expect(
+      pickMapTarget([], state, { x: 300, y: 255 }, { x: 9, y: 7 }),
+    ).toBeNull();
+    expect(
+      pickMapTarget([], state, { x: 300, y: 256 }, { x: 9, y: 8 }),
+    ).toEqual({ vehicleId: null, lineId: "route-001" });
+  });
+
+  it("keeps a wide shared metro corridor off the neighboring tile too", () => {
+    let state = metroCorridorState(10);
+    state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
+
+    expect(
+      pickMapTarget([], state, { x: 300, y: 255 }, { x: 9, y: 7 }),
+    ).toBeNull();
+    expect(
+      pickMapTarget([], state, { x: 300, y: 256 }, { x: 9, y: 8 }),
+    ).toEqual({ vehicleId: null, lineId: "metro-001" });
   });
 });
