@@ -168,7 +168,7 @@ export function applyUiTileClick(
           ui:
             ui.selectedVehicleId === null
               ? ui
-              : { ...ui, selectedVehicleId: null },
+              : { ...ui, selectedId: null, selectedVehicleId: null },
           lineIdToOpen,
         };
       }
