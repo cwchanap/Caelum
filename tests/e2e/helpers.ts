@@ -146,6 +146,21 @@ export async function mapTileViewportPoint(
   };
 }
 
+export async function mapWorldViewportPoint(
+  canvas: Locator,
+  world: { x: number; y: number },
+): Promise<{ x: number; y: number }> {
+  const box = await canvas.boundingBox();
+  if (box === null) {
+    throw new Error("Game canvas does not have a visible bounding box");
+  }
+  const { scale, offsetX, offsetY } = await boardTransform(canvas.page(), box);
+  return {
+    x: box.x + offsetX + world.x * scale,
+    y: box.y + offsetY + world.y * scale,
+  };
+}
+
 /**
  * Click the centre of the given map tile on the runtime canvas. The `position`
  * is element-relative (Playwright `click`), so it does not include the canvas's
@@ -161,6 +176,20 @@ export async function clickMapTile(
     throw new Error("Game canvas does not have a visible bounding box");
   }
 
+  await canvas.click({
+    position: { x: point.x - box.x, y: point.y - box.y },
+  });
+}
+
+export async function clickWorldPoint(
+  canvas: Locator,
+  world: { x: number; y: number },
+): Promise<void> {
+  const point = await mapWorldViewportPoint(canvas, world);
+  const box = await canvas.boundingBox();
+  if (box === null) {
+    throw new Error("Game canvas does not have a visible bounding box");
+  }
   await canvas.click({
     position: { x: point.x - box.x, y: point.y - box.y },
   });
