@@ -297,8 +297,8 @@ export async function createGameRuntime(
     getCamera: () => camera,
     getSceneRevision: () => sceneRevision,
     onTick: (deltaSeconds) => api.tick(deltaSeconds),
-    onTileClick: (point) => {
-      api.handleTileClick(point);
+    onTileClick: (point, pick) => {
+      api.handleTileClick(point, pick);
     },
     onRouteDraftContextMenu: () => {
       if (ui.routeDraft === null) {
@@ -1608,7 +1608,7 @@ export async function createGameRuntime(
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({ type: "setSpeed", speed });
     },
-    handleTileClick(point) {
+    handleTileClick(point, _pick) {
       if (dead) return Promise.resolve(getSnapshot());
       if (workingSave.isBusy()) return Promise.resolve(getSnapshot());
       if (ui.routeDraft?.source.kind === "edit") {

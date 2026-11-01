@@ -163,7 +163,7 @@ function encode(options?: {
     alpha: options?.alpha ?? 1,
     paused: options?.paused ?? false,
     viewport: options?.viewport ?? FULL_MAP,
-  });
+  }).instances;
 }
 
 function instancesOf(data: Float32Array): number[][] {
@@ -604,7 +604,7 @@ describe("emphasis, culling, and instance encoding", () => {
         alpha: 1,
         paused: false,
         viewport: FULL_MAP,
-      }),
+      }).instances,
     );
     expect(emphasized[0][8]).toBe(1);
 
@@ -616,7 +616,7 @@ describe("emphasis, culling, and instance encoding", () => {
         alpha: 1,
         paused: false,
         viewport: FULL_MAP,
-      }),
+      }).instances,
     );
     expect(dimmed[0][8]).toBeCloseTo(UNRELATED_ROUTE_OPACITY);
     // RGB stays the route-neutral vehicle color while alpha dims.
@@ -637,7 +637,7 @@ describe("emphasis, culling, and instance encoding", () => {
         alpha: 1,
         paused: false,
         viewport: FULL_MAP,
-      }),
+      }).instances,
     );
     expect(dimmed[0][8]).toBeCloseTo(UNRELATED_ROUTE_OPACITY);
   });
@@ -684,7 +684,7 @@ describe("emphasis, culling, and instance encoding", () => {
         alpha: 1,
         paused: false,
         viewport: { minX: 400, minY: 0, maxX: 432, maxY: 64 },
-      }),
+      }).instances,
     );
     expect(instances).toHaveLength(4);
     expectNear(instances[0][0], 368);
@@ -702,9 +702,36 @@ describe("emphasis, culling, and instance encoding", () => {
         alpha: 1,
         paused: false,
         viewport: { minX: 5000, minY: 5000, maxX: 6000, maxY: 6000 },
-      }),
+      }).instances,
     );
     expect(instances).toHaveLength(0);
+  });
+
+  it("exposes the post-cull draw points as pick samples", () => {
+    const legs = legWithSteps([lineStep({ x: 1, y: 1 }, { x: 40, y: 1 })]);
+    const vehicles = [11, 20].map((tileX, index) =>
+      busVehicle({
+        id: `vehicle-${String(index).padStart(3, "0")}`,
+        stepProgress: (tileX - 1) / 39,
+      }),
+    );
+    const latest = stateWithVehicles(legs, vehicles);
+    const { instances, samples } = encodeVehicleInstances({
+      previous: null,
+      latest,
+      ui: createUiState(),
+      alpha: 1,
+      paused: false,
+      viewport: { minX: 400, minY: 0, maxX: 432, maxY: 64 },
+    });
+    // Tile 11 (368px) survives the one-tile margin; tile 20 (624px) is culled.
+    expect(samples).toHaveLength(1);
+    expect(samples[0].id).toBe("vehicle-000");
+    expectNear(samples[0].point.x, 368);
+    expectNear(samples[0].point.y, 48);
+    // The sample is the draw point written into the same frame's instance row.
+    expect(samples[0].point.x).toBe(instances[0]);
+    expect(samples[0].point.y).toBe(instances[1]);
   });
 
   it("encodes in presented order without re-sorting", () => {
@@ -740,7 +767,7 @@ describe("emphasis, culling, and instance encoding", () => {
           maxX: state.map.width * tileSize,
           maxY: state.map.height * tileSize,
         },
-      }),
+      }).instances,
     );
     expect(instances).toHaveLength(5000);
   });
@@ -764,7 +791,7 @@ describe("emphasis, culling, and instance encoding", () => {
         alpha: 1,
         paused: false,
         viewport: { minX: 3568, minY: 0, maxX: 16272, maxY: 100 },
-      }),
+      }).instances,
     );
     expect(instances).toHaveLength(400);
     // First kept vehicle is index 109: x = 32*109 + 48.
@@ -786,7 +813,7 @@ describe("emphasis, culling, and instance encoding", () => {
         maxX: state.map.width * tileSize,
         maxY: state.map.height * tileSize,
       },
-    });
+    }).instances;
     expect(instances.length / VEHICLE_INSTANCE_FLOATS).toBe(5000);
 
     const { device, passes, writes } = createFakeDevice();
@@ -881,7 +908,7 @@ describe("corridor-offset lane sampling", () => {
         alpha: 1,
         paused: false,
         viewport: FULL_MAP,
-      }),
+      }).instances,
     );
 
     expect(instances).toHaveLength(2);
@@ -932,7 +959,7 @@ describe("corridor-offset lane sampling", () => {
         alpha: 0.5,
         paused: false,
         viewport: FULL_MAP,
-      }),
+      }).instances,
     );
 
     expect(instances).toHaveLength(1);

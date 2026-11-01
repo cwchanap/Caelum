@@ -9,6 +9,7 @@ import {
   syncCanvasSize,
   visibleWorldRect,
   zoomCameraAt,
+  type BoardTransform,
   type Camera,
   type CameraAction,
 } from "../render/boardTransform";
@@ -23,6 +24,11 @@ import {
   encodeVehicleInstances,
   interpolationAlpha,
 } from "../render/webgpu/vehicleInstances";
+import {
+  pickMapTarget,
+  type MapPick,
+  type MapPickSample,
+} from "../render/webgpu/pickMapTarget";
 import {
   createWebGpuRenderer,
   VEHICLE_INSTANCE_FLOATS,
@@ -63,7 +69,9 @@ export interface WebGpuHostContext {
   /** Runtime-owned scene revision (bumped by `acceptPresentationUpdate`). */
   getSceneRevision: () => number;
   onTick: (deltaSeconds: number) => unknown;
-  onTileClick: (point: Point) => void;
+  /** Click on a map tile; `pick` is the drawn-geometry candidate the host
+   *  resolved (if any) — the runtime decides what it selects or builds. */
+  onTileClick: (point: Point, pick?: MapPick | null) => void;
   onHoverTile: (point: Point | null) => void;
   /** Handle a route-draft context menu. Return true to consume the browser menu. */
   onRouteDraftContextMenu: () => boolean;
@@ -167,6 +175,15 @@ export function createWebGpuHostWithRenderer(
 
   let transform: ClipTransform | null = null;
 
+  // Hit targets of the latest on-screen draw: the post-cull vehicle samples
+  // and the board transform they were drawn with. Only a real drawFrame
+  // refreshes them — an offscreen captureFrame must not replace the screen's
+  // pick list — and detach clears them.
+  let drawnTargets: {
+    samples: MapPickSample[];
+    transform: BoardTransform;
+  } | null = null;
+
   // Unexpected device loss is terminal: one loud fatal error, no recreation,
   // no Canvas fallback. A deliberate destroy() loss is ignored.
   void renderer.lost.then((info) => {
@@ -242,7 +259,7 @@ export function createWebGpuHostWithRenderer(
     return routeCache.vertices;
   };
 
-  const syncSize = (target: HTMLCanvasElement): void => {
+  const syncSize = (target: HTMLCanvasElement): BoardTransform => {
     let cssWidth: number;
     let cssHeight: number;
     if (hasObservedSize) {
@@ -273,6 +290,7 @@ export function createWebGpuHostWithRenderer(
       oy: 1 - (2 * board.offsetY * dpr) / pixelHeight,
     };
     renderer.resize(pixelWidth, pixelHeight);
+    return board;
   };
 
   const transformVertices = (
@@ -321,15 +339,18 @@ export function createWebGpuHostWithRenderer(
     return out;
   };
 
-  /** Assembles the frame's batches from the observed state — the exact input
-   *  both drawFrame and captureFrame hand to the renderer. */
-  const buildFrame = (nowMs: number): WebGpuRenderFrame => {
+  /** Assembles the frame's batches and pick samples from the observed state —
+   *  the frame is the exact input both drawFrame and captureFrame hand to the
+   *  renderer; only drawFrame retains the samples. */
+  const buildFrame = (
+    nowMs: number,
+  ): { frame: WebGpuRenderFrame; samples: MapPickSample[] } => {
     const { latest, previous, alpha } = observeState(nowMs);
     const ui = ctx.getUi();
     const revision = ctx.getSceneRevision();
     const overlays = buildOverlayRanges(latest, ui);
     const map = latest.map;
-    const instances = encodeVehicleInstances({
+    const { instances, samples } = encodeVehicleInstances({
       previous,
       latest,
       ui,
@@ -343,31 +364,34 @@ export function createWebGpuHostWithRenderer(
       ),
     });
     return {
-      solids: [
-        {
-          role: "structural",
-          vertices: transformVertices(sceneVertices(latest, revision)),
-        },
-        {
-          role: "dynamic",
-          vertices: transformVertices(overlays.underRoutes),
-        },
-        {
-          role: "route",
-          vertices: transformVertices(routeVertices(latest, ui, revision)),
-        },
-        {
-          role: "dynamic",
-          vertices: transformVertices(overlays.routeDraft),
-        },
-      ],
-      vehicles: [{ instances: transformInstances(instances) }],
-      overVehicles: [
-        {
-          role: "dynamic",
-          vertices: transformVertices(overlays.overVehicles),
-        },
-      ],
+      frame: {
+        solids: [
+          {
+            role: "structural",
+            vertices: transformVertices(sceneVertices(latest, revision)),
+          },
+          {
+            role: "dynamic",
+            vertices: transformVertices(overlays.underRoutes),
+          },
+          {
+            role: "route",
+            vertices: transformVertices(routeVertices(latest, ui, revision)),
+          },
+          {
+            role: "dynamic",
+            vertices: transformVertices(overlays.routeDraft),
+          },
+        ],
+        vehicles: [{ instances: transformInstances(instances) }],
+        overVehicles: [
+          {
+            role: "dynamic",
+            vertices: transformVertices(overlays.overVehicles),
+          },
+        ],
+      },
+      samples,
     };
   };
 
@@ -375,8 +399,10 @@ export function createWebGpuHostWithRenderer(
     if (canvas === null) {
       return;
     }
-    syncSize(canvas);
-    renderer.render(buildFrame(nowMs));
+    const board = syncSize(canvas);
+    const { frame, samples } = buildFrame(nowMs);
+    renderer.render(frame);
+    drawnTargets = { samples, transform: board };
   };
 
   const captureFrame = (): Promise<WebGpuCapturedFrame | null> => {
@@ -386,7 +412,7 @@ export function createWebGpuHostWithRenderer(
     // Same sizing/transform prep as drawFrame so the capture is in the same
     // device-pixel space as the presented canvas.
     syncSize(canvas);
-    return renderer.captureFrame(buildFrame(performance.now()));
+    return renderer.captureFrame(buildFrame(performance.now()).frame);
   };
 
   const cancelPendingFrame = (): void => {
@@ -693,6 +719,24 @@ export function createWebGpuHostWithRenderer(
       if (pan === null) nextCanvas.style.cursor = "";
     };
 
+    // Convert click CSS px to world px through the transform the last
+    // presented frame was drawn with, then pick the nearest drawn sample.
+    const pickAt = (event: MouseEvent): MapPick | null => {
+      const targets = drawnTargets;
+      if (targets === null || !(targets.transform.scale > 0)) {
+        return null;
+      }
+      const rect = boardRect();
+      return pickMapTarget(targets.samples, {
+        x:
+          (event.clientX - rect.left - targets.transform.offsetX) /
+          targets.transform.scale,
+        y:
+          (event.clientY - rect.top - targets.transform.offsetY) /
+          targets.transform.scale,
+      });
+    };
+
     const handleClick = (event: MouseEvent): void => {
       if (suppressClick) {
         suppressClick = false;
@@ -711,7 +755,7 @@ export function createWebGpuHostWithRenderer(
       );
 
       if (point !== null) {
-        ctx.onTileClick(point);
+        ctx.onTileClick(point, pickAt(event));
       }
     };
 
@@ -976,6 +1020,7 @@ export function createWebGpuHostWithRenderer(
       surfaceHost = null;
       activeDetach = null;
       retrackPointer = null;
+      drawnTargets = null;
     }
 
     function teardown(): void {

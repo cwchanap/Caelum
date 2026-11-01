@@ -361,7 +361,7 @@ describe("createWebGpuHost lifecycle", () => {
       new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
     );
 
-    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 }, null);
   });
 
   it("click on drag tool does not call onTileClick", () => {
@@ -396,7 +396,7 @@ describe("createWebGpuHost lifecycle", () => {
     canvas.dispatchEvent(
       new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
     );
-    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 }, null);
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 2, y: 3 });
   });
 
@@ -735,7 +735,7 @@ describe("createWebGpuHost lifecycle", () => {
     secondCanvas!.dispatchEvent(
       new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
     );
-    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 });
+    expect(callbacks.onTileClick).toHaveBeenCalledWith({ x: 2, y: 3 }, null);
 
     host.stop();
   });
@@ -1365,6 +1365,100 @@ describe("createWebGpuHost observed vehicle history", () => {
     const latestX = (2 + 3 * 0.5) * tileSize + tileSize / 2;
     expect(worldX).toBeCloseTo(latestX, 3);
     vi.unstubAllGlobals();
+  });
+});
+
+describe("createWebGpuHost map target picking", () => {
+  it("picks the drawn vehicle under a zoomed click, and suppresses after a pan", () => {
+    // Zoom 2 centered at tile (7, 4.5): zero offsets, so world px map to CSS
+    // px at 2x and the paused bus drawn at world (80, 80) sits at CSS
+    // (160, 160).
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect" },
+      camera: { zoom: 2, center: { x: 7, y: 4.5 } },
+    });
+    fx.fireFrame(0);
+
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 160, clientY: 160, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
+      { x: 2, y: 2 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+
+    // A click away from every drawn sample reports a null candidate.
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 700, clientY: 400, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 10, y: 6 },
+      null,
+    );
+
+    // The pick converts through the drawn transform, not the live camera: a
+    // camera pan with no frame drawn yet still picks where the vehicle is
+    // painted while the tile resolves under the new camera.
+    fx.host.adjustCamera({ kind: "pan", x: 1, y: 0 });
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 160, clientY: 160, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 5, y: 2 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+
+    // A pointer pan still swallows the click that follows its release.
+    dispatchPointer(fx.canvas, "pointerdown", { clientX: 160, clientY: 160 });
+    dispatchPointer(fx.canvas, "pointermove", { clientX: 200, clientY: 160 });
+    dispatchPointer(fx.canvas, "pointerup", { clientX: 200, clientY: 160 });
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 200, clientY: 160, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenCalledTimes(3);
+  });
+
+  it("keeps the screen's pick targets across an offscreen capture", async () => {
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect" },
+    });
+    fx.fireFrame(0);
+
+    // The capture builds a frame from a vehicle-less state offscreen; the
+    // retained pick list still mirrors the last presented frame.
+    fx.setState(createTestGameState());
+    await fx.host.captureFrame();
+
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
+      { x: 2, y: 2 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+  });
+
+  it("clears pick targets on detach so a remount starts empty", () => {
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect" },
+    });
+    fx.fireFrame(0);
+
+    const secondHost = document.createElement("div");
+    document.body.appendChild(secondHost);
+    fx.host.mount(secondHost);
+    const canvas = secondHost.querySelector("canvas") as HTMLCanvasElement;
+
+    canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 2, y: 2 },
+      null,
+    );
   });
 });
 

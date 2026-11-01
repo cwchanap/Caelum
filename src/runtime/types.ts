@@ -27,6 +27,7 @@ import type {
   SandboxResetError,
 } from "./backend/types";
 import type { WebGpuCapturedFrame } from "../render/webgpu/renderer";
+import type { MapPick } from "../render/webgpu/pickMapTarget";
 import type { Camera, CameraAction } from "../render/boardTransform";
 import type {
   RuntimePersistenceController,
@@ -292,7 +293,10 @@ export interface RuntimeController {
   setOverlay: (overlay: Overlay | null) => RuntimeSnapshot;
   togglePause: () => RuntimeCommandResult;
   setSpeed: (speed: GameState["speed"]) => RuntimeCommandResult;
-  handleTileClick: (point: Point) => RuntimeCommandResult;
+  handleTileClick: (
+    point: Point,
+    pick?: MapPick | null,
+  ) => RuntimeCommandResult;
   assignRouteToPlatform: (
     nodeId: string,
     routeId: string,
