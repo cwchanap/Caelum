@@ -469,6 +469,8 @@ export function assignTestVehicle(
     id,
     mode,
     lineId,
+    capacity: mode === "bus" ? 18 : 90,
+    passengerCount: 0,
     itineraryIndex: 0,
     pathStepIndex: 0,
     stepProgress: 0,

@@ -349,6 +349,8 @@ export interface Vehicle {
   id: string;
   mode: "bus" | "metro";
   lineId: string;
+  capacity: number;
+  passengerCount: number;
   itineraryIndex: number;
   pathStepIndex: number;
   stepProgress: number;

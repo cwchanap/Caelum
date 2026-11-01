@@ -69,6 +69,8 @@ function busVehicle(overrides: Partial<Vehicle> = {}): Vehicle {
     id: "vehicle-001",
     mode: "bus",
     lineId: "route-001",
+    capacity: 18,
+    passengerCount: 0,
     itineraryIndex: 0,
     pathStepIndex: 0,
     stepProgress: 0,

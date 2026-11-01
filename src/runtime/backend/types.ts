@@ -74,7 +74,7 @@ export interface RustMetroLine extends Omit<
 
 export interface RustVehicle extends Omit<
   Vehicle,
-  "parkedPosition" | "capacity" | "passengerIds"
+  "parkedPosition" | "capacity" | "passengerIds" | "passengerCount"
 > {
   capacity: number;
   passengerIds: string[];
@@ -226,7 +226,7 @@ export interface PresentationMetroLine extends Omit<
   legs: RustRouteLegPath[];
 }
 
-/** Frame vehicle row: cursor data without latent passenger/capacity payloads. */
+/** Frame vehicle row: cursor data plus occupancy scalars, without latent passenger IDs. */
 export interface PresentationVehicle extends Omit<Vehicle, "parkedPosition"> {
   parkedPosition: TripPosition | null | undefined;
 }
