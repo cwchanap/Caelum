@@ -204,6 +204,8 @@ pub struct VehiclePresentation {
     pub id: String,
     pub mode: TransitMode,
     pub line_id: String,
+    pub capacity: u16,
+    pub passenger_count: usize,
     pub itinerary_index: usize,
     pub path_step_index: usize,
     pub step_progress: f64,
@@ -324,6 +326,8 @@ fn project_frame(snapshot: &GameSnapshot, population: &PopulationAggregates) -> 
                 id: vehicle.id.clone(),
                 mode: vehicle.mode,
                 line_id: vehicle.line_id.clone(),
+                capacity: vehicle.capacity,
+                passenger_count: vehicle.passenger_ids.len(),
                 itinerary_index: vehicle.itinerary_index,
                 path_step_index: vehicle.path_step_index,
                 step_progress: vehicle.step_progress,
@@ -828,6 +832,10 @@ mod tests {
                 "presentation JSON contains forbidden key {forbidden}"
             );
         }
+
+        let vehicle = &value["frame"]["vehicles"][0];
+        assert_eq!(vehicle["passengerCount"], serde_json::json!(1));
+        assert_eq!(vehicle["capacity"], serde_json::json!(18));
     }
 
     fn collect_keys(value: &serde_json::Value, keys: &mut Vec<String>) {
@@ -874,6 +882,8 @@ mod tests {
                 id: "vehicle-001".to_string(),
                 mode: TransitMode::Metro,
                 line_id: "metro-001".to_string(),
+                capacity: 80,
+                passenger_count: 1,
                 itinerary_index: 2,
                 path_step_index: 3,
                 step_progress: 0.5,

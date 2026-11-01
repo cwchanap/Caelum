@@ -139,12 +139,8 @@ export function createPresentationUpdate(
       trafficFlow: [],
       demandFlow: [],
       vehicles: snapshot.transit.vehicles.map((vehicle) => {
-        const {
-          capacity: _capacity,
-          passengerIds: _passengerIds,
-          ...rest
-        } = vehicle;
-        return rest;
+        const { passengerIds, ...rest } = vehicle;
+        return { ...rest, passengerCount: passengerIds.length };
       }),
       serviceMetrics: [
         ...snapshot.transit.routes.flatMap((route) =>
