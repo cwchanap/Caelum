@@ -1,14 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { Point } from "../../src/domain/types";
 import { tileSize } from "../../src/render/boardTransform";
-import {
-  pickMapTarget,
-  type MapPickSample,
-} from "../../src/render/webgpu/pickMapTarget";
-import { presentationPath } from "../../src/render/webgpu/transitBatch";
+import type { MapPickSample } from "../../src/render/webgpu/pickMapTarget";
 import { encodeVehicleInstances } from "../../src/render/webgpu/vehicleInstances";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
-import { resolveNodesAtTile } from "../../src/ui/actions";
 import {
   clickMapTile,
   clickWorldPoint,
@@ -24,6 +18,11 @@ const ROUTE_STOPS = [
   { x: 3, y: 3 },
   { x: 7, y: 3 },
   { x: 11, y: 3 },
+] as const;
+
+const LINE_PATH_TILES = [
+  { x: 5, y: 4 },
+  { x: 9, y: 4 },
 ] as const;
 
 function pausedVehicleSamples(snapshot: RuntimeSnapshot): MapPickSample[] {
@@ -51,67 +50,19 @@ async function nextFrame(page: Page): Promise<void> {
   );
 }
 
-function linePathClicks(
-  snapshot: RuntimeSnapshot,
-  samples: MapPickSample[],
-  lineId: string,
-): { x: number; y: number }[] {
-  const line =
-    snapshot.state.transit.routes.find((route) => route.id === lineId) ??
-    snapshot.state.transit.metroLines.find((route) => route.id === lineId);
-  if (line === undefined) return [];
-  const nodeTiles = [
-    ...snapshot.state.transit.stops,
-    ...snapshot.state.transit.stations,
-  ]
-    .filter((node) => node.status === "present")
-    .map((node) => node.position);
-  const stepTiles: Point[] = [];
-  for (const leg of line.legs) {
-    const path = presentationPath(leg);
-    if (path === null) continue;
-    for (const step of path.steps) {
-      if (
-        !stepTiles.some(
-          (tile) => tile.x === step.position.x && tile.y === step.position.y,
-        )
-      ) {
-        stepTiles.push(step.position);
-      }
-    }
-  }
-  const clickInTile = (tile: Point): { x: number; y: number } | null => {
-    for (const dx of [0, -8, 8]) {
-      for (const dy of [0, -8, 8]) {
-        const world = {
-          x: (tile.x + 0.5) * tileSize + dx,
-          y: (tile.y + 0.5) * tileSize + dy,
-        };
-        const pick = pickMapTarget(samples, snapshot.state, world, tile);
-        if (pick?.lineId === lineId && pick.vehicleId === null) {
-          return world;
-        }
-      }
-    }
-    return null;
-  };
-  const eligible = (awayFromStops: boolean): { x: number; y: number }[] =>
-    stepTiles.flatMap((tile) => {
-      if (resolveNodesAtTile(snapshot.state, tile).length > 0) return [];
-      if (
-        awayFromStops &&
-        nodeTiles.some(
-          (node) =>
-            Math.max(Math.abs(node.x - tile.x), Math.abs(node.y - tile.y)) <= 1,
-        )
-      ) {
-        return [];
-      }
-      const world = clickInTile(tile);
-      return world === null ? [] : [world];
-    });
-  const away = eligible(true);
-  return away.length > 0 ? away : eligible(false);
+function linePathClicks(samples: MapPickSample[]): { x: number; y: number }[] {
+  return LINE_PATH_TILES.flatMap((tile) => {
+    const world = {
+      x: (tile.x + 0.5) * tileSize,
+      y: (tile.y + 0.5) * tileSize,
+    };
+    const vehicleCovered = samples.some(
+      (sample) =>
+        (sample.point.x - world.x) ** 2 + (sample.point.y - world.y) ** 2 <=
+        (tileSize / 2) ** 2,
+    );
+    return vehicleCovered ? [] : [world];
+  });
 }
 
 test("selects a displayed vehicle and opens Lines from its path", async ({
@@ -206,7 +157,7 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
   );
 
   const inspectBox = await inspector.boundingBox();
-  const candidates = linePathClicks(presented, samples, route.id);
+  const candidates = linePathClicks(samples);
   let clicked = false;
   for (const world of candidates) {
     const viewport = await mapWorldViewportPoint(canvas, world);
