@@ -6,13 +6,15 @@
 
 ## Player contract
 
-With an active city and no route draft, **Ctrl/Cmd+Z** undoes the **most recent successful construction gesture**, once, within **one game hour** of that gesture. This includes one-tile and dragged roads, road-direction edits, roundabouts, track, bus stops, metro stations, placed buildings (including transit buildings), and area rectangle paint. One multi-tile stroke is one undo. Partially successful strokes undo only actual changes and refund only money actually spent.
+With an active city and no route draft, **Ctrl/Cmd+Z** undoes exactly the **last successful construction gesture** within **one in-game hour**. One road/track drag or rectangle paint is one gesture. Eligible construction: `LayRoad`, `LayRoadLine`, `CycleRoadDirection`, `PlaceRoundabout`, `LayTrack`, `LayTrackLine`, `PaintAreaRectangle`, `AddBusStop`, `AddMetroStation`, `PlaceBuilding` (including transit buildings).
 
-Undo restores the authored footprint and the relevant structural entities, **not the entire game snapshot**. It refunds the construction deduction into the *current* budget, preserving income, vehicle movement, population and time that happened afterward. Successful undo consumes the record; a subsequent Ctrl/Cmd+Z reports “Nothing to undo.” A successful second build replaces the first record. Successful demolition also clears it, but is never itself undoable. Rejected/no-op build attempts leave the prior record intact.
+The inverse operates on the **current** simulation state: the build is removed, the amount actually paid is added back to the *current* budget, and live time, trips, population, income and unrelated growth are preserved. Partial strokes refund only tiles actually charged; Creative/free placement refunds zero. A second undo returns `NothingToUndo`; a successful later build replaces the record, and a successful demolish discards it without becoming undoable. Rejected/no-op builds do not erase the earlier record.
 
-The time limit uses **the clock already implemented in Caelum**: `clock::GAME_DAY_SECONDS == 1_200.0`, so one in-game hour is `GAME_DAY_SECONDS / 24.0 == 50` units of `GameSnapshot.time`. Check the elapsed simulation time, not wall-clock seconds or `3600`. Pause holds the window open; speed affects how quickly game time advances. Accept the exact boundary; reject elapsed time greater than one hour. An expired record is discarded after reporting the expiration.
+The limit is `clock::GAME_DAY_SECONDS / 24.0`: the current game day is 1,200 time units, so **one game hour is 50 units of `GameSnapshot.time`, not 3,600**. Accept the exact boundary and reject afterward. Pausing freezes the window; speeding the simulation consumes it faster. An expired record is discarded on attempt.
 
-A conflict is rejected **without modifying map, budget, ECS world or topology**, with the existing action-feedback UI explaining that the affected construction or a dependent route changed. Examples: a later route uses a newly created road/track or node; auto-growth occupied an area-painted tile; a touched structure or entity no longer matches its recorded post-build state. A conflicted record may be retried if the dependency is resolved before expiry. This is intentionally conservative: it is better to refuse a questionable undo than to silently break a running route.
+Undo is rejected **without touching the live engine or its budget** if restoring the map would overlap a building added since the build, or if the resulting world would turn an existing working bus route or metro line into a broken one. Undo **must not reject merely because a running line uses newly built road**: normal construction can automatically reroute an already-working line onto the new road. If removing that road simply reroutes the line back to another valid path, undo succeeds. Existing route-draft undo retains keyboard precedence.
+
+No demolition undo, redo, multi-level history, saved-game schema changes or new art/SFX.
 
 ## Existing implementation boundaries (verified against main)
 
@@ -24,42 +26,49 @@ A conflict is rejected **without modifying map, budget, ECS world or topology**,
 
 ## Narrow Rust design
 
-Add one private non-serialized field `last_build: Option<BuildUndo>` to `GameEngine`, with a small internal `build_undo.rs` module for capture/check/inverse work (or keep it local to `engine.rs` if the final code is shorter). Do **not** add durable data to `GameSnapshot`, a history stack, command trait, reversible-intent framework or per-host undo implementation.
+Use one private, **non-serialized** `last_build: Option<BuildUndo>` on `GameEngine`, initialized to `None` in `from_parts`. A tiny `build_undo.rs` is optional only if it keeps `engine.rs` readable. No command abstraction, diff ledger, route-path scanner or separate history manager.
 
-`BuildUndo` stores:
+```rust
+struct BuildUndo {
+    built_at: f64,
+    refund: i32,
+    inverse: Inverse,
+}
+enum Inverse {
+    RestoreMap(GameMap),
+    Demolish(Point),
+}
+```
 
-1. `built_at: f64` and `refund: i32` (the **actual** positive `budget_before - budget_after`; zero in Creative, for free direction edits and area paint).
-2. The **changed** `Tile` values, as before/after pairs, at every authoritative changed coordinate. Compare the full before/after `map.tiles` and retain only differences: road strokes change adjacent connections and sometimes tiles outside their requested points; building placement does not change the tile layer at all.
-3. The before/after `map.road_structures` vectors **only when they differ**. This small structural backup covers automatic junction and roundabout creation/removal/port updates without inventing an inverse geometry algorithm.
-4. Before/after changes to **authored building and transit-node entities by ID**: newly added buildings, newly added stops/stations, and tombstones reactivated by placement. Capture the actual entity changes, including full building footprints and restored node state. Do not save unrelated route, vehicle, trip, budget or clock snapshots. Road-derived stop-access for unchanged nodes is recomputed by the normal network commit path.
+### Record the smallest inverse
 
-Derive `affected_points` from changed map tiles, building footprints and changed stop/station anchors; deduplicate them. The temporary pre/post snapshots needed to calculate the diff can be dropped immediately after an applied dispatch. This stays small even when the city grows; it does not retain full snapshots for an hour.
+Classify **every `GameIntent` explicitly with an exhaustive match**, no `_ =>` wildcard: map construction, placement construction, demolition, undo, or non-construction. This is a maintenance invariant: new map-changing intents must be considered for undo so a saved old map can never silently overwrite their effects. The classifier borrows the intent before dispatch; it must not duplicate the existing mutation rules.
 
-### Capture and invalidation
+- **Map construction** (`LayRoad`, `LayRoadLine`, `CycleRoadDirection`, `PlaceRoundabout`, `LayTrack`, `LayTrackLine`, `PaintAreaRectangle`): clone only the pre-build `GameMap`. This includes all road connections, generated automatic junctions and roundabout structures. Map construction adds no player building or transit node.
+- **Placement construction** (`AddBusStop`, `AddMetroStation`, `PlaceBuilding`): remember the clicked point/origin as `Demolish(Point)`. Placement does not change map tiles. One point is sufficient because `transit::remove_at_tile` finds the occupying building (including its footprint) or a standalone node.
+- Only when the existing dispatch result says `applied` store/replace the record, with `built_at = self.snapshot.time` and `refund = budget_before - budget_after` (the **actual deduction**, not the catalog quote). Rejected/no-op actions preserve the prior record.
+- A **successful** `RemoveAtTile` or `RemoveAtTiles` clears it. Undo itself never records a new inverse. Other intents preserve the record.
 
-Keep the current dispatch match and mutations as the authority. A thin `dispatch` wrapper may classify the incoming intent as:
-- **Eligible build:** `LayRoad`, `LayRoadLine`, `CycleRoadDirection`, `PlaceRoundabout`, `LayTrack`, `LayTrackLine`, `AddBusStop`, `AddMetroStation`, `PlaceBuilding`, `PaintAreaRectangle`.
-- **Demolition:** `RemoveAtTile`, `RemoveAtTiles`: clear previous undo on a successful removal, do not capture a demolition.
-- **Undo:** `UndoLastBuild`, handled separately without recapturing the inverse as a new build.
-- **Other intents:** keep the record until save/reset/restore, replacement build, successful demolish, expiration or successful undo. This permits a player to open/tune service but requires a dependency check before undo.
+Between successful builds/demolition and reset/restore, ordinary gameplay intents cannot change `GameMap`; ticks only add buildings, and `tick` asserts road topology is not modified. Therefore no after-tile/entity copies or generic `post_build_matches` checks are needed. This invariant depends on the exhaustive classifier, not on trusting arbitrary future actions.
 
-For eligible builds: take a temporary *shell* snapshot before the existing dispatch path; only when the resulting `applied` is true, build the delta from that snapshot to the committed `self.snapshot` and replace the previous record. The live shell excludes ECS citizen rows already. Compute the refund from actual budget deductions, **never** from a catalog's nominal quote. A rejected or no-op dispatch must not accidentally consume a prior undo.
+### Prepare candidate, validate, then commit
 
-### Validate then apply
+Extract `prepare_network_candidate(&self, snapshot: GameSnapshot) -> GameplayResult<(GameSnapshot, RoadTopology)>` from `commit_network_mutation`'s existing stop-access normalization, topology compilation and `route_lifecycle::recompute_all_routes`. Ordinary network builds call prepare then `commit_snapshot_and_topology` just as before. A rejected preparation must never touch `self.world`; avoid reconciling ECS in the no-op branch.
 
-`UndoLastBuild` first checks record presence and elapsed game time. It then checks that:
-- Each recorded post-build tile still matches the current tile; every tracked entity still matches the relevant post-build authored state and has not been replaced/occupied on its footprint. In particular, zoning undo must not erase autonomously grown buildings. Unchanged entities and map cells elsewhere must be preserved.
-- Recorded road structures still match their post-build version, if any.
-- No current Bus/Metro line, live route leg/service path, or platform assignment depends on the modified road/track footprint or the added/reactivated stop/station. Check the current route paths/waypoint IDs; never “repair” dependency by silently breaking the player's line. This may conservatively reject an undo that could have rerouted.
-- A refund can be added safely to the current `i32` budget.
+For `UndoLastBuild`:
 
-Only after all checks pass, construct an inverse candidate **from the current shell**, restore recorded tiles and road structures, undo only the recorded building/node additions/reactivations, and add `refund` to the current budget. Pass the candidate through existing topology/stop-access/route recompute and building/ECS reconciliation so the authoritative invariants stay in place. If candidate compilation fails, reject without altering the live engine. Do not directly assign an old `GameSnapshot` to `self.snapshot`: that would rewind time, income, trips, vehicles, IDs, and current population.
-
-The record is cleared **only after a successful** undo; a dependency rejection retains it until its time limit. Do not generate a second record from undo.
+1. Require an existing record; reject `NothingToUndo` otherwise. On `time - built_at > GAME_DAY_SECONDS / 24.0`, clear and reject `UndoExpired`.
+2. Clone the **current** shell snapshot. For `RestoreMap(before_map)`, compare current tiles to the stored map and reject `UndoConflict` if **any current building's occupied footprint intersects tiles whose map data would change**. This protects a building that grew on newly painted land. Replace only `candidate.map` with `before_map`; preserve current buildings and the rest of the shell.
+3. For `Demolish(point)`, apply the existing `transit::remove_at_tile(&candidate, &point)`. That routine removes player buildings/standalone nodes, uses logical tombstones when still referenced, and already cooperates with ECS building reconciliation. Do not duplicate its entity/route logic. A reactivated tombstone will become Missing again if still referenced; **do not assert byte-for-byte pre-build node metadata**, because demolition does not promise to reset all derived fields.
+4. Add `refund` with `checked_add`; overflow or unsuccessful demolition becomes `UndoConflict`. Do not reset budget to its old amount.
+5. Call `prepare_network_candidate` on this inverse. Before committing, compare `path_broken` for each route/metro line in the **current** shell vs the prepared candidate; reject `UndoConflict` only if a formerly connected line becomes broken. This reuses route recomputation already required for ordinary network mutation; it allows a harmless auto-reroute back to a previous path. No path-step/waypoint/platform scanner.
+6. On success, call `commit_snapshot_and_topology` **once** (including existing ECS reconciliation) and clear the undo record. Conflicts keep the record until expiry for retry. No rollback state machine.
 
 ### Save/reset/restore
 
-Make `GameEngine::snapshot_for_save(&mut self)` consume/clear `last_build` on **save capture**, and minimally change the WASM wrapper to `&mut self` and the Tauri command to take a mutable `OwnedEngine` mutex guard. This may also clear undo when the later storage write fails; accept that conservative behavior rather than adding another backend call or post-save handshake. The exported snapshot stays structurally identical. `from_parts`, `from_snapshot`, `restore_snapshot`, `reset`, and new city creation initialize `last_build: None`. No schema bump, persistence migration, host-specific state or extra `GameBackend` method.
+Change `GameEngine::snapshot_for_save` to `&mut self` and clear the temporary record on save capture; minimally update the WASM wrapper `&mut self` and the existing Tauri `game_snapshot_for_save` mutable mutex guard. The Tauri runtime epoch is checked **before** modifying engine state; this check already exists. A later failed storage write may still consume undo, which is acceptable for this local game.
+
+`from_parts` initializes the record to `None`, so reset, restore and New City automatically clear it. The serialized `GameSnapshot` and two thin host `GameBackend` implementations do not acquire new fields, version numbers or RPC methods.
 
 ## Wire and UI
 
@@ -70,10 +79,17 @@ Make `GameEngine::snapshot_for_save(&mut self)` consume/clear `last_build` on **
 
 ## Acceptance / tests
 
-1. Rust: one successful road stroke undo restores neighboring connections, generated structure state, changed tiles and **actual** budget debit; a second undo rejects. Cover representative track, stop/station, building (including transit-node creation), roundabout and zone-paint cases without repetitive per-tile test matrices.
-2. Rust: a partially affordable stroke refunds only charged tiles; Creative mode does not mint money; refund augments the **current** budget instead of resetting other income/expenses.
-3. Rust: expiry is tested at `GAME_DAY_SECONDS / 24.0`, including the boundary; paused time does not advance it. A conflicting route/path/occupied footprint rejects without changing gameplay state.
-4. Rust: second build replaces record; successful demolish clears it; rejected build preserves it; save capture and restore/reset clear it, with unchanged snapshot schema and payload. Verify ECS reconciliation on undo of occupied residential construction.
-5. Runtime/UI: route-draft undo keeps priority, input/contenteditable retains native undo, and world Cmd/Ctrl+Z dispatches exactly once through the queue. Feedback for no record, expired and conflicting is readable. The browser and native paths use the identical intent and Rust logic.
+Focus Rust testing on **eight player-level cases**, not per-kind matrices:
+
+1. Road stroke undo restores the whole pre-build map and full actual refund; second undo is `NothingToUndo`.
+2. Partial affordable stroke refunds only actual payment.
+3. One `PlaceBuilding` transit-node placement undo reuses demolition and refunds.
+4. Undo at exactly one game hour (50 time units) succeeds; just beyond fails `UndoExpired`.
+5. A route made possible by the newly built network would become broken: `UndoConflict` without modifying state or budget.
+6. Growth occupies an altered zone tile before undo: `UndoConflict` (start just before a six-hour growth boundary to keep the one-hour undo window).
+7. A formerly connected route auto-reroutes onto the new road, and undo successfully returns it to a connected old path.
+8. `snapshot_for_save` clears the record; no undo state appears in serialized snapshots.
+
+Reuse the existing demolition/ECS and route-recompute coverage instead of multiplying track, stop, roundabout, Creative, tombstone and reset/restore tests. Include focused TS runtime/keyboard/rejection tests: draft undo has priority, text inputs keep native undo, world Cmd/Ctrl+Z issues one queued intent, and feedback shows the three rejection reasons. Browser and native hosts use the same Rust code and current generic dispatch.
 
 **Out of scope:** undo demolition, redo, multi-step history, redo stack, autosave or snapshot format changes, UI toolbar/button redesign, new art/SFX, generalized transaction log, extra performance abstraction, or an implementation PR separate from this design PR.
