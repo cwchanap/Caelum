@@ -403,6 +403,7 @@ describe("applyUiTileClick line pick", () => {
 
     expect(result.lineIdToOpen).toBe("route-001");
     expect(result.ui.selectedVehicleId).toBeNull();
+    expect(result.ui.selectedId).toBeNull();
     expect(result.state).toBe(state);
   });
 
