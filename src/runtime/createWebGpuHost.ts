@@ -3,11 +3,10 @@ import type { UiState } from "../ui/uiState";
 import {
   applyCameraAction,
   applyCanvasPixelSize,
-  canvasToTile,
+  canvasToWorld,
   getBoardTransform,
   panCamera,
   syncCanvasSize,
-  tileSize,
   visibleWorldRect,
   zoomCameraAt,
   type BoardTransform,
@@ -25,11 +24,8 @@ import {
   encodeVehicleInstances,
   interpolationAlpha,
 } from "../render/webgpu/vehicleInstances";
-import {
-  pickMapTarget,
-  type MapPick,
-  type MapPickSample,
-} from "../render/webgpu/pickMapTarget";
+import { pickMapTarget } from "../render/webgpu/pickMapTarget";
+import type { MapPick } from "../ui/mapPick";
 import {
   createWebGpuRenderer,
   VEHICLE_INSTANCE_FLOATS,
@@ -91,6 +87,10 @@ export interface GameHost {
   stop(): void;
   syncAnimationLoop(): void;
   isRunning(): boolean;
+  /** Compute the clamped camera an action would produce, without applying or
+   *  publishing it; `undefined` while the board has no measured size. Lets a
+   *  controller fold a camera move into a single commit. */
+  cameraForAction(action: CameraAction): Camera | null | undefined;
   /** Apply a button/key camera action against the current board size. */
   adjustCamera(action: CameraAction): void;
   /** Rebuilds the current frame and reads its pixels back from an offscreen
@@ -174,9 +174,17 @@ export function createWebGpuHostWithRenderer(
 
   let transform: ClipTransform | null = null;
 
+  // Pick inputs the most recently drawn frame left behind. `revision` marks
+  // the scene the frame drew: while it still matches the runtime's scene
+  // revision the drawn transform and positions are what is on screen, so
+  // every pointer path resolves against them; after a load/reset/scene change
+  // the drawn world is stale and pointer paths fall back to the live mapping
+  // with no pick candidates.
   let drawnTargets: {
-    samples: MapPickSample[];
+    vehicleIds: string[];
+    positions: Float32Array<ArrayBuffer>;
     state: GameState;
+    revision: number;
     transform: BoardTransform;
   } | null = null;
 
@@ -341,15 +349,17 @@ export function createWebGpuHostWithRenderer(
     nowMs: number,
   ): {
     frame: WebGpuRenderFrame;
-    samples: MapPickSample[];
+    vehicleIds: string[];
+    positions: Float32Array<ArrayBuffer>;
     state: GameState;
+    revision: number;
   } => {
     const { latest, previous, alpha } = observeState(nowMs);
     const ui = ctx.getUi();
     const revision = ctx.getSceneRevision();
     const overlays = buildOverlayRanges(latest, ui);
     const map = latest.map;
-    const { instances, samples } = encodeVehicleInstances({
+    const { instances, vehicleIds } = encodeVehicleInstances({
       previous,
       latest,
       ui,
@@ -390,8 +400,10 @@ export function createWebGpuHostWithRenderer(
           },
         ],
       },
-      samples,
+      vehicleIds,
+      positions: instances,
       state: latest,
+      revision,
     };
   };
 
@@ -400,9 +412,27 @@ export function createWebGpuHostWithRenderer(
       return;
     }
     const board = syncSize(canvas);
-    const { frame, samples, state: drawn } = buildFrame(nowMs);
-    renderer.render(frame);
-    drawnTargets = { samples, state: drawn, transform: board };
+    const built = buildFrame(nowMs);
+    renderer.render(built.frame);
+    const previousTransform = drawnTargets?.transform;
+    drawnTargets = {
+      vehicleIds: built.vehicleIds,
+      positions: built.positions,
+      state: built.state,
+      revision: built.revision,
+      transform: board,
+    };
+    if (
+      previousTransform === undefined ||
+      previousTransform.scale !== board.scale ||
+      previousTransform.offsetX !== board.offsetX ||
+      previousTransform.offsetY !== board.offsetY
+    ) {
+      // The world the pointer paths resolve against just moved on screen:
+      // re-aim a resting pointer's hover/drag at the tile now under it so it
+      // agrees with a click instead of lingering on the previous mapping.
+      retrackPointer?.();
+    }
   };
 
   const captureFrame = (): Promise<WebGpuCapturedFrame | null> => {
@@ -550,18 +580,24 @@ export function createWebGpuHostWithRenderer(
     syncAnimationLoop();
   };
 
-  const adjustCamera = (action: CameraAction): void => {
+  const cameraForAction = (action: CameraAction): Camera | null | undefined => {
     if (!(boardCssWidth > 0 && boardCssHeight > 0)) {
+      return undefined;
+    }
+    return applyCameraAction(
+      { width: boardCssWidth, height: boardCssHeight },
+      ctx.getState().map,
+      ctx.getCamera(),
+      action,
+    );
+  };
+
+  const adjustCamera = (action: CameraAction): void => {
+    const next = cameraForAction(action);
+    if (next === undefined) {
       return;
     }
-    ctx.onCameraChange(
-      applyCameraAction(
-        { width: boardCssWidth, height: boardCssHeight },
-        ctx.getState().map,
-        ctx.getCamera(),
-        action,
-      ),
-    );
+    ctx.onCameraChange(next);
     retrackPointer?.();
   };
 
@@ -591,9 +627,9 @@ export function createWebGpuHostWithRenderer(
     host.innerHTML = "";
     canvas = nextCanvas;
     host.appendChild(canvas);
-    // Draws are frame-scheduled, but canvasToTile scales client coordinates
-    // by the backing store: size it now so a pointer event landing before
-    // the first frame still maps to the right tile.
+    // Draws are frame-scheduled, but pointer mapping scales client
+    // coordinates by the backing store: size it now so a pointer event
+    // landing before the first frame still maps to the right tile.
     syncSize(nextCanvas);
 
     // Map panning: middle-button or Space + left drag pans immediately under
@@ -612,6 +648,44 @@ export function createWebGpuHostWithRenderer(
     let lastPointer: { clientX: number; clientY: number } | null = null;
 
     const boardRect = (): DOMRect => nextCanvas.getBoundingClientRect();
+
+    /** The one position mapping every pointer path shares: the last drawn
+     *  frame's transform and map while the drawn scene revision is current
+     *  (a pointer actuates what is on screen), else the live state+camera —
+     *  e.g. just after a city load, before the new scene's first frame. */
+    const pointerMapping = (): {
+      transform: BoardTransform;
+      map: GameMap;
+    } => {
+      if (
+        drawnTargets !== null &&
+        drawnTargets.revision === ctx.getSceneRevision()
+      ) {
+        return {
+          transform: drawnTargets.transform,
+          map: drawnTargets.state.map,
+        };
+      }
+      const liveState = ctx.getState();
+      return {
+        transform: getBoardTransform(
+          boardRect(),
+          liveState.map,
+          ctx.getCamera(),
+        ),
+        map: liveState.map,
+      };
+    };
+
+    /** Client position → {world, tile} under the shared pointer mapping;
+     *  null when the position maps outside the board or the map. */
+    const pointerTarget = (
+      clientX: number,
+      clientY: number,
+    ): { world: Point; tile: Point } | null => {
+      const { transform, map } = pointerMapping();
+      return canvasToWorld(nextCanvas, clientX, clientY, map, transform);
+    };
 
     const beginPan = (event: PointerEvent, moved: boolean): void => {
       pan = {
@@ -641,13 +715,7 @@ export function createWebGpuHostWithRenderer(
     // the hover tile (badge / building preview / hover highlight) follows.
     const trackPointer = (clientX: number, clientY: number): void => {
       lastPointer = { clientX, clientY };
-      const point = canvasToTile(
-        nextCanvas,
-        clientX,
-        clientY,
-        ctx.getState().map,
-        ctx.getCamera(),
-      );
+      const point = pointerTarget(clientX, clientY)?.tile ?? null;
       if (ctx.getUi().drag !== null) {
         ctx.onDragCurrent(point);
       } else {
@@ -728,43 +796,25 @@ export function createWebGpuHostWithRenderer(
         return; // drag tools are driven by pointerdown/up below.
       }
 
-      const rect = boardRect();
-      const cssX = event.clientX - rect.left;
-      const cssY = event.clientY - rect.top;
-      if (cssX < 0 || cssX >= rect.width || cssY < 0 || cssY >= rect.height) {
+      const target = pointerTarget(event.clientX, event.clientY);
+      if (target === null) {
         return;
       }
-      const board =
-        drawnTargets?.transform ??
-        getBoardTransform(rect, ctx.getState().map, ctx.getCamera());
-      if (!(board.scale > 0)) {
-        return;
-      }
-      const world = {
-        x: (cssX - board.offsetX) / board.scale,
-        y: (cssY - board.offsetY) / board.scale,
-      };
-      const map = ctx.getState().map;
-      const point = {
-        x: Math.floor(world.x / tileSize),
-        y: Math.floor(world.y / tileSize),
-      };
-      if (
-        point.x < 0 ||
-        point.x >= map.width ||
-        point.y < 0 ||
-        point.y >= map.height
-      ) {
-        return;
-      }
+      // Pick candidates exist only while the drawn frame's scene revision is
+      // current — a click just after a city load maps onto the live world but
+      // carries no stale samples — and only while the Select tool can consume
+      // them (same selectedBuilding gate handleTileClick applies).
+      const drawn =
+        drawnTargets !== null &&
+        drawnTargets.revision === ctx.getSceneRevision()
+          ? drawnTargets
+          : null;
+      const ui = ctx.getUi();
       ctx.onTileClick(
-        point,
-        pickMapTarget(
-          drawnTargets?.samples ?? [],
-          drawnTargets?.state ?? null,
-          world,
-          point,
-        ),
+        target.tile,
+        ui.activeTool === "inspect" && ui.selectedBuilding === null
+          ? pickMapTarget(drawn, target.world, target.tile)
+          : null,
       );
     };
 
@@ -845,13 +895,7 @@ export function createWebGpuHostWithRenderer(
       if (event.button !== 0 || !dragTool) {
         return;
       }
-      const point = canvasToTile(
-        nextCanvas,
-        event.clientX,
-        event.clientY,
-        ctx.getState().map,
-        ctx.getCamera(),
-      );
+      const point = pointerTarget(event.clientX, event.clientY)?.tile ?? null;
       if (point === null) {
         return;
       }
@@ -874,13 +918,7 @@ export function createWebGpuHostWithRenderer(
       if (ctx.getUi().drag === null || event.button !== 0) {
         return;
       }
-      const point = canvasToTile(
-        nextCanvas,
-        event.clientX,
-        event.clientY,
-        ctx.getState().map,
-        ctx.getCamera(),
-      );
+      const point = pointerTarget(event.clientX, event.clientY)?.tile ?? null;
       // Snap the gesture to the release tile before committing, so a release on
       // a different tile than the last move builds to where the user let go.
       ctx.onDragCurrent(point);
@@ -1057,6 +1095,7 @@ export function createWebGpuHostWithRenderer(
     stop,
     syncAnimationLoop,
     isRunning: () => running,
+    cameraForAction,
     adjustCamera,
     captureFrame,
   };

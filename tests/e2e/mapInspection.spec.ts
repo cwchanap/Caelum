@@ -1,7 +1,8 @@
 import { expect, test, type Page } from "@playwright/test";
 import { tileSize } from "../../src/render/boardTransform";
-import type { MapPickSample } from "../../src/render/webgpu/pickMapTarget";
+import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
 import { encodeVehicleInstances } from "../../src/render/webgpu/vehicleInstances";
+import type { Point } from "../../src/domain/types";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
   clickMapTile,
@@ -25,8 +26,12 @@ const LINE_PATH_TILES = [
   { x: 9, y: 4 },
 ] as const;
 
-function pausedVehicleSamples(snapshot: RuntimeSnapshot): MapPickSample[] {
-  return encodeVehicleInstances({
+/** Post-cull drawn samples in the {id, point} shape the click picker reads
+ *  back out of the frame's instance buffer. */
+function pausedVehicleSamples(
+  snapshot: RuntimeSnapshot,
+): { id: string; point: Point }[] {
+  const { instances, vehicleIds } = encodeVehicleInstances({
     previous: null,
     latest: snapshot.state,
     ui: snapshot.ui,
@@ -38,7 +43,14 @@ function pausedVehicleSamples(snapshot: RuntimeSnapshot): MapPickSample[] {
       maxX: (snapshot.state.map.width + 1) * tileSize,
       maxY: (snapshot.state.map.height + 1) * tileSize,
     },
-  }).samples;
+  });
+  return vehicleIds.map((id, index) => ({
+    id,
+    point: {
+      x: instances[index * VEHICLE_INSTANCE_FLOATS]!,
+      y: instances[index * VEHICLE_INSTANCE_FLOATS + 1]!,
+    },
+  }));
 }
 
 async function nextFrame(page: Page): Promise<void> {
@@ -50,7 +62,9 @@ async function nextFrame(page: Page): Promise<void> {
   );
 }
 
-function linePathClicks(samples: MapPickSample[]): { x: number; y: number }[] {
+function linePathClicks(
+  samples: { id: string; point: Point }[],
+): { x: number; y: number }[] {
   return LINE_PATH_TILES.flatMap((tile) => {
     const world = {
       x: (tile.x + 0.5) * tileSize,

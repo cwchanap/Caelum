@@ -6,17 +6,15 @@ import type {
   Vehicle,
 } from "../../domain/types";
 import type { UiState } from "../../ui/uiState";
-import { tileSize } from "../boardTransform";
+import { tileCenter, tileSize } from "../boardTransform";
 import { colors } from "../colors";
 import { pointAndTangentAt } from "../pathGeometry";
 import { VEHICLE_INSTANCE_FLOATS } from "./renderer";
 import { parseColor, withAlpha, type Rgba } from "./primitives";
-import type { MapPickSample } from "./pickMapTarget";
 import {
-  buildCorridorGroups,
+  corridorsFor,
   presentationForRoute,
   presentationPath,
-  renderableLines,
   type CorridorGroups,
   UNRELATED_ROUTE_OPACITY,
 } from "./transitBatch";
@@ -48,13 +46,6 @@ const VEHICLE_HALF_LENGTH = 7;
 const VEHICLE_HALF_WIDTH = 4;
 const BUS_COLOR: Rgba = parseColor(colors.bus);
 const METRO_COLOR: Rgba = parseColor(colors.metro);
-
-function center(point: TripPosition): TripPosition {
-  return {
-    x: point.x * tileSize + tileSize / 2,
-    y: point.y * tileSize + tileSize / 2,
-  };
-}
 
 function itineraryFor(
   state: GameState,
@@ -102,7 +93,7 @@ function latestSample(
   if (itinerary === null || itinerary.length === 0) {
     return vehicle.parkedPosition === null
       ? null
-      : { point: center(vehicle.parkedPosition), angle: null };
+      : { point: tileCenter(vehicle.parkedPosition), angle: null };
   }
   const leg = itinerary[vehicle.itineraryIndex % itinerary.length];
   const step = leg?.currentPath?.steps[vehicle.pathStepIndex];
@@ -118,7 +109,7 @@ function latestSample(
     ) {
       const terminal = terminalWaypointPosition(state, vehicle, leg);
       if (terminal !== null) {
-        return { point: center(terminal), angle: null };
+        return { point: tileCenter(terminal), angle: null };
       }
     }
     if (vehicle.parkedPosition === null) return null;
@@ -132,7 +123,7 @@ function latestSample(
             vehicle.lineId,
             corridors,
           ).translatePoint(vehicle.parkedPosition);
-    return { point: center(point), angle: null };
+    return { point: tileCenter(point), angle: null };
   }
   const presented = presentationForRoute(
     step.geometry,
@@ -141,7 +132,7 @@ function latestSample(
   ).geometry;
   const sample = pointAndTangentAt(presented, vehicle.stepProgress);
   return {
-    point: center(sample.point),
+    point: tileCenter(sample.point),
     angle:
       vehicle.mode === "bus"
         ? Math.atan2(sample.tangent.y, sample.tangent.x)
@@ -202,20 +193,6 @@ function sameGeometry(a: PathGeometry, b: PathGeometry): boolean {
   return false;
 }
 
-/** Corridor offsets are state-derived presentation, and GameState is
- *  immutable with reference-equality dispatch, so they cache on state
- *  identity like the canvas renderer's transit cache did. */
-const corridorsCache = new WeakMap<GameState, CorridorGroups>();
-
-function corridorsFor(state: GameState): CorridorGroups {
-  let corridors = corridorsCache.get(state);
-  if (corridors === undefined) {
-    corridors = buildCorridorGroups(renderableLines(state));
-    corridorsCache.set(state, corridors);
-  }
-  return corridors;
-}
-
 export interface EncodeVehicleInstancesInput {
   /** Previous accepted state, or null after a scene change. */
   previous: GameState | null;
@@ -233,7 +210,9 @@ export interface EncodeVehicleInstancesInput {
  *  encodes visible instances in the presented (stable vehicle) order. */
 export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
   instances: Float32Array<ArrayBuffer>;
-  samples: MapPickSample[];
+  /** Post-cull vehicle ids in submitted instance order; instance i's world
+   *  center sits at `instances[i * VEHICLE_INSTANCE_FLOATS]`. */
+  vehicleIds: string[];
 } {
   const { previous, latest, alpha, paused } = input;
   const corridors = corridorsFor(latest);
@@ -247,7 +226,7 @@ export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
   const instances = new Float32Array(
     latest.transit.vehicles.length * INSTANCE_FLOATS,
   );
-  const samples: MapPickSample[] = [];
+  const vehicleIds: string[] = [];
   let offset = 0;
   for (const vehicle of latest.transit.vehicles) {
     const previousVehicle = previousById.get(vehicle.id);
@@ -287,12 +266,12 @@ export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
     instances[offset + 6] = color[1];
     instances[offset + 7] = color[2];
     instances[offset + 8] = color[3];
-    samples.push({ id: vehicle.id, point: sample.point });
+    vehicleIds.push(vehicle.id);
     offset += INSTANCE_FLOATS;
   }
   return {
     instances: instances.subarray(0, offset) as Float32Array<ArrayBuffer>,
-    samples,
+    vehicleIds,
   };
 }
 
@@ -458,7 +437,7 @@ function sampleStep(
   ).geometry;
   const sample = pointAndTangentAt(presented, clamped);
   return {
-    point: center(sample.point),
+    point: tileCenter(sample.point),
     angle:
       vehicle.mode === "bus"
         ? Math.atan2(sample.tangent.y, sample.tangent.x)

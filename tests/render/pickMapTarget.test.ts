@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { pickMapTarget } from "../../src/render/webgpu/pickMapTarget";
-import { tileSize } from "../../src/render/boardTransform";
+import {
+  pickMapTarget,
+  type MapPickTargets,
+} from "../../src/render/webgpu/pickMapTarget";
+import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
 import type {
   GameState,
   Point,
@@ -16,6 +19,24 @@ import {
   placeTestBuilding,
 } from "../helpers/gameState";
 import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
+
+/** Drawn-frame pick input in the shape encodeVehicleInstances leaves it:
+ *  post-cull ids in instance order, centers in the world-space buffer. */
+function pickTargets(
+  samples: { id: string; point: Point }[],
+  state: GameState,
+): MapPickTargets {
+  const positions = new Float32Array(samples.length * VEHICLE_INSTANCE_FLOATS);
+  samples.forEach((sample, index) => {
+    positions[index * VEHICLE_INSTANCE_FLOATS] = sample.point.x;
+    positions[index * VEHICLE_INSTANCE_FLOATS + 1] = sample.point.y;
+  });
+  return {
+    vehicleIds: samples.map((sample) => sample.id),
+    positions,
+    state,
+  };
+}
 
 function corridorState(routeCount = 1): GameState {
   let state = createTestGameState();
@@ -196,10 +217,16 @@ function turningLeg(): RouteLegPath {
 }
 
 describe("pickMapTarget", () => {
-  it("picks the sample inside half a tile", () => {
+  it("misses before any frame has been drawn", () => {
+    expect(pickMapTarget(null, { x: 80, y: 80 }, { x: 2, y: 2 })).toBeNull();
+  });
+
+  it("picks the vehicle drawn on the clicked tile", () => {
     const pick = pickMapTarget(
-      [{ id: "vehicle-001", point: { x: 80, y: 80 } }],
-      null,
+      pickTargets(
+        [{ id: "vehicle-001", point: { x: 80, y: 80 } }],
+        createTestGameState(),
+      ),
       { x: 90, y: 88 },
       { x: 2, y: 2 },
     );
@@ -207,65 +234,34 @@ describe("pickMapTarget", () => {
     expect(pick).toEqual({ vehicleId: "vehicle-001", lineId: null });
   });
 
-  it("keeps the boundary at exactly half a tile and misses beyond it", () => {
-    const samples = [{ id: "vehicle-001", point: { x: 80, y: 80 } }];
+  it("does not let a vehicle drawn on a neighboring tile steal a building click", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
+    // The bus is 12px from the click — inside the pick radius — but it was
+    // drawn on tile (9,8), not the clicked building tile (9,7).
+    const pick = pickMapTarget(
+      pickTargets([{ id: "vehicle-001", point: { x: 300, y: 259 } }], state),
+      { x: 300, y: 247 },
+      { x: 9, y: 7 },
+    );
 
-    expect(
-      pickMapTarget(
-        samples,
-        null,
-        { x: 80 + tileSize / 2, y: 80 },
-        { x: 3, y: 2 },
-      ),
-    ).toEqual({
-      vehicleId: "vehicle-001",
-      lineId: null,
-    });
-    expect(
-      pickMapTarget(
-        samples,
-        null,
-        { x: 80 + tileSize / 2 + 0.5, y: 80 },
-        { x: 3, y: 2 },
-      ),
-    ).toBeNull();
-    expect(
-      pickMapTarget(samples, null, { x: 400, y: 400 }, { x: 12, y: 12 }),
-    ).toBeNull();
+    expect(pick).toBeNull();
   });
 
   it("picks the nearest of two samples", () => {
     const pick = pickMapTarget(
-      [
-        { id: "vehicle-001", point: { x: 80, y: 80 } },
-        { id: "vehicle-002", point: { x: 84, y: 80 } },
-      ],
-      null,
+      pickTargets(
+        [
+          { id: "vehicle-001", point: { x: 80, y: 80 } },
+          { id: "vehicle-002", point: { x: 84, y: 80 } },
+        ],
+        createTestGameState(),
+      ),
       { x: 83, y: 80 },
       { x: 2, y: 2 },
     );
 
     expect(pick).toEqual({ vehicleId: "vehicle-002", lineId: null });
-  });
-
-  it("breaks a distance tie by id", () => {
-    const pick = pickMapTarget(
-      [
-        { id: "vehicle-002", point: { x: 76, y: 80 } },
-        { id: "vehicle-001", point: { x: 84, y: 80 } },
-      ],
-      null,
-      { x: 80, y: 80 },
-      { x: 2, y: 2 },
-    );
-
-    expect(pick).toEqual({ vehicleId: "vehicle-001", lineId: null });
-  });
-
-  it("misses an empty sample list", () => {
-    expect(
-      pickMapTarget([], null, { x: 80, y: 80 }, { x: 2, y: 2 }),
-    ).toBeNull();
   });
 });
 
@@ -273,7 +269,11 @@ describe("pickMapTarget line paths", () => {
   it("hits a line whose presented step is on the clicked tile", () => {
     const state = corridorState();
 
-    const pick = pickMapTarget([], state, { x: 300, y: 272 }, { x: 9, y: 8 });
+    const pick = pickMapTarget(
+      pickTargets([], state),
+      { x: 300, y: 272 },
+      { x: 9, y: 8 },
+    );
 
     expect(pick).toEqual({ vehicleId: null, lineId: "route-001" });
   });
@@ -281,7 +281,11 @@ describe("pickMapTarget line paths", () => {
   it("stays pickable up to the path end tile", () => {
     const state = corridorState();
 
-    const pick = pickMapTarget([], state, { x: 491, y: 272 }, { x: 15, y: 8 });
+    const pick = pickMapTarget(
+      pickTargets([], state),
+      { x: 491, y: 272 },
+      { x: 15, y: 8 },
+    );
 
     expect(pick).toEqual({ vehicleId: null, lineId: "route-001" });
   });
@@ -291,7 +295,7 @@ describe("pickMapTarget line paths", () => {
     state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
 
     expect(
-      pickMapTarget([], state, { x: 300, y: 255 }, { x: 9, y: 7 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 255 }, { x: 9, y: 7 }),
     ).toBeNull();
   });
 
@@ -299,13 +303,13 @@ describe("pickMapTarget line paths", () => {
     const state = corridorState(2);
 
     expect(
-      pickMapTarget([], state, { x: 300, y: 271 }, { x: 9, y: 8 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 271 }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
     expect(
-      pickMapTarget([], state, { x: 300, y: 273 }, { x: 9, y: 8 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 273 }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: null, lineId: "route-002" });
     expect(
-      pickMapTarget([], state, { x: 300, y: 272 }, { x: 9, y: 8 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 272 }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 
@@ -313,8 +317,7 @@ describe("pickMapTarget line paths", () => {
     const state = corridorState();
 
     const pick = pickMapTarget(
-      [{ id: "vehicle-001", point: { x: 300, y: 272 } }],
-      state,
+      pickTargets([{ id: "vehicle-001", point: { x: 300, y: 272 } }], state),
       { x: 300, y: 272 },
       { x: 9, y: 8 },
     );
@@ -328,10 +331,18 @@ describe("pickMapTarget line paths", () => {
     state = placeTestBuilding(state, "smallHouse", { x: 15, y: 7 }, 0);
 
     expect(
-      pickMapTarget([], state, { x: 502, y: 255 }, { x: 15, y: 7 }),
+      pickMapTarget(
+        pickTargets([], state),
+        { x: 502, y: 255 },
+        { x: 15, y: 7 },
+      ),
     ).toBeNull();
     expect(
-      pickMapTarget([], state, { x: 502, y: 258 }, { x: 15, y: 8 }),
+      pickMapTarget(
+        pickTargets([], state),
+        { x: 502, y: 258 },
+        { x: 15, y: 8 },
+      ),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 
@@ -340,10 +351,10 @@ describe("pickMapTarget line paths", () => {
     state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
 
     expect(
-      pickMapTarget([], state, { x: 300, y: 255 }, { x: 9, y: 7 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 255 }, { x: 9, y: 7 }),
     ).toBeNull();
     expect(
-      pickMapTarget([], state, { x: 300, y: 256 }, { x: 9, y: 8 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 256 }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 
@@ -352,10 +363,10 @@ describe("pickMapTarget line paths", () => {
     state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
 
     expect(
-      pickMapTarget([], state, { x: 300, y: 255 }, { x: 9, y: 7 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 255 }, { x: 9, y: 7 }),
     ).toBeNull();
     expect(
-      pickMapTarget([], state, { x: 300, y: 256 }, { x: 9, y: 8 }),
+      pickMapTarget(pickTargets([], state), { x: 300, y: 256 }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: null, lineId: "metro-001" });
   });
 
@@ -377,13 +388,25 @@ describe("pickMapTarget line paths", () => {
     state = placeTestBuilding(state, "smallHouse", { x: 14, y: 7 }, 90);
 
     expect(
-      pickMapTarget([], state, { x: 464, y: 272 }, { x: 14, y: 8 }),
+      pickMapTarget(
+        pickTargets([], state),
+        { x: 464, y: 272 },
+        { x: 14, y: 8 },
+      ),
     ).toBeNull();
     expect(
-      pickMapTarget([], state, { x: 432, y: 272 }, { x: 13, y: 8 }),
+      pickMapTarget(
+        pickTargets([], state),
+        { x: 432, y: 272 },
+        { x: 13, y: 8 },
+      ),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
     expect(
-      pickMapTarget([], state, { x: 490, y: 304 }, { x: 15, y: 9 }),
+      pickMapTarget(
+        pickTargets([], state),
+        { x: 490, y: 304 },
+        { x: 15, y: 9 },
+      ),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 
@@ -401,7 +424,7 @@ describe("pickMapTarget line paths", () => {
     };
 
     expect(
-      pickMapTarget([], state, { x: 311, y: 289 }, { x: 9, y: 9 }),
+      pickMapTarget(pickTargets([], state), { x: 311, y: 289 }, { x: 9, y: 9 }),
     ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 });

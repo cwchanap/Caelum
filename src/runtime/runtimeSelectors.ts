@@ -130,27 +130,21 @@ function buildVehicleInspector(
   const line =
     state.transit.routes.find((route) => route.id === vehicle.lineId) ??
     state.transit.metroLines.find((line) => line.id === vehicle.lineId);
-  const { name, color } = routeNameAndColor(state, vehicle.lineId);
   const leg =
     line !== undefined && line.legs.length > 0
       ? line.legs[vehicle.itineraryIndex % line.legs.length]
       : undefined;
   let destinationLabel = "—";
   if (leg !== undefined && leg.status === "connected") {
-    const destination =
-      state.transit.stops.find((node) => node.id === leg.toWaypointId) ??
-      state.transit.stations.find((node) => node.id === leg.toWaypointId);
-    if (destination !== undefined) {
-      destinationLabel = waypointLabel(state, leg.toWaypointId);
-    }
+    destinationLabel = waypointLabel(state, leg.toWaypointId);
   }
   return {
     kind: "vehicle",
     vehicleId: vehicle.id,
     vehicleLabel: vehicle.mode === "bus" ? "Bus" : "Metro",
     lineId: vehicle.lineId,
-    lineName: name,
-    lineColor: color,
+    lineName: line?.name ?? vehicle.lineId,
+    lineColor: line?.color ?? "#888888",
     riders: vehicle.passengerCount,
     capacity: vehicle.capacity,
     destinationLabel,

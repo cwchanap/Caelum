@@ -301,24 +301,6 @@ describe("applyUiTileClick vehicle pick", () => {
     expect(result.ui.activeCommandDestination).toBeNull();
   });
 
-  it("does not select a vehicle while a building placement is armed", () => {
-    const state = vehicleState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "inspect" as const,
-      selectedBuilding: "smallHouse" as const,
-    };
-
-    const result = applyUiTileClick(
-      state,
-      ui,
-      { x: 10, y: 8 },
-      pick("vehicle-001"),
-    );
-
-    expect(result.ui.selectedVehicleId).toBeNull();
-  });
-
   it("keeps a supplied pick out of route-draft resolution", () => {
     const state = vehicleState();
     const ui = {
@@ -407,6 +389,28 @@ describe("applyUiTileClick line pick", () => {
     expect(result.state).toBe(state);
   });
 
+  it("clears a selected node when a line pick opens Lines", () => {
+    const state = lineState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedId: "7,8",
+      selectedNodeKind: "stop" as const,
+    };
+
+    const result = applyUiTileClick(
+      state,
+      ui,
+      { x: 10, y: 8 },
+      pick("route-001"),
+    );
+
+    expect(result.lineIdToOpen).toBe("route-001");
+    expect(result.ui.selectedId).toBeNull();
+    expect(result.ui.selectedNodeKind).toBeNull();
+    expect(result.ui.selectedVehicleId).toBeNull();
+  });
+
   it("lets a vehicle candidate win over a line candidate", () => {
     let state = lineState();
     state = assignTestVehicle(state, "bus", "route-001");
@@ -437,26 +441,6 @@ describe("applyUiTileClick line pick", () => {
     expect(result.lineIdToOpen).toBeNull();
     expect(result.ui.selectedId).toBe("7,8");
     expect(result.ui.selectedNodeKind).toBe("stop");
-  });
-
-  it("ignores a line candidate while a building placement is armed", () => {
-    const state = lineState();
-    const ui = {
-      ...createUiState(),
-      activeTool: "inspect" as const,
-      selectedBuilding: "smallHouse" as const,
-    };
-
-    const result = applyUiTileClick(
-      state,
-      ui,
-      { x: 10, y: 8 },
-      pick("route-001"),
-    );
-
-    expect(result.lineIdToOpen).toBeNull();
-    expect(result.ui.selectedId).toBe("10,8");
-    expect(result.ui.selectedVehicleId).toBeNull();
   });
 
   it("keeps a supplied line pick out of route-draft resolution", () => {

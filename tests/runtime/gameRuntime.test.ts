@@ -2524,6 +2524,7 @@ describe("Game Runtime", () => {
             running = false;
           },
           captureFrame: async () => null,
+          cameraForAction: () => undefined,
           adjustCamera: () => {},
           syncAnimationLoop: () => {
             const state = context.getState();
@@ -3118,6 +3119,30 @@ describe("Game Runtime", () => {
     });
     await runtime.tick(0.016);
 
+    const cleared = runtime.getSnapshot();
+    expect(cleared.shell.inspector).toBeNull();
+    expect(cleared.ui.selectedVehicleId).toBeNull();
+    expect(cleared.ui.selectedId).toBeNull();
+
+    // A later vehicle reusing the same id — the core allocates max+1, so a
+    // retired top-numbered id can come back on a different bus — must not
+    // resurrect the dead selection.
+    backend.setSnapshot({
+      ...snapshotWithVehicle(),
+      paused: false,
+      transit: {
+        ...snapshotWithVehicle().transit,
+        vehicles: [
+          {
+            ...snapshotWithVehicle().transit.vehicles[0]!,
+            lineId: "route-001",
+          },
+        ],
+      },
+    });
+    await runtime.tick(0.016);
+
+    expect(runtime.getSnapshot().ui.selectedVehicleId).toBeNull();
     expect(runtime.getSnapshot().shell.inspector).toBeNull();
   });
 
@@ -5762,16 +5787,32 @@ describe("route creation and management", () => {
       expect(backend.intents).toEqual([]);
     });
 
-    it("centers the map camera on the focused wait location", async () => {
+    it("centers the map camera on the focused wait location in one commit", async () => {
       const { runtime } = await navigationRuntime();
+      const focused = { zoom: 2, center: { x: 14.5, y: 7.5 } };
+      lastFakeHost()!.cameraForAction.mockReturnValue(focused);
+      const published: RuntimeSnapshot[] = [];
+      const unsubscribe = runtime.subscribe((snapshot) =>
+        published.push(snapshot),
+      );
 
       runtime.focusWaitLocation("route-001", "stop-001");
+      unsubscribe();
 
-      expect(lastFakeHost()!.adjustCamera).toHaveBeenCalledTimes(1);
-      expect(lastFakeHost()!.adjustCamera).toHaveBeenCalledWith({
+      expect(lastFakeHost()!.cameraForAction).toHaveBeenCalledWith({
         kind: "centerOn",
         point: { x: 14, y: 7 },
       });
+      // The host is asked, not told: the camera lands inside the commit
+      // rather than arriving through a separate adjustCamera → publish.
+      expect(lastFakeHost()!.adjustCamera).not.toHaveBeenCalled();
+      expect(runtime.getSnapshot().camera).toBe(focused);
+      // Subscribers see exactly one snapshot carrying the camera move and
+      // the Inspect selection together — no intermediate new-camera/old-UI.
+      expect(published).toHaveLength(1);
+      expect(published[0]!.camera).toBe(focused);
+      expect(published[0]!.ui.selectedId).toBe("14,7");
+      expect(published[0]!.ui.activeTool).toBe("inspect");
     });
 
     it("disarms an armed building or area when focusing a wait location", async () => {
@@ -5820,6 +5861,7 @@ describe("route creation and management", () => {
 
       expect(snapshot.ui).toBe(before.ui);
       expect(snapshot.ui.routeDraft).not.toBeNull();
+      expect(lastFakeHost()!.cameraForAction).not.toHaveBeenCalled();
       expect(lastFakeHost()!.adjustCamera).not.toHaveBeenCalled();
     });
 
@@ -5844,6 +5886,7 @@ describe("route creation and management", () => {
       expect(runtime.focusWaitLocation("route-001", "stop-tomb").ui).toBe(
         before.ui,
       );
+      expect(lastFakeHost()!.cameraForAction).not.toHaveBeenCalled();
       expect(lastFakeHost()!.adjustCamera).not.toHaveBeenCalled();
     });
 

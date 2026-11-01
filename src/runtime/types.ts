@@ -27,7 +27,7 @@ import type {
   SandboxResetError,
 } from "./backend/types";
 import type { WebGpuCapturedFrame } from "../render/webgpu/renderer";
-import type { MapPick } from "../render/webgpu/pickMapTarget";
+import type { MapPick } from "../ui/mapPick";
 import type { Camera, CameraAction } from "../render/boardTransform";
 import type {
   RuntimePersistenceController,
