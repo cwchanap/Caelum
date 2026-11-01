@@ -146,6 +146,7 @@ export function applyUiTileClick(
           selectedId: `${point.x},${point.y}`,
           selectedNodeKind: null,
           selectedVehicleId: vehicle.id,
+          activeCommandDestination: null,
         },
       };
     }
