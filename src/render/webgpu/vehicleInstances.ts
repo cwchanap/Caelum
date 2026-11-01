@@ -11,6 +11,7 @@ import { colors } from "../colors";
 import { pointAndTangentAt } from "../pathGeometry";
 import { VEHICLE_INSTANCE_FLOATS } from "./renderer";
 import { parseColor, withAlpha, type Rgba } from "./primitives";
+import type { MapPickSample } from "./pickMapTarget";
 import {
   buildCorridorGroups,
   presentationForRoute,
@@ -229,10 +230,13 @@ export interface EncodeVehicleInstancesInput {
 
 /** Interpolates the latest presented vehicles in path space against the
  *  previous accepted state, culls to the viewport plus one tile margin, and
- *  encodes visible instances in the presented (stable vehicle) order. */
-export function encodeVehicleInstances(
-  input: EncodeVehicleInstancesInput,
-): Float32Array<ArrayBuffer> {
+ *  encodes visible instances in the presented (stable vehicle) order. The
+ *  `samples` output exposes the same post-cull draw points so a click pick
+ *  never needs a second vehicle-position pass. */
+export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
+  instances: Float32Array<ArrayBuffer>;
+  samples: MapPickSample[];
+} {
   const { previous, latest, alpha, paused } = input;
   const corridors = corridorsFor(latest);
   const previousById = new Map<string, Vehicle>();
@@ -245,6 +249,7 @@ export function encodeVehicleInstances(
   const instances = new Float32Array(
     latest.transit.vehicles.length * INSTANCE_FLOATS,
   );
+  const samples: MapPickSample[] = [];
   let offset = 0;
   for (const vehicle of latest.transit.vehicles) {
     const previousVehicle = previousById.get(vehicle.id);
@@ -284,9 +289,13 @@ export function encodeVehicleInstances(
     instances[offset + 6] = color[1];
     instances[offset + 7] = color[2];
     instances[offset + 8] = color[3];
+    samples.push({ id: vehicle.id, point: sample.point });
     offset += INSTANCE_FLOATS;
   }
-  return instances.subarray(0, offset) as Float32Array<ArrayBuffer>;
+  return {
+    instances: instances.subarray(0, offset) as Float32Array<ArrayBuffer>,
+    samples,
+  };
 }
 
 function emphasizedOpacity(
