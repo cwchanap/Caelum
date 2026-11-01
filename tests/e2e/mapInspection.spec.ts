@@ -158,6 +158,17 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
     )
     .toBeGreaterThan(0);
 
+  const deployed = await runtimeSnapshot(page);
+  const route = deployed.state.transit.routes.at(0);
+  if (route === undefined) {
+    throw new Error("Saved route is missing from the runtime snapshot");
+  }
+  const linesList = page.getByTestId("panel-lines");
+  const selectRoute = linesList.getByRole("button", {
+    name: `Select ${route.name}`,
+  });
+  await expect(selectRoute).toHaveAttribute("aria-pressed", "false");
+
   await page.getByRole("button", { name: "Close Lines" }).click();
   await expect(page.getByTestId("command-panel")).toHaveCount(0);
 
@@ -175,11 +186,12 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
   const vehicle = presented.state.transit.vehicles.find(
     (candidate) => candidate.id === sample?.id,
   );
-  const route = presented.state.transit.routes.find(
-    (candidate) => candidate.id === vehicle?.lineId,
-  );
-  if (sample === undefined || vehicle === undefined || route === undefined) {
-    throw new Error("Displayed bus or its route is missing from the snapshot");
+  if (
+    sample === undefined ||
+    vehicle === undefined ||
+    vehicle.lineId !== route.id
+  ) {
+    throw new Error("Displayed bus is missing or not on the saved route");
   }
 
   await nextFrame(page);
@@ -215,7 +227,6 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
     "data-command-panel",
     "lines",
   );
-  const linesPanel = page.getByTestId("panel-lines");
-  await expect(linesPanel).toBeVisible();
-  await expect(linesPanel.getByTestId(`route-name-${route.id}`)).toBeVisible();
+  await expect(linesList).toBeVisible();
+  await expect(selectRoute).toHaveAttribute("aria-pressed", "true");
 });
