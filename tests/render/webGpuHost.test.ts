@@ -1370,9 +1370,6 @@ describe("createWebGpuHost observed vehicle history", () => {
 
 describe("createWebGpuHost map target picking", () => {
   it("picks the drawn vehicle under a zoomed click, and suppresses after a pan", () => {
-    // Zoom 2 centered at tile (7, 4.5): zero offsets, so world px map to CSS
-    // px at 2x and the paused bus drawn at world (80, 80) sits at CSS
-    // (160, 160).
     const fx = createFixture({
       state: stateWithVehicleForFrame(),
       ui: { activeTool: "inspect" },
@@ -1388,7 +1385,6 @@ describe("createWebGpuHost map target picking", () => {
       { vehicleId: "vehicle-001", lineId: null },
     );
 
-    // A click away from every drawn sample reports a null candidate.
     fx.canvas.dispatchEvent(
       new MouseEvent("click", { clientX: 700, clientY: 400, bubbles: true }),
     );
@@ -1397,19 +1393,15 @@ describe("createWebGpuHost map target picking", () => {
       null,
     );
 
-    // The pick converts through the drawn transform, not the live camera: a
-    // camera pan with no frame drawn yet still picks where the vehicle is
-    // painted while the tile resolves under the new camera.
     fx.host.adjustCamera({ kind: "pan", x: 1, y: 0 });
     fx.canvas.dispatchEvent(
       new MouseEvent("click", { clientX: 160, clientY: 160, bubbles: true }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
-      { x: 5, y: 2 },
+      { x: 2, y: 2 },
       { vehicleId: "vehicle-001", lineId: null },
     );
 
-    // A pointer pan still swallows the click that follows its release.
     dispatchPointer(fx.canvas, "pointerdown", { clientX: 160, clientY: 160 });
     dispatchPointer(fx.canvas, "pointermove", { clientX: 200, clientY: 160 });
     dispatchPointer(fx.canvas, "pointerup", { clientX: 200, clientY: 160 });
@@ -1419,6 +1411,36 @@ describe("createWebGpuHost map target picking", () => {
     expect(fx.callbacks.onTileClick).toHaveBeenCalledTimes(3);
   });
 
+  it("still resolves a click the live camera maps off the drawn map", () => {
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect" },
+    });
+    fx.fireFrame(0);
+
+    Element.prototype.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 1400,
+          height: 576,
+          left: 0,
+          top: 0,
+          right: 1400,
+          bottom: 576,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
+      { x: 2, y: 2 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+  });
+
   it("keeps the screen's pick targets across an offscreen capture", async () => {
     const fx = createFixture({
       state: stateWithVehicleForFrame(),
@@ -1426,8 +1448,6 @@ describe("createWebGpuHost map target picking", () => {
     });
     fx.fireFrame(0);
 
-    // The capture builds a frame from a vehicle-less state offscreen; the
-    // retained pick list still mirrors the last presented frame.
     fx.setState(createTestGameState());
     await fx.host.captureFrame();
 

@@ -724,12 +724,10 @@ describe("emphasis, culling, and instance encoding", () => {
       paused: false,
       viewport: { minX: 400, minY: 0, maxX: 432, maxY: 64 },
     });
-    // Tile 11 (368px) survives the one-tile margin; tile 20 (624px) is culled.
     expect(samples).toHaveLength(1);
     expect(samples[0].id).toBe("vehicle-000");
     expectNear(samples[0].point.x, 368);
     expectNear(samples[0].point.y, 48);
-    // The sample is the draw point written into the same frame's instance row.
     expect(samples[0].point.x).toBe(instances[0]);
     expect(samples[0].point.y).toBe(instances[1]);
   });
