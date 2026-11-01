@@ -1504,6 +1504,56 @@ describe("createWebGpuHost map target picking", () => {
       null,
     );
   });
+
+  it("carries no stale picks or mapping into a replaced scene", () => {
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect" },
+    });
+    fx.fireFrame(0);
+
+    // A city load swaps the world and bumps the scene revision before the
+    // next frame draws. A click in that gap resolves against the live map —
+    // the drawn targets belong to the previous scene and must not leak a
+    // vehicle pick (ids repeat across cities) or its transform.
+    fx.setState(createTestGameState());
+    fx.setSceneRevision(2);
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 2, y: 2 },
+      null,
+    );
+
+    // Once the new scene has drawn a frame, clicks actuate that frame again.
+    fx.fireFrame(16);
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 2, y: 2 },
+      null,
+    );
+  });
+
+  it("carries no pick while a building placement is armed", () => {
+    const fx = createFixture({
+      state: stateWithVehicleForFrame(),
+      ui: { activeTool: "inspect", selectedBuilding: "smallHouse" },
+    });
+    fx.fireFrame(0);
+
+    // An armed placement is a build click, not a Select click: the drawn
+    // vehicle under it must not reach handleTileClick as a candidate.
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
+      { x: 2, y: 2 },
+      null,
+    );
+  });
 });
 
 describe("createWebGpuHost device loss", () => {

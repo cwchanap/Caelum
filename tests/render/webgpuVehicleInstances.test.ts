@@ -707,7 +707,7 @@ describe("emphasis, culling, and instance encoding", () => {
     expect(instances).toHaveLength(0);
   });
 
-  it("exposes the post-cull draw points as pick samples", () => {
+  it("exposes the post-cull draw order and world centers for picking", () => {
     const legs = legWithSteps([lineStep({ x: 1, y: 1 }, { x: 40, y: 1 })]);
     const vehicles = [11, 20].map((tileX, index) =>
       busVehicle({
@@ -716,7 +716,7 @@ describe("emphasis, culling, and instance encoding", () => {
       }),
     );
     const latest = stateWithVehicles(legs, vehicles);
-    const { instances, samples } = encodeVehicleInstances({
+    const { instances, vehicleIds } = encodeVehicleInstances({
       previous: null,
       latest,
       ui: createUiState(),
@@ -724,12 +724,11 @@ describe("emphasis, culling, and instance encoding", () => {
       paused: false,
       viewport: { minX: 400, minY: 0, maxX: 432, maxY: 64 },
     });
-    expect(samples).toHaveLength(1);
-    expect(samples[0].id).toBe("vehicle-000");
-    expectNear(samples[0].point.x, 368);
-    expectNear(samples[0].point.y, 48);
-    expect(samples[0].point.x).toBe(instances[0]);
-    expect(samples[0].point.y).toBe(instances[1]);
+    expect(vehicleIds).toEqual(["vehicle-000"]);
+    // The id order matches the instance buffer, whose position slot is the
+    // world center the click picker measures.
+    expectNear(instances[0]!, 368);
+    expectNear(instances[1]!, 48);
   });
 
   it("encodes in presented order without re-sorting", () => {

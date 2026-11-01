@@ -6,7 +6,7 @@ import type {
   TripPosition,
 } from "../../domain/types";
 import type { UiState } from "../../ui/uiState";
-import { tileSize } from "../boardTransform";
+import { tileCenter, tileSize } from "../boardTransform";
 import { colors } from "../colors";
 import {
   canonicalCorridorPrimitive,
@@ -37,13 +37,6 @@ const METRO_LINE_WIDTH = 8;
 const STOP_MARKER_COLOR = parseColor(colors.bus);
 const STATION_MARKER_COLOR = parseColor(colors.metro);
 const ACCESS_INDICATOR_COLOR = parseColor(colors.hover);
-
-function center(point: TripPosition): TripPosition {
-  return {
-    x: point.x * tileSize + tileSize / 2,
-    y: point.y * tileSize + tileSize / 2,
-  };
-}
 
 function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
@@ -126,6 +119,20 @@ export function buildCorridorGroups(
   );
 }
 
+/** Corridor offsets are state-derived presentation, and GameState is
+ *  immutable with reference-equality dispatch, so they cache on state
+ *  identity. */
+const corridorsCache = new WeakMap<GameState, CorridorGroups>();
+
+export function corridorsFor(state: GameState): CorridorGroups {
+  let corridors = corridorsCache.get(state);
+  if (corridors === undefined) {
+    corridors = buildCorridorGroups(renderableLines(state));
+    corridorsCache.set(state, corridors);
+  }
+  return corridors;
+}
+
 function nodePositionMap(state: GameState): Map<string, TripPosition> {
   const positions = new Map<string, TripPosition>();
   for (const stop of state.transit.stops) {
@@ -200,7 +207,7 @@ function drawSteps(
   for (const step of path.steps) {
     const geometry = toPixelGeometry(
       offsetForRoute(step.geometry, routeId, corridors),
-      center,
+      tileCenter,
     );
     if (geometry.kind === "line") {
       if (dash !== undefined) {
@@ -231,7 +238,12 @@ function drawEndpointConnector(
   lineWidth: number,
 ): void {
   if (sameTripPosition(nodePosition, pathEndpoint)) return;
-  g.thickLine(center(nodePosition), center(pathEndpoint), lineWidth, color);
+  g.thickLine(
+    tileCenter(nodePosition),
+    tileCenter(pathEndpoint),
+    lineWidth,
+    color,
+  );
 }
 
 function drawLegs(
@@ -281,8 +293,8 @@ function drawLegs(
     } else if (from !== undefined && to !== undefined) {
       // Broken leg with no last-valid geometry: dotted endpoint-to-endpoint.
       g.dashedLine(
-        center(from),
-        center(to),
+        tileCenter(from),
+        tileCenter(to),
         lineWidth,
         BROKEN_LEG_DASH.dash,
         BROKEN_LEG_DASH.gap,
@@ -298,7 +310,7 @@ function drawArrowhead(
   angleRadians: number,
   color: Rgba,
 ): void {
-  const pixel = center(point);
+  const pixel = tileCenter(point);
   const cos = Math.cos(angleRadians);
   const sin = Math.sin(angleRadians);
   g.triangle(
@@ -332,8 +344,8 @@ function drawStopAccessIndicators(g: SolidGeometry, state: GameState): void {
     const access = stop.roadAccess;
     if (stop.status !== "present" || access === undefined) continue;
 
-    const from = center(stop.position);
-    const to = center(access.roadPoint);
+    const from = tileCenter(stop.position);
+    const to = tileCenter(access.roadPoint);
     const dx = to.x - from.x;
     const dy = to.y - from.y;
     const length = Math.hypot(dx, dy);
@@ -399,7 +411,11 @@ function drawRouteNodeCues(
       const geometry = waypointGeometry(line, waypointId);
       if (node === undefined || geometry === null) continue;
       const presentation = presentationForRoute(geometry, line.id, corridors);
-      g.circle(center(presentation.translatePoint(node.position)), 3, cueColor);
+      g.circle(
+        tileCenter(presentation.translatePoint(node.position)),
+        3,
+        cueColor,
+      );
     }
   }
 }
@@ -439,7 +455,7 @@ export function buildTransitBatch(
   );
   const g = new SolidGeometry();
   const lines = renderableLines(state);
-  const corridors = buildCorridorGroups(lines);
+  const corridors = corridorsFor(state);
   const nodes = nodePositionMap(state);
 
   for (const line of lines) {
@@ -474,12 +490,12 @@ export function buildTransitBatch(
 
   for (const stop of state.transit.stops) {
     if (stop.status !== "present") continue;
-    const point = center(stop.position);
+    const point = tileCenter(stop.position);
     g.rect(point.x - 5, point.y - 5, 10, 10, STOP_MARKER_COLOR);
   }
   for (const station of state.transit.stations) {
     if (station.status !== "present") continue;
-    g.circle(center(station.position), 8, STATION_MARKER_COLOR);
+    g.circle(tileCenter(station.position), 8, STATION_MARKER_COLOR);
   }
   drawRouteNodeCues(g, state, lines, corridors, emphasizedIds);
 
@@ -510,7 +526,7 @@ export function draftLegVertices(
   }
 
   const g = new SolidGeometry();
-  const corridors = buildCorridorGroups(renderableLines(state));
+  const corridors = corridorsFor(state);
   const nodes = nodePositionMap(state);
   const draftRouteId = editedId ?? `draft-${draft.instanceId}`;
 
@@ -542,8 +558,8 @@ export function draftLegVertices(
       }
     } else if (from !== undefined && to !== undefined) {
       g.dashedLine(
-        center(from),
-        center(to),
+        tileCenter(from),
+        tileCenter(to),
         3,
         DRAFT_DASH.dash,
         DRAFT_DASH.gap,

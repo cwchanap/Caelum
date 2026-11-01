@@ -397,10 +397,36 @@ export async function createGameRuntime(
     return snapshot;
   };
 
-  const commit = (nextState = state, nextUi = ui): RuntimeSnapshot => {
-    const changed = nextState !== state || nextUi !== ui;
+  const commit = (
+    nextState = state,
+    nextUi = ui,
+    nextCamera?: Camera | null,
+  ): RuntimeSnapshot => {
+    if (
+      nextUi.selectedVehicleId !== null &&
+      !nextState.transit.vehicles.some(
+        (candidate) => candidate.id === nextUi.selectedVehicleId,
+      )
+    ) {
+      // The selected vehicle no longer exists in the incoming state — retired
+      // by the simulation, or this is a different city's state where the same
+      // id now names another vehicle (the core allocates ids as max+1). Keeping
+      // the id would let Inspect present a different vehicle than the player
+      // clicked.
+      nextUi = {
+        ...nextUi,
+        selectedId: null,
+        selectedNodeKind: null,
+        selectedVehicleId: null,
+      };
+    }
+    const cameraChanged = nextCamera !== undefined && nextCamera !== camera;
+    const changed = nextState !== state || nextUi !== ui || cameraChanged;
     state = nextState;
     ui = nextUi;
+    if (cameraChanged) {
+      camera = nextCamera;
+    }
 
     if (!changed) {
       if (!dead) {
@@ -1886,19 +1912,29 @@ export async function createGameRuntime(
       if (route === undefined) return commit(state, ui);
       const node = presentNodeAt(state, nodeId);
       if (node === null) return commit(state, ui);
-      gameHost.adjustCamera({ kind: "centerOn", point: node.position });
-      return commit(state, {
-        ...ui,
-        activeTool: "inspect",
-        activeCommandDestination: null,
-        selectedId: `${node.position.x},${node.position.y}`,
-        selectedNodeKind: node.kind,
-        selectedVehicleId: null,
-        selectedRouteId: routeId,
-        routeFailureFocus: null,
-        selectedBuilding: null,
-        selectedArea: null,
+      // Resolve the camera before committing so the move and the selection
+      // land in one published snapshot — subscribers never see new camera
+      // with old UI or old camera with new UI.
+      const nextCamera = gameHost.cameraForAction({
+        kind: "centerOn",
+        point: node.position,
       });
+      return commit(
+        state,
+        {
+          ...ui,
+          activeTool: "inspect",
+          activeCommandDestination: null,
+          selectedId: `${node.position.x},${node.position.y}`,
+          selectedNodeKind: node.kind,
+          selectedVehicleId: null,
+          selectedRouteId: routeId,
+          routeFailureFocus: null,
+          selectedBuilding: null,
+          selectedArea: null,
+        },
+        nextCamera,
+      );
     },
     openServiceControls(routeId) {
       if (dead) return getSnapshot();

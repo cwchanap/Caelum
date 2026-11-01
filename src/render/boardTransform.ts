@@ -10,6 +10,14 @@ export interface BoardTransform {
   height: number;
 }
 
+/** World-pixel center of a map tile. */
+export function tileCenter(point: Point): Point {
+  return {
+    x: point.x * tileSize + tileSize / 2,
+    y: point.y * tileSize + tileSize / 2,
+  };
+}
+
 interface BoardSize {
   width: number;
   height: number;
@@ -284,13 +292,18 @@ export function syncCanvasSize(canvas: CanvasSizeTarget): boolean {
   return applyCanvasPixelSize(canvas, rect.width, rect.height);
 }
 
-export function canvasToTile(
+/**
+ * Screen→world→tile conversion against one resolved transform — the shared
+ * mapping every pointer path uses, so a click, the hover highlight, and a
+ * drag release cannot disagree. Returns null off-canvas or off-map.
+ */
+export function canvasToWorld(
   canvas: HTMLCanvasElement,
   clientX: number,
   clientY: number,
   map: MapSize,
-  camera: Camera | null = null,
-): Point | null {
+  transform: BoardTransform,
+): { world: Point; tile: Point } | null {
   const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) {
     return null;
@@ -304,19 +317,37 @@ export function canvasToTile(
   if (cssX < 0 || cssX >= rect.width || cssY < 0 || cssY >= rect.height) {
     return null;
   }
+  if (!(transform.scale > 0)) {
+    return null;
+  }
 
   // Map in CSS px: the camera is clamped against the CSS board, the same box
   // the host and the DOM text overlay use.
-  const transform = getBoardTransform(rect, map, camera);
-  const point = {
-    x: Math.floor((cssX - transform.offsetX) / transform.scale / tileSize),
-    y: Math.floor((cssY - transform.offsetY) / transform.scale / tileSize),
+  const world = {
+    x: (cssX - transform.offsetX) / transform.scale,
+    y: (cssY - transform.offsetY) / transform.scale,
+  };
+  const tile = {
+    x: Math.floor(world.x / tileSize),
+    y: Math.floor(world.y / tileSize),
   };
 
-  return point.x >= 0 &&
-    point.x < map.width &&
-    point.y >= 0 &&
-    point.y < map.height
-    ? point
+  return tile.x >= 0 && tile.x < map.width && tile.y >= 0 && tile.y < map.height
+    ? { world, tile }
     : null;
+}
+
+export function canvasToTile(
+  canvas: HTMLCanvasElement,
+  clientX: number,
+  clientY: number,
+  map: MapSize,
+  camera: Camera | null = null,
+): Point | null {
+  const transform = getBoardTransform(
+    canvas.getBoundingClientRect(),
+    map,
+    camera,
+  );
+  return canvasToWorld(canvas, clientX, clientY, map, transform)?.tile ?? null;
 }

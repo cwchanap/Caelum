@@ -1,6 +1,6 @@
 import type { GameState, Point, Station, Stop } from "../domain/types";
 import { isPresentTransitNode } from "../runtime/presentationView";
-import type { MapPick } from "../render/webgpu/pickMapTarget";
+import type { MapPick } from "./mapPick";
 import {
   applyRouteNodeClick,
   cancelDraftRoute,
@@ -134,11 +134,11 @@ export function applyUiTileClick(
     const nodes = resolveNodesAtTile(state, point);
     const isSameTile = ui.selectedId === `${point.x},${point.y}`;
     const vehicle =
-      ui.selectedBuilding === null && !(isSameTile && nodes.length > 0)
-        ? state.transit.vehicles.find(
+      isSameTile && nodes.length > 0
+        ? undefined
+        : state.transit.vehicles.find(
             (candidate) => candidate.id === pick?.vehicleId,
-          )
-        : undefined;
+          );
     if (vehicle !== undefined) {
       return {
         state,
@@ -154,10 +154,9 @@ export function applyUiTileClick(
     }
 
     if (nodes.length === 0) {
-      const pickedLineId = ui.selectedBuilding === null ? pick?.lineId : null;
+      const pickedLineId = pick?.lineId ?? null;
       const lineIdToOpen =
         pickedLineId !== null &&
-        pickedLineId !== undefined &&
         (state.transit.routes.some((route) => route.id === pickedLineId) ||
           state.transit.metroLines.some((line) => line.id === pickedLineId))
           ? pickedLineId
@@ -166,9 +165,14 @@ export function applyUiTileClick(
         return {
           state,
           ui:
-            ui.selectedVehicleId === null
+            ui.selectedId === null
               ? ui
-              : { ...ui, selectedId: null, selectedVehicleId: null },
+              : {
+                  ...ui,
+                  selectedId: null,
+                  selectedNodeKind: null,
+                  selectedVehicleId: null,
+                },
           lineIdToOpen,
         };
       }
