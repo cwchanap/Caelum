@@ -21,7 +21,7 @@ export interface MapPick {
 const PICK_RADIUS = tileSize / 2;
 const LINE_STEP_SAMPLES = 8;
 
-interface LinePickStep {
+interface LinePickCandidate {
   lineId: string;
   tiles: Point[];
   points: Point[];
@@ -34,30 +34,38 @@ function center(point: Point): Point {
   };
 }
 
-function linePickSteps(state: GameState): LinePickStep[] {
+function linePickCandidates(state: GameState): LinePickCandidate[] {
   const lines = renderableLines(state);
   const corridors = buildCorridorGroups(lines);
-  const steps: LinePickStep[] = [];
+  const candidates: LinePickCandidate[] = [];
   for (const line of lines) {
+    const tiles: Point[] = [];
+    const points: Point[] = [];
     for (const leg of line.legs) {
       const path = presentationPath(leg);
       if (path === null) continue;
       for (const step of path.steps) {
+        if (
+          !tiles.some(
+            (entry) =>
+              entry.x === step.position.x && entry.y === step.position.y,
+          )
+        ) {
+          tiles.push(step.position);
+        }
         const presented = presentationForRoute(
           step.geometry,
           line.id,
           corridors,
         ).geometry;
-        const tiles = [step.position];
-        const points: Point[] = [];
         for (let index = 0; index <= LINE_STEP_SAMPLES; index += 1) {
           points.push(center(pointAt(presented, index / LINE_STEP_SAMPLES)));
         }
-        steps.push({ lineId: line.id, tiles, points });
       }
     }
+    candidates.push({ lineId: line.id, tiles, points });
   }
-  return steps;
+  return candidates;
 }
 
 export function pickMapTarget(
@@ -86,13 +94,13 @@ export function pickMapTarget(
   let bestLineId: string | null = null;
   let bestLineDistanceSq = 0;
   if (state !== null) {
-    for (const step of linePickSteps(state)) {
+    for (const line of linePickCandidates(state)) {
       if (
-        !step.tiles.some((entry) => entry.x === tile.x && entry.y === tile.y)
+        !line.tiles.some((entry) => entry.x === tile.x && entry.y === tile.y)
       ) {
         continue;
       }
-      for (const sample of step.points) {
+      for (const sample of line.points) {
         const dx = sample.x - point.x;
         const dy = sample.y - point.y;
         const distanceSq = dx * dx + dy * dy;
@@ -100,9 +108,9 @@ export function pickMapTarget(
         if (
           bestLineId === null ||
           distanceSq < bestLineDistanceSq ||
-          (distanceSq === bestLineDistanceSq && step.lineId < bestLineId)
+          (distanceSq === bestLineDistanceSq && line.lineId < bestLineId)
         ) {
-          bestLineId = step.lineId;
+          bestLineId = line.lineId;
           bestLineDistanceSq = distanceSq;
         }
       }
