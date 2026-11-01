@@ -3120,6 +3120,35 @@ describe("Game Runtime", () => {
 
     expect(runtime.getSnapshot().shell.inspector).toBeNull();
   });
+
+  it("opens Lines with the picked route and clears vehicle Inspect, even when already selected", async () => {
+    const backend = backendSpy(snapshotWithVehicle());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("inspect");
+    runtime.openServiceControls("route-001");
+    await runtime.handleTileClick(
+      { x: 5, y: 5 },
+      { vehicleId: "vehicle-001", lineId: null },
+    );
+    expect(runtime.getSnapshot().ui.selectedVehicleId).toBe("vehicle-001");
+    expect(runtime.getSnapshot().shell.inspector?.kind).toBe("vehicle");
+
+    const snapshot = await runtime.handleTileClick(
+      { x: 6, y: 5 },
+      { vehicleId: null, lineId: "route-001" },
+    );
+
+    expect(snapshot.ui.selectedVehicleId).toBeNull();
+    expect(snapshot.ui.selectedRouteId).toBe("route-001");
+    expect(snapshot.ui.activeCommandDestination).toBe("lines");
+    expect(snapshot.shell.inspector).toBeNull();
+    expect(backend.intents).toEqual([]);
+  });
 });
 
 describe("runtime assignRouteToPlatform", () => {

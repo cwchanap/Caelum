@@ -1645,6 +1645,10 @@ export async function createGameRuntime(
           point,
           isSelectClick ? pick : undefined,
         );
+        if (result.lineIdToOpen !== null) {
+          commit(state, result.ui);
+          return api.openServiceControls(result.lineIdToOpen);
+        }
         if (
           hasPreviewRelevantChange(previousDraft, result.ui.routeDraft) &&
           result.ui.routePreviewError === null
