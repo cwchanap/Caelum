@@ -33,7 +33,8 @@ export type CameraAction =
   | { kind: "zoomIn" }
   | { kind: "zoomOut" }
   | { kind: "fit" }
-  | { kind: "pan"; x: number; y: number };
+  | { kind: "pan"; x: number; y: number }
+  | { kind: "centerOn"; point: Point };
 
 /** Largest on-screen tile, in CSS px, the camera may zoom to. */
 const MAX_TILE_CSS_PX = 96;
@@ -237,6 +238,17 @@ export function applyCameraAction(
         -action.x * board.width * PAN_STEP_FRACTION,
         -action.y * board.height * PAN_STEP_FRACTION,
       );
+    case "centerOn": {
+      const current = resolvedCamera(board, map, camera);
+      const zoom =
+        current.zoom <= 1 ? Math.min(2, maxZoom(board, map)) : current.zoom;
+      return fittedAsNull(
+        clampCamera(board, map, {
+          zoom,
+          center: { x: action.point.x, y: action.point.y },
+        }),
+      );
+    }
   }
 }
 
