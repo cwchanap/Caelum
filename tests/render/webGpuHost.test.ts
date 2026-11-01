@@ -1769,14 +1769,29 @@ function stateWithVehicleForFrame(
     stepProgress: 0,
     parkedPosition: null,
   };
-  const step: RoadPathStep = {
-    position: { x: 2, y: 2 },
-    enteringHeading: "east",
-    leavingHeading: "east",
-    movement: "straight",
-    geometry: { kind: "line", from: { x: 2, y: 2 }, to },
-    travelSeconds: 10,
-  };
+  const dx = Math.sign(to.x - 2);
+  const dy = Math.sign(to.y - 2);
+  const heading = dx !== 0 ? ("east" as const) : ("south" as const);
+  const steps: RoadPathStep[] = [];
+  for (
+    let index = 0;
+    index <= Math.abs(to.x - 2) + Math.abs(to.y - 2);
+    index += 1
+  ) {
+    const position = { x: 2 + dx * index, y: 2 + dy * index };
+    steps.push({
+      position,
+      enteringHeading: heading,
+      leavingHeading: heading,
+      movement: "straight",
+      geometry: {
+        kind: "line",
+        from: position,
+        to: { x: position.x + dx, y: position.y + dy },
+      },
+      travelSeconds: 10,
+    });
+  }
   return {
     ...base,
     transit: {
@@ -1808,11 +1823,11 @@ function stateWithVehicleForFrame(
               status: "connected",
               currentPath: {
                 kind: "road",
-                steps: [step],
-                totalTravelSeconds: 10,
+                steps,
+                totalTravelSeconds: 10 * steps.length,
               } as TransitPath,
               lastValidPath: null,
-              estimatedSeconds: 10,
+              estimatedSeconds: 10 * steps.length,
               failureReason: null,
             },
           ],
