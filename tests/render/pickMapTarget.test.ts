@@ -85,6 +85,71 @@ function withTerminalUTurn(state: GameState, terminal: Point): GameState {
   };
 }
 
+function staleLegEndingAt(to: Point): RouteLegPath {
+  const from = { x: to.x - 1, y: to.y };
+  const path: TransitPath = {
+    kind: "road",
+    steps: [
+      {
+        position: { x: from.x, y: from.y },
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: {
+          kind: "line",
+          from: { x: from.x, y: from.y },
+          to: { x: to.x, y: to.y },
+        },
+        travelSeconds: 1.25,
+      },
+    ],
+    totalTravelSeconds: 1.25,
+  };
+  return {
+    fromWaypointId: "stop-001",
+    toWaypointId: "stop-002",
+    direction: "outbound",
+    kind: "service",
+    status: "networkDisconnected",
+    currentPath: null,
+    lastValidPath: path,
+    estimatedSeconds: null,
+    failureReason: "networkDisconnected",
+  };
+}
+
+function reconnectingLeg(from: Point): RouteLegPath {
+  const path: TransitPath = {
+    kind: "road",
+    steps: [
+      {
+        position: { x: from.x, y: from.y },
+        enteringHeading: "west",
+        leavingHeading: "west",
+        movement: "straight",
+        geometry: {
+          kind: "line",
+          from: { x: from.x, y: from.y },
+          to: { x: from.x - 1, y: from.y },
+        },
+        travelSeconds: 1.25,
+      },
+    ],
+    totalTravelSeconds: 1.25,
+  };
+  return {
+    fromWaypointId: "stop-002",
+    toWaypointId: "stop-001",
+    direction: "return",
+    kind: "service",
+    status: "connected",
+    currentPath: path,
+    lastValidPath: path,
+    estimatedSeconds: 1.25,
+    failureReason: null,
+  };
+}
+
 describe("pickMapTarget", () => {
   it("picks the sample inside half a tile", () => {
     const pick = pickMapTarget(
@@ -247,5 +312,33 @@ describe("pickMapTarget line paths", () => {
     expect(
       pickMapTarget([], state, { x: 300, y: 256 }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: null, lineId: "metro-001" });
+  });
+
+  it("does not let a retained last-valid endpoint claim a tile with no presented step", () => {
+    let state = corridorState();
+    state = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: state.transit.routes.map((route) => ({
+          ...route,
+          legs: [
+            staleLegEndingAt({ x: 14, y: 8 }),
+            reconnectingLeg({ x: 15, y: 9 }),
+          ],
+        })),
+      },
+    };
+    state = placeTestBuilding(state, "smallHouse", { x: 14, y: 7 }, 90);
+
+    expect(
+      pickMapTarget([], state, { x: 464, y: 272 }, { x: 14, y: 8 }),
+    ).toBeNull();
+    expect(
+      pickMapTarget([], state, { x: 432, y: 272 }, { x: 13, y: 8 }),
+    ).toEqual({ vehicleId: null, lineId: "route-001" });
+    expect(
+      pickMapTarget([], state, { x: 490, y: 304 }, { x: 15, y: 9 }),
+    ).toEqual({ vehicleId: null, lineId: "route-001" });
   });
 });
