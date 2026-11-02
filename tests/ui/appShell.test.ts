@@ -1840,7 +1840,6 @@ describe("App command shell", () => {
 
     const editable = document.createElement("div");
     editable.contentEditable = "true";
-    // jsdom leaves isContentEditable unimplemented; stub the browser value.
     Object.defineProperty(editable, "isContentEditable", { value: true });
     document.body.appendChild(editable);
     await fireEvent.keyDown(editable, { key: "z", ctrlKey: true });

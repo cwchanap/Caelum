@@ -913,8 +913,6 @@ function applyIntent(
     return { ...snapshot, budget: intent.budget };
   }
   if (intent.type === "undoLastBuild") {
-    // The fake keeps no build record; runtime tests assert the intent crossed
-    // the queue while Rust proves the inverse.
     return snapshot;
   }
   throw new Error(
@@ -3231,7 +3229,7 @@ describe("runtime undoLastBuild", () => {
     };
     backend.rejectNextDispatchWith(nothingToUndo);
     const pending = runtime.undoLastBuild();
-    await Promise.resolve(); // let the queued dispatch reach the suspended backend call
+    await Promise.resolve();
     await backend.resolveNext();
     const snapshot = await pending;
 
