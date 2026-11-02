@@ -279,8 +279,6 @@ impl GameEngine {
         snapshot
     }
 
-    /// Capture the durable snapshot for a save. The pending build-undo record
-    /// is consumed on capture, so a failed write may still cost the undo.
     pub fn snapshot_for_save(&mut self) -> GameSnapshot {
         self.last_build = None;
         let mut snapshot = self.snapshot();
@@ -456,8 +454,6 @@ impl GameEngine {
     /// was invalid.
     pub fn dispatch(&mut self, intent: GameIntent) -> GameplayUpdateResult {
         let build_class = build_undo::classify(&intent);
-        // Map builds capture their whole-map inverse before dispatching; only
-        // construction classes pay the clone.
         let before_map = match build_class {
             BuildClass::Map => Some(self.snapshot.map.clone()),
             _ => None,
@@ -468,8 +464,6 @@ impl GameEngine {
         result
     }
 
-    /// Record the undo inverse of an applied construction. Rejected and no-op
-    /// dispatches keep the previous record; a successful demolition clears it.
     fn note_build_record(
         &mut self,
         build_class: BuildClass,
@@ -710,9 +704,6 @@ impl GameEngine {
         result.map(|mutation| NetworkCandidate::plain(mutation.into_snapshot()))
     }
 
-    /// Undo the retained build record. Checks run against the live shell and a
-    /// cloned candidate only — a rejection changes neither the snapshot, the
-    /// topology, the budget, nor the ECS world.
     fn undo_last_build(&mut self) -> GameplayUpdateResult {
         let Some(record) = &self.last_build else {
             return GameplayUpdateResult::rejected(
@@ -769,8 +760,6 @@ impl GameEngine {
             }
         };
 
-        // Ordinary network preparation runs before any commit; the only extra
-        // veto is a connected route that would come back broken.
         let (candidate, topology) = match self.prepare_network_candidate(candidate) {
             Ok(prepared) => prepared,
             Err(rejection) => {
@@ -808,10 +797,6 @@ impl GameEngine {
         self.commit_snapshot_and_topology(candidate, topology)
     }
 
-    /// Shared candidate preparation: stop-access normalization, conditional
-    /// topology compilation, and route recomputation against the live shell.
-    /// Pure with respect to `self` — commits happen only through
-    /// [`GameEngine::commit_snapshot_and_topology`].
     fn prepare_network_candidate(
         &self,
         snapshot: GameSnapshot,
@@ -857,8 +842,8 @@ impl GameEngine {
             return GameplayUpdateResult::frame_only(self.frame_update(), false);
         }
         // Building-changing candidates reconcile the ECS population world with
-        // the candidate before installation. The no-op guard above runs first,
-        // so rejected and identical candidates never mutate the world.
+        // the candidate before installation. Rejected and no-op dispatches
+        // never reach this point, so they cannot mutate the world.
         if snapshot.buildings != self.snapshot.buildings {
             crate::population::reconcile_buildings(&mut self.world, &self.snapshot, &mut snapshot);
         }
