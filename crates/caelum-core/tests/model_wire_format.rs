@@ -1178,6 +1178,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
                 ("size", json!("compact2x2")),
             ],
         ),
+        (GameIntent::UndoLastBuild, "undoLastBuild", vec![]),
         (
             GameIntent::SetBudget { budget: 50_000 },
             "setBudget",
@@ -1216,6 +1217,7 @@ fn all_game_intent_variants_use_camel_case_wire_names() {
             GameIntent::AssignRouteToPlatform { .. } => "assignRouteToPlatform",
             GameIntent::PaintAreaRectangle { .. } => "paintAreaRectangle",
             GameIntent::PlaceBuilding { .. } => "placeBuilding",
+            GameIntent::UndoLastBuild => "undoLastBuild",
             GameIntent::SetBudget { .. } => "setBudget",
         }
     }
@@ -1647,6 +1649,9 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
             RejectionCode::InvalidBuildingPlacement => "invalidBuildingPlacement",
             RejectionCode::BlockedFootprint => "blockedFootprint",
             RejectionCode::UnsafeRoundaboutPortMapping => "unsafeRoundaboutPortMapping",
+            RejectionCode::NothingToUndo => "nothingToUndo",
+            RejectionCode::UndoExpired => "undoExpired",
+            RejectionCode::UndoConflict => "undoConflict",
         }
     }
 
@@ -1681,6 +1686,9 @@ fn rejection_code_camel_case_spellings_are_exhaustive() {
         RejectionCode::InvalidBuildingPlacement,
         RejectionCode::BlockedFootprint,
         RejectionCode::UnsafeRoundaboutPortMapping,
+        RejectionCode::NothingToUndo,
+        RejectionCode::UndoExpired,
+        RejectionCode::UndoConflict,
     ];
 
     let mut seen = std::collections::HashSet::new();

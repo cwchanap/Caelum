@@ -821,7 +821,7 @@ fn missing_driving_payload_becomes_unserved_and_saveable() {
 
     let engine = GameEngine::from_snapshot(next);
     assert!(engine.is_ok(), "unserved result is persistence-valid");
-    if let Ok(engine) = engine {
+    if let Ok(mut engine) = engine {
         let saved = engine.snapshot_for_save();
         assert!(saved.active_trips.is_empty());
     }

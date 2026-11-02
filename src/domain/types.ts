@@ -145,7 +145,10 @@ export type RejectionCode =
   | "invalidHeadway"
   | "headwayNotSet"
   | "fleetAlreadyAssigned"
-  | "vehiclesOccupied";
+  | "vehiclesOccupied"
+  | "nothingToUndo"
+  | "undoExpired"
+  | "undoConflict";
 
 export interface RejectionContext {
   routeId?: string;

@@ -51,7 +51,7 @@ fn worker_idle_schedule_round_trips_through_save_and_restore() {
         Some(Point::from((8, 3))),
     )];
 
-    let engine = GameEngine::from_snapshot(snapshot.clone()).unwrap();
+    let mut engine = GameEngine::from_snapshot(snapshot.clone()).unwrap();
     let restored = GameEngine::from_snapshot(engine.snapshot_for_save()).unwrap();
 
     assert_eq!(restored.snapshot().sims, snapshot.sims);
@@ -72,7 +72,7 @@ fn student_idle_schedule_round_trips_through_save_and_restore() {
         }),
     }];
 
-    let engine = GameEngine::from_snapshot(snapshot.clone()).unwrap();
+    let mut engine = GameEngine::from_snapshot(snapshot.clone()).unwrap();
     let restored = GameEngine::from_snapshot(engine.snapshot_for_save()).unwrap();
 
     assert_eq!(restored.snapshot().sims, snapshot.sims);
@@ -117,7 +117,7 @@ fn travelling_sim_without_next_activity_round_trips_through_save_and_restore() {
         private_car_trip: None,
     }];
 
-    let engine = GameEngine::from_snapshot(snapshot.clone()).unwrap();
+    let mut engine = GameEngine::from_snapshot(snapshot.clone()).unwrap();
     let restored = GameEngine::from_snapshot(engine.snapshot_for_save()).unwrap();
 
     assert_eq!(restored.snapshot().sims, snapshot.sims);

@@ -52,7 +52,7 @@ fn save_changes_only_paused_on_a_validated_clone() {
 
 #[test]
 fn strict_construction_preserves_the_snapshot_and_rebuilds_equal_topology() {
-    let source = GameEngine::new();
+    let mut source = GameEngine::new();
     let expected_snapshot = source.snapshot_for_save();
     let expected_topology = source.road_topology_for_test().clone();
 

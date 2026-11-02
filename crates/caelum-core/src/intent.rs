@@ -115,6 +115,9 @@ pub enum GameIntent {
         origin: Point,
         rotation: u16,
     },
+    /// Fieldless undo of the most recent applied build, while the record is
+    /// younger than one in-game hour.
+    UndoLastBuild,
     /// Debug/e2e helper to set the budget directly. Deserialized on the wire
     /// for dev WASM/e2e, but `GameEngine::dispatch` only applies it under
     /// `debug_assertions` — release builds leave the snapshot unchanged.

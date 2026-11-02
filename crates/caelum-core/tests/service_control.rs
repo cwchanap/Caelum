@@ -68,7 +68,7 @@ fn one_bus_service_engine() -> GameEngine {
 }
 
 fn creative_one_bus_service_engine() -> GameEngine {
-    let deployed = one_bus_service_engine();
+    let mut deployed = one_bus_service_engine();
     let mut snapshot = deployed.snapshot_for_save();
     snapshot.rules.economy_preset = EconomyPreset::Creative;
     snapshot.budget = 399;
@@ -2070,7 +2070,7 @@ fn snapshot_for_save_omits_derived_service_metrics() {
         Point { x: 12, y: 4 },
         150.0,
     ));
-    let engine = GameEngine::from_snapshot(state).expect("targeted state loads");
+    let mut engine = GameEngine::from_snapshot(state).expect("targeted state loads");
     assert_eq!(
         engine.snapshot().transit.routes[0]
             .service_metrics
@@ -2150,7 +2150,7 @@ fn incoming_service_metrics_never_become_authority() {
         longest_wait_seconds: None,
         can_retire_vehicle: false,
     });
-    let restored = GameEngine::from_snapshot(forged).expect("forged state loads");
+    let mut restored = GameEngine::from_snapshot(forged).expect("forged state loads");
     let save = restored.snapshot_for_save();
     assert!(
         save.transit.routes[0].service_metrics.is_none(),
