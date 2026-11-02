@@ -30,6 +30,22 @@ describe("rejectionMessage", () => {
       "Keep parallel one-way roads at least 3 tiles apart.",
     );
   });
+
+  it.each([
+    ["nothingToUndo", "There is nothing to undo."],
+    ["undoExpired", "Too much time has passed to undo that build."],
+    [
+      "undoConflict",
+      "A building or route now depends on that build, so it can't be undone.",
+    ],
+  ] as const)("maps undo rejection %s to player copy", (code, expected) => {
+    const rejection = {
+      code,
+      context: gameplayRejectionContext(),
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(expected);
+  });
 });
 
 describe("workingSaveErrorMessage", () => {

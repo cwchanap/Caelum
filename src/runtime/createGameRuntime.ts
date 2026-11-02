@@ -1721,6 +1721,10 @@ export async function createGameRuntime(
       const intent = intentForToolClick(point);
       return intent === null ? commit(state, ui) : enqueueDispatch(intent);
     },
+    undoLastBuild() {
+      if (dead) return Promise.resolve(getSnapshot());
+      return enqueueDispatch({ type: "undoLastBuild" });
+    },
     assignRouteToPlatform(nodeId, routeId, platformId) {
       if (dead) return Promise.resolve(getSnapshot());
       return enqueueDispatch({

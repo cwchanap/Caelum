@@ -250,6 +250,7 @@ function createRuntimeHarness(
     commitDrag: vi.fn(async () => publish()),
     cancelDrag: vi.fn(() => publish()),
     handleTileClick: vi.fn(async () => publish()),
+    undoLastBuild: vi.fn(() => publish()),
     mountCanvas: vi.fn(() => () => {}),
     adjustCamera: vi.fn(() => publish()),
   } satisfies RuntimeController;
@@ -1776,5 +1777,98 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "Dismiss" }));
     expect(runtime.dismissRejection).toHaveBeenCalledTimes(1);
+  });
+
+  it("routes plain Ctrl/Cmd+Z to world undo while a city is active", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(runtime.undoLastBuild).toHaveBeenCalledTimes(1);
+    expect(runtime.undoRouteDraft).not.toHaveBeenCalled();
+    expect(runtime.redoRouteDraft).not.toHaveBeenCalled();
+
+    await fireEvent.keyDown(window, { key: "z", metaKey: true });
+    expect(runtime.undoLastBuild).toHaveBeenCalledTimes(2);
+  });
+
+  it("keeps route-draft undo/redo ahead of world undo", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-lines"));
+    await fireEvent.click(screen.getByRole("button", { name: "New Bus" }));
+
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(runtime.undoRouteDraft).toHaveBeenCalledTimes(1);
+    await fireEvent.keyDown(window, {
+      key: "z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    await fireEvent.keyDown(window, { key: "y", ctrlKey: true });
+    expect(runtime.redoRouteDraft).toHaveBeenCalledTimes(2);
+    expect(runtime.undoLastBuild).not.toHaveBeenCalled();
+  });
+
+  it("leaves Ctrl+Shift+Z, Ctrl+Y, and Alt+Z alone without a route draft", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(window, {
+      key: "z",
+      ctrlKey: true,
+      shiftKey: true,
+    });
+    await fireEvent.keyDown(window, { key: "y", ctrlKey: true });
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true, altKey: true });
+
+    expect(runtime.undoLastBuild).not.toHaveBeenCalled();
+    expect(runtime.undoRouteDraft).not.toHaveBeenCalled();
+    expect(runtime.redoRouteDraft).not.toHaveBeenCalled();
+  });
+
+  it("lets editable fields keep native text undo", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.keyDown(
+      screen.getByRole("textbox", { name: "Rename Harbour City" }),
+      { key: "z", ctrlKey: true },
+    );
+
+    const editable = document.createElement("div");
+    editable.contentEditable = "true";
+    // jsdom leaves isContentEditable unimplemented; stub the browser value.
+    Object.defineProperty(editable, "isContentEditable", { value: true });
+    document.body.appendChild(editable);
+    await fireEvent.keyDown(editable, { key: "z", ctrlKey: true });
+    editable.remove();
+
+    expect(runtime.undoLastBuild).not.toHaveBeenCalled();
+    expect(runtime.undoRouteDraft).not.toHaveBeenCalled();
+  });
+
+  it("does not run world undo on the New City screen or without an active city", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const view = render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(harness.runtime.undoLastBuild).not.toHaveBeenCalled();
+    view.unmount();
+
+    const noCity = createRuntimeHarness({
+      persistence: { activeCity: null },
+    });
+    render(App, { props: { runtime: noCity.runtime } });
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    expect(noCity.runtime.undoLastBuild).not.toHaveBeenCalled();
   });
 });
