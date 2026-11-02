@@ -454,9 +454,9 @@ fn rejects_vehicle_path_step_index_outside_the_normalized_route_path() {
 
 #[test]
 fn deterministic_round_trip_preserves_the_save_snapshot() {
-    let engine = engine_with_bus_route();
+    let mut engine = engine_with_bus_route();
     let saved = engine.snapshot_for_save();
-    let restored = GameEngine::from_snapshot(saved.clone()).expect("save must load");
+    let mut restored = GameEngine::from_snapshot(saved.clone()).expect("save must load");
 
     assert_eq!(restored.snapshot_for_save(), saved);
 }

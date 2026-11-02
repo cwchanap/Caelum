@@ -218,7 +218,7 @@ fn game_snapshot_for_save(
     state: State<'_, EngineState>,
     runtime_epoch: u64,
 ) -> Result<serde_json::Value, SnapshotCommandError> {
-    let owned = state
+    let mut owned = state
         .lock()
         .map_err(|error| SnapshotCommandError::HostFailure(error.to_string()))?;
     ensure_snapshot_runtime_epoch(owned.runtime_epoch, runtime_epoch)?;

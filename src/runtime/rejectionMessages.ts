@@ -90,6 +90,12 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "This route already has a bus fleet.";
     case "vehiclesOccupied":
       return "Every removable vehicle on this line has riders.";
+    case "nothingToUndo":
+      return "There is nothing to undo.";
+    case "undoExpired":
+      return "Too much time has passed to undo that build.";
+    case "undoConflict":
+      return "A building or route now depends on that build, so it can't be undone.";
     default:
       return assertNever(code, "rejection code");
   }

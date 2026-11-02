@@ -37,6 +37,9 @@ pub enum RejectionCode {
     InvalidBuildingPlacement,
     BlockedFootprint,
     UnsafeRoundaboutPortMapping,
+    NothingToUndo,
+    UndoExpired,
+    UndoConflict,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]

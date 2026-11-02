@@ -202,6 +202,7 @@ export type GameIntent =
       origin: Point;
       rotation: BuildingRotation;
     }
+  | { type: "undoLastBuild" }
   | { type: "setBudget"; budget: number };
 
 // ---------------------------------------------------------------------------

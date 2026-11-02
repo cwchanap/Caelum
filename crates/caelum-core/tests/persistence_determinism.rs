@@ -1,7 +1,7 @@
 use caelum_core::model::{EconomyPreset, Point, ServicePattern, TransitMode};
 use caelum_core::{GameEngine, GameIntent, RoadPreset, SandboxCreationRequest};
 
-fn assert_savable(engine: &GameEngine, label: &str) {
+fn assert_savable(engine: &mut GameEngine, label: &str) {
     let saved = engine.snapshot_for_save();
     GameEngine::from_snapshot(saved).unwrap_or_else(|error| {
         panic!("{label} produced a state that cannot be restored: {error:?}")
@@ -157,8 +157,8 @@ fn restored_engine_has_identical_future_results_and_topology() {
             original.road_topology_for_test(),
             restored.road_topology_for_test()
         );
-        assert_savable(&original, "original continuation state");
-        assert_savable(&restored, "restored continuation state");
+        assert_savable(&mut original, "original continuation state");
+        assert_savable(&mut restored, "restored continuation state");
     }
 }
 

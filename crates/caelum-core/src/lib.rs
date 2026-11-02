@@ -23,6 +23,7 @@
 //! and stable id/jitter derivation (see [`commute`] and [`ids`]).
 
 pub mod areas;
+pub(crate) mod build_undo;
 pub mod building_catalog;
 pub mod buildings;
 pub mod clock;

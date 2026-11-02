@@ -62,7 +62,7 @@ impl WasmGameEngine {
         to_snapshot_js_value(&self.inner.presentation())
     }
 
-    pub fn snapshot_for_save(&self) -> Result<JsValue, JsValue> {
+    pub fn snapshot_for_save(&mut self) -> Result<JsValue, JsValue> {
         to_snapshot_js_value(&self.inner.snapshot_for_save())
     }
 

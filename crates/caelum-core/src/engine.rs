@@ -1,9 +1,10 @@
 use crate::areas;
+use crate::build_undo::{self, BuildClass, BuildUndo};
 use crate::buildings;
 use crate::clock;
 use crate::cost_policy::CostedMutation;
 use crate::intent::{DispatchContext, GameIntent, GameplayUpdateResult};
-use crate::model::{GameSnapshot, Point};
+use crate::model::{GameMap, GameSnapshot, Point};
 use crate::persistence::{normalize_snapshot_for_save, prepare_snapshot, SnapshotLoadError};
 use crate::population::TripDemand;
 use crate::presentation::{self, PresentationUpdate};
@@ -209,6 +210,7 @@ pub struct GameEngine {
     road_topology: RoadTopology,
     world: World,
     population_schedule: Schedule,
+    last_build: Option<BuildUndo>,
 }
 
 impl Default for GameEngine {
@@ -263,6 +265,7 @@ impl GameEngine {
             road_topology,
             world,
             population_schedule,
+            last_build: None,
         }
     }
 
@@ -276,7 +279,10 @@ impl GameEngine {
         snapshot
     }
 
-    pub fn snapshot_for_save(&self) -> GameSnapshot {
+    /// Capture the durable snapshot for a save. The pending build-undo record
+    /// is consumed on capture, so a failed write may still cost the undo.
+    pub fn snapshot_for_save(&mut self) -> GameSnapshot {
+        self.last_build = None;
         let mut snapshot = self.snapshot();
         normalize_snapshot_for_save(&mut snapshot, &self.road_topology);
         snapshot
@@ -449,6 +455,54 @@ impl GameEngine {
     /// presentation update, an `applied` flag, and a rejection reason when the intent
     /// was invalid.
     pub fn dispatch(&mut self, intent: GameIntent) -> GameplayUpdateResult {
+        let build_class = build_undo::classify(&intent);
+        // Map builds capture their whole-map inverse before dispatching; only
+        // construction classes pay the clone.
+        let before_map = match build_class {
+            BuildClass::Map => Some(self.snapshot.map.clone()),
+            _ => None,
+        };
+        let budget_before = self.snapshot.budget;
+        let result = self.dispatch_intent(intent);
+        self.note_build_record(build_class, before_map, budget_before, &result);
+        result
+    }
+
+    /// Record the undo inverse of an applied construction. Rejected and no-op
+    /// dispatches keep the previous record; a successful demolition clears it.
+    fn note_build_record(
+        &mut self,
+        build_class: BuildClass,
+        before_map: Option<GameMap>,
+        budget_before: i32,
+        result: &GameplayUpdateResult,
+    ) {
+        if !result.applied {
+            return;
+        }
+        match build_class {
+            BuildClass::Map => {
+                self.last_build = Some(BuildUndo {
+                    built_at: self.snapshot.time,
+                    refund: budget_before - self.snapshot.budget,
+                    inverse: build_undo::BuildInverse::RestoreMap(
+                        before_map.expect("map builds clone their inverse before dispatch"),
+                    ),
+                });
+            }
+            BuildClass::Placement(point) => {
+                self.last_build = Some(BuildUndo {
+                    built_at: self.snapshot.time,
+                    refund: budget_before - self.snapshot.budget,
+                    inverse: build_undo::BuildInverse::Demolish(point),
+                });
+            }
+            BuildClass::Demolition => self.last_build = None,
+            BuildClass::Undo | BuildClass::Other => {}
+        }
+    }
+
+    fn dispatch_intent(&mut self, intent: GameIntent) -> GameplayUpdateResult {
         match intent {
             GameIntent::SetPaused { paused } => {
                 let mut next = self.snapshot.clone();
@@ -620,6 +674,7 @@ impl GameEngine {
                 ));
                 self.commit_network_mutation(candidate)
             }
+            GameIntent::UndoLastBuild => self.undo_last_build(),
             // Debug/test-only: production release builds ignore this intent so a
             // host cannot bypass construction costs via `{ "type": "setBudget" }`.
             // Unit tests use `set_budget_for_test`; e2e uses debug WASM builds.
@@ -655,26 +710,122 @@ impl GameEngine {
         result.map(|mutation| NetworkCandidate::plain(mutation.into_snapshot()))
     }
 
+    /// Undo the retained build record. Checks run against the live shell and a
+    /// cloned candidate only — a rejection changes neither the snapshot, the
+    /// topology, the budget, nor the ECS world.
+    fn undo_last_build(&mut self) -> GameplayUpdateResult {
+        let Some(record) = &self.last_build else {
+            return GameplayUpdateResult::rejected(
+                self.frame_update(),
+                GameplayRejection::new(RejectionCode::NothingToUndo),
+            );
+        };
+        let built_at = record.built_at;
+        let refund = record.refund;
+        if self.snapshot.time - built_at > build_undo::UNDO_WINDOW_SECONDS {
+            self.last_build = None;
+            return GameplayUpdateResult::rejected(
+                self.frame_update(),
+                GameplayRejection::new(RejectionCode::UndoExpired),
+            );
+        }
+
+        let mut candidate = self.snapshot.clone();
+        match &self
+            .last_build
+            .as_ref()
+            .expect("record checked above")
+            .inverse
+        {
+            build_undo::BuildInverse::RestoreMap(before_map) => {
+                if build_undo::grown_building_conflicts(&self.snapshot, before_map) {
+                    return GameplayUpdateResult::rejected(
+                        self.frame_update(),
+                        GameplayRejection::new(RejectionCode::UndoConflict),
+                    );
+                }
+                candidate.map = before_map.clone();
+            }
+            build_undo::BuildInverse::Demolish(point) => {
+                let point = *point;
+                candidate = match transit::remove_at_tile(&candidate, &point) {
+                    Ok(next) => next,
+                    Err(_) => {
+                        return GameplayUpdateResult::rejected(
+                            self.frame_update(),
+                            GameplayRejection::new(RejectionCode::UndoConflict),
+                        )
+                    }
+                };
+            }
+        }
+        candidate.budget = match candidate.budget.checked_add(refund) {
+            Some(budget) => budget,
+            None => {
+                return GameplayUpdateResult::rejected(
+                    self.frame_update(),
+                    GameplayRejection::new(RejectionCode::UndoConflict),
+                )
+            }
+        };
+
+        // Ordinary network preparation runs before any commit; the only extra
+        // veto is a connected route that would come back broken.
+        let (candidate, topology) = match self.prepare_network_candidate(candidate) {
+            Ok(prepared) => prepared,
+            Err(rejection) => {
+                return GameplayUpdateResult::rejected(self.frame_update(), rejection)
+            }
+        };
+        if build_undo::breaks_connected_route(&self.snapshot, &candidate) {
+            return GameplayUpdateResult::rejected(
+                self.frame_update(),
+                GameplayRejection::new(RejectionCode::UndoConflict),
+            );
+        }
+        let result = self.commit_snapshot_and_topology(candidate, topology);
+        self.last_build = None;
+        result
+    }
+
     fn commit_network_mutation(
         &mut self,
         candidate: GameplayResult<NetworkCandidate>,
     ) -> GameplayUpdateResult {
-        let mut network_candidate = match candidate {
+        let network_candidate = match candidate {
             Ok(candidate) => candidate,
             Err(rejection) => {
                 return GameplayUpdateResult::rejected(self.frame_update(), rejection)
             }
         };
-        let map_changed = self.snapshot.map != network_candidate.snapshot.map;
+        let (candidate, topology) = match self.prepare_network_candidate(network_candidate.snapshot)
+        {
+            Ok(prepared) => prepared,
+            Err(rejection) => {
+                return GameplayUpdateResult::rejected(self.frame_update(), rejection)
+            }
+        };
+        self.commit_snapshot_and_topology(candidate, topology)
+    }
+
+    /// Shared candidate preparation: stop-access normalization, conditional
+    /// topology compilation, and route recomputation against the live shell.
+    /// Pure with respect to `self` — commits happen only through
+    /// [`GameEngine::commit_snapshot_and_topology`].
+    fn prepare_network_candidate(
+        &self,
+        snapshot: GameSnapshot,
+    ) -> GameplayResult<(GameSnapshot, RoadTopology)> {
+        let mut candidate = snapshot;
+        let map_changed = self.snapshot.map != candidate.map;
         if map_changed {
             // Short-circuit: skip the O(stops × footprint) normalization +
             // rebase pass when no present stop's road-access neighbourhood
             // changed between the old and new maps (e.g. a road edit far
             // from any stop). Mirrors the `changed_accesses.is_empty()` gate
             // in route_lifecycle::rebase_parked_bus_access_to_live_stop.
-            if stop_access::stops_access_affected(&self.snapshot.map, &network_candidate.snapshot) {
-                network_candidate.snapshot =
-                    stop_access::normalize_snapshot_stops(network_candidate.snapshot);
+            if stop_access::stops_access_affected(&self.snapshot.map, &candidate) {
+                candidate = stop_access::normalize_snapshot_stops(candidate);
             }
         }
         // If the map's road topology inputs are unchanged (e.g. AddBusStop,
@@ -685,21 +836,16 @@ impl GameEngine {
         let topology = if !map_changed {
             self.road_topology.clone()
         } else {
-            match RoadTopology::compile(&network_candidate.snapshot.map) {
-                Ok(topology) => topology,
-                Err(error) => {
-                    return GameplayUpdateResult::rejected(self.frame_update(), error.into());
-                }
-            }
+            RoadTopology::compile(&candidate.map).map_err(GameplayRejection::from)?
         };
         let candidate = route_lifecycle::recompute_all_routes(
             &self.snapshot,
-            network_candidate.snapshot,
+            candidate,
             RoutingContext {
                 road_topology: &topology,
             },
         );
-        self.commit_snapshot_and_topology(candidate, topology)
+        Ok((candidate, topology))
     }
 
     fn commit_snapshot_and_topology(
@@ -707,14 +853,14 @@ impl GameEngine {
         mut snapshot: GameSnapshot,
         road_topology: RoadTopology,
     ) -> GameplayUpdateResult {
-        // Building-changing candidates reconcile the ECS population world with
-        // the candidate before installation. Rejected and no-op dispatches
-        // never reach this point, so they cannot mutate the world.
-        if snapshot.buildings != self.snapshot.buildings {
-            crate::population::reconcile_buildings(&mut self.world, &self.snapshot, &mut snapshot);
-        }
         if snapshot == self.snapshot {
             return GameplayUpdateResult::frame_only(self.frame_update(), false);
+        }
+        // Building-changing candidates reconcile the ECS population world with
+        // the candidate before installation. The no-op guard above runs first,
+        // so rejected and identical candidates never mutate the world.
+        if snapshot.buildings != self.snapshot.buildings {
+            crate::population::reconcile_buildings(&mut self.world, &self.snapshot, &mut snapshot);
         }
         self.snapshot = snapshot;
         self.road_topology = road_topology;
