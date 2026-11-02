@@ -1,11 +1,3 @@
-//! One-level Ctrl/Cmd+Z undo for the most recent applied build.
-//!
-//! The engine records the last applied construction (a whole-map inverse for
-//! map builds, a demolish point for placements, and the actual budget debit)
-//! and `undoLastBuild` restores it while the record is younger than one
-//! in-game hour (`GAME_DAY_SECONDS / 24`). Successful demolition clears the
-//! record, capture-for-save consumes it, and restore/reset drop it.
-
 use caelum_core::model::{Point, ServicePattern, TransitMode, TransitPath};
 use caelum_core::{GameEngine, GameIntent, GameplayUpdateResult, RejectionCode, RoadPreset};
 
@@ -88,8 +80,6 @@ fn route_is_broken(engine: &GameEngine, route_id: &str) -> bool {
 #[test]
 fn undo_restores_pre_build_map_and_budget_then_reports_nothing() {
     let mut engine = blank_engine();
-    // Crossing strokes generate an automatic junction so the recorded inverse
-    // must restore generated road structures, not just authored tiles.
     lay_road_line(&mut engine, horizontal(8, 4, 20));
     lay_road_line(&mut engine, vertical(12, 3, 14));
     assert!(!engine.snapshot().map.road_structures.is_empty());
@@ -97,8 +87,6 @@ fn undo_restores_pre_build_map_and_budget_then_reports_nothing() {
     let before_map = engine.snapshot().map.clone();
     let before_budget = engine.snapshot().budget;
 
-    // A stroke joining the junction changes nearby connections: more tiles
-    // change than the three authored points.
     lay_road_line(&mut engine, horizontal(8, 21, 24));
     assert_ne!(engine.snapshot().map, before_map);
     let spent = before_budget - engine.snapshot().budget;
@@ -117,8 +105,6 @@ fn undo_restores_pre_build_map_and_budget_then_reports_nothing() {
 #[test]
 fn undo_refunds_only_the_actual_partial_stroke_charge() {
     let mut engine = blank_engine();
-    // Ten requested tiles but only three fit the remaining budget: the stroke
-    // applies partially and the undo must refund the charged amount only.
     engine.set_budget_for_test(350);
     lay_road_line(&mut engine, horizontal(5, 2, 11));
     let after = engine.snapshot();
@@ -138,7 +124,6 @@ fn undo_refunds_only_the_actual_partial_stroke_charge() {
 #[test]
 fn undo_place_building_demolishes_building_and_transit_node() {
     let mut engine = blank_engine();
-    // A bus terminal is a building whose placement also creates a stop node.
     lay_road_line(&mut engine, horizontal(6, 4, 8));
     let before_budget = engine.snapshot().budget;
     let before_buildings = engine.snapshot().buildings.len();
@@ -186,7 +171,6 @@ fn undo_succeeds_at_exactly_one_game_hour_and_expires_beyond_it() {
     );
     assert_eq!(engine.snapshot().map, before_map);
 
-    // Rebuild, then push past the window: the record drops with no refund.
     lay_road_line(&mut engine, horizontal(9, 2, 4));
     let budget_before_expiry = engine.snapshot().budget;
     engine.tick(UNDO_WINDOW_SECONDS + 0.5);
@@ -204,9 +188,6 @@ fn undo_succeeds_at_exactly_one_game_hour_and_expires_beyond_it() {
 #[test]
 fn undo_conflicts_when_a_new_route_now_depends_on_the_build() {
     let mut engine = blank_engine();
-    // Stops anchor on two-tile stubs that predate the undone stroke; the
-    // stroke is the only connection between them, so removing it breaks the
-    // leg while each stop keeps valid road access.
     lay_road_line(&mut engine, vertical(2, 5, 6));
     lay_road_line(&mut engine, vertical(12, 5, 6));
     apply(&mut engine, GameIntent::AddBusStop { point: point(2, 4) });
@@ -231,10 +212,7 @@ fn undo_conflicts_when_a_new_route_now_depends_on_the_build() {
     let conflict = undo(&mut engine);
     assert!(!conflict.applied);
     assert_eq!(rejection_code(&conflict), Some(RejectionCode::UndoConflict));
-    // A rejected undo preserves the live shell, budget, and population world.
     assert_eq!(engine.snapshot(), after_route);
-    // The record is retained until expiry: a second attempt inside the window
-    // conflicts again rather than reporting NothingToUndo.
     assert_eq!(
         rejection_code(&undo(&mut engine)),
         Some(RejectionCode::UndoConflict)
@@ -244,7 +222,6 @@ fn undo_conflicts_when_a_new_route_now_depends_on_the_build() {
 #[test]
 fn growth_onto_a_changed_zone_tile_rejects_undo() {
     let mut engine = blank_engine();
-    // A running line: stops plus one assigned bus make the nodes served.
     lay_road_line(&mut engine, horizontal(5, 2, 12));
     apply(&mut engine, GameIntent::AddBusStop { point: point(2, 4) });
     apply(
@@ -270,9 +247,6 @@ fn growth_onto_a_changed_zone_tile_rejects_undo() {
     );
     apply(&mut engine, GameIntent::SetPaused { paused: false });
 
-    // Seed just before the six-game-hour growth boundary, then zone land next
-    // to the served stop so the growth pass builds on painted tiles inside
-    // the one-hour undo window.
     engine.tick(GROWTH_INTERVAL_SECONDS - 1.0);
     apply(
         &mut engine,
@@ -306,8 +280,6 @@ fn growth_onto_a_changed_zone_tile_rejects_undo() {
 #[test]
 fn undo_of_a_shortcut_keeps_the_earlier_connected_route() {
     let mut engine = blank_engine();
-    // Stops at (2,4) and (12,4); the only initial path runs down around a
-    // U-shape. A later direct stroke is the undoable shortcut.
     lay_road_line(&mut engine, vertical(2, 5, 8));
     lay_road_line(&mut engine, horizontal(8, 2, 12));
     lay_road_line(&mut engine, vertical(12, 5, 8));
@@ -328,7 +300,6 @@ fn undo_of_a_shortcut_keeps_the_earlier_connected_route() {
     );
     assert!(!route_is_broken(&engine, "route-001"));
 
-    // The shortcut reroutes the connected line through the new road.
     lay_road_line(&mut engine, horizontal(5, 3, 11));
     assert!(
         route_path_touches(&engine, "route-001", point(6, 5)),
@@ -347,7 +318,6 @@ fn undo_of_a_shortcut_keeps_the_earlier_connected_route() {
         "the line is connected via its earlier U-shaped path"
     );
     assert!(!route_path_touches(&engine, "route-001", point(6, 5)));
-    // The actual shortcut debit is refunded.
     assert!(engine.snapshot().budget > shortcut_budget);
 }
 
