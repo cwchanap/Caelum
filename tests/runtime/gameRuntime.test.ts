@@ -912,6 +912,11 @@ function applyIntent(
   if (intent.type === "setBudget") {
     return { ...snapshot, budget: intent.budget };
   }
+  if (intent.type === "undoLastBuild") {
+    // The fake keeps no build record; runtime tests assert the intent crossed
+    // the queue while Rust proves the inverse.
+    return snapshot;
+  }
   throw new Error(
     `fake backend applyIntent: unhandled intent type "${intent.type}" — add a handler or the dispatch silently no-ops`,
   );
@@ -3193,6 +3198,88 @@ describe("runtime assignRouteToPlatform", () => {
       routeId: "route-001",
       platformId: "stop-001-p1",
     });
+  });
+});
+
+describe("runtime undoLastBuild", () => {
+  it("dispatches exactly one undoLastBuild intent through the gameplay queue", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    await runtime.undoLastBuild();
+
+    expect(backend.intents).toEqual([{ type: "undoLastBuild" }]);
+    expect(runtime.getSnapshot().rejection).toBeNull();
+    expect(runtime.getSnapshot().backendError).toBeNull();
+  });
+
+  it("surfaces a rejected undo through the existing rejection channel", async () => {
+    const backend = deferredDispatchBackend();
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    const nothingToUndo: GameplayRejection = {
+      code: "nothingToUndo",
+      context: { affectedRouteIds: [] },
+    };
+    backend.rejectNextDispatchWith(nothingToUndo);
+    const pending = runtime.undoLastBuild();
+    await Promise.resolve(); // let the queued dispatch reach the suspended backend call
+    await backend.resolveNext();
+    const snapshot = await pending;
+
+    expect(snapshot.rejection).toEqual(nothingToUndo);
+    expect(snapshot.backendError).toBeNull();
+    expect(
+      backend.intents.filter((intent) => intent.type === "undoLastBuild"),
+    ).toHaveLength(1);
+  });
+
+  it("does not reach the backend while a save is busy", async () => {
+    const backend = backendSpy();
+    const initial = fullRustSnapshot();
+    const delegate = createMemoryCitySaveStore();
+    const city = {
+      id: "city-undo-busy",
+      name: "Undo Busy City",
+      createdAt: "2026-08-08T09:00:00.000Z",
+      savedAt: "2026-08-08T09:30:00.000Z",
+    };
+    await delegate.createCity({
+      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      savedAt: city.savedAt,
+      snapshot: initial,
+    });
+    const store = createDelayedCitySaveStore(delegate);
+    store.defer("updateCity");
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+      saveStore: store,
+      initialCity: city,
+      now: () => "2026-08-08T10:00:00.000Z",
+    });
+
+    const save = runtime.persistence.save();
+    await store.waitForActive("updateCity");
+    expect(runtime.getSnapshot().persistence.busy).toBe(true);
+
+    await runtime.undoLastBuild();
+    expect(backend.intents).toHaveLength(0);
+
+    store.releaseNext("updateCity");
+    await save;
+
+    await runtime.undoLastBuild();
+    expect(backend.intents).toEqual([{ type: "undoLastBuild" }]);
   });
 });
 

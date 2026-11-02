@@ -39,4 +39,34 @@ describe("WASM backend", () => {
     expect(result.applied).toBe(true);
     expect(result.update.scene).toBeNull();
   });
+
+  it("forwards the fieldless undoLastBuild intent to the engine", async () => {
+    const backend = await createWasmBackend();
+    const built = await backend.buildSandboxSnapshot(request);
+    expect(built.ok).toBe(true);
+    if (!built.ok) return;
+    const restored = await backend.restoreSnapshot(built.snapshot);
+    expect(restored.ok).toBe(true);
+
+    const laid = await backend.dispatch({
+      type: "layRoadLine",
+      points: [
+        { x: 2, y: 5 },
+        { x: 3, y: 5 },
+        { x: 4, y: 5 },
+      ],
+      preset: "twoWay",
+    });
+    expect(laid.applied).toBe(true);
+    expect(laid.update.frame.budget).toBeLessThan(request.startingCapital);
+
+    const undone = await backend.dispatch({ type: "undoLastBuild" });
+    expect(undone.applied).toBe(true);
+    expect(undone.rejection).toBeNull();
+    expect(undone.update.frame.budget).toBe(request.startingCapital);
+
+    const second = await backend.dispatch({ type: "undoLastBuild" });
+    expect(second.applied).toBe(false);
+    expect(second.rejection?.code).toBe("nothingToUndo");
+  });
 });

@@ -576,6 +576,21 @@
       return;
     }
 
+    if (
+      !targetIsInput &&
+      !routeDraftActive &&
+      !showNewCity &&
+      snapshot?.persistence.activeCity != null &&
+      (event.metaKey || event.ctrlKey) &&
+      !event.altKey &&
+      !event.shiftKey &&
+      key === "z"
+    ) {
+      event.preventDefault();
+      void applyRuntimeResult(() => runtime.undoLastBuild());
+      return;
+    }
+
     if (event.metaKey || event.ctrlKey || event.altKey || targetIsInput) {
       return;
     }

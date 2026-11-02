@@ -310,6 +310,7 @@ export interface RuntimeController {
     point: Point,
     pick?: MapPick | null,
   ) => RuntimeCommandResult;
+  undoLastBuild: () => RuntimeCommandResult;
   assignRouteToPlatform: (
     nodeId: string,
     routeId: string,
