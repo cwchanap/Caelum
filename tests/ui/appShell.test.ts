@@ -1792,6 +1792,17 @@ describe("App command shell", () => {
     expect(runtime.undoLastBuild).toHaveBeenCalledTimes(2);
   });
 
+  it("ignores held-key repeats of Ctrl/Cmd+Z", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
+    await fireEvent.keyDown(window, { key: "z", ctrlKey: true, repeat: true });
+    await fireEvent.keyDown(window, { key: "z", metaKey: true, repeat: true });
+
+    expect(runtime.undoLastBuild).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps route-draft undo/redo ahead of world undo", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

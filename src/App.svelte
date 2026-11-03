@@ -578,12 +578,12 @@
 
     if (
       !targetIsInput &&
-      !routeDraftActive &&
       !showNewCity &&
       snapshot?.persistence.activeCity != null &&
       (event.metaKey || event.ctrlKey) &&
       !event.altKey &&
       !event.shiftKey &&
+      !event.repeat &&
       key === "z"
     ) {
       event.preventDefault();
