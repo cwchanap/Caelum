@@ -3,7 +3,7 @@
 > **Issue:** [Caelum #68](https://github.com/cwchanap/Caelum/issues/68)  
 > **Implementation plan:** [2026-11-02-issue-68-route-editor-feedback.md](../plans/2026-11-02-issue-68-route-editor-feedback.md)  
 > **Reviews:** [Initial design review](https://github.com/cwchanap/Caelum/pull/77#issuecomment-6597186117) and [follow-up review (delayed dispatch and obsolete test)](https://github.com/cwchanap/Caelum/pull/77#pullrequestreview-5748520001)  
-> **PR policy:** Design, implementation, tests and review stay in **one PR**. This draft currently contains planning only.
+> **PR policy:** Design, implementation, tests and review stay in **one PR**. Implementation and tests are now committed in this same PR.
 
 ## Problem and corrected evidence
 
