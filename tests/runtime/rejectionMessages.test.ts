@@ -34,10 +34,7 @@ describe("rejectionMessage", () => {
   it.each([
     ["nothingToUndo", "There is nothing to undo."],
     ["undoExpired", "Too much time has passed to undo that build."],
-    [
-      "undoConflict",
-      "A building or route now depends on that build, so it can't be undone.",
-    ],
+    ["undoConflict", "That build can't be undone."],
   ] as const)("maps undo rejection %s to player copy", (code, expected) => {
     const rejection = {
       code,
@@ -45,6 +42,28 @@ describe("rejectionMessage", () => {
     } satisfies GameplayRejection;
 
     expect(rejectionMessage(rejection)).toBe(expected);
+  });
+
+  it("names the dependent route in an undoConflict", () => {
+    const rejection = {
+      code: "undoConflict",
+      context: { ...gameplayRejectionContext(), routeId: "route-001" },
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(
+      "route-001 would lose its connection, so that build can't be undone.",
+    );
+  });
+
+  it("names the blocking tile in an undoConflict", () => {
+    const rejection = {
+      code: "undoConflict",
+      context: { ...gameplayRejectionContext(), point: { x: 0, y: 3 } },
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(
+      "Newer construction blocks that build's site at (0, 3), so it can't be undone.",
+    );
   });
 });
 

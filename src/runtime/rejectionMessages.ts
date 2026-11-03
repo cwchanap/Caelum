@@ -95,7 +95,13 @@ export function rejectionMessage(rejection: GameplayRejection): string {
     case "undoExpired":
       return "Too much time has passed to undo that build.";
     case "undoConflict":
-      return "A building or route now depends on that build, so it can't be undone.";
+      if (context.routeId !== undefined) {
+        return `${context.routeId} would lose its connection, so that build can't be undone.`;
+      }
+      if (context.point !== undefined) {
+        return `Newer construction blocks that build's site at (${context.point.x}, ${context.point.y}), so it can't be undone.`;
+      }
+      return "That build can't be undone.";
     default:
       return assertNever(code, "rejection code");
   }

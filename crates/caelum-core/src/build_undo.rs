@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::intent::GameIntent;
 use crate::model::{GameMap, GameSnapshot, Point};
 
@@ -57,41 +59,48 @@ pub(crate) fn classify(intent: &GameIntent) -> BuildClass {
     }
 }
 
-pub(crate) fn grown_building_conflicts(live: &GameSnapshot, before_map: &GameMap) -> bool {
-    live.buildings.iter().any(|building| {
-        building.occupied_tiles.iter().any(|point| {
-            live.map.tile(*point).and_then(|tile| tile.area.as_deref())
-                != before_map
-                    .tile(*point)
-                    .and_then(|tile| tile.area.as_deref())
-        })
+pub(crate) fn grown_building_conflict(live: &GameSnapshot, before_map: &GameMap) -> Option<Point> {
+    live.buildings.iter().find_map(|building| {
+        building
+            .occupied_tiles
+            .iter()
+            .find(|point| {
+                live.map.tile(**point).and_then(|tile| tile.area.as_deref())
+                    != before_map
+                        .tile(**point)
+                        .and_then(|tile| tile.area.as_deref())
+            })
+            .copied()
     })
 }
 
-pub(crate) fn breaks_connected_route(live: &GameSnapshot, prepared: &GameSnapshot) -> bool {
-    let was_connected = |route_id: &str| {
-        live.transit
-            .routes
-            .iter()
-            .find(|route| route.id == route_id)
-            .map(|route| !route.path_broken)
-            .or_else(|| {
-                live.transit
-                    .metro_lines
-                    .iter()
-                    .find(|line| line.id == route_id)
-                    .map(|line| !line.path_broken)
-            })
-            .unwrap_or(false)
-    };
+pub(crate) fn newly_broken_route(live: &GameSnapshot, prepared: &GameSnapshot) -> Option<String> {
+    let connected: HashSet<&str> = live
+        .transit
+        .routes
+        .iter()
+        .filter(|route| !route.path_broken)
+        .map(|route| route.id.as_str())
+        .chain(
+            live.transit
+                .metro_lines
+                .iter()
+                .filter(|line| !line.path_broken)
+                .map(|line| line.id.as_str()),
+        )
+        .collect();
     prepared
         .transit
         .routes
         .iter()
-        .any(|route| route.path_broken && was_connected(&route.id))
-        || prepared
-            .transit
-            .metro_lines
-            .iter()
-            .any(|line| line.path_broken && was_connected(&line.id))
+        .find(|route| route.path_broken && connected.contains(route.id.as_str()))
+        .map(|route| route.id.clone())
+        .or_else(|| {
+            prepared
+                .transit
+                .metro_lines
+                .iter()
+                .find(|line| line.path_broken && connected.contains(line.id.as_str()))
+                .map(|line| line.id.clone())
+        })
 }

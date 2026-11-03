@@ -12,7 +12,7 @@ use crate::preview::{
     self, RoadMutationPreviewRequest, RoadMutationPreviewResponse, RoutePreviewRequest,
     RoutePreviewResponse,
 };
-use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode};
+use crate::rejection::{GameplayRejection, GameplayResult, RejectionCode, RejectionContext};
 use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
 use crate::route_editor;
@@ -474,26 +474,22 @@ impl GameEngine {
         if !result.applied {
             return;
         }
-        match build_class {
-            BuildClass::Map => {
-                self.last_build = Some(BuildUndo {
-                    built_at: self.snapshot.time,
-                    refund: budget_before - self.snapshot.budget,
-                    inverse: build_undo::BuildInverse::RestoreMap(
-                        before_map.expect("map builds clone their inverse before dispatch"),
-                    ),
-                });
+        let inverse = match build_class {
+            BuildClass::Map => build_undo::BuildInverse::RestoreMap(
+                before_map.expect("map builds clone their inverse before dispatch"),
+            ),
+            BuildClass::Placement(point) => build_undo::BuildInverse::Demolish(point),
+            BuildClass::Demolition => {
+                self.last_build = None;
+                return;
             }
-            BuildClass::Placement(point) => {
-                self.last_build = Some(BuildUndo {
-                    built_at: self.snapshot.time,
-                    refund: budget_before - self.snapshot.budget,
-                    inverse: build_undo::BuildInverse::Demolish(point),
-                });
-            }
-            BuildClass::Demolition => self.last_build = None,
-            BuildClass::Undo | BuildClass::Other => {}
-        }
+            BuildClass::Undo | BuildClass::Other => return,
+        };
+        self.last_build = Some(BuildUndo {
+            built_at: self.snapshot.time,
+            refund: budget_before - self.snapshot.budget,
+            inverse,
+        });
     }
 
     fn dispatch_intent(&mut self, intent: GameIntent) -> GameplayUpdateResult {
@@ -705,76 +701,108 @@ impl GameEngine {
     }
 
     fn undo_last_build(&mut self) -> GameplayUpdateResult {
-        let Some(record) = &self.last_build else {
+        let Some(record) = self.last_build.take() else {
             return GameplayUpdateResult::rejected(
                 self.frame_update(),
                 GameplayRejection::new(RejectionCode::NothingToUndo),
             );
         };
-        let built_at = record.built_at;
-        let refund = record.refund;
-        if self.snapshot.time - built_at > build_undo::UNDO_WINDOW_SECONDS {
-            self.last_build = None;
+        // Expiry consumes the record; every later rejection path puts it back so
+        // a conflict stays retryable until the window closes.
+        if self.snapshot.time - record.built_at > build_undo::UNDO_WINDOW_SECONDS {
             return GameplayUpdateResult::rejected(
                 self.frame_update(),
                 GameplayRejection::new(RejectionCode::UndoExpired),
             );
         }
-
-        let mut candidate = self.snapshot.clone();
-        match &self
-            .last_build
-            .as_ref()
-            .expect("record checked above")
-            .inverse
-        {
+        let BuildUndo {
+            built_at,
+            refund,
+            inverse,
+        } = record;
+        // `Some` marks a Demolish(point) inverse for `restore_record`; a map
+        // inverse is recovered from the discarded candidate's map instead.
+        let mut placement = None;
+        let mut candidate = match inverse {
             build_undo::BuildInverse::RestoreMap(before_map) => {
-                if build_undo::grown_building_conflicts(&self.snapshot, before_map) {
-                    return GameplayUpdateResult::rejected(
-                        self.frame_update(),
-                        GameplayRejection::new(RejectionCode::UndoConflict),
-                    );
-                }
-                candidate.map = before_map.clone();
-            }
-            build_undo::BuildInverse::Demolish(point) => {
-                let point = *point;
-                candidate = match transit::remove_at_tile(&candidate, &point) {
-                    Ok(next) => next,
-                    Err(_) => {
+                match build_undo::grown_building_conflict(&self.snapshot, &before_map) {
+                    Some(point) => {
+                        self.last_build = Some(BuildUndo {
+                            built_at,
+                            refund,
+                            inverse: build_undo::BuildInverse::RestoreMap(before_map),
+                        });
                         return GameplayUpdateResult::rejected(
                             self.frame_update(),
-                            GameplayRejection::new(RejectionCode::UndoConflict),
-                        )
+                            GameplayRejection::at(RejectionCode::UndoConflict, point),
+                        );
                     }
-                };
+                    None => GameSnapshot {
+                        map: before_map,
+                        ..self.snapshot.clone()
+                    },
+                }
             }
-        }
+            build_undo::BuildInverse::Demolish(point) => {
+                match transit::remove_at_tile(&self.snapshot, &point) {
+                    Ok(next) => {
+                        placement = Some(point);
+                        next
+                    }
+                    Err(_) => {
+                        self.last_build = Some(BuildUndo {
+                            built_at,
+                            refund,
+                            inverse: build_undo::BuildInverse::Demolish(point),
+                        });
+                        return GameplayUpdateResult::rejected(
+                            self.frame_update(),
+                            GameplayRejection::at(RejectionCode::UndoConflict, point),
+                        );
+                    }
+                }
+            }
+        };
+        let restore_record = |candidate: GameSnapshot| BuildUndo {
+            built_at,
+            refund,
+            inverse: match placement {
+                Some(point) => build_undo::BuildInverse::Demolish(point),
+                None => build_undo::BuildInverse::RestoreMap(candidate.map),
+            },
+        };
         candidate.budget = match candidate.budget.checked_add(refund) {
             Some(budget) => budget,
             None => {
+                self.last_build = Some(restore_record(candidate));
                 return GameplayUpdateResult::rejected(
                     self.frame_update(),
                     GameplayRejection::new(RejectionCode::UndoConflict),
-                )
+                );
             }
         };
 
         let (candidate, topology) = match self.prepare_network_candidate(candidate) {
             Ok(prepared) => prepared,
-            Err(rejection) => {
-                return GameplayUpdateResult::rejected(self.frame_update(), rejection)
+            Err((rejection, candidate)) => {
+                self.last_build = Some(restore_record(candidate));
+                return GameplayUpdateResult::rejected(self.frame_update(), rejection);
             }
         };
-        if build_undo::breaks_connected_route(&self.snapshot, &candidate) {
+        if let Some(route_id) = build_undo::newly_broken_route(&self.snapshot, &candidate) {
+            self.last_build = Some(restore_record(candidate));
             return GameplayUpdateResult::rejected(
                 self.frame_update(),
-                GameplayRejection::new(RejectionCode::UndoConflict),
+                GameplayRejection {
+                    code: RejectionCode::UndoConflict,
+                    context: RejectionContext {
+                        route_id: Some(route_id),
+                        ..RejectionContext::default()
+                    },
+                },
             );
         }
-        let result = self.commit_snapshot_and_topology(candidate, topology);
-        self.last_build = None;
-        result
+        self.commit_snapshot_and_topology(candidate, topology)
     }
 
     fn commit_network_mutation(
@@ -790,7 +818,7 @@ impl GameEngine {
         let (candidate, topology) = match self.prepare_network_candidate(network_candidate.snapshot)
         {
             Ok(prepared) => prepared,
-            Err(rejection) => {
+            Err((rejection, _candidate)) => {
                 return GameplayUpdateResult::rejected(self.frame_update(), rejection)
             }
         };
@@ -800,7 +828,7 @@ impl GameEngine {
     fn prepare_network_candidate(
         &self,
         snapshot: GameSnapshot,
-    ) -> GameplayResult<(GameSnapshot, RoadTopology)> {
+    ) -> Result<(GameSnapshot, RoadTopology), (GameplayRejection, GameSnapshot)> {
         let mut candidate = snapshot;
         let map_changed = self.snapshot.map != candidate.map;
         if map_changed {
@@ -821,7 +849,12 @@ impl GameEngine {
         let topology = if !map_changed {
             self.road_topology.clone()
         } else {
-            RoadTopology::compile(&candidate.map).map_err(GameplayRejection::from)?
+            // The candidate rides along on failure so an undo caller can restore
+            // the consumed record's inverse from it.
+            match RoadTopology::compile(&candidate.map) {
+                Ok(topology) => topology,
+                Err(error) => return Err((GameplayRejection::from(error), candidate)),
+            }
         };
         let candidate = route_lifecycle::recompute_all_routes(
             &self.snapshot,
@@ -838,14 +871,14 @@ impl GameEngine {
         mut snapshot: GameSnapshot,
         road_topology: RoadTopology,
     ) -> GameplayUpdateResult {
-        if snapshot == self.snapshot {
-            return GameplayUpdateResult::frame_only(self.frame_update(), false);
-        }
         // Building-changing candidates reconcile the ECS population world with
         // the candidate before installation. Rejected and no-op dispatches
         // never reach this point, so they cannot mutate the world.
         if snapshot.buildings != self.snapshot.buildings {
             crate::population::reconcile_buildings(&mut self.world, &self.snapshot, &mut snapshot);
+        }
+        if snapshot == self.snapshot {
+            return GameplayUpdateResult::frame_only(self.frame_update(), false);
         }
         self.snapshot = snapshot;
         self.road_topology = road_topology;

@@ -3240,6 +3240,22 @@ describe("runtime undoLastBuild", () => {
     ).toHaveLength(1);
   });
 
+  it("does not dispatch while a route draft is open", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("busRoute");
+    runtime.handleTileClick({ x: 1, y: 1 });
+    expect(runtime.getSnapshot().ui.routeDraft).not.toBeNull();
+
+    await runtime.undoLastBuild();
+    expect(backend.intents).toHaveLength(0);
+  });
+
   it("does not reach the backend while a save is busy", async () => {
     const backend = backendSpy();
     const initial = fullRustSnapshot();

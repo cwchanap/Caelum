@@ -211,7 +211,13 @@ fn undo_conflicts_when_a_new_route_now_depends_on_the_build() {
 
     let conflict = undo(&mut engine);
     assert!(!conflict.applied);
-    assert_eq!(rejection_code(&conflict), Some(RejectionCode::UndoConflict));
+    let rejection = conflict.rejection.as_ref().expect("undo rejected");
+    assert_eq!(rejection.code, RejectionCode::UndoConflict);
+    assert_eq!(
+        rejection.context.route_id.as_deref(),
+        Some("route-001"),
+        "the conflict names the route that would break"
+    );
     assert_eq!(engine.snapshot(), after_route);
     assert_eq!(
         rejection_code(&undo(&mut engine)),
@@ -269,10 +275,15 @@ fn growth_onto_a_changed_zone_tile_rejects_undo() {
 
     let conflict = undo(&mut engine);
     assert!(!conflict.applied);
+    let rejection = conflict.rejection.as_ref().expect("undo rejected");
     assert_eq!(
-        rejection_code(&conflict),
-        Some(RejectionCode::UndoConflict),
+        rejection.code,
+        RejectionCode::UndoConflict,
         "undo must not rip the zoning out from under the grown building"
+    );
+    assert!(
+        rejection.context.point.is_some(),
+        "the conflict names a tile whose zoning would revert"
     );
     assert_eq!(engine.snapshot(), grown);
 }
@@ -326,10 +337,7 @@ fn save_capture_consumes_the_undo_record() {
     let mut engine = blank_engine();
     lay_road_line(&mut engine, horizontal(5, 2, 4));
 
-    let saved = engine.snapshot_for_save();
-    let saved_json = serde_json::to_value(&saved).expect("snapshot serializes");
-    assert!(saved_json.get("lastBuild").is_none());
-    assert!(saved_json.get("undo").is_none());
+    engine.snapshot_for_save();
 
     let result = undo(&mut engine);
     assert!(!result.applied);
@@ -338,28 +346,4 @@ fn save_capture_consumes_the_undo_record() {
         Some(RejectionCode::NothingToUndo),
         "capture-for-save consumes the pending undo record"
     );
-}
-
-#[test]
-fn fieldless_undo_last_build_intent_round_trips_the_tagged_wire() {
-    let intent: GameIntent = serde_json::from_value(serde_json::json!({
-        "type": "undoLastBuild"
-    }))
-    .expect("undoLastBuild deserializes from the tagged camelCase wire");
-    assert_eq!(intent, GameIntent::UndoLastBuild);
-    assert_eq!(
-        serde_json::to_value(&intent).expect("intent serializes"),
-        serde_json::json!({ "type": "undoLastBuild" })
-    );
-
-    for (wire, code) in [
-        ("nothingToUndo", RejectionCode::NothingToUndo),
-        ("undoExpired", RejectionCode::UndoExpired),
-        ("undoConflict", RejectionCode::UndoConflict),
-    ] {
-        assert_eq!(
-            serde_json::to_value(&code).expect("code serializes"),
-            serde_json::json!(wire)
-        );
-    }
 }

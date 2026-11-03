@@ -1723,6 +1723,7 @@ export async function createGameRuntime(
     },
     undoLastBuild() {
       if (dead) return Promise.resolve(getSnapshot());
+      if (ui.routeDraft !== null) return getSnapshot();
       return enqueueDispatch({ type: "undoLastBuild" });
     },
     assignRouteToPlatform(nodeId, routeId, platformId) {

@@ -93,11 +93,13 @@ Linear road, track, remove, and area strokes may partially apply in authored ord
 ### Persistence host boundary
 
 `snapshotForSave` returns an infallible, normalized clone whose snapshot is
-paused, without mutating the engine. `restoreSnapshot(snapshot)` is
-candidate-first: each host decodes the candidate, constructs a complete
-`GameEngine` with `from_snapshot`, and replaces the active engine only after
-construction succeeds. A definitive `{ ok: false }` therefore leaves active
-gameplay unchanged.
+paused. The capture consumes the engine's pending one-level build-undo
+record, so a build cannot be undone across the save boundary even if the
+store write later fails. `restoreSnapshot(snapshot)` is candidate-first:
+each host decodes the candidate, constructs a complete `GameEngine` with
+`from_snapshot`, and replaces the active engine only after construction
+succeeds. A definitive `{ ok: false }` therefore leaves active gameplay
+unchanged.
 
 Snapshot failures cross the TypeScript host boundary through exactly three
 categories: `unsupportedSchema`, `invalidSnapshot`, and `hostFailure`. The
