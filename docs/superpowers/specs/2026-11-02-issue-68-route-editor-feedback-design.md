@@ -2,48 +2,63 @@
 
 > **Issue:** [Caelum #68](https://github.com/cwchanap/Caelum/issues/68)  
 > **Implementation plan:** [2026-11-02-issue-68-route-editor-feedback.md](../plans/2026-11-02-issue-68-route-editor-feedback.md)  
-> **PR policy:** Design, implementation, tests, and review live in **one PR**. This initial draft is planning only, not a claim that the fix is shipped.
+> **Review:** [PR #77 design review](https://github.com/cwchanap/Caelum/pull/77#issuecomment-6597186117)  
+> **PR policy:** Design, implementation, tests and review stay in **one PR**. This draft currently contains planning only.
 
-## Problem and current evidence
+## Problem and corrected evidence
 
-Issue #68 reports a rejection toast intercepting the route editor's Cancel/Save interactions. Its 1280×800 headless Chromium measurements place a roughly 254×288 toast at (1009, 412) and the Cancel button at (1003, 564). These are issue-reported coordinates, not a fresh browser run in this planning pass.
+Issue #68 was filed on 2026-10-23, before later action-feedback styling changes. Its reported **254×288** rejection toast overlapping the editor's Cancel button no longer describes the **single-line placement rejection** on current `main` (`691cc0b`). The PR reviewer measured the following in headless Chromium using a real Bus Stop/no-road-access rejection and the current UI/CSS:
 
-Reviewed against `main` at `691cc0b`:
+| Viewport | Single-line toast | Panel bottom edge | Buttons covered |
+| --- | --- | --- | --- |
+| 1024×768 | 323×70, top y=598 | y=604 | 0 |
+| 1280×800 | 323×70, top y=630 | y=636 (pinned editor) | 0 of 12 editor buttons |
+| 1440×900 | 323×70, top y=730 | y=736 | 0 |
 
-- `src/App.svelte` always renders `ActionFeedback` from `snapshot.shell.actionFeedback`, independently of the Lines panel.
-- `src/styles.css` anchors `.action-feedback` at `right: 16px`, `bottom: calc(var(--command-shelf-height) + 8px)`, `z-index: 25`. The `.command-panel` is `z-index: 20`; a tall feedback can therefore intercept pointer events. The 56px feedback slot is not a maximum toast height.
-- Between 1200 and 1399px, `.command-panel[data-command-panel="lines"].command-panel--pinned` moves the active editor to the bottom-right, where the toast already sits. Other supported desktop widths use a different panel position.
-- `src/runtime/runtimeSelectors.ts::selectActionFeedback` intentionally keeps unrelated `rejection` feedback visible, while editor-owned route errors use the editor. The shared strip can also show `roadDirectionNotice` and road-preview host errors.
-- `src/runtime/createGameRuntime.ts::setTool("busRoute" | "metroLine")` starts a new route draft but does not acknowledge an earlier global gameplay rejection/road-direction notice. `openRouteEdit(routeId)` only clears one matching `routeChangedWhileEditing` rejection. This explains the persistence across opening the editor.
-- `src/components/hud/panels/RouteEditor.svelte` already has its own preview/error text plus Save/Cancel controls; changing gameplay rejection contracts is unnecessary.
+These are **reviewer-reported measurements**, not new browser executions for this documentation revision. `.command-panel` reserves `--feedback-slot-height: 56px` plus margin below its bottom edge. The current 70px single-line toast therefore does **not** intercept an editor button center at the reviewed widths. The original one-line Playwright reproduction would pass without a fix and must not be used as a regression test.
 
-**Verdict:** Still reproducible by code inspection; no existing fix is present on the reviewed main revision. No Rust, persistence, WASM/Tauri, renderer, or schema change is required.
+**Remaining overlap:** the feedback can grow taller than its reserved slot. At **1280×800**, the reviewer appended detail rows to the live `action-feedback-details` element (real CSS, **not** a real four-route gameplay setup):
+
+- Three detail rows: 108px tall; no covered editor controls.
+- **Four detail rows: 126px tall; Save & run and Cancel are covered** in the right-pinned Lines editor.
+- Eight detail rows also obstruct a Build panel button.
+
+A real `roadDirectionNotice` renders one detail line per previously connected route newly broken by a road direction change (`src/runtime/createGameRuntime.ts::commitDispatchResult` and `src/runtime/runtimeSelectors.ts::selectActionFeedback`). Thus **a direction change that breaks four or more routes** provides a plausible remaining gameplay path to the overlapping multi-line feedback. We do not claim the four-route world setup was executed.
+
+## Why it happens
+
+- `src/App.svelte` renders `ActionFeedback` from `snapshot.shell.actionFeedback` independently of the Lines editor.
+- `src/styles.css` places `.action-feedback` bottom-right (`right: 16px`; `bottom: calc(var(--command-shelf-height) + 8px)`) at `z-index: 25`, above `.command-panel` at `z-index: 20`. At 1200–1399px, a draft pins the Lines editor to the right.
+- `setTool("busRoute" | "metroLine")` creates a draft without clearing the previous global `rejection` or `ui.roadDirectionNotice`. `openRouteEdit(routeId)` clears only a same-route `routeChangedWhileEditing` rejection.
+- Opening the Lines list **does not** replace these notices; `RouteEditor.svelte` already supplies its own route-specific feedback once a draft is active.
+
+**Verdict:** The original *short-rejection* obstruction has already been fixed by the current layout, but the *multi-line notification* overlap still needs a minimal runtime lifecycle handoff. No Rust, persistence, WASM/Tauri, renderer, or save-schema work is needed.
 
 ## Player-facing contract
 
-1. Outside a route draft, an actual gameplay rejection or road-direction notice continues to appear in the existing dismissible feedback strip with its current accessible announcement behavior.
-2. **Successfully opening** a new Bus or Metro draft, or editing an existing Bus/Metro line, acknowledges and clears *previous* global gameplay rejection and road-direction feedback. The old toast vanishes **before** the route editor becomes actionable, so it cannot cover Save, Cancel, or Reload.
-3. Clearing is real runtime state, **not temporary CSS hiding**: Cancel/Save must not resurrect an irrelevant earlier rejection.
-4. Only valid transitions clear feedback. Opening the Lines **list**, selecting a different destination without entering a draft, a rejected/busy attempt, and an unknown route ID must not silently erase an existing notice.
-5. A route's own preview, missing-node, stale-revision, validation, or save failure remains visible through the editor's existing feedback path. New gameplay failures after leaving the editor retain normal global feedback behavior.
-6. Keep the `ActionFeedback` component and stable polite live region mounted; clearing the selected feedback naturally empties its announcement text. Keyboard navigation, focus, and Escape precedence are unchanged.
+1. Outside a route draft, genuine gameplay rejection and road-direction feedback retain their current visible, dismissible and accessible behavior.
+2. On a **valid transition into** a new Bus/Metro route draft or an existing Bus/Metro line edit, acknowledge the *previous* global gameplay rejection and road-direction notice **before** committing the draft UI. This removes the stale toast and avoids an obstruction of Save, Cancel and Reload.
+3. Clearing is **runtime state**, not temporary CSS hiding. Cancel/Save do not resurrect the earlier notice.
+4. Opening the Lines **list** or an unrelated panel does **not** dismiss the notice; nor do an unknown edit ID or a blocked transition. The existing guards and route lookup already enforce this.
+5. Subsequent route-local preview, revision, missing-node and save errors continue to appear in the editor using its existing feedback pathway. New gameplay failures after leaving the editor remain actionable.
+6. Keep the existing feedback component and its stable polite live region mounted; preserve current Escape and focus behavior.
 
-## Minimal design
+## Narrow implementation
 
-**Ownership:** `createGameRuntime.ts` owns the previous-action feedback lifecycle; `App.svelte` and `ActionFeedback.svelte` remain dumb renderers. No new prop, global store, toast timer, layout observer, or generic notification manager.
+**One owner:** `src/runtime/createGameRuntime.ts`. Keep `App.svelte`, `ActionFeedback.svelte`, the selector and CSS unchanged.
 
-- In `setTool`, once the existing dead/busy/active-draft guards have passed and a Bus/Metro draft is actually being created, set private `rejection = null` and `next.roadDirectionNotice = null` before publishing the new UI. Do not change the cleanup behavior of other tools.
-- In `openRouteEdit`, resolve the target Bus/Metro line and pass the busy guard **first**. When the edit draft will open, clear the previous `rejection` (superseding the narrower same-route stale-revision special case) and put `roadDirectionNotice: null` in the new immutable UI. Keep preview invalidation, route-editor construction, selection, and queued preview behavior unchanged.
-- Reuse existing `invalidateRoadPreview` and `roadMutationPreviewError: null` on draft entry to dispose of stale road-host preview errors; do not introduce a second cleanup mechanism.
-- Do **not** clear `routePreviewError` produced later by the active route editor. The existing selector already routes editor-owned rejection to local guidance.
+- In `setTool`, after the current dead/busy/active-draft guards, **only inside** the Bus/Metro draft creation branch, set `rejection = null` and `next.roadDirectionNotice = null`. Retain existing preview invalidation and `commitWithRoadPreview`.
+- In `openRouteEdit(routeId)`, keep the busy and route-existence checks before mutation. On a successful lookup, replace the special-case same-route stale rejection cleanup with unconditional `rejection = null`, and add `roadDirectionNotice: null` to the immutable `commit` UI. Preserve route-draft initialization, preview request and pinned Lines behavior.
+- Because `reloadRouteDraft` already calls `openRouteEdit` for a valid route, remove its now-duplicated `if (globalStale) rejection = null;`; retain the `globalStale` predicate for its own early-return guard. An invalid/missing edit route does not trigger the draft-entry dismissal contract.
+- Reuse existing `invalidateRoadPreview` and `roadMutationPreviewError: null` for stale road-preview host feedback. Do not add new state or a second dismissal mechanism.
 
-This is the issue's suggested **auto-dismiss on editor entry** option. Moving the feedback by breakpoint is brittle across 1024/1280/1440 desktop layouts, reducing its z-index makes the text disappear behind the editor, and clipping to the nominal feedback slot truncates potentially useful diagnostics. None is needed for stale feedback from the workflow being left.
+This is the issue's suggested **dismiss on entering the editor** solution. Do **not** change stacking order, clip detail text, add a toast timeout or build CSS breakpoint offset tables. Those are unnecessary for this handoff.
 
-## Acceptance and regression scope
+## Focused acceptance
 
-- From an actual failed placement, open Lines, then New Bus. Confirm the rejection is visible **before** entry and absent after draft entry; click Cancel with a real Playwright pointer click and verify the draft closes. Test at 1280×800, the reported overlap width.
-- Runtime cases: Bus draft, Metro draft, existing-line edit; clear global rejection and road-direction notice only on successful entry. Cover no-op/unknown-route and guard cases without clearing. After Cancel, old notice stays gone; later genuine rejections still surface.
-- Do not break route-local preview/rejection messages. Preserve the dismiss button and stable live-region test for feedback outside a draft.
-- Existing 1024×768 and 1440×900 desktop layout tests remain green; add viewport variants only if the primary pointer test reveals another layout issue.
+- **Runtime test 1:** One parameterized test for New Bus, New Metro and editing an existing route; seed earlier feedback with existing fixtures (exercise both actual rejection and road-direction notice across these cases), enter draft, verify `shell.actionFeedback === null` and the prior notice stays cleared after Cancel.
+- **Runtime test 2:** A prior notice is **preserved** by `setCommandDestination("lines")` without entering a draft.
+- Existing route-preview/save rejection, Reload/Cancel, feedback announcement, and command-layout tests continue to pass. Do not replicate existing busy/unknown-route guards in a test matrix.
+- **No new E2E:** the old one-line reproduction is already green on `main`; an authentic multi-route browser setup would add substantial fixture cost for a small runtime-state contract.
 
-**Not doing:** CSS breakpoint offset tables; z-index escalation; click-through overlays; timeouts; dismissal on merely opening Lines; backend/rejection-code changes; migration/backward compatibility; new image art or SFX. Keep the implementation and tests on this same PR.
+**Explicitly deferred:** If an **eight-or-more-detail** toast starts blocking the Build panel, consider a separate targeted CSS height/scroll limit only when demonstrated with real gameplay. No new image art or SFX; no additional implementation PR.
