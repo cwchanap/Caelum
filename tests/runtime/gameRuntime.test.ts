@@ -5124,7 +5124,78 @@ describe("route creation and management", () => {
     expect(cancelled.ui.routePreviewError).toBeNull();
   });
 
-  it("Cancel preserves an unrelated earlier rejection", async () => {
+  it.each([
+    {
+      name: "a new Bus draft",
+      snapshot: routeSnapshot,
+      seed: async (runtime: RuntimeController, backend: BackendSpy) => {
+        backend.rejectNextDispatch();
+        await runtime.setSpeed(2);
+      },
+      enter: (runtime: RuntimeController) => runtime.setTool("busRoute"),
+    },
+    {
+      name: "a new Metro draft",
+      snapshot: routeSnapshot,
+      seed: async (runtime: RuntimeController) => {
+        runtime.setTool("road");
+        await runtime.handleTileClick({ x: 14, y: 7 });
+      },
+      enter: (runtime: RuntimeController) => runtime.setTool("metroLine"),
+    },
+    {
+      name: "an existing-line edit over a rejection",
+      snapshot: routeSnapshotWithRoute,
+      seed: async (runtime: RuntimeController, backend: BackendSpy) => {
+        backend.rejectNextDispatch();
+        await runtime.setSpeed(2);
+      },
+      enter: (runtime: RuntimeController) =>
+        runtime.startRouteEdit("route-001"),
+    },
+    {
+      name: "an existing-line edit over a road-direction notice",
+      snapshot: routeSnapshotWithRoute,
+      seed: async (runtime: RuntimeController) => {
+        runtime.setTool("road");
+        await runtime.handleTileClick({ x: 14, y: 7 });
+      },
+      enter: (runtime: RuntimeController) =>
+        runtime.startRouteEdit("route-001"),
+    },
+  ])(
+    "opening $name clears earlier gameplay feedback and Cancel does not restore it",
+    async ({ snapshot, seed, enter }) => {
+      const backend = backendSpy(snapshot());
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
+
+      await seed(runtime, backend);
+      const seeded = runtime.getSnapshot();
+      expect(
+        seeded.rejection !== null || seeded.ui.roadDirectionNotice !== null,
+      ).toBe(true);
+      expect(seeded.shell.actionFeedback).not.toBeNull();
+
+      const entered = enter(runtime);
+      expect(entered.ui.routeDraft).not.toBeNull();
+      expect(entered.ui.activeCommandDestination).toBe("lines");
+      expect(entered.rejection).toBeNull();
+      expect(entered.ui.roadDirectionNotice).toBeNull();
+      expect(entered.shell.actionFeedback).toBeNull();
+
+      const cancelled = runtime.cancelRouteDraft();
+      expect(cancelled.ui.routeDraft).toBeNull();
+      expect(cancelled.rejection).toBeNull();
+      expect(cancelled.ui.roadDirectionNotice).toBeNull();
+      expect(cancelled.shell.actionFeedback).toBeNull();
+    },
+  );
+
+  it("keeps earlier gameplay feedback when Lines opens without a draft", async () => {
     const backend = backendSpy(routeSnapshot());
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
@@ -5134,12 +5205,72 @@ describe("route creation and management", () => {
 
     backend.rejectNextDispatch();
     await runtime.setSpeed(2);
-    expect(runtime.getSnapshot().rejection).toBe(TEST_REJECTION);
+    expect(runtime.getSnapshot().shell.actionFeedback?.source).toBe(
+      "rejection",
+    );
+
+    const navigated = runtime.setCommandDestination("lines");
+
+    expect(navigated.ui.activeCommandDestination).toBe("lines");
+    expect(navigated.ui.routeDraft).toBeNull();
+    expect(navigated.shell.actionFeedback?.source).toBe("rejection");
+  });
+
+  it("does not let a delayed road-direction reply surface over an open draft", async () => {
+    const deferred = deferredDispatchBackend(routeSnapshotWithRoute());
+    const backend: DeferredDispatchBackend = {
+      ...deferred,
+      async dispatch(intent) {
+        const result = await deferred.dispatch(intent);
+        if (
+          intent.type === "cycleRoadDirection" &&
+          result.applied &&
+          result.update.scene !== null
+        ) {
+          return {
+            ...result,
+            update: {
+              ...result.update,
+              scene: {
+                ...result.update.scene,
+                routes: result.update.scene.routes.map((route) =>
+                  route.id === "route-001"
+                    ? { ...route, pathBroken: true }
+                    : route,
+                ),
+              },
+            },
+          };
+        }
+        return result;
+      },
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.setTool("road");
+    const cycle = runtime.handleTileClick({ x: 14, y: 7 });
+    await flushPromises();
 
     runtime.setTool("busRoute");
-    const cancelled = runtime.cancelRouteDraft();
+    const draft = runtime.getSnapshot().ui.routeDraft;
+    expect(draft).not.toBeNull();
 
-    expect(cancelled.rejection).toBe(TEST_REJECTION);
+    await backend.resolveNext();
+    await cycle;
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.routeDraft?.instanceId).toBe(draft?.instanceId);
+    expect(
+      snapshot.state.map.tiles.find((tile) => tile.x === 14 && tile.y === 7)
+        ?.oneWay,
+    ).toBe("north");
+    expect(snapshot.state.transit.routes[0]?.pathBroken).toBe(true);
+    expect(snapshot.ui.roadDirectionNotice).toBeNull();
+    expect(snapshot.rejection).toBeNull();
+    expect(snapshot.shell.actionFeedback).toBeNull();
   });
 
   it("does not let a slow route finish clear a newer draft", async () => {

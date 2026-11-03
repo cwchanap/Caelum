@@ -452,7 +452,9 @@ export async function createGameRuntime(
     const nextState = acceptPresentationUpdate(state, result.update);
     if (intent !== undefined) {
       const notice =
-        result.applied && intent.type === "cycleRoadDirection"
+        result.applied &&
+        intent.type === "cycleRoadDirection" &&
+        nextUi.routeDraft === null
           ? {
               direction:
                 nextState.map.tiles.find((tile) =>
@@ -790,12 +792,7 @@ export async function createGameRuntime(
     if (route === undefined && line === undefined) {
       return commit(state, ui);
     }
-    if (
-      rejection?.code === "routeChangedWhileEditing" &&
-      rejection.context.routeId === routeId
-    ) {
-      rejection = null;
-    }
+    rejection = null;
     const routeDraft = editDraft(
       route !== undefined
         ? {
@@ -842,6 +839,7 @@ export async function createGameRuntime(
       drag: null,
       roadMutationPreview: null,
       roadMutationPreviewError: null,
+      roadDirectionNotice: null,
     });
     requestRoutePreview(routeDraft);
     return result;
@@ -1129,7 +1127,6 @@ export async function createGameRuntime(
     if (!globalStale && !localStale) {
       return commit(state, ui);
     }
-    if (globalStale) rejection = null;
     // openRouteEdit clears routePreviewError via commit.
     return openRouteEdit(routeId);
   };
@@ -1388,7 +1385,9 @@ export async function createGameRuntime(
         nextRouteDraftInstanceId += 1;
         next.routePreviewError = null;
         next.routePreviewHostError = null;
+        next.roadDirectionNotice = null;
         next.activeCommandDestination = "lines";
+        rejection = null;
       }
       return commitWithRoadPreview(next);
     },
