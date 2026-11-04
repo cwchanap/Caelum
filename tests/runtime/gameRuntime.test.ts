@@ -5292,26 +5292,45 @@ describe("route creation and management", () => {
     },
   );
 
-  it("keeps earlier gameplay feedback when Lines opens without a draft", async () => {
-    const backend = backendSpy(routeSnapshot());
-    const runtime = await createGameRuntime({
-      createHost: createFakeGameHost,
-      hoverPreviewDebounceMs: 0,
-      backend,
-    });
+  it.each([
+    {
+      name: "a rejection",
+      expectedSource: "rejection",
+      seed: async (runtime: RuntimeController, backend: BackendSpy) => {
+        backend.rejectNextDispatch();
+        await runtime.setSpeed(2);
+      },
+    },
+    {
+      name: "a road-direction notice",
+      expectedSource: "roadDirection",
+      seed: async (runtime: RuntimeController) => {
+        runtime.setTool("road");
+        await runtime.handleTileClick({ x: 14, y: 7 });
+      },
+    },
+  ])(
+    "keeps earlier gameplay feedback ($name) when Lines opens without a draft",
+    async ({ expectedSource, seed }) => {
+      const backend = backendSpy(routeSnapshot());
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 0,
+        backend,
+      });
 
-    backend.rejectNextDispatch();
-    await runtime.setSpeed(2);
-    expect(runtime.getSnapshot().shell.actionFeedback?.source).toBe(
-      "rejection",
-    );
+      await seed(runtime, backend);
+      expect(runtime.getSnapshot().shell.actionFeedback?.source).toBe(
+        expectedSource,
+      );
 
-    const navigated = runtime.setCommandDestination("lines");
+      const navigated = runtime.setCommandDestination("lines");
 
-    expect(navigated.ui.activeCommandDestination).toBe("lines");
-    expect(navigated.ui.routeDraft).toBeNull();
-    expect(navigated.shell.actionFeedback?.source).toBe("rejection");
-  });
+      expect(navigated.ui.activeCommandDestination).toBe("lines");
+      expect(navigated.ui.routeDraft).toBeNull();
+      expect(navigated.shell.actionFeedback?.source).toBe(expectedSource);
+    },
+  );
 
   it("does not let a delayed road-direction reply surface over an open draft", async () => {
     const deferred = deferredDispatchBackend(routeSnapshotWithRoute());
