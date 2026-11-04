@@ -2,7 +2,8 @@
 
 **Issue:** https://linear.app/cwchanap/issue/HPA-714/fix-build-tool-traps-and-missing-cost-hints-from-the-uat  
 **Design:** [2026-11-03-hpa-714-build-tool-uat-design.md](../specs/2026-11-03-hpa-714-build-tool-uat-design.md)  
-**Policy:** **one ticket, one PR**. Keep this draft PR for the eventual implementation; do not open a second PR. This initial change is documentation only.
+**Policy:** **one ticket, one PR**. Keep this draft PR for the eventual implementation; do not open a second PR. This initial change is documentation only.  
+**Review:** [HPA-714 design review](https://github.com/cwchanap/Caelum/pull/78#issuecomment-6624795002) — corrections incorporated below.
 
 ## Baseline and boundaries
 
@@ -12,56 +13,55 @@ Use **test → small change → re-test** per step below. Keep native Tauri/WASM
 
 ## 1. Reproduce and fix safe road-direction clicks (first priority)
 
-**Files:** `crates/caelum-core/src/road.rs`; `tests/road_authoring.rs` or `tests/engine_topology.rs` under `crates/caelum-core`; `src/runtime/roadMutations.ts`; `src/runtime/createGameRuntime.ts`; `tests/runtime/roadDirectionFeedback.test.ts`, `tests/runtime/roadDrag.test.ts`, existing runtime preview tests.
+**Files:** `crates/caelum-core/src/road.rs` + `rejection.rs`, focused core road tests; `src/runtime/roadMutations.ts`, `src/runtime/createGameRuntime.ts`, `src/domain/types.ts`, `src/runtime/rejectionMessages.ts`; `tests/runtime/roadDirectionFeedback.test.ts` and `tests/runtime/roadDrag.test.ts`.
 
-- Write one Rust regression for a horizontal straight road whose legal headings are only E/W, and one vertical case N/S. Assert `None → forward → reverse → None`, topology stays valid and no perpendicular direction is produced. Assert mixed-axis/structure-owned contact is unchanged.
-- Replace the **old** real-core test contract in `roadDirectionFeedback.test.ts` that currently explicitly expects a horizontal road to cycle to North, break the shuttle, and cycle North/East/South/West. Do not keep that obsolete assertion as a competing test. Use `setRoadPreset("oneWay")` for direction-change tests; separately cover twoWay/dual no-op by click and stationary drag.
-- Make `roadClickIntent` return `GameIntent | null` (and preview mutation `RoadMutation | null`), taking the selected road preset. Keep execution-time map lookup in `enqueueComputedDispatch` for queued actions; no-op returns without backend dispatch, price charge or direction notice.
-- In Rust `cycle_road_direction` derive the axis once from reciprocal port connections and select only the two parallel directions. Do not patch by checking UI preset inside Rust: the chosen preset gates the **frontend action**, while Rust must independently keep an invoked `CycleRoadDirection` safe.
-- Update hover preview fallback for no-op existing roads to a neutral "Already road"; clear stale preview on no-op. Keep normal multi-tile `layRoadLine` and explicit One-Way route-impact feedback unchanged.
+- **Replace the obsolete regression** that requires a horizontal road to cycle to North and break its shuttle and then N/E/S/W; it pins the bug. Add Rust tests for horizontal E/W, vertical N/S, degree-1 dead ends, an off-axis old heading corrected to two-way, an ordinary corner/mixed-axis/isolated rejection and a structure-owned no-op. Preview and committed core cycle should agree.
+- Add typed `roadDirectionNeedsStraightRoad` for ordinary roads without one straight axis, with "Only straight roads can be one-way." in cursor preview and committed feedback. `cycle_road_direction` must still reject bad headings when called directly; structure-owned roads keep current behavior.
+- Change `roadClickIntent`/`roadClickMutation` to take selected preset and return `GameIntent | null` / `RoadMutation | null` for gated no-ops on existing roads. Use the same decision for click, zero-length drag and hover. Show neutral "Already road", never a charged change or false rejection.
+- **Capture `roadPreset` at the click/gesture commit**, passing it to `enqueueComputedDispatch`, but re-read `state.map` **when the queued closure runs**. A subsequent preset change must not retroactively turn the user's click into another action, and an earlier queued build must still be visible. `enqueueComputedDispatch` already accepts null intents.
+- Keep multi-tile `layRoadLine` and existing road/roundabout pre-click preview invalidation and route-impact notices.
 
-**Gate:** Rust invariant tests plus selected runtime road-direction/drag tests pass before touching cost UI.
+**Gate:** Rust invariants and real-core road-direction/drag tests pass; clicking a normal road with 1-Lane/2-Lane does not change it. **Risk:** old tests explicitly assert the unsafe North/E/S/W cycle, so update expectations rather than retaining compatibility paths.
+## 2. Reuse the existing Track preview and warnings channel
 
-## 2. Make Track cost and partial-build previews authoritative
+**Files:** `crates/caelum-core/src/preview.rs`, `transit.rs`, `road.rs`, `engine.rs` only as needed for the shared inner track loop; `src/runtime/backend/types.ts`, `src/runtime/runtimeSelectors.ts`, `src/runtime/rejectionMessages.ts`, `src/runtime/roadMutations.ts`, `src/runtime/createGameRuntime.ts`; focused Rust/backend/runtime tests.
 
-**Files:** `crates/caelum-core/src/preview.rs`, `crates/caelum-core/src/transit.rs`, `crates/caelum-core/src/road.rs` only as needed for the existing preview mutation variants; `src/runtime/backend/types.ts` and existing WASM/Tauri preview serialization/normalization tests; `src/runtime/roadMutations.ts` and `src/runtime/createGameRuntime.ts`.
+- Add `layTrack` and `layTrackLine` to the existing `RoadMutation` preview variants and `preview_network_candidate`. Give `apply_linear_tiles_in_order` rejection arms for these preview-only types, like `PlaceRoundabout`. **No new `GameBackend` method**, no new coordinator, no generic preview service.
+- `lay_track_line_costed` currently returns snapshot-only `CostedMutation`. Reuse a **single Rust inner loop** for engine commit and preview. It should sum `authorize()?.apply_to()` for each successfully placed track tile (the **actual charge**) and collect blocked/unaffordable causes. Map the committed result to current `CostedMutation`; use `dispatch_context` for changed/unchanged preview tiles. The single-tile path keeps existing Rust `TRACK_COST` policy. Do not reimplement a track simulator in TypeScript.
+- `skippedTiles` includes harmless unchanged tiles via `dispatch_context` and `record_line_results`. **Never use `skippedTiles` to choose warning tone.** Capture causes only at real Rust skip sites: Road out of bounds/roundabout-owned/disallowed reverse overlay/invalid placement = blocked, unaffordable quote = budget; Track invalid placement **except already-laid track** = blocked, unaffordable quote = budget. An accepted unchanged road/crossing or existing track is not a blocked cause. A whole rejected road stroke remains a rejection.
+- Replace `WarningCode::SkippedTiles` with `TilesBlocked` and `TilesUnaffordable` (wire `tilesBlocked`/`tilesUnaffordable`). Reuse the existing `GameplayWarning.context.footprint` and `RoadMutationPreviewResponse.warnings`; no new serialized response field or extra counts. Pass `warnings` through `buildRoadMutationPreview`; replace obsolete generic `warningMessage` copy. UI count = corresponding warning footprint length.
+- Wire Track hover/drag through existing `roadMutationForUi` / `commitWithRoadPreview` / generation handling without changing actual Track dispatch. Keep coordinator invalidation and debouncing.
+- Tests: compare preview and commit on $150/12-tile Road stroke ($100 charged, 11 unaffordable), blocked Road/Track stroke, existing road/track no-op (no partial-build warning), and Creative-mode paid placement.
 
-- Extend **the existing** `previewRoadMutation` request with Track single/line mutations; no additional `GameBackend` operation or separate preview coordinator. Use Rust's current `lay_track_costed` / `lay_track_line_costed` logic on a candidate snapshot. Capture real `changedTiles`, `skippedTiles` and paid `cost`.
-- Expose small skip-cause counts on the existing preview response only where necessary. Populate blocked/insufficient-budget counts at the same per-tile decisions in Rust road/track paths. Keep non-budget remainder as a generic skipped count; prevent approved unchanged crossing tiles from being falsely called "blocked." Roundabout/remove previews use empty counts.
-- Wire Track hover and drag through existing `roadMutationForUi` / `commitWithRoadPreview` / generation handling. Do not lose the currently correct debounce and stale-held-preview logic. Keep actual Track dispatch (`layTrack` / `layTrackLine`) unchanged.
-- Test one budget-limited 12-tile Road stroke ($150 → $100 charge, 11 unaffordable), one blocked tile within a Road stroke, and one blocked/limited Track stroke. Compare preview to actual dispatch at the core boundary, including one Creative case.
+**Gate:** Rust preview stays read-only, matches commit cost and cause footprints, and the backend retains nine operations.
+## 3. Cost and genuine failure reason beside the cursor
 
-**Gate:** Rust preview is read-only, reports the correct cost and skips, and the existing backend contract remains a single nine-method interface.
+**Files:** `src/render/mapTextOverlay.ts`, `src/runtime/runtimeSelectors.ts` and existing preview view types; `src/domain/catalog/transit.ts`, `tests/runtime/runtimeSelectors.test.ts`, `tests/runtime/buildingCatalog.test.ts`, `tests/render/mapTextOverlay.test.ts`, `tests/ui/mapTextOverlay.test.ts`; one focused Rust pricing test.
 
-## 3. Show the price and partial-build reason beside the cursor
+- Keep a single `cursorBadge` per hover/drag tile. Road/Roundabout/Track show **Rust** preview charges. Bus Stop/Metro Station/selected building display `BUILDING_CATALOG[type].cost` and existing `canPlaceBusStop`/`canPlaceBuilding` validity checks. Delete unused `COSTS` export from `src/domain/catalog/transit.ts` and its *only* selector-test assertion rather than reviving a TS copy of `TRACK_COST`.
+- Ensure `BUS_STOP_COST` and `METRO_STATION_COST` equal their Rust `building_definition` catalog entries in one focused Rust assertion. Pin those two displayed prices in current `buildingCatalog.test.ts`. No codegen or additional cost service.
+- Display `⦿ Label · $X` or `Free` in Creative mode, with equivalent non-live `a11yText`. Locally invalid placements can show an informational listed price plus `⊘`; a rejected Rust preview **wins over** price. Pending/stale previews remain neutral.
+- For accepted Road/Track results, set warning tone only when `tilesBlocked` or `tilesUnaffordable` has a nonempty footprint; show concise cause/count, e.g. "Not enough money, 11 tiles skipped" or "2 tiles blocked." Keep broken-first route-impact summary, no second overlay, no generic unclassified skipped warning.
+- Update the existing cursor test which accepts a Rust preview with unchanged/skipped tiles: **its warning expectation must follow `warnings`, not `skippedTiles`**. Add one no-op-only neutral test and one truly blocked warning test.
 
-**Files:** `src/render/mapTextOverlay.ts`, `src/runtime/runtimeSelectors.ts` and preview view type if needed; `src/domain/catalog/buildings.ts` (small reuse of existing shared prices only); `tests/render/mapTextOverlay.test.ts`, `tests/ui/mapTextOverlay.test.ts`.
+**Gate:** Stop/Station/building/Track cost, Standard/Creative, blocked/budget warnings and neutral existing-road clicks pass focused UI tests.
+## 4. Contextual copy, Build polish and **shared** post-dispatch refresh
 
-- Keep one `cursorBadge` per current hover/drag tile. Use Rust quoted cost for Road/Roundabout/Track. For Bus Stop/Metro Station/armed building, reuse `BUILDING_CATALOG[type].cost` and existing read-only validation. Do not add new literals for track or transit prices; if consolidating duplicated frontend stop/station prices, reference the already-existing `COSTS` values rather than copying them again.
-- Display `⦿ Label · $X` or `Free` in Creative mode; extend the non-live accessible readout consistently. Unaffordable or blocked single-placement badges still show informational listed price with `⊘`; a rejected Rust preview shows the rejection instead of an apparent charge.
-- For accepted Road/Track preview with real skipped tiles, set existing warning tone and add concise counts (`Not enough money, 11 tiles skipped` / `2 tiles blocked`). Keep the actual charged cost shown, not an all-tiles quote. For mixed or unknown causes do not invent a specific reason.
-- Keep existing route impact text (broken before rerouted); combine without creating another overlay or strip notification. Preserve pending/stale-generation behavior so a warning from a prior stroke cannot persist as current.
+**Files:** `crates/caelum-core/src/transit.rs` + `rejection.rs`; `src/domain/types.ts`, `src/runtime/rejectionMessages.ts`; `src/components/hud/panels/BuildPanel.svelte`, applicable CSS and UI tests; `src/runtime/createGameRuntime.ts` and focused runtime preview tests.
 
-**Gate:** Cursor tests for Track/Stop/Station/building prices, Creative/Standard, one partial-budget warning, one blocked warning, and no-op existing road. Update old test expecting an accepted preview with a skipped tile to have no warning: the new warning is intentional.
+- When a Bus Stop targets an existing road tile, return `stopMustBeBesideRoad` → "Place stops beside a road, not on it." Keep `blockedTile` for other collisions; no intent-tracking framework.
+- Remove `tool-num` 01/02 ordinals, markup, obsolete style/test assertions and **BuildPanel's** `pad2` import; `pad2` elsewhere (including `runtimeSelectors.ts`) remains. Show `buildingRotation` with `°` and keep the current accessible "degrees" name; real shortcut chips remain.
+- **No new roundabout-specific refresh path.** `commitDispatchResult` already handles applied scene/budget changes; derive `roadMutationForUi(nextState, nextUi)` instead of relying on cleared `activeRoadMutation`. Keep pre-click coordinator invalidation so stale answers cannot repopulate. Reuse existing generation bump and `sendRoadMutationPreviewRequest` for Roundabout/Road/Track. A rejected placement without scene/budget change does not re-request; when tool/hover changed during pending dispatch, use the current `nextUi`.
+- Add focused runtime test: after successful roundabout placement, the cursor badge settles **without pointer movement**; an older pending preview is dropped.
 
-## 4. Contextual rejection and small UI corrections
+**Gate:** one shared post-dispatch refresh mechanism, with no new component/state owner.
+## 5. Focused browser journeys and verification
 
-**Files:** `crates/caelum-core/src/transit.rs` + `rejection.rs` (new narrow rejection code); `src/domain/types.ts`, `src/runtime/rejectionMessages.ts`; `src/components/hud/panels/BuildPanel.svelte` and applicable CSS; `src/runtime/createGameRuntime.ts` (roundabout refresh); `tests/runtime/rejectionMessages.test.ts` / existing equivalent; `tests/ui/buildPanel.test.ts` and runtime preview tests.
+**Files:** extend `tests/e2e/commandShelf.spec.ts` for Road/One-Way/Track/partial-warning interactions, and `tests/e2e/roundabouts.spec.ts` for stationary-pointer post-roundabout refresh. Reuse existing setups, no new suite.
 
-- Return the new stop-on-road rejection only when a Bus Stop placement actually targets a road. Map it to "Place stops beside a road, not on it." Do not globally replace `blockedTile` for buildings or footprints.
-- Delete `pad2(index + 1)` and the ordinal element, associated obsolete styling/import/tests; keep genuine shortcut chips. Render `buildingRotation` with the degree symbol while preserving the current accessible button name.
-- Upon successful `placeRoundabout`, request a fresh preview for the *current* armed tool/hover against the committed new snapshot, even if the cursor has not moved. Reuse the existing request generation and ignore stale results; do not refresh after a rejected placement or if the user changed tools.
-- Add focused UI/runtime regression for the settled label immediately after roundabout placement.
+Walk through: arm 1-Lane, click existing horizontal road (no change); arm One-Way, click the road (only E/W); hover/drag Track to see actual price; inspect a truly unaffordable/blocked partial stroke and neutral unchanged road/track; place a roundabout and confirm the badge settles without moving pointer.
 
-**Gate:** Existing build panel accessibility and keyboard behavior remains intact; no new component.
-
-## 5. One focused player-flow and verification
-
-**File:** extend `tests/e2e/commandShelf.spec.ts` or existing build-tool Playwright scenario (no new test suite).
-
-Walk through: arm 1-Lane, click existing horizontal road (no change); arm One-Way, click same road (only E/W); hover/drag Track and read cost; inspect a budget-limited stroke warning; place a roundabout and confirm the label settles without another move. Reuse fixtures and browser setup; do not require new art.
-
-Run the repository commands after code changes (do not mark as passed until executed):
+Run the repository's normal gates after implementation (this design-only update does **not** claim they have run):
 
 ```sh
 cargo fmt --all --check
@@ -74,17 +74,25 @@ bun run format:check
 bun run test:e2e
 ```
 
-Also confirm browser/WASM and Tauri call the same existing preview contract, with no save-schema update. Do a quick manual pointer/cost look if available.
+Confirm WASM and Tauri still consume the same preview contract, without a save-schema change. Manually inspect cursor text at map edges if convenient.
 
+### Risks and controls
+
+- **Intentional regression-test change:** `roadDirectionFeedback.test.ts` pins unsafe North/E/S/W cycling and route breakage; replace that contract before implementation.
+- **False warnings:** unchanged roads/crossings and already-laid track can appear in `skippedTiles`; only Rust-classified `tilesBlocked`/`tilesUnaffordable` should tone the badge.
+- **Queued clicks and stale previews:** capture preset at click, re-read map on execution, and re-derive post-dispatch preview from current state/UI; keep invalidation/generation checks.
+- **Cost drift:** Rust stop/station constants match Rust building catalog; TS catalog display is pinned. Preview/commit share the same Track placement loop.
+
+Do not broaden into cost services, an extra preview method, unrelated UAT, new art/SFX tasks or multiple PRs.
 ## Review checklist
 
-- [ ] Rust road headings stay on connected axis; mixed/structure road no-op
-- [ ] Both road-click entry points + hover respect selected preset and queued execution order
-- [ ] Track preview uses Rust, not a new TS cost simulator; skip reasons are evidence-based
-- [ ] Stop/station/building listed prices reuse current catalogs; Creative labels say Free
+- [ ] Rust headings stay on resolved axis; unsupported ordinary roads reject, structure-owned no-op, legacy off-axis headings reset
+- [ ] Click and stationary drag capture preset at input, read map at queued execution; hover matches mode
+- [ ] Track preview/commit share Rust cost loop; blocker/budget footprints reuse existing warnings, with no false no-op warnings
+- [ ] Stop/station/building prices come from BUILDING_CATALOG; Rust/TS price pins, dead COSTS removed, Creative Free
 - [ ] An accepted partial stroke shows warning + actual charge; no stale preview
 - [ ] Bus Stop on road has specific copy; generic blocked error unchanged elsewhere
-- [ ] No fake ordinal shortcuts; degree suffix and post-roundabout hover refresh verified
+- [ ] No fake ordinal shortcuts; degree suffix and shared post-dispatch roundabout hover refresh verified
 - [ ] Focused core/UI/Playwright checks pass; update docs on **this same PR**
 - [ ] No unrelated UAT items, migrations, new host operations, or new assets
 
