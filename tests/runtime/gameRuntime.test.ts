@@ -4749,6 +4749,102 @@ describe("route creation and management", () => {
     expect(afterReload.ui.routeDraft).toBe(fresh.ui.routeDraft);
   });
 
+  it("Reload honours a stale flag that only survives on the draft preview", async () => {
+    const previews = deferredPreviewBackend(routeSnapshotWithRoute());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+    runtime.startRouteEdit("route-001");
+    previews.resolveRoute(0, {
+      ...routePreview(0, ["stop-001", "stop-002"]),
+      rejection: {
+        code: "routeChangedWhileEditing",
+        context: {
+          routeId: "route-001",
+          expectedRevision: 0,
+          actualRevision: 9,
+          affectedRouteIds: ["route-001"],
+        },
+      },
+    });
+    await flushPromises();
+    // A transient interaction error replaces the route-preview error while
+    // the stale flag stays recorded on the draft's own preview.
+    runtime.selectRouteWaypoint(5, "replace");
+    const armed = runtime.getSnapshot();
+    expect(armed.ui.routePreviewError?.code).toBe(
+      "invalidRouteDraftInteraction",
+    );
+    expect(armed.rejection).toBeNull();
+    expect(armed.shell.routeDraft?.canReload).toBe(true);
+
+    const draftBefore = armed.ui.routeDraft;
+    const reloaded = runtime.reloadRouteDraft();
+
+    expect(reloaded.ui.routeDraft?.source).toEqual({
+      kind: "edit",
+      routeId: "route-001",
+      expectedRevision: 0,
+    });
+    expect(reloaded.ui.routeDraft?.instanceId).not.toBe(
+      draftBefore?.instanceId,
+    );
+    expect(reloaded.ui.routePreviewError).toBeNull();
+  });
+
+  it("Reload retires the stale flag when the edited route no longer exists", async () => {
+    const previews = deferredPreviewBackend(routeSnapshotWithRoute());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+    runtime.startRouteEdit("route-001");
+    previews.resolveRoute(0, {
+      ...routePreview(0, ["stop-001", "stop-002"]),
+      rejection: {
+        code: "routeChangedWhileEditing",
+        context: {
+          routeId: "route-001",
+          expectedRevision: 0,
+          actualRevision: 9,
+          affectedRouteIds: ["route-001"],
+        },
+      },
+    });
+    await flushPromises();
+    expect(runtime.getSnapshot().shell.routeDraft?.canReload).toBe(true);
+
+    // The route is deleted while its edit draft is still open; the
+    // scene-triggered preview refresh stays in flight on purpose — Reload
+    // must unstick the stale markers without waiting for it.
+    await runtime.deleteRoute("route-001");
+    const reloaded = runtime.reloadRouteDraft();
+
+    expect(reloaded.shell.routeDraft?.canReload).toBe(false);
+    expect(reloaded.ui.routePreviewError).toBeNull();
+    expect(reloaded.ui.routeDraft?.preview?.rejection).toBeNull();
+
+    // When the refresh answer lands, the editor reports the missing route.
+    previews.resolveRoute(
+      0,
+      {
+        ...routePreview(0, ["stop-001", "stop-002"]),
+        rejection: {
+          code: "routeNotFound",
+          context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
+        },
+      },
+      1,
+    );
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.routePreviewError?.code).toBe(
+      "routeNotFound",
+    );
+  });
+
   it("successful creation save deploys the initial fleet after the route", async () => {
     const base = backendSpy(routeSnapshot());
     const dispatch = vi.fn(base.dispatch.bind(base));
@@ -5126,7 +5222,8 @@ describe("route creation and management", () => {
 
   it.each([
     {
-      name: "a new Bus draft",
+      name: "a new Bus draft over a rejection",
+      expectedSource: "rejection",
       snapshot: routeSnapshot,
       seed: async (runtime: RuntimeController, backend: BackendSpy) => {
         backend.rejectNextDispatch();
@@ -5135,7 +5232,8 @@ describe("route creation and management", () => {
       enter: (runtime: RuntimeController) => runtime.setTool("busRoute"),
     },
     {
-      name: "a new Metro draft",
+      name: "a new Metro draft over a road-direction notice",
+      expectedSource: "roadDirection",
       snapshot: routeSnapshot,
       seed: async (runtime: RuntimeController) => {
         runtime.setTool("road");
@@ -5145,6 +5243,7 @@ describe("route creation and management", () => {
     },
     {
       name: "an existing-line edit over a rejection",
+      expectedSource: "rejection",
       snapshot: routeSnapshotWithRoute,
       seed: async (runtime: RuntimeController, backend: BackendSpy) => {
         backend.rejectNextDispatch();
@@ -5155,6 +5254,7 @@ describe("route creation and management", () => {
     },
     {
       name: "an existing-line edit over a road-direction notice",
+      expectedSource: "roadDirection",
       snapshot: routeSnapshotWithRoute,
       seed: async (runtime: RuntimeController) => {
         runtime.setTool("road");
@@ -5165,7 +5265,7 @@ describe("route creation and management", () => {
     },
   ])(
     "opening $name clears earlier gameplay feedback and Cancel does not restore it",
-    async ({ snapshot, seed, enter }) => {
+    async ({ expectedSource, snapshot, seed, enter }) => {
       const backend = backendSpy(snapshot());
       const runtime = await createGameRuntime({
         createHost: createFakeGameHost,
@@ -5175,10 +5275,7 @@ describe("route creation and management", () => {
 
       await seed(runtime, backend);
       const seeded = runtime.getSnapshot();
-      expect(
-        seeded.rejection !== null || seeded.ui.roadDirectionNotice !== null,
-      ).toBe(true);
-      expect(seeded.shell.actionFeedback).not.toBeNull();
+      expect(seeded.shell.actionFeedback?.source).toBe(expectedSource);
 
       const entered = enter(runtime);
       expect(entered.ui.routeDraft).not.toBeNull();
@@ -5260,6 +5357,7 @@ describe("route creation and management", () => {
 
     await backend.resolveNext();
     await cycle;
+    await flushPromises();
 
     const snapshot = runtime.getSnapshot();
     expect(snapshot.ui.routeDraft?.instanceId).toBe(draft?.instanceId);
@@ -5268,8 +5366,125 @@ describe("route creation and management", () => {
         ?.oneWay,
     ).toBe("north");
     expect(snapshot.state.transit.routes[0]?.pathBroken).toBe(true);
-    expect(snapshot.ui.roadDirectionNotice).toBeNull();
+    // The notice stays recorded but hidden — nothing may render over the
+    // pinned editor. It surfaces once the draft closes.
+    expect(snapshot.ui.roadDirectionNotice?.brokenRouteNames).toEqual([
+      "Bus 1",
+    ]);
     expect(snapshot.rejection).toBeNull();
+    expect(snapshot.shell.actionFeedback).toBeNull();
+
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.shell.actionFeedback?.source).toBe("roadDirection");
+    expect(cancelled.shell.actionFeedback?.details).toEqual([
+      "Bus 1 became broken after this direction change.",
+    ]);
+  });
+
+  it("defers a delayed dispatch rejection while a draft is open", async () => {
+    const backend = deferredDispatchBackend(routeSnapshotWithRoute());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.setTool("road");
+    backend.rejectNextDispatch();
+    const click = runtime.handleTileClick({ x: 14, y: 7 });
+    await flushPromises();
+
+    runtime.setTool("busRoute");
+    expect(runtime.getSnapshot().ui.routeDraft).not.toBeNull();
+
+    await backend.resolveNext();
+    await click;
+    await flushPromises();
+
+    // The rejection lands while the draft is open: it stays recorded but must
+    // not render over the pinned editor, then surfaces once the draft closes.
+    const during = runtime.getSnapshot();
+    expect(during.rejection).toEqual(TEST_REJECTION);
+    expect(during.shell.actionFeedback).toBeNull();
+
+    const cancelled = runtime.cancelRouteDraft();
+    expect(cancelled.shell.actionFeedback?.source).toBe("rejection");
+  });
+
+  it("re-requests the open draft's preview when a queued dispatch changes the route", async () => {
+    const deferred = deferredDispatchBackend(routeSnapshotWithRoute());
+    let routeRevision = 0;
+    const backend: DeferredDispatchBackend = {
+      ...deferred,
+      async dispatch(intent) {
+        const result = await deferred.dispatch(intent);
+        if (
+          intent.type === "cycleRoadDirection" &&
+          result.applied &&
+          result.update.scene !== null
+        ) {
+          // The direction change re-broke the route: its revision moves.
+          routeRevision = 1;
+          return {
+            ...result,
+            update: {
+              ...result.update,
+              scene: {
+                ...result.update.scene,
+                routes: result.update.scene.routes.map((route) =>
+                  route.id === "route-001" ? { ...route, revision: 1 } : route,
+                ),
+              },
+            },
+          };
+        }
+        return result;
+      },
+      async previewRoute(request) {
+        if (
+          request.routeId === "route-001" &&
+          request.expectedRevision !== null &&
+          request.expectedRevision !== routeRevision
+        ) {
+          return {
+            ...routePreview(request.generation, request.waypointIds),
+            rejection: {
+              code: "routeChangedWhileEditing",
+              context: {
+                routeId: "route-001",
+                expectedRevision: request.expectedRevision,
+                actualRevision: routeRevision,
+                affectedRouteIds: ["route-001"],
+              },
+            },
+          };
+        }
+        return routePreview(request.generation, request.waypointIds);
+      },
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.setTool("road");
+    const cycle = runtime.handleTileClick({ x: 14, y: 7 });
+    await flushPromises();
+
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+    expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
+
+    await backend.resolveNext();
+    await cycle;
+    await flushPromises();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.routeDraft).not.toBeNull();
+    expect(snapshot.ui.routePreviewError?.code).toBe(
+      "routeChangedWhileEditing",
+    );
+    expect(snapshot.shell.routeDraft?.canReload).toBe(true);
+    expect(snapshot.shell.routeDraft?.canSave).toBe(false);
     expect(snapshot.shell.actionFeedback).toBeNull();
   });
 
