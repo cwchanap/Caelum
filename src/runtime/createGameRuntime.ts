@@ -476,7 +476,14 @@ export async function createGameRuntime(
                 )
                 .map((route) => route.name),
             }
-          : null;
+          : // A later dispatch clears the notice — but only once the feedback
+            // strip could show it. While a route draft keeps it hidden, the
+            // recorded notice stays until it surfaces on close or is
+            // explicitly dismissed; an unrelated speed/pause dispatch must not
+            // silently discard it.
+            ui.routeDraft !== null
+            ? nextUi.roadDirectionNotice
+            : null;
       if (nextUi.roadDirectionNotice !== notice) {
         nextUi = { ...nextUi, roadDirectionNotice: notice };
       }
@@ -501,7 +508,14 @@ export async function createGameRuntime(
       previewCoordinator.invalidateRoute();
       nextUi = {
         ...nextUi,
-        routeDraft: { ...draftToRefresh, previewPending: true },
+        // The held preview was accepted against the pre-dispatch world; while
+        // the refresh request is in flight it must not keep `canSave` armed or
+        // feed failures/warnings — "Checking route…" means no usable preview.
+        routeDraft: {
+          ...draftToRefresh,
+          previewPending: true,
+          preview: null,
+        },
       };
     }
     // An armed road preview was computed against the previous world. If this
@@ -614,7 +628,13 @@ export async function createGameRuntime(
     // rejection === null) — otherwise a no-op intent like re-toggling pause
     // would clear a placement rejection the player hasn't dismissed yet.
     // Update only on success (clears) or when a new rejection is present.
-    if (result.applied || result.rejection !== null) {
+    // While a route draft hides the strip, a rejection recorded there is
+    // deferred, not stale: an unrelated successful dispatch (speed, pause)
+    // must not discard it before it ever surfaces on close.
+    if (
+      result.rejection !== null ||
+      (result.applied && ui.routeDraft === null)
+    ) {
       rejection = result.rejection;
     }
     const resolvedUi =
@@ -814,6 +834,18 @@ export async function createGameRuntime(
       : { ...nextUi, roadDirectionNotice: null };
   };
 
+  /** Whether the stored rejection is owned by the given open draft — a Save
+   *  rejection mirrored into the draft panel, or the stale-revision marker
+   *  for the route being edited. Editor-owned feedback retires with its
+   *  editor; unrelated feedback hidden behind a draft is deferred and
+   *  survives until it surfaces on close. */
+  const isEditorOwnedRejection = (draft: RouteDraft | null): boolean =>
+    rejection !== null &&
+    (ui.routePreviewError === rejection ||
+      (draft?.source.kind === "edit" &&
+        rejection.code === "routeChangedWhileEditing" &&
+        rejection.context.routeId === draft.source.routeId));
+
   const rejectRouteDraftInteraction = (
     error: RouteDraftInteractionError,
   ): RuntimeSnapshot => {
@@ -968,12 +1000,21 @@ export async function createGameRuntime(
         const tokenIsCurrent = isCurrent(current);
         if (tokenIsCurrent) {
           backendError = null;
-          rejection = result.rejection;
+          // A Save rejection always replaces stored feedback (it mirrors
+          // into the draft panel below). A successful Save clears only a
+          // rejection this editor owned — an unrelated rejection hidden
+          // behind the open draft stays deferred until the draft closes.
+          if (result.rejection !== null || isEditorOwnedRejection(current)) {
+            rejection = result.rejection;
+          }
         } else if (result.applied) {
           // A superseded save still succeeded in the backend; clear any prior
-          // rejection so a stale failure does not outlive the successful save.
+          // rejection so a stale failure does not outlive the successful save
+          // — unless it is still hidden behind the current draft.
           backendError = null;
-          rejection = null;
+          if (ui.routeDraft === null) {
+            rejection = null;
+          }
         }
         if (result.applied && tokenIsCurrent) {
           if (isCreate) {
@@ -1075,13 +1116,7 @@ export async function createGameRuntime(
     const draft = ui.routeDraft;
     previewCoordinator.invalidateRoute();
     const cancelledUi = cancelDraftRoute(ui);
-    const editorOwnsRejection =
-      rejection !== null &&
-      (ui.routePreviewError === rejection ||
-        (draft?.source.kind === "edit" &&
-          rejection.code === "routeChangedWhileEditing" &&
-          rejection.context.routeId === draft.source.routeId));
-    if (editorOwnsRejection) rejection = null;
+    if (isEditorOwnedRejection(draft)) rejection = null;
     if (
       cancelledUi === ui &&
       ui.routeDraftHistory.past.length === 0 &&
