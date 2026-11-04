@@ -4825,7 +4825,9 @@ describe("route creation and management", () => {
 
     expect(reloaded.shell.routeDraft?.canReload).toBe(false);
     expect(reloaded.ui.routePreviewError).toBeNull();
-    expect(reloaded.ui.routeDraft?.preview?.rejection).toBeNull();
+    // The world-change refresh already cleared the held preview — including
+    // the stale flag that had armed Reload — so nothing stale survives.
+    expect(reloaded.ui.routeDraft?.preview).toBeNull();
 
     // When the refresh answer lands, the editor reports the missing route.
     previews.resolveRoute(
@@ -5393,6 +5395,19 @@ describe("route creation and management", () => {
     expect(snapshot.rejection).toBeNull();
     expect(snapshot.shell.actionFeedback).toBeNull();
 
+    // An unrelated successful dispatch while the draft hides the strip must
+    // not discard the deferred notice before it ever surfaces.
+    const speed = runtime.setSpeed(2);
+    await flushPromises();
+    await backend.resolveNext();
+    await speed;
+    const afterSpeed = runtime.getSnapshot();
+    expect(afterSpeed.ui.routeDraft).not.toBeNull();
+    expect(afterSpeed.ui.roadDirectionNotice?.brokenRouteNames).toEqual([
+      "Bus 1",
+    ]);
+    expect(afterSpeed.shell.actionFeedback).toBeNull();
+
     const cancelled = runtime.cancelRouteDraft();
     expect(cancelled.shell.actionFeedback?.source).toBe("roadDirection");
     expect(cancelled.shell.actionFeedback?.details).toEqual([
@@ -5425,15 +5440,27 @@ describe("route creation and management", () => {
     expect(during.rejection).toEqual(TEST_REJECTION);
     expect(during.shell.actionFeedback).toBeNull();
 
+    // An unrelated successful dispatch while the draft hides the strip must
+    // not discard the deferred rejection before it ever surfaces.
+    const toggled = runtime.togglePause();
+    await flushPromises();
+    await backend.resolveNext();
+    await toggled;
+    const afterPause = runtime.getSnapshot();
+    expect(afterPause.ui.routeDraft).not.toBeNull();
+    expect(afterPause.rejection).toEqual(TEST_REJECTION);
+    expect(afterPause.shell.actionFeedback).toBeNull();
+
     const cancelled = runtime.cancelRouteDraft();
     expect(cancelled.shell.actionFeedback?.source).toBe("rejection");
   });
 
   it("re-requests the open draft's preview when a queued dispatch changes the route", async () => {
     const deferred = deferredDispatchBackend(routeSnapshotWithRoute());
-    let routeRevision = 0;
+    const previews = deferredPreviewBackend(routeSnapshotWithRoute());
     const backend: DeferredDispatchBackend = {
       ...deferred,
+      previewRoute: previews.backend.previewRoute,
       async dispatch(intent) {
         const result = await deferred.dispatch(intent);
         if (
@@ -5442,7 +5469,6 @@ describe("route creation and management", () => {
           result.update.scene !== null
         ) {
           // The direction change re-broke the route: its revision moves.
-          routeRevision = 1;
           return {
             ...result,
             update: {
@@ -5458,27 +5484,6 @@ describe("route creation and management", () => {
         }
         return result;
       },
-      async previewRoute(request) {
-        if (
-          request.routeId === "route-001" &&
-          request.expectedRevision !== null &&
-          request.expectedRevision !== routeRevision
-        ) {
-          return {
-            ...routePreview(request.generation, request.waypointIds),
-            rejection: {
-              code: "routeChangedWhileEditing",
-              context: {
-                routeId: "route-001",
-                expectedRevision: request.expectedRevision,
-                actualRevision: routeRevision,
-                affectedRouteIds: ["route-001"],
-              },
-            },
-          };
-        }
-        return routePreview(request.generation, request.waypointIds);
-      },
     };
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
@@ -5490,11 +5495,39 @@ describe("route creation and management", () => {
     await flushPromises();
 
     runtime.startRouteEdit("route-001");
+    previews.resolveRoute(0, routePreview(0, ["stop-001", "stop-002"]));
     await flushPromises();
     expect(runtime.getSnapshot().shell.routeDraft?.canSave).toBe(true);
 
     await backend.resolveNext();
     await cycle;
+    await flushPromises();
+
+    // While the revalidation request is in flight, the accepted preview it
+    // replaced was computed against the pre-change world — Save must not
+    // stay armed on it (the same generation is reused by the refresh).
+    const pending = runtime.getSnapshot();
+    expect(pending.ui.routeDraft?.previewPending).toBe(true);
+    expect(pending.ui.routeDraft?.preview).toBeNull();
+    expect(pending.shell.routeDraft?.canSave).toBe(false);
+    expect(pending.shell.actionFeedback).toBeNull();
+
+    previews.resolveRoute(
+      0,
+      {
+        ...routePreview(0, ["stop-001", "stop-002"]),
+        rejection: {
+          code: "routeChangedWhileEditing",
+          context: {
+            routeId: "route-001",
+            expectedRevision: 0,
+            actualRevision: 1,
+            affectedRouteIds: ["route-001"],
+          },
+        },
+      },
+      1,
+    );
     await flushPromises();
 
     const snapshot = runtime.getSnapshot();
