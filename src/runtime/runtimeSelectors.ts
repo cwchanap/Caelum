@@ -720,11 +720,10 @@ export function buildRoadMutationPreview(
 
 function selectActionFeedback(
   rejection: GameplayRejection | null,
-  editorOwnsRejection: boolean,
   roadHostError: string | null,
   roadDirectionNotice: UiState["roadDirectionNotice"],
 ): ShellActionFeedback | null {
-  if (rejection !== null && !editorOwnsRejection) {
+  if (rejection !== null) {
     return {
       source: "rejection",
       tone: "error",
@@ -784,18 +783,6 @@ export function selectShellState(
   );
   const networkSummary = `${state.metrics.lateTrips} late · ${state.metrics.unservedTrips} unserved`;
   const routeDraft = selectRouteEditorView(state, ui, rejection);
-  const routeId =
-    ui.routeDraft?.source.kind === "edit" ? ui.routeDraft.source.routeId : null;
-  const editorOwnsRejection =
-    routeDraft !== null &&
-    (routeDraft.canReload ||
-      (rejection !== null && ui.routePreviewError === rejection) ||
-      (rejection !== null &&
-        routeId !== null &&
-        ui.routePreviewError !== null &&
-        ui.routePreviewError.code === rejection.code &&
-        ui.routePreviewError.context.routeId === routeId &&
-        rejection.context.routeId === routeId));
 
   const command: ShellCommandState = {
     activeDestination: ui.activeCommandDestination,
@@ -839,11 +826,16 @@ export function selectShellState(
     inspector,
     routeDraft,
     routes: buildRouteList(state, ui),
-    actionFeedback: selectActionFeedback(
-      rejection,
-      editorOwnsRejection,
-      ui.roadMutationPreviewError,
-      ui.roadDirectionNotice,
-    ),
+    // No gameplay feedback may render over an open route draft: rejections,
+    // road-direction notices and road-preview host errors stay recorded but
+    // hidden until the draft closes, while editor-owned errors surface
+    // through the draft panel itself.
+    actionFeedback: draftActive
+      ? null
+      : selectActionFeedback(
+          rejection,
+          ui.roadMutationPreviewError,
+          ui.roadDirectionNotice,
+        ),
   };
 }

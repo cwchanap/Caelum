@@ -25,16 +25,17 @@ Do not duplicate existing busy/unknown-ID/active-draft guard tests; those return
 
 ## 2. Small production change in the runtime
 
-**File:** `src/runtime/createGameRuntime.ts` only.
+**Files:** `src/runtime/createGameRuntime.ts` and `src/runtime/runtimeSelectors.ts`. (The follow-up review superseded the earlier "runtime only" boundary: it asked for the no-feedback-over-a-draft rule to live once in the selectors rather than be repeated at every entry point.)
 
-1. `setTool(tool)`: keep all existing guard, road-preview invalidation and next-UI logic. Inside `if (tool === "busRoute" || tool === "metroLine")`, after valid draft creation, add `rejection = null` and `next.roadDirectionNotice = null`. Commit the existing next UI as before.
-2. `openRouteEdit(routeId)`: keep the busy guard and both route/line lookups; do nothing if no matching line exists. After successful lookup, replace the narrow `routeChangedWhileEditing` check with `rejection = null` and include `roadDirectionNotice: null` in its current immutable UI object. Keep draft generation, `invalidateRoadPreview`, `requestRoutePreview`, focus and selection behavior unchanged.
-3. `reloadRouteDraft()`: remove the redundant `if (globalStale) rejection = null;` statement, since a successful `openRouteEdit` now clears it. **Keep** `globalStale` and `localStale` in the guard: both still determine whether Reload is actionable. A missing route that fails lookup must not silently dismiss prior feedback.
-4. `commitDispatchResult(result, nextUi, intent)`: in the existing `notice` construction predicate require `nextUi.routeDraft === null` alongside `result.applied && intent.type === "cycleRoadDirection"`. This is **completion-time** suppression of the stale road-direction banner, not cancellation of the already-accepted gameplay update; `commit(nextState, nextUi)` still proceeds normally. `dispatchNow` already resolves the current `ui` after awaiting the backend, so no new epoch, lock or queue layer is needed. Do **not** suppress editor-local route save errors.
+1. `selectShellState` gates `shell.actionFeedback` on `draftActive` — one place for the "no gameplay feedback over an open draft" rule. Feedback that lands while a draft is open is recorded (`rejection`, `ui.roadDirectionNotice`, `ui.roadMutationPreviewError`) but deferred; it surfaces when the draft closes. The now-dead `editorOwnsRejection` path was removed.
+2. `clearGameplayFeedback(nextUi)` retires the pending rejection and road-direction notice together; `setTool`, `openRouteEdit` and `dismissRejection` share it so the clearing logic cannot drift. Clearing still happens only when a valid draft actually opens — opening the Lines list alone is not an acknowledgement.
+3. `commitDispatchResult` records the road-direction notice unconditionally (no `routeDraft` gate) so a late `cycleRoadDirection` result's broken-route detail is not lost; the selector keeps it hidden until the draft closes. The gameplay update still applies.
+4. `commitDispatchResult` also re-requests the open draft's preview when a scene-carrying dispatch lands (excluding the frame-only intents `setPaused`/`setSpeed`/`setBudget`, which cannot change what a preview reads). A queued direction change that re-broke the edited route surfaces `routeChangedWhileEditing` in-editor (Reload enabled, Save disabled); a deleted route surfaces `routeNotFound`. The superseded-save path now relies on this generic refresh.
+5. `reloadRouteDraft()` honours all three places `selectRouteEditorView`'s `canReload` reads a `routeChangedWhileEditing` rejection (global `rejection`, `ui.routePreviewError`, `draft.preview.rejection`) — previously a preview-only stale flag enabled Reload but the guard ignored it and the click did nothing. When the edited route no longer exists, Reload retires that route's matching stale markers instead of staying enabled forever; unrelated feedback is preserved. A missing route still does not clear unrelated feedback.
 
-Do not touch `ActionFeedback.svelte`, `App.svelte`, `runtimeSelectors.ts`, `styles.css`, `RouteEditor.svelte` or gameplay/WASM/Tauri code.
+Do not touch `ActionFeedback.svelte`, `App.svelte`, `styles.css`, `RouteEditor.svelte` or gameplay/WASM/Tauri code.
 
-**Review focus:** Clearing happens only when the editor truly opens; Cancel does not restore previous notices. A previously enqueued road-direction operation can still update the world but cannot reintroduce its notice while the editor is open. Editor-owned preview and save errors still render through the existing `routePreviewError`/`routePreviewHostError` path.
+**Review focus:** Clearing happens only when the editor truly opens; Cancel does not restore earlier feedback because entry clearing already retired it, while feedback that lands *during* the draft is deferred rather than re-shown over the editor. A previously enqueued road-direction operation still updates the world, keeps its notice recorded for after the draft closes, and refreshes the open draft's preview. Editor-owned preview and save errors still render through the existing `routePreviewError`/`routePreviewHostError` path.
 
 ## 3. Verification on this same PR
 
@@ -51,14 +52,17 @@ Use `bun run test -- …` instead of calling `bunx vitest` directly so that the 
 
 ## Done when
 
-- [ ] Replace the obsolete `Cancel preserves an unrelated earlier rejection` test with a parameterized runtime entry-and-Cancel test for New Bus, New Metro and existing-line edit.
-- [ ] One runtime test ensures opening the Lines **list** does not clear the previous notice.
-- [ ] One delayed-dispatch test proves a road-direction reply accepted **after** draft entry cannot repopulate the banner and still updates gameplay state.
-- [ ] `setTool` and `openRouteEdit` clear stale `rejection` and `roadDirectionNotice` at the validated draft-entry boundary.
-- [ ] `commitDispatchResult` suppresses road-direction **notices** while `nextUi.routeDraft !== null`, not the gameplay update.
-- [ ] `reloadRouteDraft` has no duplicate rejection-clear branch, while retaining its stale-error guard.
-- [ ] Existing editor-local error / Reload semantics and feedback accessibility remain intact.
-- [ ] Focused tests, type check, lint and format checks pass; this PR remains the sole implementation PR.
+- [x] Replace the obsolete `Cancel preserves an unrelated earlier rejection` test with a parameterized runtime entry-and-Cancel test for New Bus, New Metro and existing-line edit — each row asserting `shell.actionFeedback?.source` for its seeded feedback type.
+- [x] One runtime test ensures opening the Lines **list** does not clear the previous notice.
+- [x] One delayed-dispatch test proves a road-direction reply accepted **after** draft entry stays hidden while the draft is open, still updates gameplay state, and surfaces after Cancel.
+- [x] A delayed rejection landing after draft entry is deferred likewise (hidden while open, shown on close).
+- [x] A scene-carrying dispatch lands while a draft is open re-requests the draft preview so a bumped revision surfaces `routeChangedWhileEditing` in-editor.
+- [x] `setTool`, `openRouteEdit` and `dismissRejection` clear stale `rejection` and `roadDirectionNotice` through one shared helper at the validated boundary.
+- [x] `commitDispatchResult` records road-direction notices unconditionally and refreshes an open draft's preview on scene-carrying dispatches (frame-only intents excluded) — never suppressing the gameplay update itself.
+- [x] `selectShellState` holds the single "no gameplay feedback over an open draft" rule via `draftActive`; `editorOwnsRejection` removed.
+- [x] `reloadRouteDraft` honours all three stale-rejection sources (`rejection`, `routePreviewError`, `draft.preview.rejection`) and retires matching markers when the edited route is gone, so Reload can no longer be enabled-but-inert.
+- [x] Existing editor-local error / Reload semantics and feedback accessibility remain intact.
+- [x] Focused tests, type check, lint and format checks pass; this PR remains the sole implementation PR.
 - [ ] Replace `Tracks #68` with `Fixes #68` in the PR body **only after the actual fix** is committed and verified.
 
 **Deferred:** Toast overflow over Build controls from very large detail lists (e.g. eight rows) can be handled separately if observed in real gameplay. No speculative CSS fallback, viewport test matrix, new image art/SFX, general notification architecture, or duplicate implementation PR.

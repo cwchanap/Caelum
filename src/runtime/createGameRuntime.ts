@@ -70,6 +70,14 @@ import type {
 
 const rotations = [0, 90, 180, 270] as const;
 const ROUTE_DRAFT_HISTORY_LIMIT = 100;
+// These intents only move frame fields (clock, speed, budget); the scene
+// they carry cannot change what a route preview reads, so they must not
+// churn an open draft's preview request.
+const ROUTE_PREVIEW_NEUTRAL_INTENTS = new Set<GameIntent["type"]>([
+  "setPaused",
+  "setSpeed",
+  "setBudget",
+]);
 
 function emptyRouteDraftHistory(): RouteDraftHistory {
   return { past: [], future: [] };
@@ -452,9 +460,7 @@ export async function createGameRuntime(
     const nextState = acceptPresentationUpdate(state, result.update);
     if (intent !== undefined) {
       const notice =
-        result.applied &&
-        intent.type === "cycleRoadDirection" &&
-        nextUi.routeDraft === null
+        result.applied && intent.type === "cycleRoadDirection"
           ? {
               direction:
                 nextState.map.tiles.find((tile) =>
@@ -475,6 +481,29 @@ export async function createGameRuntime(
         nextUi = { ...nextUi, roadDirectionNotice: notice };
       }
     }
+    // A dispatch carrying a scene can invalidate an open draft's preview: the
+    // edited route's revision may have moved (e.g. a queued direction cycle
+    // re-broke its legs) or the route may be gone entirely. Re-request inside
+    // the same commit so stale state surfaces as `routeChangedWhileEditing` /
+    // `routeNotFound` in the editor instead of leaving Save enabled on a dead
+    // revision — and so a late road-direction notice is not the only record
+    // of what changed. `selectShellState` keeps both off the screen while the
+    // draft is open.
+    const draftToRefresh =
+      intent !== undefined &&
+      result.update.scene !== null &&
+      !ROUTE_PREVIEW_NEUTRAL_INTENTS.has(intent.type) &&
+      !dead &&
+      !workingSave.isBusy()
+        ? nextUi.routeDraft
+        : null;
+    if (draftToRefresh !== null) {
+      previewCoordinator.invalidateRoute();
+      nextUi = {
+        ...nextUi,
+        routeDraft: { ...draftToRefresh, previewPending: true },
+      };
+    }
     // An armed road preview was computed against the previous world. If this
     // update changed anything the preview reads — a scene update, or the
     // budget on a frame-only update — re-issue it inside the same commit so
@@ -492,9 +521,12 @@ export async function createGameRuntime(
         roadPreviewGeneration: generation,
       });
       sendRoadMutationPreviewRequest(previewMutation, generation);
+      if (draftToRefresh !== null) requestRoutePreview(draftToRefresh);
       return snapshot;
     }
-    return commit(nextState, nextUi);
+    const snapshot = commit(nextState, nextUi);
+    if (draftToRefresh !== null) requestRoutePreview(draftToRefresh);
+    return snapshot;
   };
 
   const clearHoverPreviewTimer = (): void => {
@@ -770,6 +802,18 @@ export async function createGameRuntime(
     return result;
   };
 
+  /** Retires the gameplay feedback that may be on screen when a route draft
+   *  opens or when the player dismisses it manually: the pending rejection
+   *  and the road-direction notice go together. Feedback that lands while a
+   *  draft is open is not cleared here — `selectShellState` keeps it hidden
+   *  until the draft closes. */
+  const clearGameplayFeedback = (nextUi: UiState): UiState => {
+    rejection = null;
+    return nextUi.roadDirectionNotice === null
+      ? nextUi
+      : { ...nextUi, roadDirectionNotice: null };
+  };
+
   const rejectRouteDraftInteraction = (
     error: RouteDraftInteractionError,
   ): RuntimeSnapshot => {
@@ -792,7 +836,6 @@ export async function createGameRuntime(
     if (route === undefined && line === undefined) {
       return commit(state, ui);
     }
-    rejection = null;
     const routeDraft = editDraft(
       route !== undefined
         ? {
@@ -819,28 +862,30 @@ export async function createGameRuntime(
     // coordinator epoch so in-flight responses resolve null and are dropped,
     // and the cleared fields remove the stale overlay.
     invalidateRoadPreview();
-    const result = commit(state, {
-      ...ui,
-      activeTool: route === undefined ? "metroLine" : "busRoute",
-      selectedNodeKind: null,
-      selectedVehicleId: null,
-      selectedBuilding: null,
-      selectedArea: null,
-      activeBuildGroup: null,
-      activeCommandDestination: "lines",
-      selectedId: null,
-      routeDraft,
-      routeDraftHistory: emptyRouteDraftHistory(),
-      routeDraftNotice: null,
-      routePreviewError: null,
-      routePreviewHostError: null,
-      selectedRouteId: routeId,
-      routeFailureFocus: null,
-      drag: null,
-      roadMutationPreview: null,
-      roadMutationPreviewError: null,
-      roadDirectionNotice: null,
-    });
+    const result = commit(
+      state,
+      clearGameplayFeedback({
+        ...ui,
+        activeTool: route === undefined ? "metroLine" : "busRoute",
+        selectedNodeKind: null,
+        selectedVehicleId: null,
+        selectedBuilding: null,
+        selectedArea: null,
+        activeBuildGroup: null,
+        activeCommandDestination: "lines",
+        selectedId: null,
+        routeDraft,
+        routeDraftHistory: emptyRouteDraftHistory(),
+        routeDraftNotice: null,
+        routePreviewError: null,
+        routePreviewHostError: null,
+        selectedRouteId: routeId,
+        routeFailureFocus: null,
+        drag: null,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
+      }),
+    );
     requestRoutePreview(routeDraft);
     return result;
   };
@@ -979,18 +1024,18 @@ export async function createGameRuntime(
         }
         // A superseded save changed the snapshot. The current draft's preview
         // was computed against the pre-save snapshot and may carry a stale
-        // expected revision (e.g. an edit draft opened before the save bumped
-        // the route's revision). Invalidate and re-request so the fresh
-        // preview surfaces `routeChangedWhileEditing` instead of leaving Save
-        // enabled on a stale revision that the next save would reject.
+        // expected revision; commitDispatchResult's scene-triggered refresh
+        // re-requests it so a fresh answer can surface
+        // `routeChangedWhileEditing` instead of leaving Save enabled on a
+        // stale revision. Invalidate anyway: a request still in flight must
+        // not apply a pre-save answer once the save is no longer busy.
         if (result.applied && !tokenIsCurrent) {
           previewCoordinator.invalidateRoute();
           if (current !== null) {
-            const canRequestPreview = !workingSave.isBusy();
             const refreshedDraft: RouteDraft = {
               ...current,
               preview: null,
-              previewPending: canRequestPreview,
+              previewPending: false,
             };
             const supersededResult = commitDispatchResult(
               result,
@@ -1000,7 +1045,6 @@ export async function createGameRuntime(
               },
               intent,
             );
-            if (canRequestPreview) requestRoutePreview(refreshedDraft);
             return deployCreatedLine() ?? supersededResult;
           }
           const supersededResult = commitDispatchResult(result, ui, intent);
@@ -1118,16 +1162,39 @@ export async function createGameRuntime(
       return commit(state, ui);
     }
     const routeId = draft.source.routeId;
+    // Reload is enabled by any of the three places a `routeChangedWhileEditing`
+    // rejection can live (see `selectRouteEditorView`'s canReload); the action
+    // must honour every source or the button stays enabled but does nothing.
     const globalStale =
       rejection?.code === "routeChangedWhileEditing" &&
       rejection.context.routeId === routeId;
     const localStale =
       ui.routePreviewError?.code === "routeChangedWhileEditing" &&
       ui.routePreviewError.context.routeId === routeId;
-    if (!globalStale && !localStale) {
+    const clearedDraft: RouteDraft =
+      draft.preview?.rejection?.code === "routeChangedWhileEditing" &&
+      draft.preview.rejection.context.routeId === routeId
+        ? { ...draft, preview: { ...draft.preview, rejection: null } }
+        : draft;
+    if (!globalStale && !localStale && clearedDraft === draft) {
       return commit(state, ui);
     }
-    // openRouteEdit clears routePreviewError via commit.
+    // The edited route may be gone: openRouteEdit returns early on a failed
+    // lookup without touching feedback, which would leave Reload enabled
+    // forever. Retire this route's stale markers so the button disables;
+    // unrelated feedback is preserved.
+    const routeStillExists =
+      draft.mode === "metro"
+        ? state.transit.metroLines.some((line) => line.id === routeId)
+        : state.transit.routes.some((route) => route.id === routeId);
+    if (!routeStillExists) {
+      if (globalStale) rejection = null;
+      return commit(state, {
+        ...ui,
+        routePreviewError: localStale ? null : ui.routePreviewError,
+        routeDraft: clearedDraft,
+      });
+    }
     return openRouteEdit(routeId);
   };
 
@@ -1385,9 +1452,8 @@ export async function createGameRuntime(
         nextRouteDraftInstanceId += 1;
         next.routePreviewError = null;
         next.routePreviewHostError = null;
-        next.roadDirectionNotice = null;
         next.activeCommandDestination = "lines";
-        rejection = null;
+        return commitWithRoadPreview(clearGameplayFeedback(next));
       }
       return commitWithRoadPreview(next);
     },
@@ -2021,8 +2087,7 @@ export async function createGameRuntime(
       if (rejection === null && ui.roadDirectionNotice === null) {
         return commit(state, ui);
       }
-      rejection = null;
-      return commit(state, { ...ui, roadDirectionNotice: null });
+      return commit(state, clearGameplayFeedback(ui));
     },
     debugSetBudget(budget) {
       if (dead) return Promise.resolve(getSnapshot());
