@@ -4830,17 +4830,13 @@ describe("route creation and management", () => {
     expect(reloaded.ui.routeDraft?.preview).toBeNull();
 
     // When the refresh answer lands, the editor reports the missing route.
-    previews.resolveRoute(
-      0,
-      {
-        ...routePreview(0, ["stop-001", "stop-002"]),
-        rejection: {
-          code: "routeNotFound",
-          context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
-        },
+    previews.resolveRoute(1, {
+      ...routePreview(1, ["stop-001", "stop-002"]),
+      rejection: {
+        code: "routeNotFound",
+        context: { routeId: "route-001", affectedRouteIds: ["route-001"] },
       },
-      1,
-    );
+    });
     await flushPromises();
     expect(runtime.getSnapshot().ui.routePreviewError?.code).toBe(
       "routeNotFound",
@@ -5505,29 +5501,26 @@ describe("route creation and management", () => {
 
     // While the revalidation request is in flight, the accepted preview it
     // replaced was computed against the pre-change world — Save must not
-    // stay armed on it (the same generation is reused by the refresh).
+    // stay armed on it (the refresh bumps the draft generation, so the old
+    // preview could not match even if it were kept).
     const pending = runtime.getSnapshot();
     expect(pending.ui.routeDraft?.previewPending).toBe(true);
     expect(pending.ui.routeDraft?.preview).toBeNull();
     expect(pending.shell.routeDraft?.canSave).toBe(false);
     expect(pending.shell.actionFeedback).toBeNull();
 
-    previews.resolveRoute(
-      0,
-      {
-        ...routePreview(0, ["stop-001", "stop-002"]),
-        rejection: {
-          code: "routeChangedWhileEditing",
-          context: {
-            routeId: "route-001",
-            expectedRevision: 0,
-            actualRevision: 1,
-            affectedRouteIds: ["route-001"],
-          },
+    previews.resolveRoute(1, {
+      ...routePreview(1, ["stop-001", "stop-002"]),
+      rejection: {
+        code: "routeChangedWhileEditing",
+        context: {
+          routeId: "route-001",
+          expectedRevision: 0,
+          actualRevision: 1,
+          affectedRouteIds: ["route-001"],
         },
       },
-      1,
-    );
+    });
     await flushPromises();
 
     const snapshot = runtime.getSnapshot();
@@ -5538,6 +5531,56 @@ describe("route creation and management", () => {
     expect(snapshot.shell.routeDraft?.canReload).toBe(true);
     expect(snapshot.shell.routeDraft?.canSave).toBe(false);
     expect(snapshot.shell.actionFeedback).toBeNull();
+  });
+
+  it("keeps the replacement refresh pending when the invalidated preview resolves first", async () => {
+    const deferred = deferredDispatchBackend(routeSnapshotWithRoute());
+    const previews = deferredPreviewBackend(routeSnapshotWithRoute());
+    const backend: DeferredDispatchBackend = {
+      ...deferred,
+      previewRoute: previews.backend.previewRoute,
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    runtime.setTool("road");
+    const cycle = runtime.handleTileClick({ x: 14, y: 7 });
+    await flushPromises();
+
+    // Leave the initial edit preview (generation 0) unresolved when the
+    // queued dispatch lands, so its invalidated response races the refresh.
+    runtime.startRouteEdit("route-001");
+    await flushPromises();
+
+    await backend.resolveNext();
+    await cycle;
+    await flushPromises();
+
+    const pending = runtime.getSnapshot();
+    expect(pending.ui.routeDraft?.previewPending).toBe(true);
+    expect(pending.ui.routeDraft?.preview).toBeNull();
+    expect(pending.shell.routeDraft?.canSave).toBe(false);
+
+    // The invalidated generation-0 request resolves to null; it must not
+    // match the refreshed draft, or the editor would drop "Checking route…"
+    // for a no-preview state while the replacement is still in flight.
+    previews.resolveRoute(0, routePreview(0, ["stop-001", "stop-002"]));
+    await flushPromises();
+
+    const stillPending = runtime.getSnapshot();
+    expect(stillPending.ui.routeDraft?.previewPending).toBe(true);
+    expect(stillPending.ui.routeDraft?.preview).toBeNull();
+    expect(stillPending.shell.routeDraft?.canSave).toBe(false);
+
+    previews.resolveRoute(1, routePreview(1, ["stop-001", "stop-002"]));
+    await flushPromises();
+
+    const resolved = runtime.getSnapshot();
+    expect(resolved.ui.routeDraft?.previewPending).toBe(false);
+    expect(resolved.ui.routeDraft?.preview).not.toBeNull();
+    expect(resolved.shell.routeDraft?.canSave).toBe(true);
   });
 
   it("does not let a slow route finish clear a newer draft", async () => {
