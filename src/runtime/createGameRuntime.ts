@@ -504,19 +504,22 @@ export async function createGameRuntime(
       !workingSave.isBusy()
         ? nextUi.routeDraft
         : null;
+    let refreshedRouteDraft: RouteDraft | null = null;
     if (draftToRefresh !== null) {
       previewCoordinator.invalidateRoute();
-      nextUi = {
-        ...nextUi,
+      refreshedRouteDraft = {
+        ...draftToRefresh,
+        // A world change is preview-relevant like any draft edit: bump the
+        // generation so an invalidated in-flight request's null response
+        // cannot match this draft and clear the replacement's pending state.
+        generation: draftToRefresh.generation + 1,
         // The held preview was accepted against the pre-dispatch world; while
         // the refresh request is in flight it must not keep `canSave` armed or
         // feed failures/warnings — "Checking route…" means no usable preview.
-        routeDraft: {
-          ...draftToRefresh,
-          previewPending: true,
-          preview: null,
-        },
+        previewPending: true,
+        preview: null,
       };
+      nextUi = { ...nextUi, routeDraft: refreshedRouteDraft };
     }
     // An armed road preview was computed against the previous world. If this
     // update changed anything the preview reads — a scene update, or the
@@ -535,11 +538,12 @@ export async function createGameRuntime(
         roadPreviewGeneration: generation,
       });
       sendRoadMutationPreviewRequest(previewMutation, generation);
-      if (draftToRefresh !== null) requestRoutePreview(draftToRefresh);
+      if (refreshedRouteDraft !== null)
+        requestRoutePreview(refreshedRouteDraft);
       return snapshot;
     }
     const snapshot = commit(nextState, nextUi);
-    if (draftToRefresh !== null) requestRoutePreview(draftToRefresh);
+    if (refreshedRouteDraft !== null) requestRoutePreview(refreshedRouteDraft);
     return snapshot;
   };
 
