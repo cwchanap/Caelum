@@ -209,6 +209,9 @@ function cursorBadgeText(
       if (tile?.kind === "road" && roadMutationForUi(state, ui) === null) {
         return { text: "Already road", a11yText: "Already road" };
       }
+      if (roadMutationForUi(state, ui) !== null) {
+        return pendingBadge(label);
+      }
       // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
       // reject cycleRoadDirection, so exclude them from the existing-road fallback.
       const ok =
@@ -223,6 +226,9 @@ function cursorBadgeText(
       }
       if (preview !== null) {
         return previewBadge(label, state, preview);
+      }
+      if (roadMutationForUi(state, ui) !== null) {
+        return pendingBadge(label);
       }
       return placementBadge(label, isValidTrackPlacement(state, cursor));
     }

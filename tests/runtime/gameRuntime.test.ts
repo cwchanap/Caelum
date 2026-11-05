@@ -1457,6 +1457,51 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
   });
 
+  it("shows a neutral pending badge until the first road and track responses land", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    const pendingRoad = runtime.getSnapshot();
+    expect(pendingRoad.ui.roadMutationPreview).toBeNull();
+    expect(previews.roadRequestGenerations).toContain(1);
+    expect(
+      selectMapTextOverlayItems(pendingRoad.state, pendingRoad.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Road …",
+      a11yText: "Road, preview pending",
+    });
+
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+    const resolvedRoad = runtime.getSnapshot();
+    expect(
+      selectMapTextOverlayItems(resolvedRoad.state, resolvedRoad.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road · $100");
+
+    runtime.setTool("track");
+    runtime.setHoverTile({ x: 8, y: 5 });
+    const pendingTrack = runtime.getSnapshot();
+    expect(pendingTrack.ui.roadMutationPreview).toBeNull();
+    expect(
+      selectMapTextOverlayItems(pendingTrack.state, pendingTrack.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Track …",
+      a11yText: "Track, preview pending",
+    });
+  });
+
   it("drops a held preview that does not answer the drag's start tile", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
     const runtime = await createGameRuntime({

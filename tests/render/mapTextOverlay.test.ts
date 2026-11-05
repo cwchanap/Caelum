@@ -62,8 +62,8 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: 7, y: 8 },
-        text: "⦿ Road →",
-        a11yText: "Road →",
+        text: "⦿ Road → …",
+        a11yText: "Road →, preview pending",
       },
     ]);
   });
@@ -116,8 +116,8 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: 6, y: 4 },
-        text: "⦿ Road",
-        a11yText: "Road",
+        text: "⦿ Road …",
+        a11yText: "Road, preview pending",
       },
     ]);
   });
@@ -431,6 +431,37 @@ describe("selectMapTextOverlayItems", () => {
     expect(items[0]?.tone).toBeUndefined();
   });
 
+  it("shows a neutral pending badge while the first preview response is in flight", () => {
+    const occupied = addTestBusStop(createTestGameState(), { x: 6, y: 4 });
+    const roadDragUi: UiState = {
+      ...createUiState(),
+      activeTool: "road",
+      hoverTile: { x: 6, y: 4 },
+      drag: {
+        tool: "road",
+        start: { x: 4, y: 4 },
+        current: { x: 6, y: 4 },
+      },
+      roadPreviewGeneration: 1,
+    };
+    expect(itemsOfKind(occupied, roadDragUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Road …",
+      a11yText: "Road, preview pending",
+    });
+
+    const tracked = withTracks(createTestGameState(), [{ x: 2, y: 2 }]);
+    const trackUi: UiState = {
+      ...createUiState(),
+      activeTool: "track",
+      hoverTile: { x: 2, y: 2 },
+      roadPreviewGeneration: 1,
+    };
+    expect(itemsOfKind(tracked, trackUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Track …",
+      a11yText: "Track, preview pending",
+    });
+  });
+
   describe("cursor badge wording", () => {
     function previewResponse(
       overrides: Partial<RoadMutationPreviewResponse> = {},
@@ -478,7 +509,7 @@ describe("selectMapTextOverlayItems", () => {
       });
     });
 
-    it("labels the road tool per preset and flags unplaceable tiles", () => {
+    it("labels the road tool per preset and pends on implied strokes", () => {
       const state = createTestGameState();
       const ui: UiState = {
         ...createUiState(),
@@ -486,14 +517,14 @@ describe("selectMapTextOverlayItems", () => {
         hoverTile: { x: 2, y: 2 },
       };
 
-      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road");
+      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road …");
       expect(
         itemsOfKind(
           state,
           { ...ui, roadPreset: "dualBidirectional" },
           "cursorBadge",
         )[0]?.text,
-      ).toBe("⦿ Road ⇄");
+      ).toBe("⦿ Road ⇄ …");
       // Hovering an existing bare road stays valid (direction cycling).
       expect(
         itemsOfKind(withRoads(state, [{ x: 2, y: 2 }]), ui, "cursorBadge")[0]
@@ -505,7 +536,7 @@ describe("selectMapTextOverlayItems", () => {
           { ...ui, roadPreset: "oneWay" },
           "cursorBadge",
         )[0]?.text,
-      ).toBe("⦿ Road →");
+      ).toBe("⦿ Road → …");
       // Off-map tiles cannot accept a road.
       expect(
         itemsOfKind(
@@ -513,10 +544,10 @@ describe("selectMapTextOverlayItems", () => {
           { ...ui, hoverTile: { x: -1, y: 0 } },
           "cursorBadge",
         )[0]?.text,
-      ).toBe("⦿ Road ⊘");
+      ).toBe("⦿ Road …");
     });
 
-    it("labels the track tool and flags invalid tiles", () => {
+    it("labels the track tool and pends over existing track", () => {
       const state = createTestGameState();
       const ui: UiState = {
         ...createUiState(),
@@ -524,11 +555,11 @@ describe("selectMapTextOverlayItems", () => {
         hoverTile: { x: 2, y: 2 },
       };
 
-      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Track");
+      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Track …");
       expect(
         itemsOfKind(withTracks(state, [{ x: 2, y: 2 }]), ui, "cursorBadge")[0]
           ?.text,
-      ).toBe("⦿ Track ⊘");
+      ).toBe("⦿ Track …");
     });
 
     it("labels the stop and station tools with their catalog prices", () => {
@@ -908,14 +939,14 @@ describe("selectMapTextOverlayItems", () => {
       );
     });
 
-    it("lets an accepted Rust response override the single-tile road heuristic", () => {
+    it("lets an accepted Rust response override the pending first response", () => {
       const state = addTestBusStop(createTestGameState(), { x: 2, y: 2 });
       const ui: UiState = {
         ...createUiState(),
         activeTool: "road",
         hoverTile: { x: 2, y: 2 },
       };
-      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road ⊘");
+      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road …");
 
       const accepted = itemsOfKind(
         state,
