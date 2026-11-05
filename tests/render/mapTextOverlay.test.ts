@@ -1021,7 +1021,6 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      // A Rust rejection supersedes the nominal charge and the local ⊘ hint.
       expect(items[0]?.text).toBe("⦿ Track · That tile is blocked. ⊘");
       expect(items[0]?.text).not.toContain("$500");
       expect(items[0]?.tone).toBe("warning");

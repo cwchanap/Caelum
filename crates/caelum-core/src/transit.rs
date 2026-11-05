@@ -118,18 +118,10 @@ pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<
     lay_track_line_costed(state, points).map(CostedMutation::into_snapshot)
 }
 
-/// Result of the ordered partial-build track stroke shared by commit and
-/// preview. Commit consumes only the snapshot through `lay_track_line_costed`;
-/// the preview additionally reports `cost` and the cause footprints.
 pub(crate) struct TrackLineOutcome {
     pub snapshot: GameSnapshot,
-    /// Sum of nominal costs authorized for each placed tile — Creative still
-    /// reports the nominal price even though it deducts nothing.
     pub cost: i32,
-    /// Requested tiles skipped for an invalid placement — except already-laid
-    /// track, which is a harmless no-op and never a cause.
     pub blocked_tiles: Vec<Point>,
-    /// Requested tiles skipped because the track quote exceeded the budget.
     pub unaffordable_tiles: Vec<Point>,
 }
 

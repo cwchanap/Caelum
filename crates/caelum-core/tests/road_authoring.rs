@@ -1356,9 +1356,6 @@ fn track_over_road_level_crossing_authors_no_road_tiles() {
     });
     assert_eq!(preview.rejection, None);
     assert_eq!(preview.changed_tiles, road_points);
-    // The stroke lays track over road (a level crossing): the tiles already
-    // read kind == "road", but nothing in this mutation authored a road, so
-    // authored_tiles stays empty.
     assert!(preview.authored_tiles.is_empty());
     assert_eq!(preview.cost, TRACK_COST * 3);
 
@@ -1377,7 +1374,6 @@ fn track_over_road_level_crossing_authors_no_road_tiles() {
 #[test]
 fn blocked_track_stroke_warns_only_the_blocked_tiles() {
     let mut engine = blank_engine();
-    // Compact2x2 owns (3,2),(4,2),(3,3),(4,3); its structure blocks track.
     let placed = engine.dispatch(GameIntent::PlaceRoundabout {
         origin: point(3, 2),
         size: RoundaboutSize::Compact2x2,
@@ -1416,8 +1412,6 @@ fn blocked_track_stroke_warns_only_the_blocked_tiles() {
 
 #[test]
 fn blocked_road_stroke_warns_only_the_blocked_tiles() {
-    // An out-of-bounds point mid-stroke is a blocked cause the per-tile loop
-    // records without aborting the rest of the stroke.
     let engine = blank_engine();
     let points = vec![point(2, 2), point(3, 2), point(99, 2)];
 
@@ -1458,9 +1452,7 @@ fn existing_track_is_a_harmless_skip_not_a_blocked_cause() {
     });
     assert_eq!(preview.rejection, None);
     assert_eq!(preview.changed_tiles, vec![point(3, 2), point(4, 2)]);
-    // The already-laid tile stays in skipped_tiles as a harmless no-op...
     assert_eq!(preview.skipped_tiles, vec![point(2, 2)]);
-    // ...but it is not a blocked cause, so no partial-build warning shows.
     assert!(preview.warnings.is_empty());
 }
 
@@ -1473,10 +1465,6 @@ fn a_blocked_tile_that_gains_an_approach_port_is_not_a_warning_cause() {
     });
     assert!(placed.applied, "roundabout fixture: {placed:?}");
 
-    // A bent stroke reaches the per-tile loop instead of the atomic contact
-    // check. (3,3) is roundabout-owned so the lane loop records it blocked,
-    // but the authored approach at (3,2) attaches a roundabout port — the
-    // tile ends up changed, and a changed tile cannot also be a cause.
     let points = vec![point(2, 2), point(3, 2), point(3, 3)];
     let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
         mutation: RoadMutation::LayRoadLine {
@@ -1503,9 +1491,6 @@ fn existing_road_is_a_harmless_skip_not_a_blocked_cause() {
     });
     assert!(laid.applied, "road fixture: {laid:?}");
 
-    // A bent stroke is not axis-resolved, so it merges the existing road
-    // instead of hitting the atomic same-axis contact rejection. (2,2) is
-    // byte-identical after the merge — a harmless no-op, not a blocked cause.
     let points = vec![point(2, 2), point(3, 2), point(3, 3)];
     let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
         mutation: RoadMutation::LayRoadLine {
@@ -1515,8 +1500,6 @@ fn existing_road_is_a_harmless_skip_not_a_blocked_cause() {
         generation: 1,
     });
     assert_eq!(preview.rejection, None);
-    // (3,2) gains a connection to the newly authored (3,3); (2,2) is
-    // unchanged and lands in skipped_tiles as a harmless no-op.
     assert_eq!(preview.changed_tiles, vec![point(3, 2), point(3, 3)]);
     assert_eq!(preview.skipped_tiles, vec![point(2, 2)]);
     assert!(preview.warnings.is_empty());
@@ -1541,8 +1524,6 @@ fn fully_skipped_track_stroke_rejects_with_the_attempted_footprint() {
         preview.rejection.as_ref().map(|rejection| &rejection.code),
         Some(&RejectionCode::InvalidTrackStroke),
     );
-    // The rejected preview keeps the attempted footprint so the overlay can
-    // mark every requested tile invalid, not just the anchor.
     assert_eq!(preview.changed_tiles, points);
     assert!(preview.warnings.is_empty());
 

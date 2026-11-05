@@ -183,8 +183,6 @@ describe("track mutation derivation", () => {
       activeTool: "track" as const,
       hoverTile: { x: 5, y: 5 },
     };
-    // The preview decides validity — the derivation always asks Rust, so a
-    // hovering verdict on already-laid track stays authoritative.
     expect(roadMutationForUi(state, ui)).toEqual({
       type: "layTrack",
       point: { x: 5, y: 5 },
@@ -219,7 +217,6 @@ describe("track mutation derivation", () => {
         current: { x: 5, y: 3 },
       },
     };
-    // |dx| > |dy| locks the stroke horizontal.
     expect(roadMutationForUi(state, ui)).toEqual({
       type: "layTrackLine",
       points: [

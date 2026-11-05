@@ -1277,8 +1277,6 @@ describe("buildOverlayRanges drag gestures", () => {
       roadPreviewGeneration: 1,
       roadMutationPreview: {
         generation: 1,
-        // Ties lock horizontal: the drag implies (2,2)→(4,2), and this held
-        // answer is exactly that stroke.
         mutation: {
           type: "layTrackLine" as const,
           points: [
@@ -1301,8 +1299,7 @@ describe("buildOverlayRanges drag gestures", () => {
       },
     });
 
-    // Changed tiles tint valid, the skipped tile invalid — the shared
-    // mutation-preview channel, not the old unconditional-green fill.
+    // Ties lock horizontal: tiles (2,2), (3,2), (4,2).
     expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(true);
     expect(hasVertexNear(underRoutes, colors.previewValid, 96, 64)).toBe(true);
     expect(hasVertexNear(underRoutes, colors.previewInvalid, 128, 64)).toBe(
@@ -1326,8 +1323,6 @@ describe("buildOverlayRanges drag gestures", () => {
       },
     });
 
-    // No resolved preview: the shared pipeline renders nothing rather than
-    // the removed unconditional-green gesture fill.
     expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(false);
     expect(hasVertexNear(underRoutes, colors.previewValid, 128, 64)).toBe(
       false,

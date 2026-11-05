@@ -1700,7 +1700,6 @@ describe("Game Runtime", () => {
       point: { x: 5, y: 5 },
     });
 
-    // Extending to a diagonal target axis-locks the stroke like a road drag.
     runtime.startDrag({ x: 5, y: 5 });
     runtime.setDragCurrent({ x: 8, y: 6 });
     expect(mutations.at(-1)).toEqual({
@@ -1738,9 +1737,6 @@ describe("Game Runtime", () => {
     await flushPromises();
     expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
 
-    // Pointer-down opens the single-tile drag and bumps the generation, but
-    // the held answer still prefixes the mutation the stroke implies — the
-    // priced badge stays visible instead of flashing pending/unpriced.
     runtime.startDrag({ x: 5, y: 5 });
     const snap = runtime.getSnapshot();
     expect(snap.ui.drag?.tool).toBe("track");
@@ -1782,8 +1778,6 @@ describe("Game Runtime", () => {
     });
     await flushPromises();
 
-    // Extending past the held answer's stroke keeps the verdict: its request
-    // is a prefix of the stroke now implied.
     runtime.setDragCurrent({ x: 7, y: 5 });
     let snap = runtime.getSnapshot();
     expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(false);
@@ -1793,8 +1787,6 @@ describe("Game Runtime", () => {
       )?.text,
     ).toBe("⦿ Track · $1,500");
 
-    // Retracting below the held answer's extent breaks the prefix — the
-    // badge reads pending rather than claiming the three-tile cost.
     runtime.setDragCurrent({ x: 5, y: 5 });
     snap = runtime.getSnapshot();
     expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(true);
@@ -1817,8 +1809,6 @@ describe("Game Runtime", () => {
     runtime.setHoverTile({ x: 5, y: 5 });
     runtime.setHoverTile({ x: 6, y: 5 });
 
-    // Generation 1 resolves after generation 2 was requested: it must not
-    // repopulate the badge for the tile the pointer already left.
     previews.resolveRoad(1, {
       generation: 1,
       changedTiles: [{ x: 5, y: 5 }],
@@ -1861,7 +1851,6 @@ describe("Game Runtime", () => {
     runtime.setHoverTile({ x: 5, y: 5 });
     previews.resolveRoad(1, {
       generation: 1,
-      // The attempted footprint still highlights what the stroke tried.
       changedTiles: [{ x: 5, y: 5 }],
       authoredTiles: [],
       generatedStructures: [],
@@ -1926,8 +1915,6 @@ describe("Game Runtime", () => {
     const badge = selectMapTextOverlayItems(snap.state, snap.ui).find(
       (item) => item.kind === "cursorBadge",
     );
-    // The badge carries the actual paid charge plus the cause count from the
-    // warning footprint — never the raw skippedTiles list.
     expect(badge?.text).toBe(
       "⦿ Track · $1,000 · Not enough money, 2 tiles skipped",
     );
@@ -1955,8 +1942,6 @@ describe("Game Runtime", () => {
       authoredTiles: [],
       generatedStructures: [],
       cost: 1_000,
-      // Already-laid track lands here as a harmless no-op — it must not read
-      // as a problem on the badge.
       skippedTiles: [
         { x: 4, y: 5 },
         { x: 5, y: 5 },
