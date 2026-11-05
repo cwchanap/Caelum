@@ -92,6 +92,36 @@ describe("selectMapTextOverlayItems", () => {
     },
   );
 
+  it("does not show Already road while a chargeable stroke ends on a road", () => {
+    const state = withRoads(createTestGameState(), [
+      { x: 6, y: 3 },
+      { x: 6, y: 4 },
+      { x: 6, y: 5 },
+    ]);
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "twoWay" as const,
+      hoverTile: { x: 6, y: 4 },
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 4 },
+        current: { x: 6, y: 4 },
+      },
+    };
+
+    const items = itemsOfKind(state, ui, "cursorBadge");
+
+    expect(items).toEqual([
+      {
+        kind: "cursorBadge",
+        anchor: { x: 6, y: 4 },
+        text: "⦿ Road",
+        a11yText: "Road",
+      },
+    ]);
+  });
+
   it("anchors the cursor badge on the drag current tile", () => {
     const state = createTestGameState();
     const ui = {
