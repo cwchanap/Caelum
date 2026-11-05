@@ -1328,7 +1328,18 @@ export async function createGameRuntime(
     if (workingSave.isBusy()) return getSnapshot();
     const mutation = dead ? null : roadMutationForUi(state, nextUi);
     if (mutation === null) {
-      return commit(state, nextUi);
+      // A null mutation is a real transition: the UI now implies no road
+      // action (e.g. preset switched to a road-preserving lane count, or a
+      // drag retracted onto an existing road). Kill the armed preview request
+      // and any pending hover debounce, and clear the resolved preview so a
+      // stale cost or rejection cannot outlive the gesture it described.
+      clearHoverPreviewTimer();
+      invalidateRoadPreview();
+      return commit(state, {
+        ...nextUi,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
+      });
     }
     const generation = nextUi.roadPreviewGeneration + 1;
     const snapshot = commit(state, {
@@ -1698,7 +1709,7 @@ export async function createGameRuntime(
           // A zero-length road drag is a tap: defer the lay-vs-cycle decision
           // to execution time so the tile kind reflects drained queued updates.
           return enqueueComputedDispatch(() =>
-            roadClickIntent(state, points[0]),
+            roadClickIntent(state, points[0], roadPreset),
           );
         }
         const intent = intentForToolClick(points[0]);
@@ -1798,12 +1809,18 @@ export async function createGameRuntime(
         // response from repopulating it after the click.
         clearHoverPreviewTimer();
         invalidateRoadPreview();
+        // The preset is part of the committed gesture: capture it now so a
+        // preset switch before the queued closure runs cannot change the
+        // click's meaning, while the closure still re-reads `state.map`.
+        const roadPreset = ui.roadPreset;
         commit(state, {
           ...ui,
           roadMutationPreview: null,
           roadMutationPreviewError: null,
         });
-        return enqueueComputedDispatch(() => roadClickIntent(state, point));
+        return enqueueComputedDispatch(() =>
+          roadClickIntent(state, point, roadPreset),
+        );
       }
 
       if (ui.activeTool === "roundabout") {

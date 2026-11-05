@@ -43,10 +43,8 @@ fn lay_two_way_line(engine: &mut GameEngine, points: Vec<Point>) {
 fn set_one_way_line(engine: &mut GameEngine, points: Vec<Point>) {
     let direction = heading_between(points[0], points[1]).expect("fixture line has a direction");
     let cycles = match direction {
-        Heading::North => 1,
-        Heading::East => 2,
-        Heading::South => 3,
-        Heading::West => 4,
+        Heading::East | Heading::North => 1,
+        Heading::South | Heading::West => 2,
     };
     for point in points {
         if engine

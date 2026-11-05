@@ -1117,11 +1117,11 @@ fn cycling_road_direction_breaks_and_restores_route() {
             .unwrap()
             .one_way
             .map(|h| h.as_str()),
-        Some("north")
+        Some("east")
     );
     assert!(engine.snapshot().transit.routes[0].path_broken);
 
-    for _ in 0..4 {
+    for _ in 0..2 {
         engine.dispatch(GameIntent::CycleRoadDirection {
             point: (4, 5).into(),
         });
@@ -2098,9 +2098,11 @@ fn remove_at_tiles_all_unchanged_is_rejected() {
 #[test]
 fn lay_road_line_one_way_rejects_repaint_and_single_tile_direction_cycle_remains_edit() {
     let mut engine = GameEngine::new();
-    engine.dispatch(GameIntent::LayRoad {
-        point: (1, 1).into(),
+    let fixture = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![(1, 1).into(), (2, 1).into()],
+        preset: RoadPreset::TwoWay,
     });
+    assert!(fixture.applied, "fixture road should apply: {fixture:?}");
     let before = engine.snapshot();
 
     let result = engine.dispatch(GameIntent::LayRoadLine {
@@ -2125,7 +2127,7 @@ fn lay_road_line_one_way_rejects_repaint_and_single_tile_direction_cycle_remains
     );
     assert_eq!(
         engine.snapshot().map.tile((1, 1).into()).unwrap().one_way,
-        Some(caelum_core::model::Heading::North)
+        Some(caelum_core::model::Heading::East)
     );
     assert_eq!(engine.snapshot().budget, before.budget);
 }

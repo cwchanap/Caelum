@@ -10,11 +10,15 @@ fn point(x: i32, y: i32) -> Point {
     Point { x, y }
 }
 
-fn one_way_engine(points: Vec<Point>) -> GameEngine {
+fn blank_engine() -> GameEngine {
     let mut request = caelum_core::canonical_default_request();
     request.template_id = "blankGrid".to_string();
-    let mut engine = GameEngine::from_sandbox_request(request)
-        .expect("blank grid fixture request should remain valid");
+    GameEngine::from_sandbox_request(request)
+        .expect("blank grid fixture request should remain valid")
+}
+
+fn one_way_engine(points: Vec<Point>) -> GameEngine {
+    let mut engine = blank_engine();
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points,
         preset: RoadPreset::OneWay,
@@ -540,21 +544,21 @@ fn direction_edit_removes_inherited_parallel_one_way_lateral_link() {
         .road_connections
         .contains(&Heading::South));
 
-    // None -> North -> East on each endpoint.
+    // Same-direction arrows on both linked endpoints — as a direction edit
+    // leaves them — must strip the inherited bridge between the lane ends.
+    let mut state = engine.snapshot();
     for point in [point(3, 5), point(3, 6)] {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
+        state.map.tile_mut(point).unwrap().one_way = Some(Heading::East);
     }
+    let result = apply_road_mutation(
+        &state,
+        &RoadMutation::LayRoad {
+            point: point(20, 1),
+        },
+    )
+    .expect("canonicalizing mutation applies");
 
-    let map = &engine.snapshot().map;
+    let map = &result.snapshot.map;
     let upper = map.tile(point(3, 5)).expect("upper endpoint");
     let lower = map.tile(point(3, 6)).expect("lower endpoint");
     assert_eq!(upper.one_way, Some(Heading::East));
@@ -578,19 +582,18 @@ fn direction_edit_endpoints_strip_upstream_and_keep_downstream_lateral_links() {
 
     // Left (upstream) ends: arrows point into the lanes, so the arrow-aligned
     // continuation evidence holds and the inherited bridge is stripped.
+    let mut state = engine.snapshot();
     for point in [point(3, 5), point(3, 6)] {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
+        state.map.tile_mut(point).unwrap().one_way = Some(Heading::East);
     }
-    let map = &engine.snapshot().map;
+    let result = apply_road_mutation(
+        &state,
+        &RoadMutation::LayRoad {
+            point: point(20, 1),
+        },
+    )
+    .expect("canonicalizing mutation applies");
+    let map = &result.snapshot.map;
     assert!(!map
         .tile(point(3, 5))
         .expect("upstream upper endpoint")
@@ -606,19 +609,18 @@ fn direction_edit_endpoints_strip_upstream_and_keep_downstream_lateral_links() {
     // arrow-aligned continuation exists. This state is a rotation of the
     // protected 2x2-loop transient (loop_with_spur_repro), and keeping the
     // dead-end bridge is the accepted cost of preserving ring edges.
+    let mut state = result.snapshot;
     for point in [point(10, 5), point(10, 6)] {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
+        state.map.tile_mut(point).unwrap().one_way = Some(Heading::East);
     }
-    let map = &engine.snapshot().map;
+    let result = apply_road_mutation(
+        &state,
+        &RoadMutation::LayRoad {
+            point: point(21, 1),
+        },
+    )
+    .expect("canonicalizing mutation applies");
+    let map = &result.snapshot.map;
     let upper = map.tile(point(10, 5)).expect("downstream upper endpoint");
     let lower = map.tile(point(10, 6)).expect("downstream lower endpoint");
     assert_eq!(upper.one_way, Some(Heading::East));
@@ -630,7 +632,7 @@ fn direction_edit_endpoints_strip_upstream_and_keep_downstream_lateral_links() {
 }
 
 #[test]
-fn direction_cycle_intermediate_state_preserves_through_edges() {
+fn direction_edit_intermediate_state_preserves_through_edges() {
     let mut engine = GameEngine::new();
     let result = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![point(3, 5), point(4, 5)],
@@ -638,17 +640,21 @@ fn direction_cycle_intermediate_state_preserves_through_edges() {
     });
     assert!(result.applied, "fixture TwoWay should apply: {result:?}");
 
-    // One step per tile across separate dispatches: both arrows are transiently
-    // North while the real through-edge between them stays East/West.
+    // Transient arrows off the connected axis — the shape a pre-fix cycle or
+    // an edge-removal ordering can leave behind — must not let the real
+    // through-edge between the tiles read as a parallel-lane lateral link.
+    let mut state = engine.snapshot();
     for point in [point(3, 5), point(4, 5)] {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
+        state.map.tile_mut(point).unwrap().one_way = Some(Heading::North);
     }
-
-    let map = &engine.snapshot().map;
+    let result = apply_road_mutation(
+        &state,
+        &RoadMutation::LayRoad {
+            point: point(10, 10),
+        },
+    )
+    .expect("canonicalizing mutation applies");
+    let map = &result.snapshot.map;
     assert!(map
         .tile(point(3, 5))
         .expect("west tile")
@@ -1131,5 +1137,178 @@ fn unrelated_structure_ownership_is_independent_of_tile_kind() {
             .road_structure_id
             .as_deref(),
         Some("roundabout-fixture")
+    );
+}
+
+#[test]
+fn direction_cycle_visits_only_the_connected_axis() {
+    let mut engine = blank_engine();
+    let horizontal = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(horizontal.applied, "horizontal fixture: {horizontal:?}");
+
+    let mid = point(5, 5);
+    for expected in [Some(Heading::East), Some(Heading::West), None] {
+        let result = engine.dispatch(GameIntent::CycleRoadDirection { point: mid });
+        assert!(result.applied, "cycle should apply: {result:?}");
+        assert_eq!(engine.snapshot().map.tile(mid).unwrap().one_way, expected);
+    }
+
+    let vertical = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|y| point(14, y)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(vertical.applied, "vertical fixture: {vertical:?}");
+
+    let mid = point(14, 6);
+    for expected in [Some(Heading::North), Some(Heading::South), None] {
+        let result = engine.dispatch(GameIntent::CycleRoadDirection { point: mid });
+        assert!(result.applied, "cycle should apply: {result:?}");
+        assert_eq!(engine.snapshot().map.tile(mid).unwrap().one_way, expected);
+    }
+}
+
+#[test]
+fn direction_cycle_on_a_degree_one_dead_end_uses_its_axis() {
+    let mut engine = blank_engine();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(result.applied, "fixture: {result:?}");
+
+    let dead_end = point(10, 5);
+    assert_eq!(
+        engine
+            .snapshot()
+            .map
+            .tile(dead_end)
+            .unwrap()
+            .road_connections,
+        vec![Heading::West]
+    );
+    for expected in [Some(Heading::East), Some(Heading::West), None] {
+        let result = engine.dispatch(GameIntent::CycleRoadDirection { point: dead_end });
+        assert!(result.applied, "cycle should apply: {result:?}");
+        assert_eq!(
+            engine.snapshot().map.tile(dead_end).unwrap().one_way,
+            expected
+        );
+    }
+}
+
+#[test]
+fn direction_cycle_corrects_an_off_axis_heading_to_two_way() {
+    let mut engine = blank_engine();
+    let result = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 5)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(result.applied, "fixture: {result:?}");
+
+    // A heading left on the wrong axis by the retired N/E/S/W cycle — or by an
+    // edge-removal ordering that stranded the arrow — is repaired to two-way
+    // rather than cycled to another invalid heading.
+    let mut state = engine.snapshot();
+    state.map.tile_mut(point(5, 5)).unwrap().one_way = Some(Heading::North);
+
+    let result = apply_road_mutation(
+        &state,
+        &RoadMutation::CycleRoadDirection { point: point(5, 5) },
+    )
+    .expect("off-axis cycle applies");
+
+    assert_eq!(result.snapshot.map.tile(point(5, 5)).unwrap().one_way, None);
+    assert_eq!(result.changed_tiles, vec![point(5, 5)]);
+}
+
+#[test]
+fn direction_cycle_rejects_corner_mixed_axis_and_isolated_tiles() {
+    let mut engine = blank_engine();
+    // A 2x2 ring gives every cell connections on both axes; a lone LayRoad
+    // tile has none. Neither is one straight road.
+    let ring = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(5, 5), point(6, 5), point(6, 6), point(5, 6)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(ring.applied, "ring fixture: {ring:?}");
+    let lone = engine.dispatch(GameIntent::LayRoad { point: point(9, 9) });
+    assert!(lone.applied, "isolated fixture: {lone:?}");
+
+    for target in [point(5, 5), point(9, 9)] {
+        let before = engine.snapshot();
+        let result = engine.dispatch(GameIntent::CycleRoadDirection { point: target });
+        assert!(!result.applied);
+        assert_eq!(
+            result.rejection.as_ref().map(|rejection| &rejection.code),
+            Some(&RejectionCode::RoadDirectionNeedsStraightRoad),
+        );
+        assert_eq!(result.rejection.unwrap().context.point, Some(target));
+        assert_eq!(engine.snapshot(), before);
+    }
+}
+
+#[test]
+fn direction_cycle_rejects_non_road_and_missing_tiles() {
+    let mut engine = blank_engine();
+    let empty = engine.dispatch(GameIntent::CycleRoadDirection { point: point(3, 3) });
+    assert!(!empty.applied);
+    assert_eq!(
+        empty.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::RoadRequired)
+    );
+
+    let missing = engine.dispatch(GameIntent::CycleRoadDirection {
+        point: point(-1, 0),
+    });
+    assert!(!missing.applied);
+    assert_eq!(
+        missing.rejection.map(|rejection| rejection.code),
+        Some(RejectionCode::OutOfBounds)
+    );
+}
+
+#[test]
+fn direction_cycle_preview_matches_commit_on_axis_and_rejection() {
+    let mut engine = blank_engine();
+    let ring = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(5, 5), point(6, 5), point(6, 6), point(5, 6)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(ring.applied, "ring fixture: {ring:?}");
+    let line = engine.dispatch(GameIntent::LayRoadLine {
+        points: (2..=10).map(|x| point(x, 9)).collect(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(line.applied, "line fixture: {line:?}");
+
+    let mutation = RoadMutation::CycleRoadDirection { point: point(5, 5) };
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation,
+        generation: 7,
+    });
+    assert_eq!(
+        preview.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::RoadDirectionNeedsStraightRoad),
+    );
+    let before = engine.snapshot();
+    let committed = engine.dispatch(GameIntent::CycleRoadDirection { point: point(5, 5) });
+    assert!(!committed.applied);
+    assert_eq!(committed.rejection, preview.rejection);
+    assert_eq!(engine.snapshot(), before);
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::CycleRoadDirection { point: point(5, 9) },
+        generation: 8,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.changed_tiles, vec![point(5, 9)]);
+    let committed = engine.dispatch(GameIntent::CycleRoadDirection { point: point(5, 9) });
+    assert!(committed.applied);
+    assert_eq!(
+        engine.snapshot().map.tile(point(5, 9)).unwrap().one_way,
+        Some(Heading::East),
     );
 }

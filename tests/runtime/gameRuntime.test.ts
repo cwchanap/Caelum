@@ -5235,6 +5235,7 @@ describe("route creation and management", () => {
       snapshot: routeSnapshot,
       seed: async (runtime: RuntimeController) => {
         runtime.setTool("road");
+        runtime.setRoadPreset("oneWay");
         await runtime.handleTileClick({ x: 14, y: 7 });
       },
       enter: (runtime: RuntimeController) => runtime.setTool("metroLine"),
@@ -5256,6 +5257,7 @@ describe("route creation and management", () => {
       snapshot: routeSnapshotWithRoute,
       seed: async (runtime: RuntimeController) => {
         runtime.setTool("road");
+        runtime.setRoadPreset("oneWay");
         await runtime.handleTileClick({ x: 14, y: 7 });
       },
       enter: (runtime: RuntimeController) =>
@@ -5304,6 +5306,7 @@ describe("route creation and management", () => {
       expectedSource: "roadDirection",
       seed: async (runtime: RuntimeController) => {
         runtime.setTool("road");
+        runtime.setRoadPreset("oneWay");
         await runtime.handleTileClick({ x: 14, y: 7 });
       },
     },
@@ -5365,6 +5368,7 @@ describe("route creation and management", () => {
       backend,
     });
     runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
     const cycle = runtime.handleTileClick({ x: 14, y: 7 });
     await flushPromises();
 
@@ -5419,6 +5423,7 @@ describe("route creation and management", () => {
       backend,
     });
     runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
     backend.rejectNextDispatch();
     const click = runtime.handleTileClick({ x: 14, y: 7 });
     await flushPromises();
@@ -5487,6 +5492,7 @@ describe("route creation and management", () => {
       backend,
     });
     runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
     const cycle = runtime.handleTileClick({ x: 14, y: 7 });
     await flushPromises();
 
@@ -5546,6 +5552,7 @@ describe("route creation and management", () => {
       backend,
     });
     runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
     const cycle = runtime.handleTileClick({ x: 14, y: 7 });
     await flushPromises();
 
@@ -6666,6 +6673,9 @@ describe("runtime road drag", () => {
     runtime.setDragCurrent({ x: 2, y: 0 });
     await runtime.commitDrag();
 
+    // A stationary drag is a tap: under the One-Way preset it commits the
+    // same direction-cycle a click would dispatch.
+    runtime.setRoadPreset("oneWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 1, y: 0 });
     await runtime.commitDrag();
@@ -6689,7 +6699,7 @@ describe("runtime road drag", () => {
     });
 
     runtime.setTool("road");
-    runtime.setRoadPreset("twoWay");
+    runtime.setRoadPreset("oneWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 3, y: 0 });
     const dragCommit = runtime.commitDrag(); // enqueues layRoadLine, suspends
@@ -6719,6 +6729,70 @@ describe("runtime road drag", () => {
           intent.point.y === 0,
       ),
     ).toBe(false);
+  });
+
+  it("keeps the preset captured at commit time when a queued road click drains", async () => {
+    // A click committed under One-Way stays a direction change even if the
+    // player switches presets before the queued closure executes — the
+    // committed gesture's meaning cannot be rewritten after the fact.
+    const backend = deferredDispatchBackend();
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setRoadPreset("twoWay");
+    runtime.startDrag({ x: 1, y: 0 });
+    runtime.setDragCurrent({ x: 3, y: 0 });
+    const dragCommit = runtime.commitDrag(); // enqueues layRoadLine, suspends
+
+    runtime.setRoadPreset("oneWay");
+    const clickPromise = runtime.handleTileClick({ x: 2, y: 0 });
+    await Promise.resolve(); // let the click enqueue behind the drag
+
+    // The preset change lands while the click is still queued.
+    runtime.setRoadPreset("twoWay");
+
+    await backend.resolveNext();
+    await dragCommit;
+    await backend.resolveNext();
+    await clickPromise;
+
+    // The committed gesture still cycles: the queued closure re-read the map
+    // (the tile became road) but kept the One-Way preset it was armed with.
+    expect(backend.intents).toContainEqual({
+      type: "cycleRoadDirection",
+      point: { x: 2, y: 0 },
+    });
+  });
+
+  it("dispatches nothing when an existing road is clicked under a lane preset", async () => {
+    const backend = backendSpy();
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setRoadPreset("twoWay");
+    await runtime.handleTileClick({ x: 1, y: 0 });
+    expect(
+      runtime.getSnapshot().state.map.tiles.find((t) => t.x === 1 && t.y === 0)
+        ?.kind,
+    ).toBe("road");
+
+    const intentsBefore = backend.intents.length;
+    const clicked = await runtime.handleTileClick({ x: 1, y: 0 });
+
+    // Gated no-op: no backend dispatch, no rejection, no direction change.
+    expect(backend.intents).toHaveLength(intentsBefore);
+    expect(clicked.rejection).toBeNull();
+    expect(
+      clicked.state.map.tiles.find((t) => t.x === 1 && t.y === 0)?.oneWay,
+    ).toBeUndefined();
   });
 
   it("uses the same inclusive rectangle for remove preview and commit", async () => {

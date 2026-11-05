@@ -31,6 +31,17 @@ describe("rejectionMessage", () => {
     );
   });
 
+  it("maps roadDirectionNeedsStraightRoad", () => {
+    const rejection = {
+      code: "roadDirectionNeedsStraightRoad",
+      context: gameplayRejectionContext(),
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(
+      "Only straight roads can be one-way.",
+    );
+  });
+
   it.each([
     ["nothingToUndo", "There is nothing to undo."],
     ["undoExpired", "Too much time has passed to undo that build."],
