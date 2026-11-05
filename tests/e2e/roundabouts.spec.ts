@@ -6,6 +6,7 @@ import {
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
+  hoverMapTile,
   openCommandDestination,
   removeMapTile,
   runtimeSnapshot,
@@ -327,3 +328,79 @@ for (const fixture of [
     expect(removed.state.transit.routes.at(-1)?.pathBroken).toBe(true);
   });
 }
+
+test("settles the roundabout badge after rejected and applied clicks without moving the pointer", async ({
+  page,
+}) => {
+  await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const overlay = page.getByTestId("map-text-overlay");
+  const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
+  const feedback = page.getByTestId("action-feedback");
+  const edge = { x: 27, y: 0 } as const;
+  const open = { x: 4, y: 3 } as const;
+
+  await selectBuildLeaf(page, "roads", "compactRoundabout");
+
+  await hoverMapTile(canvas, edge);
+  await expect(badge).toContainText("outside the map");
+  const rejectedGeneration = (await runtimeSnapshot(page)).ui
+    .roadPreviewGeneration;
+  await clickMapTile(canvas, edge);
+  await expect(feedback).toHaveAttribute("data-source", "rejection");
+  await expect(feedback).toContainText("outside the map");
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return {
+        generation: snapshot.ui.roadPreviewGeneration,
+        held: snapshot.ui.roadMutationPreview?.generation ?? null,
+        rejection: snapshot.ui.roadMutationPreview?.rejection?.code ?? null,
+        pending: snapshot.ui.roadMutationPreviewPending,
+        structures: snapshot.state.map.roadStructures.length,
+        budget: snapshot.state.budget,
+      };
+    })
+    .toEqual({
+      generation: rejectedGeneration + 1,
+      held: rejectedGeneration + 1,
+      rejection: "outOfBounds",
+      pending: false,
+      structures: 1,
+      budget: 120_000,
+    });
+  await expect(badge).toContainText("outside the map");
+  await expect(badge).toHaveClass(/map-text-warning/);
+
+  await hoverMapTile(canvas, open);
+  await expect(badge).toContainText("$1,000");
+  const openGeneration = (await runtimeSnapshot(page)).ui.roadPreviewGeneration;
+  await clickMapTile(canvas, open);
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return {
+        generation: snapshot.ui.roadPreviewGeneration,
+        held: snapshot.ui.roadMutationPreview?.generation ?? null,
+        rejection: snapshot.ui.roadMutationPreview?.rejection?.code ?? null,
+        pending: snapshot.ui.roadMutationPreviewPending,
+        roundabouts: snapshot.state.map.roadStructures.filter(
+          (structure) => structure.kind === "roundabout",
+        ).length,
+        budget: snapshot.state.budget,
+      };
+    })
+    .toEqual({
+      generation: openGeneration + 1,
+      held: openGeneration + 1,
+      rejection: "blockedFootprint",
+      pending: false,
+      roundabouts: 1,
+      budget: 119_000,
+    });
+  await expect(badge).toContainText(
+    "must contain only empty or replaceable road tiles",
+  );
+  await expect(badge).toHaveClass(/map-text-warning/);
+  await expect(feedback).toHaveCount(0);
+});
