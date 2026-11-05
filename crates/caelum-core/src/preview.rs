@@ -247,9 +247,6 @@ pub fn preview_road_mutation(
         }
     };
     let authored_tiles = match request.mutation {
-        // A Track stroke authors track, not road — even over a road tile,
-        // where it forms a level crossing. `kind == "road"` after the fact is
-        // not evidence the mutation authored one, so the list stays empty.
         RoadMutation::LayTrack { .. } | RoadMutation::LayTrackLine { .. } => Vec::new(),
         _ => candidate
             .changed_tiles
@@ -278,9 +275,6 @@ pub fn preview_road_mutation(
         .collect();
     let route_impacts = route_impacts(snapshot, &candidate.snapshot, &topology);
     let mut warnings = Vec::new();
-    // `skipped_tiles` mixes harmless no-ops (already-built road/track) with
-    // real causes; only the cause footprints recorded at the actual skip
-    // sites may drive warning tone.
     if !candidate.blocked_tiles.is_empty() {
         warnings.push(GameplayWarning {
             code: WarningCode::TilesBlocked,
@@ -559,9 +553,6 @@ fn preview_network_candidate(
             })
         }
         RoadMutation::LayTrack { point } => {
-            // The single-tile policy is the commit's: placement failures are
-            // rejections (including already-laid track), not partial-build
-            // skips, so there are no cause footprints to carry.
             let candidate = transit::lay_track_costed(snapshot, point)?.into_snapshot();
             let context = dispatch_context(snapshot, &candidate, &[*point], transit::TRACK_COST);
             Ok(RoadMutationResult {
@@ -574,8 +565,6 @@ fn preview_network_candidate(
             })
         }
         RoadMutation::LayTrackLine { points } => {
-            // Preview and commit share `lay_track_line_outcome` so placement
-            // order, cost policy, and skip causes cannot diverge.
             let outcome = transit::lay_track_line_outcome(snapshot, points)?;
             let context = dispatch_context(snapshot, &outcome.snapshot, points, outcome.cost);
             Ok(RoadMutationResult {

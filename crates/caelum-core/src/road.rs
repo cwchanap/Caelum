@@ -51,14 +51,7 @@ pub struct RoadMutationResult {
     pub snapshot: GameSnapshot,
     pub changed_tiles: Vec<Point>,
     pub skipped_tiles: Vec<Point>,
-    /// Requested tiles the stroke refused to author: out-of-bounds,
-    /// structure-owned, disallowed overlays, or invalid placements. A subset
-    /// of `skipped_tiles` — the preview turns this footprint into a
-    /// `TilesBlocked` warning instead of treating every unchanged tile as a
-    /// cause.
     pub blocked_tiles: Vec<Point>,
-    /// Requested tiles skipped because their cost quote exceeded the budget.
-    /// Also a subset of `skipped_tiles`; drives `TilesUnaffordable`.
     pub unaffordable_tiles: Vec<Point>,
     pub cost: i32,
 }
@@ -160,10 +153,6 @@ fn apply_linear_tiles_in_order(
             0
         }
         RoadMutation::LayTrack { .. } | RoadMutation::LayTrackLine { .. } => {
-            // Track mutations share the transit module's ordered partial-build
-            // loop, not this per-tile road reducer — they only reach here if a
-            // dispatch routed them through the road path by mistake. Surface a
-            // typed rejection like PlaceRoundabout instead of panicking.
             return Err(GameplayRejection::new(RejectionCode::BlockedTile));
         }
     };
@@ -200,10 +189,6 @@ fn lay_single_road(
     Ok(cost)
 }
 
-/// What a stroke charged plus the genuine causes behind its skips. Changed
-/// and skipped tiles are reported through the caller's out-params because the
-/// preview's dispatch context reclassifies them; the cause footprints are
-/// subsets of `skipped_tiles` the preview turns into warnings.
 struct LayRoadLineOutcome {
     cost: i32,
     blocked: Vec<Point>,
@@ -326,12 +311,7 @@ fn lay_road_line(
 struct AuthoredLane {
     points: Vec<Point>,
     cost: i32,
-    /// Requested tiles skipped for a placement reason (out of bounds,
-    /// structure-owned, disallowed overlay, invalid placement) — the causes
-    /// behind the preview's `TilesBlocked` footprint.
     blocked: Vec<Point>,
-    /// Requested tiles skipped because the road quote exceeded the budget —
-    /// the causes behind the preview's `TilesUnaffordable` footprint.
     unaffordable: Vec<Point>,
 }
 
@@ -367,8 +347,6 @@ fn author_lane_tiles(
             let Some(tile) = candidate.map.tile_mut(*point) else {
                 continue;
             };
-            // An accepted merge is a harmless no-op when it changes nothing:
-            // the tile lands in skipped_tiles but is not a blocked cause.
             merge_lane_direction(tile, direction);
             lane.points.push(*point);
             continue;

@@ -108,8 +108,6 @@ function previewBadge(
   }
   const impacts = summarizeRouteImpacts(preview.routeImpacts);
   const spokenImpacts = describeRouteImpacts(preview.routeImpacts);
-  // Only Rust-classified causes tone the badge; `skippedTiles` also carries
-  // harmless unchanged no-ops and must never imply a problem.
   const warnings = preview.warnings
     .filter(
       (warning) =>

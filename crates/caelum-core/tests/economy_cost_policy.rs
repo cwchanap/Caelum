@@ -663,8 +663,6 @@ fn over_budget_track_stroke_truncates_standard_but_creative_authors_every_valid_
 
 #[test]
 fn underfunded_road_stroke_charges_affordable_tiles_and_warns_the_rest() {
-    // $150 against a 12-tile $100/tile stroke: one tile builds, the other
-    // eleven are unaffordable — a warning footprint, not a rejection.
     let mut engine = blank_engine_for(EconomyPreset::Standard, ROAD_COST + 50);
     let points: Vec<Point> = (2..=13).map(|x| point(x, 2)).collect();
 
@@ -690,7 +688,6 @@ fn underfunded_road_stroke_charges_affordable_tiles_and_warns_the_rest() {
         .iter()
         .all(|warning| warning.code != WarningCode::TilesBlocked));
 
-    // Commit agrees with the preview on charged cost and changed tiles.
     let committed = engine.dispatch(GameIntent::LayRoadLine {
         points: points.clone(),
         preset: RoadPreset::TwoWay,
@@ -727,7 +724,6 @@ fn underfunded_track_stroke_charges_affordable_tiles_and_warns_the_rest() {
         vec![point(3, 2), point(4, 2)]
     );
 
-    // Commit agrees: only the affordable tile is laid and charged.
     let committed = engine.dispatch(GameIntent::LayTrackLine { points });
     assert!(committed.applied, "{committed:?}");
     let snapshot = engine.snapshot();
@@ -749,13 +745,11 @@ fn creative_track_stroke_reports_nominal_cost_and_deducts_nothing() {
         generation: 1,
     });
     assert_eq!(preview.rejection, None);
-    // Creative still quotes the nominal price for the badge...
     assert_eq!(preview.cost, TRACK_COST * 3);
     assert_eq!(preview.changed_tiles, points);
     assert!(preview.skipped_tiles.is_empty());
     assert!(preview.warnings.is_empty());
 
-    // ...but the commit deducts nothing.
     let committed = engine.dispatch(GameIntent::LayTrackLine {
         points: vec![point(2, 2), point(3, 2), point(4, 2)],
     });
