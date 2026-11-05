@@ -2478,6 +2478,111 @@ describe("Game Runtime", () => {
 
       expect(previews.roadRequestGenerations).toHaveLength(0);
     });
+
+    it("clears the pending badge when a debounced request abandons during a busy save", async () => {
+      const initial = fullRustSnapshot();
+      const delegate = createMemoryCitySaveStore();
+      const city = {
+        id: "city-debounce-busy",
+        name: "Debounce Busy",
+        createdAt: "2026-08-08T09:00:00.000Z",
+        savedAt: "2026-08-08T09:30:00.000Z",
+      };
+      await delegate.createCity({
+        city: { id: city.id, name: city.name, createdAt: city.createdAt },
+        savedAt: "2026-08-08T09:30:00.000Z",
+        snapshot: initial,
+      });
+      const store = createDelayedCitySaveStore(delegate);
+      store.defer("updateCity");
+      const previews = deferredPreviewBackend(initial);
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        backend: previews.backend,
+        saveStore: store,
+        initialCity: city,
+        hoverPreviewDebounceMs: 50,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(true);
+
+      const save = runtime.persistence.save();
+      await store.waitForActive("updateCity");
+      expect(runtime.getSnapshot().persistence.busy).toBe(true);
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toHaveLength(0);
+      const abandoned = runtime.getSnapshot();
+      expect(abandoned.ui.roadMutationPreviewPending).toBe(false);
+      expect(
+        selectMapTextOverlayItems(abandoned.state, abandoned.ui).find(
+          (item) => item.kind === "cursorBadge",
+        ),
+      ).toMatchObject({
+        text: "⦿ Road",
+        a11yText: "Road",
+      });
+
+      store.releaseNext("updateCity");
+      await save;
+
+      runtime.setHoverTile({ x: 6, y: 5 });
+      const rearmed = runtime.getSnapshot();
+      expect(rearmed.ui.roadMutationPreviewPending).toBe(true);
+      expect(
+        selectMapTextOverlayItems(rearmed.state, rearmed.ui).find(
+          (item) => item.kind === "cursorBadge",
+        ),
+      ).toMatchObject({
+        text: "⦿ Road …",
+        a11yText: "Road, preview pending",
+      });
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+      const generation = rearmed.ui.roadPreviewGeneration;
+      expect(previews.roadRequestGenerations).toEqual([generation]);
+      previews.resolveRoad(generation, roadPreview(generation, { x: 6, y: 5 }));
+      await flushPromises();
+      const resolved = runtime.getSnapshot();
+      expect(
+        selectMapTextOverlayItems(resolved.state, resolved.ui).find(
+          (item) => item.kind === "cursorBadge",
+        )?.text,
+      ).toBe("⦿ Road · $100");
+    });
+
+    it("keeps the newer request's pending flag when a stale debounce fires", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      runtime.startDrag({ x: 5, y: 5 });
+      expect(previews.roadRequestGenerations).toEqual([2]);
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      const snap = runtime.getSnapshot();
+      expect(snap.ui.roadMutationPreviewPending).toBe(true);
+      expect(
+        selectMapTextOverlayItems(snap.state, snap.ui).find(
+          (item) => item.kind === "cursorBadge",
+        ),
+      ).toMatchObject({
+        text: "⦿ Road …",
+        a11yText: "Road, preview pending",
+      });
+    });
   });
 
   it("surfaces a current route preview host failure nonfatally and recovers", async () => {

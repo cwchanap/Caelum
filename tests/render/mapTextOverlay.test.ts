@@ -300,6 +300,7 @@ describe("selectMapTextOverlayItems", () => {
         current: { x: 5, y: 6 },
       },
       roadPreviewGeneration: 2,
+      roadMutationPreviewPending: true,
       roadMutationPreview: {
         generation: 1,
         // The held answer resolved for the longer (4,6)→(7,6) stroke; the
@@ -353,6 +354,7 @@ describe("selectMapTextOverlayItems", () => {
         current: { x: 4, y: 6 },
       },
       roadPreviewGeneration: 2,
+      roadMutationPreviewPending: true,
       roadMutationPreview: {
         generation: 1,
         changedTiles: [],
@@ -385,6 +387,7 @@ describe("selectMapTextOverlayItems", () => {
       activeTool: "road" as const,
       hoverTile: { x: 5, y: 6 },
       roadPreviewGeneration: 2,
+      roadMutationPreviewPending: true,
       roadMutationPreview: {
         generation: 1,
         changedTiles: [{ x: 4, y: 6 }],
@@ -415,6 +418,7 @@ describe("selectMapTextOverlayItems", () => {
       activeTool: "road" as const,
       hoverTile: { x: 5, y: 6 },
       roadPreviewGeneration: 2,
+      roadMutationPreviewPending: true,
       roadMutationPreview: {
         generation: 1,
         changedTiles: [],
@@ -498,6 +502,25 @@ describe("selectMapTextOverlayItems", () => {
     expect(itemsOfKind(tracked, trackUi, "cursorBadge")[0]).toMatchObject({
       text: "⦿ Track",
       a11yText: "Track",
+    });
+
+    const heldStaleUi: UiState = {
+      ...cancelledUi,
+      roadMutationPreview: {
+        generation: 0,
+        changedTiles: [{ x: 5, y: 4 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 100,
+        skippedTiles: [],
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    };
+    expect(itemsOfKind(occupied, heldStaleUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Road",
+      a11yText: "Road",
     });
   });
 

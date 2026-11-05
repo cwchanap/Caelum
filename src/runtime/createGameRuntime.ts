@@ -2135,14 +2135,16 @@ export async function createGameRuntime(
       });
       hoverPreviewTimer = setTimeout(() => {
         hoverPreviewTimer = null;
-        if (
-          dead ||
-          workingSave.isBusy() ||
-          ui.roadPreviewGeneration !== generation
-        )
+        if (dead || ui.roadPreviewGeneration !== generation) return;
+        if (workingSave.isBusy()) {
+          commit(state, { ...ui, roadMutationPreviewPending: false });
           return;
+        }
         const currentMutation = roadMutationForUi(state, ui);
-        if (currentMutation === null) return;
+        if (currentMutation === null) {
+          commit(state, { ...ui, roadMutationPreviewPending: false });
+          return;
+        }
         sendRoadMutationPreviewRequest(currentMutation, generation);
       }, hoverPreviewDebounceMs);
       return snapshot;
