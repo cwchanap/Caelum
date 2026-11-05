@@ -509,3 +509,162 @@ test("keeps RouteEditor labels owned while a line draft is pinned", async ({
   );
   await expect(page.getByRole("radio", { name: "Shuttle" })).toBeChecked();
 });
+
+test("gates road clicks by preset and clears stale badge answers on retraction", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const overlay = page.getByTestId("map-text-overlay");
+  const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
+  const feedback = page.getByTestId("action-feedback");
+  const existingRoad = { x: 5, y: 8 } as const;
+  const tileAt = async (point: { x: number; y: number }) =>
+    (await runtimeSnapshot(page)).state.map.tiles.find(
+      (tile) => tile.x === point.x && tile.y === point.y,
+    );
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  const authoredRoad = await tileAt(existingRoad);
+  expect(authoredRoad).toMatchObject({ kind: "road", oneWay: "west" });
+
+  await hoverMapTile(canvas, existingRoad);
+  await expect(badge).toContainText("Already road");
+  await expect(badge).not.toHaveClass(/map-text-warning/);
+
+  await clickMapTile(canvas, existingRoad);
+  await clickMapTile(canvas, { x: 3, y: 13 });
+  await expect
+    .poll(async () => (await tileAt({ x: 3, y: 13 }))?.kind)
+    .toBe("road");
+  expect(await tileAt(existingRoad)).toEqual(authoredRoad);
+  expect((await runtimeSnapshot(page)).state.budget).toBe(119_900);
+  await expect(feedback).toHaveCount(0);
+
+  await dragMapTiles(page, canvas, { x: 3, y: 2 }, { x: 7, y: 2 });
+  await dragMapTiles(page, canvas, { x: 7, y: 2 }, { x: 7, y: 5 });
+  await expect
+    .poll(async () =>
+      [...((await tileAt({ x: 7, y: 2 }))?.roadConnections ?? [])].sort(),
+    )
+    .toEqual(["south", "west"]);
+
+  await selectBuildLeaf(page, "roads", "road-oneWay");
+  await hoverMapTile(canvas, { x: 7, y: 2 });
+  await expect(badge).toContainText("Only straight roads can be one-way.");
+  await expect(badge).toHaveClass(/map-text-warning/);
+  await expect(feedback).toHaveCount(0);
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await hoverMapTile(canvas, { x: 7, y: 2 });
+  await expect(badge).toContainText("Already road");
+  await expect(badge).not.toHaveClass(/map-text-warning/);
+
+  const startPoint = await mapTileViewportPoint(canvas, existingRoad);
+  const extendedPoint = await mapTileViewportPoint(canvas, { x: 5, y: 6 });
+  await page.mouse.move(startPoint.x, startPoint.y);
+  await page.mouse.down();
+  await page.mouse.move(extendedPoint.x, extendedPoint.y, { steps: 4 });
+  await expect(badge).toContainText("$200");
+  await page.mouse.move(startPoint.x, startPoint.y, { steps: 4 });
+  await expect(badge).toContainText("Already road");
+  await expect(badge).not.toHaveClass(/map-text-warning/);
+  await page.mouse.up();
+
+  await clickMapTile(canvas, { x: 4, y: 13 });
+  await expect
+    .poll(async () => (await tileAt({ x: 4, y: 13 }))?.kind)
+    .toBe("road");
+  expect(await tileAt(existingRoad)).toEqual(authoredRoad);
+  expect((await runtimeSnapshot(page)).state.budget).toBe(119_000);
+  await expect(feedback).toHaveCount(0);
+});
+
+test("holds the track price at pointer-down and charges only laid tiles", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const overlay = page.getByTestId("map-text-overlay");
+  const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
+  const feedback = page.getByTestId("action-feedback");
+
+  await selectBuildLeaf(page, "transit", "track");
+  const strokeStart = { x: 14, y: 4 } as const;
+  const strokeEnd = { x: 14, y: 11 } as const;
+  await hoverMapTile(canvas, strokeStart);
+  await expect(badge).toContainText("$500");
+
+  const startPoint = await mapTileViewportPoint(canvas, strokeStart);
+  const endPoint = await mapTileViewportPoint(canvas, strokeEnd);
+  await page.mouse.move(startPoint.x, startPoint.y);
+  await page.mouse.down();
+  const pressed = (await runtimeSnapshot(page)).ui;
+  expect(pressed.drag?.tool).toBe("track");
+  expect(pressed.roadMutationPreview?.cost).toBe(500);
+  expect(pressed.roadMutationPreview?.rejection).toBeNull();
+  await expect(badge).toContainText("$500");
+
+  await page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
+  await expect(badge).toContainText("$3,000");
+  await expect(badge).toContainText("2 tiles blocked");
+  await expect(badge).toHaveClass(/map-text-warning/);
+  await page.mouse.up();
+
+  const laid = [
+    { x: 14, y: 4 },
+    { x: 14, y: 5 },
+    { x: 14, y: 6 },
+    { x: 14, y: 7 },
+    { x: 14, y: 10 },
+    { x: 14, y: 11 },
+  ];
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return laid.map(
+        (point) =>
+          snapshot.state.map.tiles.find(
+            (tile) => tile.x === point.x && tile.y === point.y,
+          )?.hasTrack ?? null,
+      );
+    })
+    .toEqual([true, true, true, true, true, true]);
+  const settled = await runtimeSnapshot(page);
+  for (const point of [
+    { x: 14, y: 8 },
+    { x: 14, y: 9 },
+  ]) {
+    expect(
+      settled.state.map.tiles.find(
+        (tile) => tile.x === point.x && tile.y === point.y,
+      )?.hasTrack ?? false,
+    ).toBe(false);
+  }
+  expect(settled.state.budget).toBe(117_000);
+  await expect(feedback).toHaveCount(0);
+
+  const secondStart = await mapTileViewportPoint(canvas, { x: 12, y: 10 });
+  const secondEnd = await mapTileViewportPoint(canvas, { x: 16, y: 10 });
+  await page.mouse.move(secondStart.x, secondStart.y);
+  await page.mouse.down();
+  await page.mouse.move(secondEnd.x, secondEnd.y, { steps: 8 });
+  await expect(badge).toContainText("$2,000");
+  await expect(badge).not.toHaveClass(/map-text-warning/);
+  await page.mouse.up();
+
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return [12, 13, 14, 15, 16].map(
+        (x) =>
+          snapshot.state.map.tiles.find((tile) => tile.x === x && tile.y === 10)
+            ?.hasTrack ?? null,
+      );
+    })
+    .toEqual([true, true, true, true, true]);
+  expect((await runtimeSnapshot(page)).state.budget).toBe(115_000);
+  await expect(feedback).toHaveCount(0);
+});
