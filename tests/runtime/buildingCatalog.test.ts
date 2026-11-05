@@ -35,6 +35,11 @@ describe("building capacity catalog", () => {
     }
   });
 
+  it("pins the stop and station prices displayed beside the cursor", () => {
+    expect(BUILDING_CATALOG.busStop.cost).toBe(2_000);
+    expect(BUILDING_CATALOG.metroStation.cost).toBe(25_000);
+  });
+
   it("pins exact player-facing pattern copy for featured workplaces", () => {
     expect(BUILDING_CATALOG.officeTower.workPattern).toBe(
       "Standard · 07:00–09:00 starts, 17:00–19:00 returns",

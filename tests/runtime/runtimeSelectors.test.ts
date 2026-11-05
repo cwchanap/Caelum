@@ -1,6 +1,5 @@
 import { describe, expect, it } from "vitest";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
-import { COSTS } from "../../src/domain/catalog/transit";
 import type {
   GameState,
   ServiceMetrics,
@@ -1980,10 +1979,6 @@ describe("action feedback selector", () => {
 });
 
 describe("ShellCommandState and ShellCityState", () => {
-  it("exposes bus terminal cost from the shared transit catalog", () => {
-    expect(COSTS.busTerminal).toBe(12_000);
-  });
-
   it("formats Rust frame clock and population rows", () => {
     const state = createTestGameState({
       day: 1,

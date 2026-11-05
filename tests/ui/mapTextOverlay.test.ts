@@ -10,6 +10,7 @@ import {
 } from "../helpers/gameState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createUiState, type UiState } from "../../src/ui/uiState";
+import { withRoads } from "../helpers/mapFixtures";
 
 afterEach(() => {
   vi.restoreAllMocks();
@@ -248,6 +249,22 @@ describe("MapTextOverlay", () => {
     expect(badge.classList.contains("map-text-side-left")).toBe(true);
     expect(badge.style.maxWidth).toBe(
       `${28 * tileSize - 0.5 * tileSize - 8}px`,
+    );
+  });
+
+  it("renders the catalog price on the stop-tool badge and its readout", async () => {
+    await renderOverlay(withRoads(createTestGameState(), [{ x: 4, y: 5 }]), {
+      activeTool: "busStop",
+      hoverTile: { x: 4, y: 4 },
+    });
+
+    const badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.textContent).toBe("⦿ Bus Stop · $2,000");
+    expect(badge.classList.contains("map-text-warning")).toBe(false);
+    expect(screen.getByTestId("map-text-cursor-readout").textContent).toBe(
+      "Bus Stop, $2,000",
     );
   });
 
