@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
+import {
+  roadClickIntent,
+  roadClickMutation,
+  roadMutationForUi,
+} from "../../src/runtime/roadMutations";
 import { axisLockedLine, rectanglePoints } from "../../src/ui/roadDrag";
+import { createUiState } from "../../src/ui/uiState";
+import { createTestGameState } from "../helpers/gameState";
+import { withRoads } from "../helpers/mapFixtures";
 
 describe("rectanglePoints", () => {
   const expected = [
@@ -67,5 +75,101 @@ describe("axisLockedLine", () => {
     expect(axisLockedLine({ x: 5, y: 5 }, { x: 5, y: 5 })).toEqual([
       { x: 5, y: 5 },
     ]);
+  });
+});
+
+describe("road click preset gating", () => {
+  const state = withRoads(createTestGameState(), [
+    { x: 4, y: 4 },
+    { x: 5, y: 4 },
+    { x: 6, y: 4 },
+  ]);
+
+  it.each(["twoWay", "dualBidirectional"] as const)(
+    "returns null for an existing road under the %s preset",
+    (preset) => {
+      expect(roadClickIntent(state, { x: 5, y: 4 }, preset)).toBeNull();
+      expect(roadClickMutation(state, { x: 5, y: 4 }, preset)).toBeNull();
+    },
+  );
+
+  it("cycles an existing road only under the oneWay preset", () => {
+    expect(roadClickIntent(state, { x: 5, y: 4 }, "oneWay")).toEqual({
+      type: "cycleRoadDirection",
+      point: { x: 5, y: 4 },
+    });
+    expect(roadClickMutation(state, { x: 5, y: 4 }, "oneWay")).toEqual({
+      type: "cycleRoadDirection",
+      point: { x: 5, y: 4 },
+    });
+  });
+
+  it.each(["twoWay", "oneWay", "dualBidirectional"] as const)(
+    "lays a new road on an empty tile under the %s preset",
+    (preset) => {
+      expect(roadClickIntent(state, { x: 5, y: 7 }, preset)).toEqual({
+        type: "layRoad",
+        point: { x: 5, y: 7 },
+      });
+      expect(roadClickMutation(state, { x: 5, y: 7 }, preset)).toEqual({
+        type: "layRoad",
+        point: { x: 5, y: 7 },
+      });
+    },
+  );
+
+  it("gates a stationary drag on a road tile through the same decision", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "twoWay" as const,
+      hoverTile: { x: 5, y: 4 },
+      drag: {
+        tool: "road" as const,
+        start: { x: 5, y: 4 },
+        current: { x: 5, y: 4 },
+      },
+    };
+    expect(roadMutationForUi(state, ui)).toBeNull();
+    expect(roadMutationForUi(state, { ...ui, roadPreset: "oneWay" })).toEqual({
+      type: "cycleRoadDirection",
+      point: { x: 5, y: 4 },
+    });
+  });
+
+  it("gates the hover arm through the same decision", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "dualBidirectional" as const,
+      hoverTile: { x: 5, y: 4 },
+    };
+    expect(roadMutationForUi(state, ui)).toBeNull();
+    expect(roadMutationForUi(state, { ...ui, roadPreset: "oneWay" })).toEqual({
+      type: "cycleRoadDirection",
+      point: { x: 5, y: 4 },
+    });
+  });
+
+  it("keeps multi-tile strokes on layRoadLine with the captured preset", () => {
+    const ui = {
+      ...createUiState(),
+      activeTool: "road" as const,
+      roadPreset: "oneWay" as const,
+      drag: {
+        tool: "road" as const,
+        start: { x: 4, y: 4 },
+        current: { x: 6, y: 4 },
+      },
+    };
+    expect(roadMutationForUi(state, ui)).toEqual({
+      type: "layRoadLine",
+      points: [
+        { x: 4, y: 4 },
+        { x: 5, y: 4 },
+        { x: 6, y: 4 },
+      ],
+      preset: "oneWay",
+    });
   });
 });

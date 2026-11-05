@@ -20,6 +20,7 @@ pub enum RejectionCode {
     InvalidRoadStroke,
     InvalidTrackStroke,
     OneWayParallelTooClose,
+    RoadDirectionNeedsStraightRoad,
     NodeAlreadyExists,
     AmbiguousTransitNode,
     MissingRouteNode,

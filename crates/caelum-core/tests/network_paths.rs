@@ -109,9 +109,6 @@ fn one_way_roads_constrain_buses_but_not_metro() {
     engine.dispatch(GameIntent::CycleRoadDirection {
         point: (8, 5).into(),
     });
-    engine.dispatch(GameIntent::CycleRoadDirection {
-        point: (8, 5).into(),
-    });
     let snapshot = engine.snapshot();
 
     let topology = RoadTopology::compile(&snapshot.map).unwrap();

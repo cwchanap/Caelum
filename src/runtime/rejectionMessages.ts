@@ -58,6 +58,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "That track stroke has no valid tiles.";
     case "oneWayParallelTooClose":
       return "Keep parallel one-way roads at least 3 tiles apart.";
+    case "roadDirectionNeedsStraightRoad":
+      return "Only straight roads can be one-way.";
     case "nodeAlreadyExists":
       return "A compatible transit node already occupies that anchor.";
     case "ambiguousTransitNode":

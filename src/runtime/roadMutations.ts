@@ -1,4 +1,9 @@
-import { samePoint, type GameState, type Point } from "../domain/types";
+import {
+  samePoint,
+  type GameState,
+  type Point,
+  type RoadPreset,
+} from "../domain/types";
 import { axisLockedLine, rectanglePoints } from "../ui/roadDrag";
 import type { UiState } from "../ui/uiState";
 import type { GameIntent, RoadMutation } from "./backend/types";
@@ -17,21 +22,32 @@ export function dragMutationPoints(
 
 /** A road click defers the lay-vs-cycle decision to whoever calls this: the
  *  tile kind is re-read against `state` at call time, so a tile that has
- *  become road routes to `cycleRoadDirection` instead of `layRoad`. */
-export function roadClickIntent(state: GameState, point: Point): GameIntent {
+ *  become road routes to `cycleRoadDirection` instead of `layRoad`. The
+ *  decision is also gated on the preset captured when the gesture was
+ *  committed: 1-Lane/2-Lane on an existing road is a no-op (null), so a
+ *  later preset switch cannot turn that committed gesture into a direction
+ *  change. */
+export function roadClickIntent(
+  state: GameState,
+  point: Point,
+  preset: RoadPreset,
+): GameIntent | null {
   const tile = state.map.tiles.find(
     (candidate) => candidate.x === point.x && candidate.y === point.y,
   );
-  return tile?.kind === "road"
-    ? { type: "cycleRoadDirection", point }
-    : { type: "layRoad", point };
+  if (tile?.kind === "road") {
+    return preset === "oneWay" ? { type: "cycleRoadDirection", point } : null;
+  }
+  return { type: "layRoad", point };
 }
 
 export function roadClickMutation(
   state: GameState,
   point: Point,
-): RoadMutation {
-  const intent = roadClickIntent(state, point);
+  preset: RoadPreset,
+): RoadMutation | null {
+  const intent = roadClickIntent(state, point, preset);
+  if (intent === null) return null;
   return intent.type === "cycleRoadDirection"
     ? intent
     : { type: "layRoad", point };
@@ -61,12 +77,12 @@ export function roadMutationForUi(
         : { type: "removeAtTiles", points };
     }
     return points.length === 1
-      ? roadClickMutation(state, points[0])
+      ? roadClickMutation(state, points[0], candidate.roadPreset)
       : { type: "layRoadLine", points, preset: candidate.roadPreset };
   }
   if (candidate.hoverTile === null) return null;
   if (candidate.activeTool === "road") {
-    return roadClickMutation(state, candidate.hoverTile);
+    return roadClickMutation(state, candidate.hoverTile, candidate.roadPreset);
   }
   if (candidate.activeTool === "roundabout") {
     return {

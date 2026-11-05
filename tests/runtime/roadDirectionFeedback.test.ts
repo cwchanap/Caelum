@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { selectMapTextOverlayItems } from "../../src/render/mapTextOverlay";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import type { RuntimeController } from "../../src/runtime/types";
@@ -52,7 +53,7 @@ describe("road direction feedback with the real core", () => {
       createHost: createFakeGameHost,
       hoverPreviewDebounceMs: 0,
     });
-    runtime.setTool("road");
+    runtime.armRoad("oneWay");
   });
 
   afterEach(() => runtime?.dispose());
@@ -75,13 +76,13 @@ describe("road direction feedback with the real core", () => {
       expect(
         changed.state.map.tiles.find((tile) => tile.x === 7 && tile.y === 4)
           ?.oneWay,
-      ).toBe("north");
+      ).toBe("east");
       expect(changed.state.transit.routes[0].pathBroken).toBe(true);
       expect(changed.state.budget).toBe(before.state.budget);
       expect(changed.shell.actionFeedback).toMatchObject({
         source: "roadDirection",
         tone: "warning",
-        message: "Road set to one-way North. Click again to cycle direction.",
+        message: "Road set to one-way East. Click again to cycle direction.",
         details: [`${route.name} became broken after this direction change.`],
         dismissible: true,
         announce: true,
@@ -98,8 +99,8 @@ describe("road direction feedback with the real core", () => {
     },
   );
 
-  it("reports each committed heading through the return to two-way", async () => {
-    for (const direction of ["North", "East", "South", "West", null]) {
+  it("cycles only along the road's axis: East then West then two-way", async () => {
+    for (const direction of ["East", "West", null]) {
       const snapshot = await runtime.handleTileClick({ x: 7, y: 4 });
       expect(snapshot.shell.actionFeedback).toMatchObject({
         source: "roadDirection",
@@ -108,7 +109,7 @@ describe("road direction feedback with the real core", () => {
             ? "Road set to two-way. Click again to cycle direction."
             : `Road set to one-way ${direction}. Click again to cycle direction.`,
       });
-      if (direction !== "North") {
+      if (direction !== "East") {
         expect(snapshot.shell.actionFeedback?.details).toEqual([]);
       }
     }
@@ -151,8 +152,14 @@ describe("road direction feedback with the real core", () => {
   });
 
   it("clears the notice when a route draft is saved", async () => {
-    await runtime.handleTileClick({ x: 1, y: 1 });
-    await runtime.handleTileClick({ x: 1, y: 1 });
+    // Cycle a side road so the notice seeds without breaking the corridor the
+    // draft's shuttle still has to path along.
+    runtime.armRoad("twoWay");
+    runtime.startDrag({ x: 1, y: 7 });
+    runtime.setDragCurrent({ x: 3, y: 7 });
+    await runtime.commitDrag();
+    runtime.armRoad("oneWay");
+    await runtime.handleTileClick({ x: 2, y: 7 });
     expect(runtime.getSnapshot().shell.actionFeedback?.source).toBe(
       "roadDirection",
     );
@@ -167,5 +174,91 @@ describe("road direction feedback with the real core", () => {
     const saved = await runtime.saveRouteDraft();
     expect(saved.state.transit.routes).toHaveLength(2);
     expect(saved.shell.actionFeedback).toBeNull();
+  });
+
+  it.each(["twoWay", "dualBidirectional"] as const)(
+    "does not dispatch or charge when a road is clicked under the %s preset",
+    async (preset) => {
+      runtime.armRoad(preset);
+      const before = runtime.getSnapshot();
+      const beforeTile = before.state.map.tiles.find(
+        (tile) => tile.x === 7 && tile.y === 4,
+      );
+      expect(beforeTile?.kind).toBe("road");
+
+      const clicked = await runtime.handleTileClick({ x: 7, y: 4 });
+
+      // Gated no-op: the tile is untouched, no rejection or direction notice
+      // was raised, and the budget did not move.
+      const afterTile = clicked.state.map.tiles.find(
+        (tile) => tile.x === 7 && tile.y === 4,
+      );
+      expect(afterTile).toEqual(beforeTile);
+      expect(clicked.rejection).toBeNull();
+      expect(clicked.shell.actionFeedback).toBeNull();
+      expect(clicked.state.budget).toBe(before.state.budget);
+    },
+  );
+
+  it("rejects one-way conversion on a corner road", async () => {
+    runtime.armRoad("twoWay");
+    runtime.startDrag({ x: 11, y: 4 });
+    runtime.setDragCurrent({ x: 11, y: 6 });
+    await runtime.commitDrag();
+    const corner = runtime
+      .getSnapshot()
+      .state.map.tiles.find((tile) => tile.x === 11 && tile.y === 4);
+    expect(corner?.kind).toBe("road");
+
+    runtime.armRoad("oneWay");
+    const clicked = await runtime.handleTileClick({ x: 11, y: 4 });
+
+    expect(clicked.rejection?.code).toBe("roadDirectionNeedsStraightRoad");
+    expect(clicked.shell.actionFeedback).toMatchObject({
+      source: "rejection",
+      message: "Only straight roads can be one-way.",
+    });
+    expect(clicked.state.budget).toBe(runtime.getSnapshot().state.budget);
+  });
+
+  it("clears a resolved rejection preview when the preset gates the hover into a no-op", async () => {
+    // An isolated road cannot take a heading: under One-Way the hover preview
+    // resolves as a rejection, so the armed tile advertises the failure.
+    runtime.armRoad("oneWay");
+    await runtime.handleTileClick({ x: 1, y: 1 });
+    runtime.setHoverTile({ x: 1, y: 1 });
+    await vi.waitFor(() =>
+      expect(
+        runtime.getSnapshot().ui.roadMutationPreview?.rejection?.code,
+      ).toBe("roadDirectionNeedsStraightRoad"),
+    );
+
+    // Switching to a lane count gates the same hover into a no-op: the stale
+    // rejection must not survive the transition.
+    const switched = runtime.setRoadPreset("twoWay");
+    expect(switched.ui.roadMutationPreview).toBeNull();
+    expect(switched.ui.roadMutationPreviewError).toBeNull();
+
+    const badge = selectMapTextOverlayItems(switched.state, switched.ui).find(
+      (item) => item.kind === "cursorBadge",
+    );
+    expect(badge).toMatchObject({ text: "Already road" });
+  });
+
+  it("clears the stroke preview when a drag retracts onto an existing road", async () => {
+    runtime.armRoad("twoWay");
+    runtime.startDrag({ x: 7, y: 4 });
+    runtime.setDragCurrent({ x: 7, y: 5 });
+    await vi.waitFor(() =>
+      expect(
+        runtime.getSnapshot().ui.roadMutationPreview?.cost,
+      ).toBeGreaterThan(0),
+    );
+
+    // Retracting onto the existing road gates the stroke to a no-op: the
+    // two-tile cost must be cleared, not left to pose as the tap's price.
+    const retracted = runtime.setDragCurrent({ x: 7, y: 4 });
+    expect(retracted.ui.roadMutationPreview).toBeNull();
+    expect(retracted.ui.roadMutationPreviewError).toBeNull();
   });
 });

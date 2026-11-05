@@ -68,6 +68,31 @@ describe("selectMapTextOverlayItems", () => {
     ]);
   });
 
+  it.each(["twoWay", "dualBidirectional"] as const)(
+    "shows a neutral Already road badge over a road under the %s preset",
+    (preset) => {
+      const state = withRoads(createTestGameState(), [{ x: 7, y: 8 }]);
+      const ui = {
+        ...createUiState(),
+        activeTool: "road" as const,
+        roadPreset: preset,
+        hoverTile: { x: 7, y: 8 },
+      };
+
+      const items = itemsOfKind(state, ui, "cursorBadge");
+
+      // The gated click is a no-op: no cost, no ⊘ — just the neutral note.
+      expect(items).toEqual([
+        {
+          kind: "cursorBadge",
+          anchor: { x: 7, y: 8 },
+          text: "Already road",
+          a11yText: "Already road",
+        },
+      ]);
+    },
+  );
+
   it("anchors the cursor badge on the drag current tile", () => {
     const state = createTestGameState();
     const ui = {
@@ -436,11 +461,19 @@ describe("selectMapTextOverlayItems", () => {
           "cursorBadge",
         )[0]?.text,
       ).toBe("⦿ Road ⇄");
-      // Hovering an existing bare road stays valid (direction cycling).
+      // An existing bare road under a lane preset is a gated no-op; arming
+      // One-Way restores the direction-cycle affordance.
       expect(
         itemsOfKind(withRoads(state, [{ x: 2, y: 2 }]), ui, "cursorBadge")[0]
           ?.text,
-      ).toBe("⦿ Road");
+      ).toBe("Already road");
+      expect(
+        itemsOfKind(
+          withRoads(state, [{ x: 2, y: 2 }]),
+          { ...ui, roadPreset: "oneWay" },
+          "cursorBadge",
+        )[0]?.text,
+      ).toBe("⦿ Road →");
       // Off-map tiles cannot accept a road.
       expect(
         itemsOfKind(

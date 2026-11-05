@@ -1,4 +1,5 @@
 use caelum_core::model::{Heading, Point};
+use caelum_core::road::{apply_road_mutation, RoadMutation};
 use caelum_core::{GameEngine, GameIntent, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -13,7 +14,7 @@ fn road_line(engine: &mut GameEngine, points: Vec<Point>) {
 }
 
 #[test]
-fn direction_cycle_over_loop_cells_preserves_ring_edge() {
+fn transient_off_axis_arrows_on_loop_cells_preserve_ring_edge() {
     let mut engine = GameEngine::new();
     // 2x2 loop (5,5)-(6,5)-(6,6)-(5,6)
     road_line(
@@ -21,18 +22,19 @@ fn direction_cycle_over_loop_cells_preserves_ring_edge() {
         vec![point(5, 5), point(6, 5), point(6, 6), point(5, 6)],
     );
 
-    // None -> North on both top cells: each has a real vertical South edge as
-    // part of the ring, so the transient arrows must not read as parallel lanes
-    // and strip the East/West edge between (5,5) and (6,5).
+    // Transient North arrows on both top cells — the shape the retired
+    // N/E/S/W cycle produced mid-cycle, and still the shape an edge-removal
+    // ordering can leave behind: each cell has a real vertical South edge as
+    // part of the ring, so the arrows must not read as parallel lanes and
+    // strip the East/West edge between (5,5) and (6,5).
+    let mut state = engine.snapshot();
     for point in [point(5, 5), point(6, 5)] {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
+        state.map.tile_mut(point).unwrap().one_way = Some(Heading::North);
     }
+    let result = apply_road_mutation(&state, &RoadMutation::LayRoad { point: point(1, 1) })
+        .expect("canonicalizing mutation applies");
 
-    let map = &engine.snapshot().map;
+    let map = &result.snapshot.map;
     assert!(
         map.tile(point(5, 5))
             .expect("tile (5,5)")
@@ -49,16 +51,16 @@ fn direction_cycle_over_loop_cells_preserves_ring_edge() {
         "ring edge (6,5)->West pruned during North transient",
     );
 
-    // Continue None -> North -> East; the removed ring edge would never return.
+    // Axis-aligned East arrows on both cells; the removed ring edge would
+    // never return.
+    let mut state = result.snapshot;
     for point in [point(5, 5), point(6, 5)] {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point })
-                .applied
-        );
+        state.map.tile_mut(point).unwrap().one_way = Some(Heading::East);
     }
+    let result = apply_road_mutation(&state, &RoadMutation::LayRoad { point: point(2, 1) })
+        .expect("canonicalizing mutation applies");
 
-    let map = &engine.snapshot().map;
+    let map = &result.snapshot.map;
     assert_eq!(map.tile(point(5, 5)).unwrap().one_way, Some(Heading::East));
     assert_eq!(map.tile(point(6, 5)).unwrap().one_way, Some(Heading::East));
     assert!(
@@ -69,10 +71,10 @@ fn direction_cycle_over_loop_cells_preserves_ring_edge() {
         "ring edge permanently lost after full direction cycle"
     );
     assert!(
-        caelum_core::road_topology::RoadTopology::compile(&engine.snapshot().map)
+        caelum_core::road_topology::RoadTopology::compile(&result.snapshot.map)
             .expect("topology must compile")
             .find_path_between_access_tiles(
-                &engine.snapshot().map,
+                &result.snapshot.map,
                 point(5, 5),
                 point(6, 5),
                 None,
@@ -94,27 +96,21 @@ fn opposite_transient_arrows_on_loop_cells_preserve_ring_edge() {
 
     // Opposite transient arrows on the top cells: only one side carries an
     // arrow-aligned edge, which is still not proof of parallel lanes.
-    assert!(
-        engine
-            .dispatch(GameIntent::CycleRoadDirection { point: point(5, 5) })
-            .applied
-    );
-    for _ in 0..3 {
-        assert!(
-            engine
-                .dispatch(GameIntent::CycleRoadDirection { point: point(6, 5) })
-                .applied
-        );
-    }
+    let mut state = engine.snapshot();
+    state.map.tile_mut(point(5, 5)).unwrap().one_way = Some(Heading::North);
+    state.map.tile_mut(point(6, 5)).unwrap().one_way = Some(Heading::South);
+    let result = apply_road_mutation(&state, &RoadMutation::LayRoad { point: point(1, 1) })
+        .expect("canonicalizing mutation applies");
+
     assert_eq!(
-        engine.snapshot().map.tile(point(5, 5)).unwrap().one_way,
+        result.snapshot.map.tile(point(5, 5)).unwrap().one_way,
         Some(Heading::North)
     );
     assert_eq!(
-        engine.snapshot().map.tile(point(6, 5)).unwrap().one_way,
+        result.snapshot.map.tile(point(6, 5)).unwrap().one_way,
         Some(Heading::South)
     );
-    let map = &engine.snapshot().map;
+    let map = &result.snapshot.map;
     assert!(
         map.tile(point(5, 5))
             .expect("tile (5,5)")

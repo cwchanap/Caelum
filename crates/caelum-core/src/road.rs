@@ -475,12 +475,29 @@ fn cycle_road_direction(candidate: &mut GameSnapshot, point: Point) -> GameplayR
         return Ok(false);
     }
 
+    // One-way only makes sense along the tile's one connected axis: a
+    // horizontal road cycles East <-> West, a vertical road North <-> South,
+    // and a degree-1 dead-end uses its only axis. Anything else (corners and
+    // mixed-axis tiles, isolated tiles with no connections) cannot take a
+    // heading, and an arrow stuck on the wrong axis resets to two-way.
+    let horizontal = has_axis(&tile.road_connections, true);
+    let vertical = has_axis(&tile.road_connections, false);
+    let axis = match (horizontal, vertical) {
+        (true, false) => [Heading::East, Heading::West],
+        (false, true) => [Heading::North, Heading::South],
+        _ => {
+            return Err(GameplayRejection::at(
+                RejectionCode::RoadDirectionNeedsStraightRoad,
+                point,
+            ))
+        }
+    };
     let next = match tile.one_way {
-        None => Some(Heading::North),
-        Some(Heading::North) => Some(Heading::East),
-        Some(Heading::East) => Some(Heading::South),
-        Some(Heading::South) => Some(Heading::West),
-        Some(Heading::West) => None,
+        None => Some(axis[0]),
+        Some(heading) if heading == axis[0] => Some(axis[1]),
+        Some(heading) if heading == axis[1] => None,
+        // Off-axis legacy heading: correct it to two-way on the next click.
+        Some(_) => None,
     };
     let Some(tile) = candidate.map.tile_mut(point) else {
         return Err(GameplayRejection::at(RejectionCode::OutOfBounds, point));

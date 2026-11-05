@@ -14,6 +14,7 @@ import {
   staleHeldRoadPreview,
 } from "../runtime/runtimeSelectors";
 import { rejectionMessage } from "../runtime/rejectionMessages";
+import { roadClickMutation } from "../runtime/roadMutations";
 import type { RoadMutationPreviewView } from "../runtime/types";
 import type { UiState } from "../ui/uiState";
 import { pointAndTangentAt } from "./pathGeometry";
@@ -155,6 +156,15 @@ function cursorBadgeText(
         return previewBadge(label, state, preview);
       }
       const tile = getTile(state.map, cursor);
+      // A road tile under a lane-count preset is a gated no-op: the click is
+      // never dispatched, so the badge stays neutral instead of quoting a
+      // cost or a ⊘.
+      if (
+        tile?.kind === "road" &&
+        roadClickMutation(state, cursor, ui.roadPreset) === null
+      ) {
+        return { text: "Already road", a11yText: "Already road" };
+      }
       // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
       // reject cycleRoadDirection, so exclude them from the existing-road fallback.
       const ok =
