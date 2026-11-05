@@ -81,7 +81,6 @@ describe("selectMapTextOverlayItems", () => {
 
       const items = itemsOfKind(state, ui, "cursorBadge");
 
-      // The gated click is a no-op: no cost, no ⊘ — just the neutral note.
       expect(items).toEqual([
         {
           kind: "cursorBadge",
@@ -461,8 +460,7 @@ describe("selectMapTextOverlayItems", () => {
           "cursorBadge",
         )[0]?.text,
       ).toBe("⦿ Road ⇄");
-      // An existing bare road under a lane preset is a gated no-op; arming
-      // One-Way restores the direction-cycle affordance.
+      // Hovering an existing bare road stays valid (direction cycling).
       expect(
         itemsOfKind(withRoads(state, [{ x: 2, y: 2 }]), ui, "cursorBadge")[0]
           ?.text,

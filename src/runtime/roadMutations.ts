@@ -22,11 +22,7 @@ export function dragMutationPoints(
 
 /** A road click defers the lay-vs-cycle decision to whoever calls this: the
  *  tile kind is re-read against `state` at call time, so a tile that has
- *  become road routes to `cycleRoadDirection` instead of `layRoad`. The
- *  decision is also gated on the preset captured when the gesture was
- *  committed: 1-Lane/2-Lane on an existing road is a no-op (null), so a
- *  later preset switch cannot turn that committed gesture into a direction
- *  change. */
+ *  become road routes to `cycleRoadDirection` instead of `layRoad`. */
 export function roadClickIntent(
   state: GameState,
   point: Point,
