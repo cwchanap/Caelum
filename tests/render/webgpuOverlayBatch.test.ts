@@ -1264,24 +1264,97 @@ describe("buildOverlayRanges drag gestures", () => {
     ).toBe(true);
   });
 
-  it("previews the axis-locked track gesture", () => {
+  it("previews a track drag from the held Rust response", () => {
     const state = createTestGameState();
     const { underRoutes } = buildOverlayRanges(state, {
       ...createUiState(),
+      activeTool: "track" as const,
       drag: {
-        tool: "track",
+        tool: "track" as const,
+        start: { x: 2, y: 2 },
+        current: { x: 4, y: 3 },
+      },
+      roadPreviewGeneration: 1,
+      roadMutationPreview: {
+        generation: 1,
+        // Ties lock horizontal: the drag implies (2,2)→(4,2), and this held
+        // answer is exactly that stroke.
+        mutation: {
+          type: "layTrackLine" as const,
+          points: [
+            { x: 2, y: 2 },
+            { x: 3, y: 2 },
+            { x: 4, y: 2 },
+          ],
+        },
+        changedTiles: [
+          { x: 2, y: 2 },
+          { x: 3, y: 2 },
+        ],
+        skippedTiles: [{ x: 4, y: 2 }],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 1_000,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    // Changed tiles tint valid, the skipped tile invalid — the shared
+    // mutation-preview channel, not the old unconditional-green fill.
+    expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(true);
+    expect(hasVertexNear(underRoutes, colors.previewValid, 96, 64)).toBe(true);
+    expect(hasVertexNear(underRoutes, colors.previewInvalid, 128, 64)).toBe(
+      true,
+    );
+    // Interior of tile (4,3), which the horizontal tie does not cover.
+    expect(hasVertexNear(underRoutes, colors.previewValid, 140, 110)).toBe(
+      false,
+    );
+  });
+
+  it("draws no local track fill while the drag preview is pending", () => {
+    const state = createTestGameState();
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeTool: "track" as const,
+      drag: {
+        tool: "track" as const,
         start: { x: 2, y: 2 },
         current: { x: 4, y: 3 },
       },
     });
 
-    // Ties lock horizontal: tiles (2,2), (3,2), (4,2).
-    expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(true);
-    expect(hasVertexNear(underRoutes, colors.previewValid, 128, 64)).toBe(true);
-    // Interior of tile (4,3), which the horizontal tie does not cover.
-    expect(hasVertexNear(underRoutes, colors.previewValid, 140, 110)).toBe(
+    // No resolved preview: the shared pipeline renders nothing rather than
+    // the removed unconditional-green gesture fill.
+    expect(hasVertexNear(underRoutes, colors.previewValid, 64, 64)).toBe(false);
+    expect(hasVertexNear(underRoutes, colors.previewValid, 128, 64)).toBe(
       false,
     );
+  });
+
+  it("previews an idle track hover from the matching Rust response", () => {
+    const state = createTestGameState();
+    const { underRoutes } = buildOverlayRanges(state, {
+      ...createUiState(),
+      activeTool: "track" as const,
+      hoverTile: { x: 3, y: 3 },
+      roadPreviewGeneration: 2,
+      roadMutationPreview: {
+        generation: 2,
+        changedTiles: [{ x: 3, y: 3 }],
+        skippedTiles: [],
+        authoredTiles: [],
+        generatedStructures: [],
+        cost: 500,
+        routeImpacts: [],
+        warnings: [],
+        rejection: null,
+      },
+    });
+
+    expect(hasVertexNear(underRoutes, colors.previewValid, 96, 96)).toBe(true);
   });
 });
 

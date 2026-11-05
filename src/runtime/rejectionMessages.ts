@@ -138,12 +138,15 @@ export function routeFailureGuidance(
 }
 
 export function warningMessage(warning: GameplayWarning): string {
-  const { code } = warning;
+  const { code, context } = warning;
+  const skipped = context.footprint?.length ?? 0;
   switch (code) {
     case "existingBrokenLeg":
       return "This leg was already disconnected in the saved route.";
-    case "skippedTiles":
-      return "Some tiles were skipped.";
+    case "tilesBlocked":
+      return `${numberFormat.format(skipped)} ${skipped === 1 ? "tile" : "tiles"} blocked`;
+    case "tilesUnaffordable":
+      return `Not enough money, ${numberFormat.format(skipped)} ${skipped === 1 ? "tile" : "tiles"} skipped`;
     case "routeWillReroute":
       return "This will reroute the saved path.";
     case "routeWillBreak":

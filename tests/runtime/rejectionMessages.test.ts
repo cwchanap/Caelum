@@ -220,12 +220,40 @@ describe("warningMessage", () => {
     );
   });
 
-  it("formats skippedTiles", () => {
+  it("formats tilesBlocked with the footprint count", () => {
     const warning: GameplayWarning = {
-      code: "skippedTiles",
-      context: baseContext,
+      code: "tilesBlocked",
+      context: {
+        ...baseContext,
+        footprint: [
+          { x: 3, y: 2 },
+          { x: 4, y: 2 },
+        ],
+      },
     };
-    expect(warningMessage(warning)).toBe("Some tiles were skipped.");
+    expect(warningMessage(warning)).toBe("2 tiles blocked");
+  });
+
+  it("formats a single blocked tile without plural", () => {
+    const warning: GameplayWarning = {
+      code: "tilesBlocked",
+      context: { ...baseContext, footprint: [{ x: 3, y: 2 }] },
+    };
+    expect(warningMessage(warning)).toBe("1 tile blocked");
+  });
+
+  it("formats tilesUnaffordable with the footprint count", () => {
+    const warning: GameplayWarning = {
+      code: "tilesUnaffordable",
+      context: {
+        ...baseContext,
+        footprint: Array.from({ length: 11 }, (_, index) => ({
+          x: index + 1,
+          y: 0,
+        })),
+      },
+    };
+    expect(warningMessage(warning)).toBe("Not enough money, 11 tiles skipped");
   });
 
   it("formats routeWillReroute", () => {

@@ -174,6 +174,15 @@ pub(crate) fn normalize_road_mutation_result(
     let context = dispatch_context(before, &result.snapshot, &requested_tiles, result.cost);
     result.changed_tiles = context.changed_tiles;
     result.skipped_tiles = context.skipped_tiles;
+    // Cause footprints are subsets of skipped_tiles: a tile the mutation
+    // ended up changing anyway — say a structure-owned tile that gained an
+    // approach port — cannot also read as a blocked or unaffordable cause.
+    result
+        .blocked_tiles
+        .retain(|point| !result.changed_tiles.contains(point));
+    result
+        .unaffordable_tiles
+        .retain(|point| !result.changed_tiles.contains(point));
     result
 }
 

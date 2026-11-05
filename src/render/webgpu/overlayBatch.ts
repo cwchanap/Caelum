@@ -23,7 +23,7 @@ import {
   isBuildingAffordableForPresentation,
   canPlaceBuilding,
 } from "../placementValidation";
-import { axisLockedLine, rectanglePoints } from "../../ui/roadDrag";
+import { rectanglePoints } from "../../ui/roadDrag";
 import type { DragGesture, UiState } from "../../ui/uiState";
 import { tileSize } from "../boardTransform";
 import { colors } from "../colors";
@@ -496,15 +496,6 @@ function drawDragPreview(
     return;
   }
 
-  const line = axisLockedLine(gesture.start, gesture.current);
-  if (gesture.tool === "track") {
-    for (const point of line) {
-      fillTile(g, point, PREVIEW_VALID);
-      strokeTile(g, point, PREVIEW_VALID_STROKE);
-    }
-    return;
-  }
-
   // A held answer the stroke has outrun reads as pending at the cursor
   // badge; draw nothing rather than the old stroke's tiles so the channels
   // agree. Held accepted geometry stays only while its request still
@@ -666,6 +657,7 @@ export function buildOverlayRanges(
     previewsRendered = true;
   } else if (
     ui.activeTool === "road" ||
+    ui.activeTool === "track" ||
     ui.activeTool === "roundabout" ||
     ui.activeTool === "remove"
   ) {

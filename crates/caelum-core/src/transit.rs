@@ -118,26 +118,49 @@ pub fn lay_track_line(state: &GameSnapshot, points: &[Point]) -> GameplayResult<
     lay_track_line_costed(state, points).map(CostedMutation::into_snapshot)
 }
 
-pub(crate) fn lay_track_line_costed(
+/// Result of the ordered partial-build track stroke shared by commit and
+/// preview. Commit consumes only the snapshot through `lay_track_line_costed`;
+/// the preview additionally reports `cost` and the cause footprints.
+pub(crate) struct TrackLineOutcome {
+    pub snapshot: GameSnapshot,
+    /// Sum of nominal costs authorized for each placed tile — Creative still
+    /// reports the nominal price even though it deducts nothing.
+    pub cost: i32,
+    /// Requested tiles skipped for an invalid placement — except already-laid
+    /// track, which is a harmless no-op and never a cause.
+    pub blocked_tiles: Vec<Point>,
+    /// Requested tiles skipped because the track quote exceeded the budget.
+    pub unaffordable_tiles: Vec<Point>,
+}
+
+pub(crate) fn lay_track_line_outcome(
     state: &GameSnapshot,
     points: &[Point],
-) -> GameplayResult<CostedMutation> {
+) -> GameplayResult<TrackLineOutcome> {
     if points.is_empty() {
         return Err(GameplayRejection::new(RejectionCode::InvalidTrackStroke));
     }
 
     let mut next = state.clone();
     let policy = CostPolicy::from_snapshot(state);
+    let mut cost = 0;
     let mut changed = false;
+    let mut blocked_tiles = Vec::new();
+    let mut unaffordable_tiles = Vec::new();
     for point in points {
         if !is_valid_track_placement(&next, point) {
+            let already_laid = get_tile(&next.map, point).is_some_and(|tile| tile.has_track);
+            if !already_laid {
+                blocked_tiles.push(*point);
+            }
             continue;
         }
         let quote = policy.quote(TRACK_COST, next.budget);
         if !quote.affordable() {
+            unaffordable_tiles.push(*point);
             continue;
         }
-        quote.authorize()?.apply_to(&mut next.budget)?;
+        cost += quote.authorize()?.apply_to(&mut next.budget)?;
         set_tile_track(&mut next.map, point, true);
         changed = true;
     }
@@ -148,7 +171,19 @@ pub(crate) fn lay_track_line_costed(
             points[0],
         ));
     }
-    Ok(CostedMutation::new(next))
+    Ok(TrackLineOutcome {
+        snapshot: next,
+        cost,
+        blocked_tiles,
+        unaffordable_tiles,
+    })
+}
+
+pub(crate) fn lay_track_line_costed(
+    state: &GameSnapshot,
+    points: &[Point],
+) -> GameplayResult<CostedMutation> {
+    lay_track_line_outcome(state, points).map(|outcome| CostedMutation::new(outcome.snapshot))
 }
 
 pub fn remove_at_tiles(state: &GameSnapshot, points: &[Point]) -> GameplayResult<GameSnapshot> {

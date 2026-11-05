@@ -3,8 +3,10 @@ use caelum_core::model::{
 };
 use caelum_core::road::{apply_road_mutation, RoadMutation};
 use caelum_core::state::create_initial_snapshot;
-use caelum_core::transit::ROAD_COST;
-use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset};
+use caelum_core::transit::{ROAD_COST, TRACK_COST};
+use caelum_core::{
+    GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset, WarningCode,
+};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -1303,5 +1305,283 @@ fn direction_cycle_preview_matches_commit_on_axis_and_rejection() {
     assert_eq!(
         engine.snapshot().map.tile(point(5, 9)).unwrap().one_way,
         Some(Heading::East),
+    );
+}
+
+#[test]
+fn track_line_preview_and_commit_agree_on_tiles_and_cost() {
+    let mut engine = blank_engine();
+    let points = vec![point(2, 2), point(3, 2), point(4, 2)];
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.changed_tiles, points);
+    assert_eq!(preview.cost, TRACK_COST * 3);
+    assert!(preview.skipped_tiles.is_empty());
+    assert!(preview.warnings.is_empty());
+    assert!(preview.authored_tiles.is_empty());
+
+    let before_budget = engine.snapshot().budget;
+    let committed = engine.dispatch(GameIntent::LayTrackLine {
+        points: points.clone(),
+    });
+    assert!(committed.applied, "{committed:?}");
+    let after = engine.snapshot();
+    assert_eq!(after.budget, before_budget - TRACK_COST * 3);
+    for point in &points {
+        assert!(after.map.tile(*point).unwrap().has_track);
+    }
+}
+
+#[test]
+fn track_over_road_level_crossing_authors_no_road_tiles() {
+    let mut engine = blank_engine();
+    let road_points = vec![point(3, 4), point(4, 4), point(5, 4)];
+    let laid = engine.dispatch(GameIntent::LayRoadLine {
+        points: road_points.clone(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(laid.applied, "road fixture: {laid:?}");
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: road_points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.changed_tiles, road_points);
+    // The stroke lays track over road (a level crossing): the tiles already
+    // read kind == "road", but nothing in this mutation authored a road, so
+    // authored_tiles stays empty.
+    assert!(preview.authored_tiles.is_empty());
+    assert_eq!(preview.cost, TRACK_COST * 3);
+
+    let committed = engine.dispatch(GameIntent::LayTrackLine {
+        points: road_points.clone(),
+    });
+    assert!(committed.applied, "{committed:?}");
+    let after = engine.snapshot();
+    for point in &road_points {
+        let tile = after.map.tile(*point).unwrap();
+        assert!(tile.has_track);
+        assert_eq!(tile.kind, "road");
+    }
+}
+
+#[test]
+fn blocked_track_stroke_warns_only_the_blocked_tiles() {
+    let mut engine = blank_engine();
+    // Compact2x2 owns (3,2),(4,2),(3,3),(4,3); its structure blocks track.
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(3, 2),
+        size: RoundaboutSize::Compact2x2,
+    });
+    assert!(placed.applied, "roundabout fixture: {placed:?}");
+    let points = vec![point(2, 2), point(3, 2), point(4, 2)];
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.changed_tiles, vec![point(2, 2)]);
+    assert_eq!(preview.skipped_tiles, vec![point(3, 2), point(4, 2)]);
+    assert_eq!(preview.cost, TRACK_COST);
+    let blocked = preview
+        .warnings
+        .iter()
+        .find(|warning| warning.code == WarningCode::TilesBlocked)
+        .expect("partial stroke should warn about the blocked tiles");
+    assert_eq!(blocked.context.footprint, vec![point(3, 2), point(4, 2)]);
+    assert!(preview
+        .warnings
+        .iter()
+        .all(|warning| warning.code != WarningCode::TilesUnaffordable));
+
+    let committed = engine.dispatch(GameIntent::LayTrackLine { points });
+    assert!(committed.applied, "{committed:?}");
+    let after = engine.snapshot();
+    assert!(after.map.tile(point(2, 2)).unwrap().has_track);
+    assert!(!after.map.tile(point(3, 2)).unwrap().has_track);
+    assert!(!after.map.tile(point(4, 2)).unwrap().has_track);
+}
+
+#[test]
+fn blocked_road_stroke_warns_only_the_blocked_tiles() {
+    // An out-of-bounds point mid-stroke is a blocked cause the per-tile loop
+    // records without aborting the rest of the stroke.
+    let engine = blank_engine();
+    let points = vec![point(2, 2), point(3, 2), point(99, 2)];
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: points.clone(),
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.changed_tiles, vec![point(2, 2), point(3, 2)]);
+    assert_eq!(preview.skipped_tiles, vec![point(99, 2)]);
+    let blocked = preview
+        .warnings
+        .iter()
+        .find(|warning| warning.code == WarningCode::TilesBlocked)
+        .expect("partial stroke should warn about the blocked tile");
+    assert_eq!(blocked.context.footprint, vec![point(99, 2)]);
+    assert!(preview
+        .warnings
+        .iter()
+        .all(|warning| warning.code != WarningCode::TilesUnaffordable));
+}
+
+#[test]
+fn existing_track_is_a_harmless_skip_not_a_blocked_cause() {
+    let mut engine = blank_engine();
+    let laid = engine.dispatch(GameIntent::LayTrack { point: point(2, 2) });
+    assert!(laid.applied, "track fixture: {laid:?}");
+
+    let points = vec![point(2, 2), point(3, 2), point(4, 2)];
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.changed_tiles, vec![point(3, 2), point(4, 2)]);
+    // The already-laid tile stays in skipped_tiles as a harmless no-op...
+    assert_eq!(preview.skipped_tiles, vec![point(2, 2)]);
+    // ...but it is not a blocked cause, so no partial-build warning shows.
+    assert!(preview.warnings.is_empty());
+}
+
+#[test]
+fn a_blocked_tile_that_gains_an_approach_port_is_not_a_warning_cause() {
+    let mut engine = blank_engine();
+    let placed = engine.dispatch(GameIntent::PlaceRoundabout {
+        origin: point(3, 3),
+        size: RoundaboutSize::Compact2x2,
+    });
+    assert!(placed.applied, "roundabout fixture: {placed:?}");
+
+    // A bent stroke reaches the per-tile loop instead of the atomic contact
+    // check. (3,3) is roundabout-owned so the lane loop records it blocked,
+    // but the authored approach at (3,2) attaches a roundabout port — the
+    // tile ends up changed, and a changed tile cannot also be a cause.
+    let points = vec![point(2, 2), point(3, 2), point(3, 3)];
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: points.clone(),
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(
+        preview.changed_tiles,
+        vec![point(2, 2), point(3, 2), point(3, 3)]
+    );
+    assert!(preview.skipped_tiles.is_empty());
+    assert!(preview.warnings.is_empty());
+}
+
+#[test]
+fn existing_road_is_a_harmless_skip_not_a_blocked_cause() {
+    let mut engine = blank_engine();
+    let laid = engine.dispatch(GameIntent::LayRoadLine {
+        points: vec![point(2, 2), point(3, 2)],
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(laid.applied, "road fixture: {laid:?}");
+
+    // A bent stroke is not axis-resolved, so it merges the existing road
+    // instead of hitting the atomic same-axis contact rejection. (2,2) is
+    // byte-identical after the merge — a harmless no-op, not a blocked cause.
+    let points = vec![point(2, 2), point(3, 2), point(3, 3)];
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: points.clone(),
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    // (3,2) gains a connection to the newly authored (3,3); (2,2) is
+    // unchanged and lands in skipped_tiles as a harmless no-op.
+    assert_eq!(preview.changed_tiles, vec![point(3, 2), point(3, 3)]);
+    assert_eq!(preview.skipped_tiles, vec![point(2, 2)]);
+    assert!(preview.warnings.is_empty());
+}
+
+#[test]
+fn fully_skipped_track_stroke_rejects_with_the_attempted_footprint() {
+    let mut engine = blank_engine();
+    for point in [point(2, 2), point(3, 2)] {
+        let laid = engine.dispatch(GameIntent::LayTrack { point });
+        assert!(laid.applied, "track fixture: {laid:?}");
+    }
+    let points = vec![point(2, 2), point(3, 2)];
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(
+        preview.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::InvalidTrackStroke),
+    );
+    // The rejected preview keeps the attempted footprint so the overlay can
+    // mark every requested tile invalid, not just the anchor.
+    assert_eq!(preview.changed_tiles, points);
+    assert!(preview.warnings.is_empty());
+
+    let committed = engine.dispatch(GameIntent::LayTrackLine {
+        points: points.clone(),
+    });
+    assert!(!committed.applied);
+    assert_eq!(
+        committed
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::InvalidTrackStroke),
+    );
+}
+
+#[test]
+fn single_track_tile_on_existing_track_still_rejects() {
+    let mut engine = blank_engine();
+    let laid = engine.dispatch(GameIntent::LayTrack { point: point(2, 2) });
+    assert!(laid.applied, "track fixture: {laid:?}");
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrack { point: point(2, 2) },
+        generation: 1,
+    });
+    assert_eq!(
+        preview.rejection.as_ref().map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
+    );
+    assert_eq!(preview.changed_tiles, vec![point(2, 2)]);
+
+    let committed = engine.dispatch(GameIntent::LayTrack { point: point(2, 2) });
+    assert!(!committed.applied);
+    assert_eq!(
+        committed
+            .rejection
+            .as_ref()
+            .map(|rejection| &rejection.code),
+        Some(&RejectionCode::BlockedTile),
     );
 }

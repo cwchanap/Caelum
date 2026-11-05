@@ -3,11 +3,12 @@ import {
   roadClickIntent,
   roadClickMutation,
   roadMutationForUi,
+  roadMutationIsPrefix,
 } from "../../src/runtime/roadMutations";
 import { axisLockedLine, rectanglePoints } from "../../src/ui/roadDrag";
 import { createUiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
-import { withRoads } from "../helpers/mapFixtures";
+import { withRoads, withTracks } from "../helpers/mapFixtures";
 
 describe("rectanglePoints", () => {
   const expected = [
@@ -171,5 +172,129 @@ describe("road click preset gating", () => {
       ],
       preset: "oneWay",
     });
+  });
+});
+
+describe("track mutation derivation", () => {
+  it("derives layTrack for a track hover, even over existing track", () => {
+    const state = withTracks(createTestGameState(), [{ x: 5, y: 5 }]);
+    const ui = {
+      ...createUiState(),
+      activeTool: "track" as const,
+      hoverTile: { x: 5, y: 5 },
+    };
+    // The preview decides validity — the derivation always asks Rust, so a
+    // hovering verdict on already-laid track stays authoritative.
+    expect(roadMutationForUi(state, ui)).toEqual({
+      type: "layTrack",
+      point: { x: 5, y: 5 },
+    });
+  });
+
+  it("derives layTrack for a single-tile track drag", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "track" as const,
+      drag: {
+        tool: "track" as const,
+        start: { x: 3, y: 3 },
+        current: { x: 3, y: 3 },
+      },
+    };
+    expect(roadMutationForUi(state, ui)).toEqual({
+      type: "layTrack",
+      point: { x: 3, y: 3 },
+    });
+  });
+
+  it("derives layTrackLine with the same axis-locked points as a road stroke", () => {
+    const state = createTestGameState();
+    const ui = {
+      ...createUiState(),
+      activeTool: "track" as const,
+      drag: {
+        tool: "track" as const,
+        start: { x: 2, y: 2 },
+        current: { x: 5, y: 3 },
+      },
+    };
+    // |dx| > |dy| locks the stroke horizontal.
+    expect(roadMutationForUi(state, ui)).toEqual({
+      type: "layTrackLine",
+      points: [
+        { x: 2, y: 2 },
+        { x: 3, y: 2 },
+        { x: 4, y: 2 },
+        { x: 5, y: 2 },
+      ],
+    });
+  });
+});
+
+describe("track held-preview identity", () => {
+  const stroke = (points: Array<{ x: number; y: number }>) =>
+    ({ type: "layTrackLine", points }) as const;
+
+  it("prefixes identical single-tile mutations for drag-start retention", () => {
+    expect(
+      roadMutationIsPrefix(
+        { type: "layTrack", point: { x: 5, y: 5 } },
+        { type: "layTrack", point: { x: 5, y: 5 } },
+      ),
+    ).toBe(true);
+  });
+
+  it("prefixes a shorter track stroke extended along the same line", () => {
+    expect(
+      roadMutationIsPrefix(
+        stroke([
+          { x: 4, y: 5 },
+          { x: 5, y: 5 },
+        ]),
+        stroke([
+          { x: 4, y: 5 },
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ]),
+      ),
+    ).toBe(true);
+  });
+
+  it("rejects a held track stroke the drag retracted past", () => {
+    expect(
+      roadMutationIsPrefix(
+        stroke([
+          { x: 4, y: 5 },
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ]),
+        stroke([
+          { x: 4, y: 5 },
+          { x: 5, y: 5 },
+        ]),
+      ),
+    ).toBe(false);
+  });
+
+  it("never prefixes across mutation kinds", () => {
+    expect(
+      roadMutationIsPrefix(
+        { type: "layTrack", point: { x: 5, y: 5 } },
+        stroke([
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ]),
+      ),
+    ).toBe(false);
+    expect(
+      roadMutationIsPrefix(
+        stroke([
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ]),
+        { type: "layRoadLine", points: [{ x: 5, y: 5 }], preset: "twoWay" },
+      ),
+    ).toBe(false);
   });
 });

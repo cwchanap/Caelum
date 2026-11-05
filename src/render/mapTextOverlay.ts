@@ -13,7 +13,7 @@ import {
   selectRouteFailures,
   staleHeldRoadPreview,
 } from "../runtime/runtimeSelectors";
-import { rejectionMessage } from "../runtime/rejectionMessages";
+import { rejectionMessage, warningMessage } from "../runtime/rejectionMessages";
 import { roadMutationForUi } from "../runtime/roadMutations";
 import type { RoadMutationPreviewView } from "../runtime/types";
 import type { UiState } from "../ui/uiState";
@@ -62,7 +62,8 @@ function hasUsefulPreview(preview: RoadMutationPreviewView): boolean {
     preview.changedTiles.length > 0 ||
     preview.authoredTiles.length > 0 ||
     preview.generatedStructures.length > 0 ||
-    preview.routeImpacts.length > 0
+    preview.routeImpacts.length > 0 ||
+    preview.warnings.length > 0
   );
 }
 
@@ -107,13 +108,23 @@ function previewBadge(
   }
   const impacts = summarizeRouteImpacts(preview.routeImpacts);
   const spokenImpacts = describeRouteImpacts(preview.routeImpacts);
+  // Only Rust-classified causes tone the badge; `skippedTiles` also carries
+  // harmless unchanged no-ops and must never imply a problem.
+  const warnings = preview.warnings
+    .filter(
+      (warning) =>
+        warning.code === "tilesBlocked" || warning.code === "tilesUnaffordable",
+    )
+    .map(warningMessage);
+  const warningText = warnings.join(" · ");
   const cost =
     preview.cost === 0 || state.rules.economyPreset === "creative"
       ? "Free"
       : preview.costLabel;
   return {
-    text: `${label} · ${cost}${impacts.length === 0 ? "" : ` · ${impacts}`}`,
-    a11yText: `${name}, ${cost}${spokenImpacts.length === 0 ? "" : `, ${spokenImpacts}`}`,
+    text: `${label} · ${cost}${warningText.length === 0 ? "" : ` · ${warningText}`}${impacts.length === 0 ? "" : ` · ${impacts}`}`,
+    a11yText: `${name}, ${cost}${warningText.length === 0 ? "" : `, ${warningText}`}${spokenImpacts.length === 0 ? "" : `, ${spokenImpacts}`}`,
+    tone: warnings.length > 0 ? "warning" : undefined,
   };
 }
 
@@ -166,8 +177,16 @@ function cursorBadgeText(
         (tile?.kind === "road" && tile.roadStructureId === undefined);
       return placementBadge(label, ok);
     }
-    case "track":
-      return placementBadge("⦿ Track", isValidTrackPlacement(state, cursor));
+    case "track": {
+      const label = "⦿ Track";
+      if (staleHeldPreview) {
+        return pendingBadge(label);
+      }
+      if (preview !== null) {
+        return previewBadge(label, state, preview);
+      }
+      return placementBadge(label, isValidTrackPlacement(state, cursor));
+    }
     case "roundabout": {
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
       const label = `⦿ Roundabout ${sizeLabel}`;

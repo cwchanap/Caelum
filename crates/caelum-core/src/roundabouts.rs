@@ -117,6 +117,8 @@ pub fn place_roundabout(
         snapshot: candidate,
         changed_tiles: template.footprint,
         skipped_tiles: Vec::new(),
+        blocked_tiles: Vec::new(),
+        unaffordable_tiles: Vec::new(),
         cost: nominal_cost,
     })
 }
