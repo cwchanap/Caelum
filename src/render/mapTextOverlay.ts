@@ -200,7 +200,9 @@ function cursorBadgeText(
             : "";
       const label = `⦿ Road${glyph}`;
       if (staleHeldPreview) {
-        return pendingBadge(label);
+        return ui.roadMutationPreviewPending
+          ? pendingBadge(label)
+          : { text: label, a11yText: a11yLabel(label) };
       }
       if (preview !== null) {
         return previewBadge(label, state, preview);
@@ -224,7 +226,9 @@ function cursorBadgeText(
     case "track": {
       const label = "⦿ Track";
       if (staleHeldPreview) {
-        return pendingBadge(label);
+        return ui.roadMutationPreviewPending
+          ? pendingBadge(label)
+          : { text: label, a11yText: a11yLabel(label) };
       }
       if (preview !== null) {
         return previewBadge(label, state, preview);
