@@ -207,6 +207,7 @@ describe("road direction feedback with the real core", () => {
     expect(corner?.kind).toBe("road");
 
     runtime.armRoad("oneWay");
+    const budgetBeforeClick = runtime.getSnapshot().state.budget;
     const clicked = await runtime.handleTileClick({ x: 11, y: 4 });
 
     expect(clicked.rejection?.code).toBe("roadDirectionNeedsStraightRoad");
@@ -214,7 +215,7 @@ describe("road direction feedback with the real core", () => {
       source: "rejection",
       message: "Only straight roads can be one-way.",
     });
-    expect(clicked.state.budget).toBe(runtime.getSnapshot().state.budget);
+    expect(clicked.state.budget).toBe(budgetBeforeClick);
   });
 
   it("clears a resolved rejection preview when the preset gates the hover into a no-op", async () => {

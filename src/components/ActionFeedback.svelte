@@ -35,46 +35,48 @@
       data-source={feedback.source}
       data-tone={feedback.tone}
     >
-      {#if feedback.tone === "error"}
-        <svg
-          class="action-feedback-icon"
-          data-testid="action-feedback-icon"
-          aria-hidden="true"
-          viewBox="0 0 16 16"
-        >
-          <circle cx="8" cy="8" r="6.5" />
-          <path d="m5.5 5.5 5 5m0-5-5 5" />
-        </svg>
-      {:else if feedback.tone === "warning"}
-        <svg
-          class="action-feedback-icon"
-          data-testid="action-feedback-icon"
-          aria-hidden="true"
-          viewBox="0 0 16 16"
-        >
-          <path d="M8 1.5 14.5 14h-13L8 1.5Zm0 4v4m0 2v.5" />
-        </svg>
-      {:else}
-        <svg
-          class="action-feedback-icon"
-          data-testid="action-feedback-icon"
-          aria-hidden="true"
-          viewBox="0 0 16 16"
-        >
-          <circle cx="8" cy="8" r="6.5" />
-          <path d="M8 7v4m0-6v-.5" />
-        </svg>
-      {/if}
+      <div class="action-feedback-body">
+        {#if feedback.tone === "error"}
+          <svg
+            class="action-feedback-icon"
+            data-testid="action-feedback-icon"
+            aria-hidden="true"
+            viewBox="0 0 16 16"
+          >
+            <circle cx="8" cy="8" r="6.5" />
+            <path d="m5.5 5.5 5 5m0-5-5 5" />
+          </svg>
+        {:else if feedback.tone === "warning"}
+          <svg
+            class="action-feedback-icon"
+            data-testid="action-feedback-icon"
+            aria-hidden="true"
+            viewBox="0 0 16 16"
+          >
+            <path d="M8 1.5 14.5 14h-13L8 1.5Zm0 4v4m0 2v.5" />
+          </svg>
+        {:else}
+          <svg
+            class="action-feedback-icon"
+            data-testid="action-feedback-icon"
+            aria-hidden="true"
+            viewBox="0 0 16 16"
+          >
+            <circle cx="8" cy="8" r="6.5" />
+            <path d="M8 7v4m0-6v-.5" />
+          </svg>
+        {/if}
 
-      <span class="action-feedback-message">{feedback.message}</span>
+        <span class="action-feedback-message">{feedback.message}</span>
 
-      {#if feedback.details.length > 0}
-        <ul class="action-feedback-details">
-          {#each feedback.details as detail, index (index)}
-            <li>{detail}</li>
-          {/each}
-        </ul>
-      {/if}
+        {#if feedback.details.length > 0}
+          <ul class="action-feedback-details">
+            {#each feedback.details as detail, index (index)}
+              <li>{detail}</li>
+            {/each}
+          </ul>
+        {/if}
+      </div>
 
       {#if feedback.dismissible}
         <button

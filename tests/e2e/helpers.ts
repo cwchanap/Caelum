@@ -264,6 +264,20 @@ export async function rebuildRoadTile(
   await clickMapTile(canvas, tile);
 }
 
+export async function drainGameplayQueue(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: { tick: (delta: number) => Promise<unknown> };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    return runtime.tick(0);
+  });
+}
+
 /**
  * Set the budget to a specific amount via the debug SetBudget intent.
  * Used by e2e tests that need to top up the budget when the normal
