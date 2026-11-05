@@ -14,7 +14,7 @@ import {
   staleHeldRoadPreview,
 } from "../runtime/runtimeSelectors";
 import { rejectionMessage } from "../runtime/rejectionMessages";
-import { roadClickMutation } from "../runtime/roadMutations";
+import { roadMutationForUi } from "../runtime/roadMutations";
 import type { RoadMutationPreviewView } from "../runtime/types";
 import type { UiState } from "../ui/uiState";
 import { pointAndTangentAt } from "./pathGeometry";
@@ -156,10 +156,7 @@ function cursorBadgeText(
         return previewBadge(label, state, preview);
       }
       const tile = getTile(state.map, cursor);
-      if (
-        tile?.kind === "road" &&
-        roadClickMutation(state, cursor, ui.roadPreset) === null
-      ) {
+      if (tile?.kind === "road" && roadMutationForUi(state, ui) === null) {
         return { text: "Already road", a11yText: "Already road" };
       }
       // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
