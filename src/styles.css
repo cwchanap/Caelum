@@ -1637,6 +1637,7 @@ body {
   border: 1px solid var(--cyan);
   background: var(--surface);
   color: var(--ink);
+  pointer-events: none;
 }
 
 .action-feedback--warning {
@@ -1670,6 +1671,7 @@ body {
   background: var(--surface-raised);
   color: inherit;
   cursor: pointer;
+  pointer-events: auto;
 }
 
 .inspection-card {

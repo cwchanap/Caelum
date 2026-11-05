@@ -337,7 +337,7 @@ test("settles the roundabout badge after rejected and applied clicks without mov
   const overlay = page.getByTestId("map-text-overlay");
   const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
   const feedback = page.getByTestId("action-feedback");
-  const edge = { x: 27, y: 0 } as const;
+  const edge = { x: 27, y: 17 } as const;
   const open = { x: 4, y: 3 } as const;
 
   await selectBuildLeaf(page, "roads", "compactRoundabout");
@@ -353,6 +353,7 @@ test("settles the roundabout badge after rejected and applied clicks without mov
     .poll(async () => {
       const snapshot = await runtimeSnapshot(page);
       return {
+        hover: snapshot.ui.hoverTile,
         generation: snapshot.ui.roadPreviewGeneration,
         held: snapshot.ui.roadMutationPreview?.generation ?? null,
         rejection: snapshot.ui.roadMutationPreview?.rejection?.code ?? null,
@@ -362,6 +363,7 @@ test("settles the roundabout badge after rejected and applied clicks without mov
       };
     })
     .toEqual({
+      hover: edge,
       generation: rejectedGeneration + 1,
       held: rejectedGeneration + 1,
       rejection: "outOfBounds",
@@ -369,8 +371,11 @@ test("settles the roundabout badge after rejected and applied clicks without mov
       structures: 1,
       budget: 120_000,
     });
+  await expect(badge).toBeVisible();
   await expect(badge).toContainText("outside the map");
   await expect(badge).toHaveClass(/map-text-warning/);
+  await feedback.getByRole("button", { name: "Dismiss" }).click();
+  await expect(feedback).toHaveCount(0);
 
   await hoverMapTile(canvas, open);
   await expect(badge).toContainText("$1,000");
@@ -380,6 +385,7 @@ test("settles the roundabout badge after rejected and applied clicks without mov
     .poll(async () => {
       const snapshot = await runtimeSnapshot(page);
       return {
+        hover: snapshot.ui.hoverTile,
         generation: snapshot.ui.roadPreviewGeneration,
         held: snapshot.ui.roadMutationPreview?.generation ?? null,
         rejection: snapshot.ui.roadMutationPreview?.rejection?.code ?? null,
@@ -391,6 +397,7 @@ test("settles the roundabout badge after rejected and applied clicks without mov
       };
     })
     .toEqual({
+      hover: open,
       generation: openGeneration + 1,
       held: openGeneration + 1,
       rejection: "blockedFootprint",
