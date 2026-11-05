@@ -42,6 +42,17 @@ describe("rejectionMessage", () => {
     );
   });
 
+  it("maps stopMustBeBesideRoad to the on-road stop guidance", () => {
+    const rejection = {
+      code: "stopMustBeBesideRoad",
+      context: gameplayRejectionContext(),
+    } satisfies GameplayRejection;
+
+    expect(rejectionMessage(rejection)).toBe(
+      "Place stops beside a road, not on it.",
+    );
+  });
+
   it.each([
     ["nothingToUndo", "There is nothing to undo."],
     ["undoExpired", "Too much time has passed to undo that build."],

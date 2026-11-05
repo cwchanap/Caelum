@@ -78,6 +78,16 @@ const ROUTE_PREVIEW_NEUTRAL_INTENTS = new Set<GameIntent["type"]>([
   "setSpeed",
   "setBudget",
 ]);
+const ROAD_MUTATION_INTENT_TYPES = new Set<GameIntent["type"]>([
+  "layRoad",
+  "layRoadLine",
+  "cycleRoadDirection",
+  "placeRoundabout",
+  "layTrack",
+  "layTrackLine",
+  "removeAtTile",
+  "removeAtTiles",
+]);
 
 function emptyRouteDraftHistory(): RouteDraftHistory {
   return { past: [], future: [] };
@@ -529,11 +539,31 @@ export async function createGameRuntime(
     // budget on a frame-only update — re-issue it inside the same commit so
     // the cursor badge cannot keep reporting a stale cost, rejection, or
     // route-impact list until the pointer happens to move again.
-    const previewMutation =
-      dead || workingSave.isBusy() ? null : activeRoadMutation;
-    if (
-      previewMutation !== null &&
-      (result.update.scene !== null || nextState.budget !== state.budget)
+    const nextMutation =
+      dead || workingSave.isBusy()
+        ? null
+        : roadMutationForUi(nextState, nextUi);
+    const previewWorldChanged =
+      result.update.scene !== null || nextState.budget !== state.budget;
+    const missingPreviewRecovery =
+      intent !== undefined &&
+      ROAD_MUTATION_INTENT_TYPES.has(intent.type) &&
+      result.rejection !== null &&
+      nextUi.roadMutationPreview === null &&
+      activeRoadMutation === null &&
+      hoverPreviewTimer === null;
+    if (nextMutation === null && previewWorldChanged) {
+      clearHoverPreviewTimer();
+      invalidateRoadPreview();
+      nextUi = {
+        ...nextUi,
+        roadMutationPreview: null,
+        roadMutationPreviewError: null,
+        roadMutationPreviewPending: false,
+      };
+    } else if (
+      nextMutation !== null &&
+      (previewWorldChanged || missingPreviewRecovery)
     ) {
       const generation = nextUi.roadPreviewGeneration + 1;
       const snapshot = commit(nextState, {
@@ -541,7 +571,7 @@ export async function createGameRuntime(
         roadPreviewGeneration: generation,
         roadMutationPreviewPending: true,
       });
-      sendRoadMutationPreviewRequest(previewMutation, generation);
+      sendRoadMutationPreviewRequest(nextMutation, generation);
       if (refreshedRouteDraft !== null)
         requestRoutePreview(refreshedRouteDraft);
       return snapshot;
@@ -563,6 +593,9 @@ export async function createGameRuntime(
     previewCoordinator.invalidateRoute();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
+    if (ui.roadMutationPreviewPending) {
+      ui = { ...ui, roadMutationPreviewPending: false };
+    }
     if (gameHost.isRunning()) gameHost.stop();
   };
 
@@ -1665,7 +1698,10 @@ export async function createGameRuntime(
       invalidateRoadPreview();
       return commit(
         state,
-        ui.drag === null
+        ui.drag === null &&
+          ui.roadMutationPreview === null &&
+          ui.roadMutationPreviewError === null &&
+          !ui.roadMutationPreviewPending
           ? ui
           : {
               ...ui,

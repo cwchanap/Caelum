@@ -251,4 +251,37 @@ describe("road direction feedback with the real core", () => {
     expect(retracted.ui.roadMutationPreview).toBeNull();
     expect(retracted.ui.roadMutationPreviewError).toBeNull();
   });
+
+  it("restores the typed rejection preview after a rejected one-way click", async () => {
+    runtime.armRoad("twoWay");
+    runtime.startDrag({ x: 11, y: 4 });
+    runtime.setDragCurrent({ x: 11, y: 6 });
+    await runtime.commitDrag();
+    runtime.armRoad("oneWay");
+    runtime.setHoverTile({ x: 11, y: 4 });
+    await vi.waitFor(() =>
+      expect(
+        runtime.getSnapshot().ui.roadMutationPreview?.rejection?.code,
+      ).toBe("roadDirectionNeedsStraightRoad"),
+    );
+
+    const clicked = await runtime.handleTileClick({ x: 11, y: 4 });
+    expect(clicked.rejection?.code).toBe("roadDirectionNeedsStraightRoad");
+    expect(clicked.ui.roadMutationPreview).toBeNull();
+    expect(clicked.ui.roadMutationPreviewPending).toBe(true);
+
+    await vi.waitFor(() => {
+      const snapshot = runtime.getSnapshot();
+      expect(snapshot.ui.roadMutationPreviewPending).toBe(false);
+      expect(snapshot.ui.roadMutationPreview?.rejection?.code).toBe(
+        "roadDirectionNeedsStraightRoad",
+      );
+    });
+    const settled = runtime.getSnapshot();
+    expect(
+      selectMapTextOverlayItems(settled.state, settled.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road → · Only straight roads can be one-way. ⊘");
+  });
 });

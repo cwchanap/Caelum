@@ -337,7 +337,10 @@ fn add_bus_stop_rejects_an_on_road_click() {
 
     let result = engine.dispatch(GameIntent::AddBusStop { point: point(4, 5) });
 
-    assert_eq!(result.rejection.unwrap().code, RejectionCode::BlockedTile);
+    assert_eq!(
+        result.rejection.unwrap().code,
+        RejectionCode::StopMustBeBesideRoad
+    );
 }
 
 #[test]

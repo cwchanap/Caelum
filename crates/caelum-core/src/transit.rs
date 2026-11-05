@@ -286,6 +286,9 @@ pub(crate) fn add_bus_stop_costed(
     if !is_valid_bus_stop_placement(state, point) {
         let rejection = match get_tile(&state.map, point) {
             None => GameplayRejection::at(RejectionCode::OutOfBounds, *point),
+            Some(tile) if tile.kind == "road" => {
+                GameplayRejection::at(RejectionCode::StopMustBeBesideRoad, *point)
+            }
             Some(tile)
                 if tile.kind != "empty"
                     || tile.has_track
@@ -1864,5 +1867,36 @@ mod tests {
         let result = tick_vehicles(&snapshot, &RoadFlow::new(), 1.0);
         assert_eq!(result.transit.vehicles.len(), 1);
         assert_eq!(result.transit.vehicles[0], vehicle);
+    }
+
+    #[test]
+    fn bus_stop_on_a_road_tile_rejects_with_beside_road_copy() {
+        let mut engine = GameEngine::new();
+        let laid = engine.dispatch(GameIntent::LayRoadLine {
+            points: (2..=10).map(|x| Point { x, y: 5 }).collect(),
+            preset: RoadPreset::TwoWay,
+        });
+        assert!(laid.applied, "fixture road should apply: {laid:?}");
+        let added = engine.dispatch(GameIntent::AddBusStop {
+            point: Point { x: 2, y: 4 },
+        });
+        assert!(added.applied, "fixture stop should apply: {added:?}");
+
+        let on_road = engine.dispatch(GameIntent::AddBusStop {
+            point: Point { x: 5, y: 5 },
+        });
+        assert!(!on_road.applied);
+        assert_eq!(
+            on_road.rejection.map(|rejection| rejection.code),
+            Some(RejectionCode::StopMustBeBesideRoad)
+        );
+
+        let on_stop = engine.dispatch(GameIntent::AddBusStop {
+            point: Point { x: 2, y: 4 },
+        });
+        assert_eq!(
+            on_stop.rejection.map(|rejection| rejection.code),
+            Some(RejectionCode::BlockedTile)
+        );
     }
 }

@@ -1824,6 +1824,258 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
   });
 
+  it("settles the roundabout cursor badge after an applied click without pointer movement", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.armRoundabout("compact2x2");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roundaboutPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
+
+    await runtime.handleTileClick({ x: 5, y: 5 });
+
+    const pending = runtime.getSnapshot();
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+    expect(pending.ui.roadPreviewGeneration).toBe(2);
+    expect(pending.ui.roadMutationPreviewPending).toBe(true);
+    expect(pending.ui.roadMutationPreview).toBeNull();
+
+    previews.resolveRoad(2, {
+      ...roundaboutPreview(2, { x: 5, y: 5 }),
+      rejection: {
+        code: "blockedFootprint",
+        context: { affectedRouteIds: [] },
+      },
+    });
+    await flushPromises();
+    const settled = runtime.getSnapshot();
+    expect(settled.ui.roadMutationPreviewPending).toBe(false);
+    expect(
+      selectMapTextOverlayItems(settled.state, settled.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe(
+      "⦿ Roundabout 2×2 · The full footprint must contain only empty or replaceable road tiles. ⊘",
+    );
+  });
+
+  it("settles the roundabout cursor badge after a rejected click without pointer movement", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.armRoundabout("compact2x2");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roundaboutPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+
+    previews.backend.rejectNextDispatch();
+    await runtime.handleTileClick({ x: 5, y: 5 });
+
+    const pending = runtime.getSnapshot();
+    expect(pending.rejection).toEqual(TEST_REJECTION);
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+    expect(pending.ui.roadMutationPreviewPending).toBe(true);
+    expect(pending.ui.roadMutationPreview).toBeNull();
+
+    previews.resolveRoad(2, {
+      ...roundaboutPreview(2, { x: 5, y: 5 }),
+      rejection: {
+        code: "blockedFootprint",
+        context: { affectedRouteIds: [] },
+      },
+    });
+    await flushPromises();
+    const settled = runtime.getSnapshot();
+    expect(settled.ui.roadMutationPreviewPending).toBe(false);
+    expect(
+      selectMapTextOverlayItems(settled.state, settled.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe(
+      "⦿ Roundabout 2×2 · The full footprint must contain only empty or replaceable road tiles. ⊘",
+    );
+  });
+
+  it("restores the typed rejection preview after a rejected one-way click", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const backend: GameBackend = {
+      ...previews.backend,
+      dispatch(intent) {
+        if (intent.type === "cycleRoadDirection") {
+          return Promise.resolve({
+            update: createPresentationUpdate(
+              previews.backend.snapshotInternal(),
+              false,
+            ),
+            applied: false,
+            rejection: {
+              code: "roadDirectionNeedsStraightRoad",
+              context: { affectedRouteIds: [] },
+            },
+          });
+        }
+        return previews.backend.dispatch(intent);
+      },
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+
+    runtime.setTool("road");
+    await runtime.handleTileClick({ x: 5, y: 5 });
+    expect(
+      runtime
+        .getSnapshot()
+        .state.map.tiles.find((tile) => tile.x === 5 && tile.y === 5)?.kind,
+    ).toBe("road");
+
+    runtime.armRoad("oneWay");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    const first = runtime.getSnapshot().ui.roadPreviewGeneration;
+    previews.resolveRoad(first, roadPreview(first, { x: 5, y: 5 }));
+    await flushPromises();
+
+    await runtime.handleTileClick({ x: 5, y: 5 });
+
+    const pending = runtime.getSnapshot();
+    expect(pending.rejection?.code).toBe("roadDirectionNeedsStraightRoad");
+    expect(pending.ui.roadMutationPreviewPending).toBe(true);
+    const generation = pending.ui.roadPreviewGeneration;
+    expect(previews.roadRequestGenerations).toEqual([first, generation]);
+
+    previews.resolveRoad(generation, {
+      ...roadPreview(generation, { x: 5, y: 5 }),
+      rejection: {
+        code: "roadDirectionNeedsStraightRoad",
+        context: { affectedRouteIds: [] },
+      },
+    });
+    await flushPromises();
+
+    const settled = runtime.getSnapshot();
+    expect(settled.ui.roadMutationPreviewPending).toBe(false);
+    expect(settled.ui.roadMutationPreview?.rejection?.code).toBe(
+      "roadDirectionNeedsStraightRoad",
+    );
+    expect(
+      selectMapTextOverlayItems(settled.state, settled.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road → · Only straight roads can be one-way. ⊘");
+  });
+
+  it("does not re-request a cleared preview on unrelated rejected dispatches or ticks", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.resolveRoad(1, roadPreview(1, { x: 5, y: 5 }));
+    await flushPromises();
+
+    runtime.startDrag({ x: 5, y: 5 });
+    runtime.cancelDrag();
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+
+    previews.backend.setSnapshot({
+      ...previews.backend.snapshotInternal(),
+      paused: false,
+    });
+    await runtime.tick(1);
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+
+    previews.backend.rejectNextDispatch();
+    await runtime.togglePause();
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+
+    previews.backend.noopNextDispatch();
+    await runtime.togglePause();
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+  });
+
+  it("drops a preview response that was in flight when the click invalidated it", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.armRoundabout("compact2x2");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(true);
+
+    const click = runtime.handleTileClick({ x: 5, y: 5 });
+    previews.resolveRoad(1, roundaboutPreview(1, { x: 5, y: 5 }));
+    await click;
+
+    const pending = runtime.getSnapshot();
+    expect(pending.ui.roadMutationPreview).toBeNull();
+    expect(previews.roadRequestGenerations).toEqual([1, 2]);
+
+    previews.resolveRoad(2, roundaboutPreview(2, { x: 5, y: 5 }));
+    await flushPromises();
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
+  });
+
+  it("clears a pending road preview flag when cancelDrag runs without a drag", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(true);
+
+    runtime.cancelDrag();
+
+    const snapshot = runtime.getSnapshot();
+    expect(snapshot.ui.roadMutationPreviewPending).toBe(false);
+    expect(snapshot.ui.roadMutationPreview).toBeNull();
+    expect(
+      selectMapTextOverlayItems(snapshot.state, snapshot.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road");
+  });
+
+  it("clears a pending road preview flag when the runtime stops", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(true);
+
+    runtime.stop();
+
+    expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(false);
+  });
+
   it("requests the shared mutation preview for a track hover and drag", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
     const mutations: RoadMutation[] = [];

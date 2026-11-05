@@ -522,6 +522,77 @@ describe("selectMapTextOverlayItems", () => {
       text: "⦿ Road",
       a11yText: "Road",
     });
+
+    const roundaboutUi: UiState = {
+      ...createUiState(),
+      activeTool: "roundabout",
+      hoverTile: { x: 4, y: 4 },
+      roadPreviewGeneration: 1,
+    };
+    expect(
+      itemsOfKind(createTestGameState(), roundaboutUi, "cursorBadge")[0],
+    ).toMatchObject({
+      text: "⦿ Roundabout 2×2",
+      a11yText: "Roundabout 2×2",
+    });
+    expect(
+      itemsOfKind(
+        createTestGameState(),
+        {
+          ...roundaboutUi,
+          roadMutationPreview: {
+            generation: 0,
+            changedTiles: [{ x: 4, y: 4 }],
+            authoredTiles: [],
+            generatedStructures: [],
+            cost: 1000,
+            skippedTiles: [],
+            routeImpacts: [],
+            warnings: [],
+            rejection: null,
+          },
+        },
+        "cursorBadge",
+      )[0],
+    ).toMatchObject({
+      text: "⦿ Roundabout 2×2",
+      a11yText: "Roundabout 2×2",
+    });
+
+    const removeUi: UiState = {
+      ...createUiState(),
+      activeTool: "remove",
+      hoverTile: { x: 2, y: 2 },
+      roadPreviewGeneration: 1,
+      drag: {
+        tool: "remove",
+        start: { x: 1, y: 2 },
+        current: { x: 2, y: 2 },
+      },
+    };
+    expect(
+      itemsOfKind(
+        createTestGameState(),
+        {
+          ...removeUi,
+          roadMutationPreview: {
+            generation: 0,
+            changedTiles: [{ x: 2, y: 2 }],
+            authoredTiles: [],
+            generatedStructures: [],
+            cost: 50,
+            skippedTiles: [],
+            routeImpacts: [],
+            warnings: [],
+            rejection: null,
+          },
+        },
+        "cursorBadge",
+      )[0],
+    ).toMatchObject({
+      text: "⦿ Demolish",
+      a11yText: "Demolish",
+    });
   });
 
   describe("cursor badge wording", () => {
@@ -734,6 +805,7 @@ describe("selectMapTextOverlayItems", () => {
         activeTool: "roundabout",
         roundaboutSize: "standard3x3",
         hoverTile: { x: 4, y: 4 },
+        roadMutationPreviewPending: true,
       };
 
       // No preview yet: pending ellipsis; compact preset reports 2×2.

@@ -122,6 +122,7 @@ export type RejectionCode =
   | "outOfBounds"
   | "roadRequired"
   | "noRoadAccess"
+  | "stopMustBeBesideRoad"
   | "trackRequired"
   | "invalidRoadStroke"
   | "invalidTrackStroke"
