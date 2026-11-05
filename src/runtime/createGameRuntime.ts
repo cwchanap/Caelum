@@ -1390,6 +1390,7 @@ export async function createGameRuntime(
   };
 
   const invalidateRoadPreview = (): void => {
+    clearHoverPreviewTimer();
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
   };

@@ -2835,6 +2835,79 @@ describe("Game Runtime", () => {
         a11yText: "Road, preview pending",
       });
     });
+
+    it("re-requests the cursor preview after a rejected drag commit while a stale debounce is pending", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      runtime.startDrag({ x: 5, y: 5 });
+      runtime.setDragCurrent({ x: 8, y: 5 });
+      expect(previews.roadRequestGenerations).toEqual([2, 3]);
+
+      previews.backend.rejectNextDispatch();
+      await runtime.commitDrag();
+
+      const pending = runtime.getSnapshot();
+      expect(pending.rejection).toEqual(TEST_REJECTION);
+      expect(previews.roadRequestGenerations).toEqual([2, 3, 4]);
+      expect(pending.ui.roadMutationPreviewPending).toBe(true);
+      expect(pending.ui.roadMutationPreview).toBeNull();
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+      expect(previews.roadRequestGenerations).toEqual([2, 3, 4]);
+
+      previews.resolveRoad(4, roadPreview(4, { x: 5, y: 5 }));
+      await flushPromises();
+      const settled = runtime.getSnapshot();
+      expect(settled.ui.roadMutationPreviewPending).toBe(false);
+      expect(settled.ui.roadMutationPreview?.generation).toBe(4);
+      expect(
+        selectMapTextOverlayItems(settled.state, settled.ui).find(
+          (item) => item.kind === "cursorBadge",
+        )?.text,
+      ).toBe("⦿ Road · $100");
+    });
+
+    it("cancels a scheduled hover preview when a no-drag cancellation runs", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(true);
+
+      runtime.cancelDrag();
+      const cancelled = runtime.getSnapshot();
+      expect(cancelled.ui.roadMutationPreviewPending).toBe(false);
+      expect(cancelled.ui.roadMutationPreview).toBeNull();
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      const after = runtime.getSnapshot();
+      expect(previews.roadRequestGenerations).toHaveLength(0);
+      expect(after.ui.roadMutationPreview).toBeNull();
+      expect(after.ui.roadMutationPreviewPending).toBe(false);
+      expect(
+        selectMapTextOverlayItems(after.state, after.ui).find(
+          (item) => item.kind === "cursorBadge",
+        ),
+      ).toMatchObject({
+        text: "⦿ Road",
+        a11yText: "Road",
+      });
+    });
   });
 
   it("surfaces a current route preview host failure nonfatally and recovers", async () => {
