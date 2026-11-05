@@ -152,8 +152,6 @@ describe("road direction feedback with the real core", () => {
   });
 
   it("clears the notice when a route draft is saved", async () => {
-    // Cycle a side road so the notice seeds without breaking the corridor the
-    // draft's shuttle still has to path along.
     runtime.armRoad("twoWay");
     runtime.startDrag({ x: 1, y: 7 });
     runtime.setDragCurrent({ x: 3, y: 7 });
@@ -188,8 +186,6 @@ describe("road direction feedback with the real core", () => {
 
       const clicked = await runtime.handleTileClick({ x: 7, y: 4 });
 
-      // Gated no-op: the tile is untouched, no rejection or direction notice
-      // was raised, and the budget did not move.
       const afterTile = clicked.state.map.tiles.find(
         (tile) => tile.x === 7 && tile.y === 4,
       );
@@ -222,8 +218,6 @@ describe("road direction feedback with the real core", () => {
   });
 
   it("clears a resolved rejection preview when the preset gates the hover into a no-op", async () => {
-    // An isolated road cannot take a heading: under One-Way the hover preview
-    // resolves as a rejection, so the armed tile advertises the failure.
     runtime.armRoad("oneWay");
     await runtime.handleTileClick({ x: 1, y: 1 });
     runtime.setHoverTile({ x: 1, y: 1 });
@@ -233,8 +227,6 @@ describe("road direction feedback with the real core", () => {
       ).toBe("roadDirectionNeedsStraightRoad"),
     );
 
-    // Switching to a lane count gates the same hover into a no-op: the stale
-    // rejection must not survive the transition.
     const switched = runtime.setRoadPreset("twoWay");
     expect(switched.ui.roadMutationPreview).toBeNull();
     expect(switched.ui.roadMutationPreviewError).toBeNull();
@@ -255,8 +247,6 @@ describe("road direction feedback with the real core", () => {
       ).toBeGreaterThan(0),
     );
 
-    // Retracting onto the existing road gates the stroke to a no-op: the
-    // two-tile cost must be cleared, not left to pose as the tap's price.
     const retracted = runtime.setDragCurrent({ x: 7, y: 4 });
     expect(retracted.ui.roadMutationPreview).toBeNull();
     expect(retracted.ui.roadMutationPreviewError).toBeNull();

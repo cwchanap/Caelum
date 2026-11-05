@@ -22,11 +22,9 @@ fn transient_off_axis_arrows_on_loop_cells_preserve_ring_edge() {
         vec![point(5, 5), point(6, 5), point(6, 6), point(5, 6)],
     );
 
-    // Transient North arrows on both top cells — the shape the retired
-    // N/E/S/W cycle produced mid-cycle, and still the shape an edge-removal
-    // ordering can leave behind: each cell has a real vertical South edge as
-    // part of the ring, so the arrows must not read as parallel lanes and
-    // strip the East/West edge between (5,5) and (6,5).
+    // None -> North on both top cells: each has a real vertical South edge as
+    // part of the ring, so the transient arrows must not read as parallel lanes
+    // and strip the East/West edge between (5,5) and (6,5).
     let mut state = engine.snapshot();
     for point in [point(5, 5), point(6, 5)] {
         state.map.tile_mut(point).unwrap().one_way = Some(Heading::North);
@@ -51,8 +49,7 @@ fn transient_off_axis_arrows_on_loop_cells_preserve_ring_edge() {
         "ring edge (6,5)->West pruned during North transient",
     );
 
-    // Axis-aligned East arrows on both cells; the removed ring edge would
-    // never return.
+    // Continue None -> North -> East; the removed ring edge would never return.
     let mut state = result.snapshot;
     for point in [point(5, 5), point(6, 5)] {
         state.map.tile_mut(point).unwrap().one_way = Some(Heading::East);

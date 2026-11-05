@@ -156,9 +156,6 @@ function cursorBadgeText(
         return previewBadge(label, state, preview);
       }
       const tile = getTile(state.map, cursor);
-      // A road tile under a lane-count preset is a gated no-op: the click is
-      // never dispatched, so the badge stays neutral instead of quoting a
-      // cost or a ⊘.
       if (
         tile?.kind === "road" &&
         roadClickMutation(state, cursor, ui.roadPreset) === null

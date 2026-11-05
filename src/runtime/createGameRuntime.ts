@@ -1328,11 +1328,6 @@ export async function createGameRuntime(
     if (workingSave.isBusy()) return getSnapshot();
     const mutation = dead ? null : roadMutationForUi(state, nextUi);
     if (mutation === null) {
-      // A null mutation is a real transition: the UI now implies no road
-      // action (e.g. preset switched to a road-preserving lane count, or a
-      // drag retracted onto an existing road). Kill the armed preview request
-      // and any pending hover debounce, and clear the resolved preview so a
-      // stale cost or rejection cannot outlive the gesture it described.
       clearHoverPreviewTimer();
       invalidateRoadPreview();
       return commit(state, {
@@ -1809,9 +1804,6 @@ export async function createGameRuntime(
         // response from repopulating it after the click.
         clearHoverPreviewTimer();
         invalidateRoadPreview();
-        // The preset is part of the committed gesture: capture it now so a
-        // preset switch before the queued closure runs cannot change the
-        // click's meaning, while the closure still re-reads `state.map`.
         const roadPreset = ui.roadPreset;
         commit(state, {
           ...ui,

@@ -6673,8 +6673,6 @@ describe("runtime road drag", () => {
     runtime.setDragCurrent({ x: 2, y: 0 });
     await runtime.commitDrag();
 
-    // A stationary drag is a tap: under the One-Way preset it commits the
-    // same direction-cycle a click would dispatch.
     runtime.setRoadPreset("oneWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 1, y: 0 });
@@ -6732,9 +6730,6 @@ describe("runtime road drag", () => {
   });
 
   it("keeps the preset captured at commit time when a queued road click drains", async () => {
-    // A click committed under One-Way stays a direction change even if the
-    // player switches presets before the queued closure executes — the
-    // committed gesture's meaning cannot be rewritten after the fact.
     const backend = deferredDispatchBackend();
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
@@ -6746,13 +6741,11 @@ describe("runtime road drag", () => {
     runtime.setRoadPreset("twoWay");
     runtime.startDrag({ x: 1, y: 0 });
     runtime.setDragCurrent({ x: 3, y: 0 });
-    const dragCommit = runtime.commitDrag(); // enqueues layRoadLine, suspends
+    const dragCommit = runtime.commitDrag();
 
     runtime.setRoadPreset("oneWay");
     const clickPromise = runtime.handleTileClick({ x: 2, y: 0 });
-    await Promise.resolve(); // let the click enqueue behind the drag
-
-    // The preset change lands while the click is still queued.
+    await Promise.resolve();
     runtime.setRoadPreset("twoWay");
 
     await backend.resolveNext();
@@ -6760,8 +6753,6 @@ describe("runtime road drag", () => {
     await backend.resolveNext();
     await clickPromise;
 
-    // The committed gesture still cycles: the queued closure re-read the map
-    // (the tile became road) but kept the One-Way preset it was armed with.
     expect(backend.intents).toContainEqual({
       type: "cycleRoadDirection",
       point: { x: 2, y: 0 },
@@ -6787,7 +6778,6 @@ describe("runtime road drag", () => {
     const intentsBefore = backend.intents.length;
     const clicked = await runtime.handleTileClick({ x: 1, y: 0 });
 
-    // Gated no-op: no backend dispatch, no rejection, no direction change.
     expect(backend.intents).toHaveLength(intentsBefore);
     expect(clicked.rejection).toBeNull();
     expect(

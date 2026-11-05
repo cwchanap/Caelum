@@ -544,8 +544,7 @@ fn direction_edit_removes_inherited_parallel_one_way_lateral_link() {
         .road_connections
         .contains(&Heading::South));
 
-    // Same-direction arrows on both linked endpoints — as a direction edit
-    // leaves them — must strip the inherited bridge between the lane ends.
+    // None -> North -> East on each endpoint.
     let mut state = engine.snapshot();
     for point in [point(3, 5), point(3, 6)] {
         state.map.tile_mut(point).unwrap().one_way = Some(Heading::East);
@@ -640,9 +639,8 @@ fn direction_edit_intermediate_state_preserves_through_edges() {
     });
     assert!(result.applied, "fixture TwoWay should apply: {result:?}");
 
-    // Transient arrows off the connected axis — the shape a pre-fix cycle or
-    // an edge-removal ordering can leave behind — must not let the real
-    // through-edge between the tiles read as a parallel-lane lateral link.
+    // One step per tile across separate dispatches: both arrows are transiently
+    // North while the real through-edge between them stays East/West.
     let mut state = engine.snapshot();
     for point in [point(3, 5), point(4, 5)] {
         state.map.tile_mut(point).unwrap().one_way = Some(Heading::North);
@@ -1208,9 +1206,6 @@ fn direction_cycle_corrects_an_off_axis_heading_to_two_way() {
     });
     assert!(result.applied, "fixture: {result:?}");
 
-    // A heading left on the wrong axis by the retired N/E/S/W cycle — or by an
-    // edge-removal ordering that stranded the arrow — is repaired to two-way
-    // rather than cycled to another invalid heading.
     let mut state = engine.snapshot();
     state.map.tile_mut(point(5, 5)).unwrap().one_way = Some(Heading::North);
 
@@ -1227,8 +1222,6 @@ fn direction_cycle_corrects_an_off_axis_heading_to_two_way() {
 #[test]
 fn direction_cycle_rejects_corner_mixed_axis_and_isolated_tiles() {
     let mut engine = blank_engine();
-    // A 2x2 ring gives every cell connections on both axes; a lone LayRoad
-    // tile has none. Neither is one straight road.
     let ring = engine.dispatch(GameIntent::LayRoadLine {
         points: vec![point(5, 5), point(6, 5), point(6, 6), point(5, 6)],
         preset: RoadPreset::TwoWay,
