@@ -752,11 +752,6 @@
         onSetSpeed={handleSetSpeed}
       />
 
-      <ActionFeedback
-        feedback={snapshot.shell.actionFeedback}
-        onDismiss={handleDismissRejection}
-      />
-
       <div class="game-workspace">
         <GameCanvas
           bind:this={gameCanvas}
@@ -873,6 +868,11 @@
           </CommandPanel>
         {/if}
       {/if}
+
+      <ActionFeedback
+        feedback={snapshot.shell.actionFeedback}
+        onDismiss={handleDismissRejection}
+      />
 
       <CommandShelf
         bind:this={commandShelf}

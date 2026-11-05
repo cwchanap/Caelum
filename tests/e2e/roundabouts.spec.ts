@@ -332,12 +332,13 @@ for (const fixture of [
 test("settles the roundabout badge after rejected and applied clicks without moving the pointer", async ({
   page,
 }) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
   await createDefaultCity(page);
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   const overlay = page.getByTestId("map-text-overlay");
   const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
   const feedback = page.getByTestId("action-feedback");
-  const edge = { x: 27, y: 17 } as const;
+  const edge = { x: 27, y: 16 } as const;
   const open = { x: 4, y: 3 } as const;
 
   await selectBuildLeaf(page, "roads", "compactRoundabout");
@@ -374,6 +375,41 @@ test("settles the roundabout badge after rejected and applied clicks without mov
   await expect(badge).toBeVisible();
   await expect(badge).toContainText("outside the map");
   await expect(badge).toHaveClass(/map-text-warning/);
+
+  const toastBox = await feedback.boundingBox();
+  const badgeBox = await badge.boundingBox();
+  const canvasBox = await canvas.boundingBox();
+  expect(toastBox).not.toBeNull();
+  expect(badgeBox).not.toBeNull();
+  expect(canvasBox).not.toBeNull();
+  const overlaps = (
+    a: { x: number; y: number; width: number; height: number },
+    b: { x: number; y: number; width: number; height: number },
+  ) =>
+    a.x < b.x + b.width &&
+    b.x < a.x + a.width &&
+    a.y < b.y + b.height &&
+    b.y < a.y + a.height;
+  expect(overlaps(toastBox!, badgeBox!)).toBe(false);
+  expect(overlaps(toastBox!, canvasBox!)).toBe(false);
+
+  await feedback.locator(".action-feedback-message").click();
+  await page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: { tick: (delta: number) => Promise<unknown> };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    return runtime.tick(0);
+  });
+  const afterToastClick = await runtimeSnapshot(page);
+  expect(afterToastClick.state.map.roadStructures.length).toBe(1);
+  expect(afterToastClick.state.budget).toBe(120_000);
+  await expect(feedback).toHaveAttribute("data-source", "rejection");
+
   await feedback.getByRole("button", { name: "Dismiss" }).click();
   await expect(feedback).toHaveCount(0);
 
