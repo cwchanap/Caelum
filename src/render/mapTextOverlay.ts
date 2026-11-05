@@ -244,7 +244,9 @@ function cursorBadgeText(
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
       const label = `⦿ Roundabout ${sizeLabel}`;
       if (preview === null || staleHeldPreview) {
-        return pendingBadge(label);
+        return ui.roadMutationPreviewPending
+          ? pendingBadge(label)
+          : { text: label, a11yText: a11yLabel(label) };
       }
       return previewBadge(label, state, preview);
     }
@@ -264,7 +266,9 @@ function cursorBadgeText(
       // the remove tool is always a remove drag (tool switches clear the
       // gesture), so `drag === null` is the whole idle check.
       if (staleHeldPreview) {
-        return pendingBadge(label);
+        return ui.roadMutationPreviewPending
+          ? pendingBadge(label)
+          : { text: label, a11yText: a11yLabel(label) };
       }
       if (
         preview === null ||

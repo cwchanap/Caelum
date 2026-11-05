@@ -50,6 +50,8 @@ export function rejectionMessage(rejection: GameplayRejection): string {
       return "Build a road here first.";
     case "noRoadAccess":
       return "That stop has no road access.";
+    case "stopMustBeBesideRoad":
+      return "Place stops beside a road, not on it.";
     case "trackRequired":
       return "Build track here first.";
     case "invalidRoadStroke":

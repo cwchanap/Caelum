@@ -22,7 +22,6 @@
   import transitPlate from "../../../assets/command-plates/transit.webp";
   import zonesPlate from "../../../assets/command-plates/zones.webp";
   import buildingsPlate from "../../../assets/command-plates/buildings.webp";
-  import { pad2 } from "../../../format";
   import {
     ROAD_PRESET_KEYS,
     ROTATE_KEY,
@@ -148,7 +147,7 @@
             class="toolbar"
             aria-label={`${section.label ?? activeGroup.label} items`}
           >
-            {#each section.items as item, index (item.id)}
+            {#each section.items as item (item.id)}
               {@const shortcut =
                 item.action.kind === "track"
                   ? TRACK_KEY
@@ -174,9 +173,6 @@
                 class:has-shortcut={chip !== undefined}
                 onclick={() => onSelectItem(item.action)}
               >
-                <span class="tool-num" aria-hidden="true"
-                  >{pad2(index + 1)}</span
-                >
                 <span class="tool-label" aria-hidden="true">{item.label}</span>
                 {#if chip !== undefined}
                   <kbd class="shortcut-chip" aria-hidden="true"
@@ -221,7 +217,7 @@
             >
           {/if}
         </span>
-        <span class="rotate-value">{buildingRotation}</span>
+        <span class="rotate-value">{buildingRotation}°</span>
       </button>
     </div>
   {/if}
@@ -229,7 +225,7 @@
 
 <style>
   .toolbar button.has-shortcut {
-    grid-template-columns: 28px minmax(0, 1fr) auto;
+    grid-template-columns: minmax(0, 1fr) auto;
   }
 
   .shortcut-chip {
@@ -248,7 +244,7 @@
   }
 
   .toolbar .shortcut-chip {
-    grid-column: 3;
+    grid-column: 2;
     grid-row: 1 / span 2;
   }
 

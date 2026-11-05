@@ -114,25 +114,21 @@ describe("BuildPanel detail view", () => {
 
   it("claims road preset shortcuts only while the Road tool is armed", () => {
     renderPanel({ activeBuildGroup: "roads" });
-    for (const [id, ordinal] of [
-      ["road-twoWay", "01"],
-      ["road-oneWay", "02"],
-      ["road-dual", "03"],
-    ]) {
+    for (const id of ["road-twoWay", "road-oneWay", "road-dual"]) {
       const button = screen.getByTestId(`build-item-${id}`);
       expect(button).not.toHaveAttribute("aria-keyshortcuts");
       expect(button).not.toHaveAttribute("title");
       expect(button).not.toHaveClass("has-shortcut");
-      expect(button.querySelector(".tool-num")).toHaveTextContent(ordinal);
+      expect(button.querySelector(".tool-num")).toBeNull();
     }
   });
 
   it("sets Road preset shortcut attributes without adding visible chips", () => {
     renderPanel({ activeBuildGroup: "roads", activeTool: "road" });
-    for (const [id, ordinal, key, title] of [
-      ["road-twoWay", "01", "1", "1-Lane (1)"],
-      ["road-oneWay", "02", "2", "1-Lane One-Way (2)"],
-      ["road-dual", "03", "3", "2-Lane (3)"],
+    for (const [id, key, title] of [
+      ["road-twoWay", "1", "1-Lane (1)"],
+      ["road-oneWay", "2", "1-Lane One-Way (2)"],
+      ["road-dual", "3", "2-Lane (3)"],
     ]) {
       const button = screen.getByTestId(`build-item-${id}`);
       expect(button).toHaveAttribute("aria-keyshortcuts", key);
@@ -145,7 +141,6 @@ describe("BuildPanel detail view", () => {
       // extra shortcut grid column — that reflowed the buttons when the
       // Road tool armed.
       expect(button).not.toHaveClass("has-shortcut");
-      expect(button.querySelector(".tool-num")).toHaveTextContent(ordinal);
     }
   });
 
@@ -207,6 +202,9 @@ describe("BuildPanel detail view", () => {
     expect(enabledRotate).toBeEnabled();
     expect(enabledRotate).toHaveAccessibleName(
       "Rotate building, current rotation 0 degrees",
+    );
+    expect(enabledRotate.querySelector(".rotate-value")).toHaveTextContent(
+      "0°",
     );
     expect(enabledRotate).toHaveAttribute("aria-keyshortcuts", "r");
     expect(enabledRotate).toHaveAttribute("title", "Rotate (R)");

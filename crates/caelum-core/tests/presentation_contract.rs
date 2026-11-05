@@ -44,7 +44,7 @@ fn rejected_dispatch_is_frame_only() {
     assert!(!result.applied);
     assert_eq!(
         result.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::BlockedTile),
+        Some(&RejectionCode::StopMustBeBesideRoad),
     );
     assert!(result.update.scene.is_none());
 }

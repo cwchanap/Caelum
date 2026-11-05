@@ -16,6 +16,7 @@ pub enum RejectionCode {
     OutOfBounds,
     RoadRequired,
     NoRoadAccess,
+    StopMustBeBesideRoad,
     TrackRequired,
     InvalidRoadStroke,
     InvalidTrackStroke,
