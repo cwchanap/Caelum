@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
   clickMapTile,
   createDefaultCity,
@@ -581,6 +582,15 @@ test("gates road clicks by preset and clears stale badge answers on retraction",
   await expect(feedback).toHaveCount(0);
 });
 
+type RoadPreviewTransition = {
+  dragTool: string | null;
+  cost: number | null;
+  rejection: string | null;
+  heldGeneration: number | null;
+  generation: number;
+  pending: boolean;
+};
+
 test("holds the track price at pointer-down and charges only laid tiles", async ({
   page,
 }) => {
@@ -599,12 +609,83 @@ test("holds the track price at pointer-down and charges only laid tiles", async 
 
   const startPoint = await mapTileViewportPoint(canvas, strokeStart);
   const endPoint = await mapTileViewportPoint(canvas, strokeEnd);
+  const hoverGeneration = (await runtimeSnapshot(page)).ui
+    .roadPreviewGeneration;
+  await page.evaluate(() => {
+    const host = window as unknown as {
+      __caelumRuntime?: {
+        subscribe: (listener: (snapshot: RuntimeSnapshot) => void) => unknown;
+      };
+      __roadPreviewTransitions?: RoadPreviewTransition[];
+    };
+    if (!host.__caelumRuntime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    const log: RoadPreviewTransition[] = [];
+    host.__roadPreviewTransitions = log;
+    host.__caelumRuntime.subscribe((snapshot) => {
+      const ui = snapshot.ui;
+      log.push({
+        dragTool: ui.drag?.tool ?? null,
+        cost: ui.roadMutationPreview?.cost ?? null,
+        rejection: ui.roadMutationPreview?.rejection?.code ?? null,
+        heldGeneration: ui.roadMutationPreview?.generation ?? null,
+        generation: ui.roadPreviewGeneration,
+        pending: ui.roadMutationPreviewPending,
+      });
+    });
+  });
+  const transitions = () =>
+    page.evaluate(
+      () =>
+        (
+          window as unknown as {
+            __roadPreviewTransitions?: RoadPreviewTransition[];
+          }
+        ).__roadPreviewTransitions ?? [],
+    );
   await page.mouse.move(startPoint.x, startPoint.y);
   await page.mouse.down();
-  const pressed = (await runtimeSnapshot(page)).ui;
-  expect(pressed.drag?.tool).toBe("track");
-  expect(pressed.roadMutationPreview?.cost).toBe(500);
-  expect(pressed.roadMutationPreview?.rejection).toBeNull();
+  await expect
+    .poll(async () => {
+      const log = await transitions();
+      const firstDragIndex = log.findIndex((t) => t.dragTool === "track");
+      return (
+        firstDragIndex >= 0 &&
+        log
+          .slice(firstDragIndex + 1)
+          .some(
+            (t) =>
+              t.dragTool === "track" &&
+              t.heldGeneration === t.generation &&
+              !t.pending,
+          )
+      );
+    })
+    .toBe(true);
+  const log = await transitions();
+  const firstDragIndex = log.findIndex((t) => t.dragTool === "track");
+  expect(firstDragIndex).toBeGreaterThanOrEqual(0);
+  expect(log[firstDragIndex]).toEqual({
+    dragTool: "track",
+    cost: 500,
+    rejection: null,
+    heldGeneration: hoverGeneration,
+    generation: hoverGeneration + 1,
+    pending: true,
+  });
+  const replacementIndex = log.findIndex(
+    (t, index) =>
+      index > firstDragIndex &&
+      t.dragTool === "track" &&
+      t.heldGeneration === t.generation &&
+      !t.pending,
+  );
+  expect(
+    log
+      .slice(firstDragIndex, replacementIndex)
+      .every((t) => t.heldGeneration !== null && t.cost !== null),
+  ).toBe(true);
   await expect(badge).toContainText("$500");
 
   await page.mouse.move(endPoint.x, endPoint.y, { steps: 8 });
