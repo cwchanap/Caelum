@@ -54,6 +54,7 @@ describe("selectMapTextOverlayItems", () => {
       activeTool: "road" as const,
       roadPreset: "oneWay" as const,
       hoverTile: { x: 7, y: 8 },
+      roadMutationPreviewPending: true,
     };
 
     const items = itemsOfKind(state, ui, "cursorBadge");
@@ -108,6 +109,7 @@ describe("selectMapTextOverlayItems", () => {
         start: { x: 4, y: 4 },
         current: { x: 6, y: 4 },
       },
+      roadMutationPreviewPending: true,
     };
 
     const items = itemsOfKind(state, ui, "cursorBadge");
@@ -443,6 +445,7 @@ describe("selectMapTextOverlayItems", () => {
         current: { x: 6, y: 4 },
       },
       roadPreviewGeneration: 1,
+      roadMutationPreviewPending: true,
     };
     expect(itemsOfKind(occupied, roadDragUi, "cursorBadge")[0]).toMatchObject({
       text: "⦿ Road …",
@@ -455,10 +458,46 @@ describe("selectMapTextOverlayItems", () => {
       activeTool: "track",
       hoverTile: { x: 2, y: 2 },
       roadPreviewGeneration: 1,
+      roadMutationPreviewPending: true,
     };
     expect(itemsOfKind(tracked, trackUi, "cursorBadge")[0]).toMatchObject({
       text: "⦿ Track …",
       a11yText: "Track, preview pending",
+    });
+  });
+
+  it("keeps a neutral non-pending badge when no preview response is expected", () => {
+    const occupied = addTestBusStop(createTestGameState(), { x: 6, y: 4 });
+    const cancelledUi: UiState = {
+      ...createUiState(),
+      activeTool: "road",
+      hoverTile: { x: 6, y: 4 },
+      roadPreviewGeneration: 1,
+    };
+    expect(itemsOfKind(occupied, cancelledUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Road",
+      a11yText: "Road",
+    });
+
+    const failedUi: UiState = {
+      ...cancelledUi,
+      roadMutationPreviewError: "preview host unavailable",
+    };
+    expect(itemsOfKind(occupied, failedUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Road",
+      a11yText: "Road",
+    });
+
+    const tracked = withTracks(createTestGameState(), [{ x: 2, y: 2 }]);
+    const trackUi: UiState = {
+      ...createUiState(),
+      activeTool: "track",
+      hoverTile: { x: 2, y: 2 },
+      roadPreviewGeneration: 1,
+    };
+    expect(itemsOfKind(tracked, trackUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Track",
+      a11yText: "Track",
     });
   });
 
@@ -515,6 +554,7 @@ describe("selectMapTextOverlayItems", () => {
         ...createUiState(),
         activeTool: "road",
         hoverTile: { x: 2, y: 2 },
+        roadMutationPreviewPending: true,
       };
 
       expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road …");
@@ -553,6 +593,7 @@ describe("selectMapTextOverlayItems", () => {
         ...createUiState(),
         activeTool: "track",
         hoverTile: { x: 2, y: 2 },
+        roadMutationPreviewPending: true,
       };
 
       expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Track …");
@@ -945,6 +986,7 @@ describe("selectMapTextOverlayItems", () => {
         ...createUiState(),
         activeTool: "road",
         hoverTile: { x: 2, y: 2 },
+        roadMutationPreviewPending: true,
       };
       expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Road …");
 

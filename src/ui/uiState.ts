@@ -98,6 +98,7 @@ export interface UiState {
   roadMutationPreview: HeldRoadMutationPreview | null;
   /** Recoverable host failure for the current road preview request. */
   roadMutationPreviewError: string | null;
+  roadMutationPreviewPending: boolean;
   roadDirectionNotice: {
     direction: RoadDirection | null;
     brokenRouteNames: string[];
@@ -130,6 +131,7 @@ export function createUiState(): UiState {
     roadPreviewGeneration: 0,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
+    roadMutationPreviewPending: false,
     roadDirectionNotice: null,
     selectedRouteId: null,
     routeFailureFocus: null,
