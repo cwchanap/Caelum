@@ -1457,7 +1457,7 @@ fn existing_track_is_a_harmless_skip_not_a_blocked_cause() {
 }
 
 #[test]
-fn a_blocked_tile_that_gains_an_approach_port_is_not_a_warning_cause() {
+fn a_blocked_tile_that_gains_an_approach_port_still_reports_its_cause() {
     let mut engine = blank_engine();
     let placed = engine.dispatch(GameIntent::PlaceRoundabout {
         origin: point(3, 3),
@@ -1479,7 +1479,12 @@ fn a_blocked_tile_that_gains_an_approach_port_is_not_a_warning_cause() {
         vec![point(2, 2), point(3, 2), point(3, 3)]
     );
     assert!(preview.skipped_tiles.is_empty());
-    assert!(preview.warnings.is_empty());
+    let blocked = preview
+        .warnings
+        .iter()
+        .find(|warning| warning.code == WarningCode::TilesBlocked)
+        .expect("roundabout-owned skip should warn even when the tile changes");
+    assert_eq!(blocked.context.footprint, vec![point(3, 3)]);
 }
 
 #[test]

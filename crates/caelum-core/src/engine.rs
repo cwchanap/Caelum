@@ -175,12 +175,6 @@ pub(crate) fn normalize_road_mutation_result(
     result.changed_tiles = context.changed_tiles;
     result.skipped_tiles = context.skipped_tiles;
     result
-        .blocked_tiles
-        .retain(|point| !result.changed_tiles.contains(point));
-    result
-        .unaffordable_tiles
-        .retain(|point| !result.changed_tiles.contains(point));
-    result
 }
 
 #[derive(Clone, Copy)]

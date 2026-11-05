@@ -293,8 +293,6 @@ fn lay_road_line(
     deduplicate_points(&mut blocked);
     deduplicate_points(&mut unaffordable);
     skipped_tiles.retain(|point| !changed_tiles.contains(point));
-    blocked.retain(|point| !changed_tiles.contains(point));
-    unaffordable.retain(|point| !changed_tiles.contains(point));
     if changed_tiles.is_empty() {
         return Err(GameplayRejection::at(
             RejectionCode::InvalidRoadStroke,
