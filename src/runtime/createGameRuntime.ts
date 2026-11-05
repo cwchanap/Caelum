@@ -179,6 +179,7 @@ function nextToolUiState(activeTool: Tool, current = createUiState()): UiState {
         : null,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
+    roadMutationPreviewPending: false,
     selectedRouteId: null,
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
@@ -205,6 +206,7 @@ function nextAreaUiState(area: AreaKind, current = createUiState()): UiState {
     routePreviewHostError: null,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
+    roadMutationPreviewPending: false,
     selectedRouteId: null,
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
@@ -234,6 +236,7 @@ function nextBuildingUiState(
     routePreviewHostError: null,
     roadMutationPreview: null,
     roadMutationPreviewError: null,
+    roadMutationPreviewPending: false,
     selectedRouteId: null,
     routeFailureFocus: null,
     roadPreset: current.roadPreset,
@@ -536,6 +539,7 @@ export async function createGameRuntime(
       const snapshot = commit(nextState, {
         ...nextUi,
         roadPreviewGeneration: generation,
+        roadMutationPreviewPending: true,
       });
       sendRoadMutationPreviewRequest(previewMutation, generation);
       if (refreshedRouteDraft !== null)
@@ -580,6 +584,7 @@ export async function createGameRuntime(
       ...ui,
       roadMutationPreview: null,
       roadMutationPreviewError: null,
+      roadMutationPreviewPending: false,
       routeDraft:
         ui.routeDraft === null
           ? ui.routeDraft
@@ -920,6 +925,7 @@ export async function createGameRuntime(
         drag: null,
         roadMutationPreview: null,
         roadMutationPreviewError: null,
+        roadMutationPreviewPending: false,
       }),
     );
     requestRoutePreview(routeDraft);
@@ -1282,6 +1288,7 @@ export async function createGameRuntime(
           ...ui,
           roadMutationPreview: { ...response, mutation },
           roadMutationPreviewError: null,
+          roadMutationPreviewPending: false,
         });
       })
       .catch((error: unknown) => {
@@ -1298,6 +1305,7 @@ export async function createGameRuntime(
           roadMutationPreview: null,
           roadMutationPreviewError:
             error instanceof Error ? error.message : String(error),
+          roadMutationPreviewPending: false,
         });
       });
   };
@@ -1314,6 +1322,7 @@ export async function createGameRuntime(
     const pending = commit(state, {
       ...ui,
       roadPreviewGeneration: generation,
+      roadMutationPreviewPending: true,
     });
     sendRoadMutationPreviewRequest(mutation, generation);
     return pending;
@@ -1334,12 +1343,14 @@ export async function createGameRuntime(
         ...nextUi,
         roadMutationPreview: null,
         roadMutationPreviewError: null,
+        roadMutationPreviewPending: false,
       });
     }
     const generation = nextUi.roadPreviewGeneration + 1;
     const snapshot = commit(state, {
       ...nextUi,
       roadPreviewGeneration: generation,
+      roadMutationPreviewPending: true,
     });
     sendRoadMutationPreviewRequest(mutation, generation);
     return snapshot;
@@ -1661,6 +1672,7 @@ export async function createGameRuntime(
               drag: null,
               roadMutationPreview: null,
               roadMutationPreviewError: null,
+              roadMutationPreviewPending: false,
             },
       );
     },
@@ -1684,6 +1696,7 @@ export async function createGameRuntime(
         drag: null,
         roadMutationPreview: null,
         roadMutationPreviewError: null,
+        roadMutationPreviewPending: false,
       });
       if (gesture.tool === "area") {
         return enqueueDispatch({
@@ -1808,6 +1821,7 @@ export async function createGameRuntime(
           ...ui,
           roadMutationPreview: null,
           roadMutationPreviewError: null,
+          roadMutationPreviewPending: false,
         });
         return enqueueComputedDispatch(() =>
           roadClickIntent(state, point, roadPreset),
@@ -1822,6 +1836,7 @@ export async function createGameRuntime(
           ...ui,
           roadMutationPreview: null,
           roadMutationPreviewError: null,
+          roadMutationPreviewPending: false,
         });
         return enqueueDispatch({
           type: "placeRoundabout",
@@ -2095,6 +2110,7 @@ export async function createGameRuntime(
           ...nextUi,
           roadMutationPreview: null,
           roadMutationPreviewError: null,
+          roadMutationPreviewPending: false,
         });
       }
       if (point === null || dead) {
@@ -2104,13 +2120,19 @@ export async function createGameRuntime(
       // coalesce into a single IPC round-trip (important on Tauri). A delay
       // of 0 disables debouncing (used in tests).
       if (hoverPreviewDebounceMs <= 0) {
-        const snapshot = commit(state, nextUi);
+        const snapshot = commit(state, {
+          ...nextUi,
+          roadMutationPreviewPending: true,
+        });
         sendRoadMutationPreviewRequest(mutation, generation);
         return snapshot;
       }
       // Debounced: commit the cleared hover state now; fire the request after
       // the delay using the generation already reserved for this hover.
-      const snapshot = commit(state, nextUi);
+      const snapshot = commit(state, {
+        ...nextUi,
+        roadMutationPreviewPending: true,
+      });
       hoverPreviewTimer = setTimeout(() => {
         hoverPreviewTimer = null;
         if (

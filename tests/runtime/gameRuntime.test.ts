@@ -1502,6 +1502,108 @@ describe("Game Runtime", () => {
     });
   });
 
+  it("returns to a neutral label after cancelDrag and pends again on the next request", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    runtime.startDrag({ x: 5, y: 5 });
+    runtime.setDragCurrent({ x: 7, y: 5 });
+    const dragging = runtime.getSnapshot();
+    expect(
+      selectMapTextOverlayItems(dragging.state, dragging.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Road …",
+      a11yText: "Road, preview pending",
+    });
+
+    runtime.cancelDrag();
+    const cancelled = runtime.getSnapshot();
+    expect(cancelled.ui.roadMutationPreviewPending).toBe(false);
+    expect(
+      selectMapTextOverlayItems(cancelled.state, cancelled.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Road",
+      a11yText: "Road",
+    });
+
+    runtime.setHoverTile({ x: 8, y: 5 });
+    const rearmed = runtime.getSnapshot();
+    expect(rearmed.ui.roadMutationPreviewPending).toBe(true);
+    expect(
+      selectMapTextOverlayItems(rearmed.state, rearmed.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Road …",
+      a11yText: "Road, preview pending",
+    });
+
+    const generation = rearmed.ui.roadPreviewGeneration;
+    previews.resolveRoad(generation, roadPreview(generation, { x: 8, y: 5 }));
+    await flushPromises();
+    const resolved = runtime.getSnapshot();
+    expect(
+      selectMapTextOverlayItems(resolved.state, resolved.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road · $100");
+  });
+
+  it("returns to a neutral label after a preview host failure and recovers on re-request", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    previews.rejectRoad(1, new Error("preview host unavailable"));
+    await flushPromises();
+    const failed = runtime.getSnapshot();
+    expect(failed.ui.roadMutationPreviewError).toBe("preview host unavailable");
+    expect(failed.ui.roadMutationPreviewPending).toBe(false);
+    expect(
+      selectMapTextOverlayItems(failed.state, failed.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Road",
+      a11yText: "Road",
+    });
+
+    runtime.setHoverTile({ x: 6, y: 5 });
+    const rearmed = runtime.getSnapshot();
+    expect(
+      selectMapTextOverlayItems(rearmed.state, rearmed.ui).find(
+        (item) => item.kind === "cursorBadge",
+      ),
+    ).toMatchObject({
+      text: "⦿ Road …",
+      a11yText: "Road, preview pending",
+    });
+    previews.resolveRoad(2, roadPreview(2, { x: 6, y: 5 }));
+    await flushPromises();
+    const resolved = runtime.getSnapshot();
+    expect(resolved.ui.roadMutationPreviewError).toBeNull();
+    expect(
+      selectMapTextOverlayItems(resolved.state, resolved.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Road · $100");
+  });
+
   it("drops a held preview that does not answer the drag's start tile", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
     const runtime = await createGameRuntime({
