@@ -1622,7 +1622,6 @@ export async function createGameRuntime(
       // the hovered tile never flashes the local fallback, while any older
       // or different-tile verdict cannot pose as this stroke's.
       const heldPreview =
-        tool !== "track" &&
         ui.roadMutationPreview !== null &&
         ui.roadMutationPreview.generation === ui.roadPreviewGeneration &&
         samePoint(ui.hoverTile, point)

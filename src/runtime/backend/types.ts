@@ -305,6 +305,8 @@ export type RoadMutation =
   | { type: "layRoadLine"; points: Point[]; preset: RoadPresetIntent }
   | { type: "cycleRoadDirection"; point: Point }
   | { type: "placeRoundabout"; origin: Point; size: RoundaboutSize }
+  | { type: "layTrack"; point: Point }
+  | { type: "layTrackLine"; points: Point[] }
   | { type: "removeAtTile"; point: Point }
   | { type: "removeAtTiles"; points: Point[] };
 
@@ -326,7 +328,8 @@ export interface TurnSummary {
 }
 
 export type WarningCode =
-  | "skippedTiles"
+  | "tilesBlocked"
+  | "tilesUnaffordable"
   | "existingBrokenLeg"
   | "routeWillReroute"
   | "routeWillBreak";

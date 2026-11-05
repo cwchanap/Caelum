@@ -23,6 +23,7 @@ import type {
 import type { RouteDraft } from "../ui/routeDraft";
 import type {
   AuthoredRoadTilePreview,
+  GameplayWarning,
   RoadMutation,
   SandboxResetError,
 } from "./backend/types";
@@ -210,6 +211,10 @@ export interface RoadMutationPreviewView {
     routeName: string;
     kind: "rerouted" | "broken";
   }>;
+  /** Rust-classified warning footprints (`tilesBlocked`/`tilesUnaffordable`);
+   *  `skippedTiles` alone is never a warning predicate — unchanged existing
+   *  roads/track land there as harmless no-ops. */
+  warnings: GameplayWarning[];
   rejection: GameplayRejection | null;
 }
 

@@ -40,7 +40,8 @@ pub struct TurnSummary {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum WarningCode {
-    SkippedTiles,
+    TilesBlocked,
+    TilesUnaffordable,
     ExistingBrokenLeg,
     RouteWillReroute,
     RouteWillBreak,
@@ -245,22 +246,28 @@ pub fn preview_road_mutation(
             return rejected_road_preview(snapshot, generation, &request.mutation, error.into())
         }
     };
-    let authored_tiles = candidate
-        .changed_tiles
-        .iter()
-        .filter_map(|point| {
-            candidate
-                .snapshot
-                .map
-                .tile(*point)
-                .map(|tile| AuthoredRoadTilePreview {
-                    point: *point,
-                    one_way: tile.one_way,
-                    road_connections: tile.road_connections.clone(),
-                    road_structure_id: tile.road_structure_id.clone(),
-                })
-        })
-        .collect();
+    let authored_tiles = match request.mutation {
+        // A Track stroke authors track, not road — even over a road tile,
+        // where it forms a level crossing. `kind == "road"` after the fact is
+        // not evidence the mutation authored one, so the list stays empty.
+        RoadMutation::LayTrack { .. } | RoadMutation::LayTrackLine { .. } => Vec::new(),
+        _ => candidate
+            .changed_tiles
+            .iter()
+            .filter_map(|point| {
+                candidate
+                    .snapshot
+                    .map
+                    .tile(*point)
+                    .map(|tile| AuthoredRoadTilePreview {
+                        point: *point,
+                        one_way: tile.one_way,
+                        road_connections: tile.road_connections.clone(),
+                        road_structure_id: tile.road_structure_id.clone(),
+                    })
+            })
+            .collect(),
+    };
     let generated_structures = candidate
         .snapshot
         .map
@@ -271,11 +278,23 @@ pub fn preview_road_mutation(
         .collect();
     let route_impacts = route_impacts(snapshot, &candidate.snapshot, &topology);
     let mut warnings = Vec::new();
-    if !candidate.skipped_tiles.is_empty() {
+    // `skipped_tiles` mixes harmless no-ops (already-built road/track) with
+    // real causes; only the cause footprints recorded at the actual skip
+    // sites may drive warning tone.
+    if !candidate.blocked_tiles.is_empty() {
         warnings.push(GameplayWarning {
-            code: WarningCode::SkippedTiles,
+            code: WarningCode::TilesBlocked,
             context: RejectionContext {
-                footprint: candidate.skipped_tiles.clone(),
+                footprint: candidate.blocked_tiles.clone(),
+                ..RejectionContext::default()
+            },
+        });
+    }
+    if !candidate.unaffordable_tiles.is_empty() {
+        warnings.push(GameplayWarning {
+            code: WarningCode::TilesUnaffordable,
+            context: RejectionContext {
+                footprint: candidate.unaffordable_tiles.clone(),
                 ..RejectionContext::default()
             },
         });
@@ -522,6 +541,8 @@ fn preview_network_candidate(
                 snapshot: candidate,
                 changed_tiles: context.changed_tiles,
                 skipped_tiles: context.skipped_tiles,
+                blocked_tiles: Vec::new(),
+                unaffordable_tiles: Vec::new(),
                 cost: context.cost,
             })
         }
@@ -532,6 +553,37 @@ fn preview_network_candidate(
                 snapshot: candidate,
                 changed_tiles: context.changed_tiles,
                 skipped_tiles: context.skipped_tiles,
+                blocked_tiles: Vec::new(),
+                unaffordable_tiles: Vec::new(),
+                cost: context.cost,
+            })
+        }
+        RoadMutation::LayTrack { point } => {
+            // The single-tile policy is the commit's: placement failures are
+            // rejections (including already-laid track), not partial-build
+            // skips, so there are no cause footprints to carry.
+            let candidate = transit::lay_track_costed(snapshot, point)?.into_snapshot();
+            let context = dispatch_context(snapshot, &candidate, &[*point], transit::TRACK_COST);
+            Ok(RoadMutationResult {
+                snapshot: candidate,
+                changed_tiles: context.changed_tiles,
+                skipped_tiles: context.skipped_tiles,
+                blocked_tiles: Vec::new(),
+                unaffordable_tiles: Vec::new(),
+                cost: context.cost,
+            })
+        }
+        RoadMutation::LayTrackLine { points } => {
+            // Preview and commit share `lay_track_line_outcome` so placement
+            // order, cost policy, and skip causes cannot diverge.
+            let outcome = transit::lay_track_line_outcome(snapshot, points)?;
+            let context = dispatch_context(snapshot, &outcome.snapshot, points, outcome.cost);
+            Ok(RoadMutationResult {
+                snapshot: outcome.snapshot,
+                changed_tiles: context.changed_tiles,
+                skipped_tiles: context.skipped_tiles,
+                blocked_tiles: outcome.blocked_tiles,
+                unaffordable_tiles: outcome.unaffordable_tiles,
                 cost: context.cost,
             })
         }
@@ -619,9 +671,12 @@ fn attempted_mutation_tiles(mutation: &RoadMutation) -> Vec<Point> {
     match mutation {
         RoadMutation::LayRoad { point }
         | RoadMutation::CycleRoadDirection { point }
-        | RoadMutation::RemoveAtTile { point } => vec![*point],
+        | RoadMutation::RemoveAtTile { point }
+        | RoadMutation::LayTrack { point } => vec![*point],
         RoadMutation::LayRoadLine { points, preset } => road::road_line_footprint(points, *preset),
-        RoadMutation::RemoveAtTiles { points } => points.clone(),
+        RoadMutation::RemoveAtTiles { points } | RoadMutation::LayTrackLine { points } => {
+            points.clone()
+        }
         RoadMutation::PlaceRoundabout { origin, .. } => vec![*origin],
     }
 }

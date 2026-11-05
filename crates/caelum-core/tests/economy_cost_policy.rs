@@ -2,11 +2,14 @@ use caelum_core::building_catalog::building_definition;
 use caelum_core::model::{
     EconomyPreset, GameSnapshot, Point, RoundaboutSize, ServicePattern, TransitMode,
 };
+use caelum_core::road::RoadMutation;
 use caelum_core::roundabouts::roundabout_cost;
 use caelum_core::transit::{
     BUS_COST, BUS_STOP_COST, METRO_COST, METRO_STATION_COST, ROAD_COST, TRACK_COST,
 };
-use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
+use caelum_core::{
+    GameEngine, GameIntent, RejectionCode, RoadMutationPreviewRequest, RoadPreset, WarningCode,
+};
 
 fn point(x: i32, y: i32) -> Point {
     Point { x, y }
@@ -18,6 +21,14 @@ fn engine_for(snapshot: &GameSnapshot, preset: EconomyPreset, budget: i32) -> Ga
     candidate.budget = budget;
     candidate.paused = true;
     GameEngine::from_snapshot(candidate).expect("fixture snapshot should be valid")
+}
+
+fn blank_engine_for(preset: EconomyPreset, budget: i32) -> GameEngine {
+    let mut request = caelum_core::canonical_default_request();
+    request.template_id = "blankGrid".to_string();
+    let engine = GameEngine::from_sandbox_request(request)
+        .expect("blank grid fixture request should remain valid");
+    engine_for(&engine.snapshot(), preset, budget)
 }
 
 fn assert_world_equal_ignoring_cost_policy(standard: &GameSnapshot, creative: &GameSnapshot) {
@@ -648,6 +659,111 @@ fn over_budget_track_stroke_truncates_standard_but_creative_authors_every_valid_
     assert!(creative.snapshot().map.tile(point(2, 2)).unwrap().has_track);
     assert!(creative.snapshot().map.tile(point(3, 2)).unwrap().has_track);
     assert!(creative.snapshot().map.tile(point(4, 2)).unwrap().has_track);
+}
+
+#[test]
+fn underfunded_road_stroke_charges_affordable_tiles_and_warns_the_rest() {
+    // $150 against a 12-tile $100/tile stroke: one tile builds, the other
+    // eleven are unaffordable — a warning footprint, not a rejection.
+    let mut engine = blank_engine_for(EconomyPreset::Standard, ROAD_COST + 50);
+    let points: Vec<Point> = (2..=13).map(|x| point(x, 2)).collect();
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayRoadLine {
+            points: points.clone(),
+            preset: RoadPreset::TwoWay,
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.cost, ROAD_COST);
+    assert_eq!(preview.changed_tiles, vec![point(2, 2)]);
+    assert_eq!(preview.skipped_tiles, points[1..]);
+    let unaffordable = preview
+        .warnings
+        .iter()
+        .find(|warning| warning.code == WarningCode::TilesUnaffordable)
+        .expect("partial stroke should warn about unaffordable tiles");
+    assert_eq!(unaffordable.context.footprint, points[1..]);
+    assert!(preview
+        .warnings
+        .iter()
+        .all(|warning| warning.code != WarningCode::TilesBlocked));
+
+    // Commit agrees with the preview on charged cost and changed tiles.
+    let committed = engine.dispatch(GameIntent::LayRoadLine {
+        points: points.clone(),
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(committed.applied, "{committed:?}");
+    let snapshot = engine.snapshot();
+    assert_eq!(snapshot.budget, 50);
+    assert_eq!(snapshot.map.tile(point(2, 2)).unwrap().kind, "road");
+    assert_eq!(snapshot.map.tile(point(3, 2)).unwrap().kind, "empty");
+}
+
+#[test]
+fn underfunded_track_stroke_charges_affordable_tiles_and_warns_the_rest() {
+    let mut engine = blank_engine_for(EconomyPreset::Standard, TRACK_COST);
+    let points = vec![point(2, 2), point(3, 2), point(4, 2)];
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    assert_eq!(preview.cost, TRACK_COST);
+    assert_eq!(preview.changed_tiles, vec![point(2, 2)]);
+    assert_eq!(preview.skipped_tiles, vec![point(3, 2), point(4, 2)]);
+    let unaffordable = preview
+        .warnings
+        .iter()
+        .find(|warning| warning.code == WarningCode::TilesUnaffordable)
+        .expect("partial stroke should warn about unaffordable tiles");
+    assert_eq!(
+        unaffordable.context.footprint,
+        vec![point(3, 2), point(4, 2)]
+    );
+
+    // Commit agrees: only the affordable tile is laid and charged.
+    let committed = engine.dispatch(GameIntent::LayTrackLine { points });
+    assert!(committed.applied, "{committed:?}");
+    let snapshot = engine.snapshot();
+    assert_eq!(snapshot.budget, 0);
+    assert!(snapshot.map.tile(point(2, 2)).unwrap().has_track);
+    assert!(!snapshot.map.tile(point(3, 2)).unwrap().has_track);
+    assert!(!snapshot.map.tile(point(4, 2)).unwrap().has_track);
+}
+
+#[test]
+fn creative_track_stroke_reports_nominal_cost_and_deducts_nothing() {
+    let mut engine = blank_engine_for(EconomyPreset::Creative, 0);
+    let points = vec![point(2, 2), point(3, 2), point(4, 2)];
+
+    let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
+        mutation: RoadMutation::LayTrackLine {
+            points: points.clone(),
+        },
+        generation: 1,
+    });
+    assert_eq!(preview.rejection, None);
+    // Creative still quotes the nominal price for the badge...
+    assert_eq!(preview.cost, TRACK_COST * 3);
+    assert_eq!(preview.changed_tiles, points);
+    assert!(preview.skipped_tiles.is_empty());
+    assert!(preview.warnings.is_empty());
+
+    // ...but the commit deducts nothing.
+    let committed = engine.dispatch(GameIntent::LayTrackLine {
+        points: vec![point(2, 2), point(3, 2), point(4, 2)],
+    });
+    assert!(committed.applied, "{committed:?}");
+    assert_eq!(engine.snapshot().budget, 0);
+    for point in [point(2, 2), point(3, 2), point(4, 2)] {
+        assert!(engine.snapshot().map.tile(point).unwrap().has_track);
+    }
 }
 
 #[test]

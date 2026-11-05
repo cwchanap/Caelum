@@ -39,12 +39,27 @@ pub enum RoadMutation {
     RemoveAtTiles {
         points: Vec<Point>,
     },
+    LayTrack {
+        point: Point,
+    },
+    LayTrackLine {
+        points: Vec<Point>,
+    },
 }
 
 pub struct RoadMutationResult {
     pub snapshot: GameSnapshot,
     pub changed_tiles: Vec<Point>,
     pub skipped_tiles: Vec<Point>,
+    /// Requested tiles the stroke refused to author: out-of-bounds,
+    /// structure-owned, disallowed overlays, or invalid placements. A subset
+    /// of `skipped_tiles` — the preview turns this footprint into a
+    /// `TilesBlocked` warning instead of treating every unchanged tile as a
+    /// cause.
+    pub blocked_tiles: Vec<Point>,
+    /// Requested tiles skipped because their cost quote exceeded the budget.
+    /// Also a subset of `skipped_tiles`; drives `TilesUnaffordable`.
+    pub unaffordable_tiles: Vec<Point>,
     pub cost: i32,
 }
 
@@ -58,12 +73,16 @@ pub fn apply_road_mutation(
     let mut candidate = state.clone();
     let mut changed_tiles = Vec::new();
     let mut skipped_tiles = Vec::new();
+    let mut blocked_tiles = Vec::new();
+    let mut unaffordable_tiles = Vec::new();
     let cost = apply_linear_tiles_in_order(
         state,
         &mut candidate,
         mutation,
         &mut changed_tiles,
         &mut skipped_tiles,
+        &mut blocked_tiles,
+        &mut unaffordable_tiles,
     )?;
     crate::roundabouts::sync_roundabout_ports(&mut candidate.map);
     refresh_automatic_junctions(&mut candidate.map)?;
@@ -72,6 +91,8 @@ pub fn apply_road_mutation(
         snapshot: candidate,
         changed_tiles,
         skipped_tiles,
+        blocked_tiles,
+        unaffordable_tiles,
         cost,
     })
 }
@@ -82,6 +103,8 @@ fn apply_linear_tiles_in_order(
     mutation: &RoadMutation,
     changed_tiles: &mut Vec<Point>,
     skipped_tiles: &mut Vec<Point>,
+    blocked_tiles: &mut Vec<Point>,
+    unaffordable_tiles: &mut Vec<Point>,
 ) -> GameplayResult<i32> {
     let cost = match mutation {
         RoadMutation::LayRoad { point } => {
@@ -89,14 +112,19 @@ fn apply_linear_tiles_in_order(
             changed_tiles.push(*point);
             cost
         }
-        RoadMutation::LayRoadLine { points, preset } => lay_road_line(
-            original,
-            candidate,
-            points,
-            *preset,
-            changed_tiles,
-            skipped_tiles,
-        )?,
+        RoadMutation::LayRoadLine { points, preset } => {
+            let outcome = lay_road_line(
+                original,
+                candidate,
+                points,
+                *preset,
+                changed_tiles,
+                skipped_tiles,
+            )?;
+            *blocked_tiles = outcome.blocked;
+            *unaffordable_tiles = outcome.unaffordable;
+            outcome.cost
+        }
         RoadMutation::CycleRoadDirection { point } => {
             if cycle_road_direction(candidate, *point)? {
                 changed_tiles.push(*point);
@@ -130,6 +158,13 @@ fn apply_linear_tiles_in_order(
                 return Err(GameplayRejection::at(RejectionCode::BlockedTile, points[0]));
             }
             0
+        }
+        RoadMutation::LayTrack { .. } | RoadMutation::LayTrackLine { .. } => {
+            // Track mutations share the transit module's ordered partial-build
+            // loop, not this per-tile road reducer — they only reach here if a
+            // dispatch routed them through the road path by mistake. Surface a
+            // typed rejection like PlaceRoundabout instead of panicking.
+            return Err(GameplayRejection::new(RejectionCode::BlockedTile));
         }
     };
 
@@ -165,6 +200,16 @@ fn lay_single_road(
     Ok(cost)
 }
 
+/// What a stroke charged plus the genuine causes behind its skips. Changed
+/// and skipped tiles are reported through the caller's out-params because the
+/// preview's dispatch context reclassifies them; the cause footprints are
+/// subsets of `skipped_tiles` the preview turns into warnings.
+struct LayRoadLineOutcome {
+    cost: i32,
+    blocked: Vec<Point>,
+    unaffordable: Vec<Point>,
+}
+
 fn lay_road_line(
     original: &GameSnapshot,
     candidate: &mut GameSnapshot,
@@ -172,7 +217,7 @@ fn lay_road_line(
     preset: RoadPreset,
     changed_tiles: &mut Vec<Point>,
     skipped_tiles: &mut Vec<Point>,
-) -> GameplayResult<i32> {
+) -> GameplayResult<LayRoadLineOutcome> {
     if points.is_empty() {
         return Err(GameplayRejection::new(RejectionCode::InvalidRoadStroke));
     }
@@ -215,6 +260,8 @@ fn lay_road_line(
     };
     let forward = author_lane_tiles(candidate, original, points, direction, false)?;
     let mut cost = forward.cost;
+    let mut blocked = forward.blocked;
+    let mut unaffordable = forward.unaffordable;
     connect_authored_sequence(&mut candidate.map, &forward.points);
     for point in &forward.points {
         connect_neighbor_endpoints(&mut candidate.map, *point);
@@ -239,6 +286,8 @@ fn lay_road_line(
                 !axis_resolved,
             )?;
             cost += authored.cost;
+            blocked.extend(authored.blocked.iter().copied());
+            unaffordable.extend(authored.unaffordable.iter().copied());
             connect_authored_sequence(&mut candidate.map, &authored.points);
             for point in &authored.points {
                 connect_neighbor_endpoints(&mut candidate.map, *point);
@@ -256,19 +305,34 @@ fn lay_road_line(
 
     deduplicate_points(changed_tiles);
     deduplicate_points(skipped_tiles);
+    deduplicate_points(&mut blocked);
+    deduplicate_points(&mut unaffordable);
     skipped_tiles.retain(|point| !changed_tiles.contains(point));
+    blocked.retain(|point| !changed_tiles.contains(point));
+    unaffordable.retain(|point| !changed_tiles.contains(point));
     if changed_tiles.is_empty() {
         return Err(GameplayRejection::at(
             RejectionCode::InvalidRoadStroke,
             points[0],
         ));
     }
-    Ok(cost)
+    Ok(LayRoadLineOutcome {
+        cost,
+        blocked,
+        unaffordable,
+    })
 }
 
 struct AuthoredLane {
     points: Vec<Point>,
     cost: i32,
+    /// Requested tiles skipped for a placement reason (out of bounds,
+    /// structure-owned, disallowed overlay, invalid placement) — the causes
+    /// behind the preview's `TilesBlocked` footprint.
+    blocked: Vec<Point>,
+    /// Requested tiles skipped because the road quote exceeded the budget —
+    /// the causes behind the preview's `TilesUnaffordable` footprint.
+    unaffordable: Vec<Point>,
 }
 
 fn author_lane_tiles(
@@ -281,16 +345,21 @@ fn author_lane_tiles(
     let mut lane = AuthoredLane {
         points: Vec::new(),
         cost: 0,
+        blocked: Vec::new(),
+        unaffordable: Vec::new(),
     };
     for point in points {
         let Some(existing) = candidate.map.tile(*point).cloned() else {
+            lane.blocked.push(*point);
             continue;
         };
         if crate::roundabouts::is_roundabout_owned(&candidate.map, *point) {
+            lane.blocked.push(*point);
             continue;
         }
         if existing.kind == "road" {
             if reverse_lane && !can_overlay_reverse_lane(&existing, direction) {
+                lane.blocked.push(*point);
                 continue;
             }
             // `existing` was just fetched from this tile, so it is present; skip
@@ -298,15 +367,19 @@ fn author_lane_tiles(
             let Some(tile) = candidate.map.tile_mut(*point) else {
                 continue;
             };
+            // An accepted merge is a harmless no-op when it changes nothing:
+            // the tile lands in skipped_tiles but is not a blocked cause.
             merge_lane_direction(tile, direction);
             lane.points.push(*point);
             continue;
         }
         if !is_valid_road_placement(original, *point) {
+            lane.blocked.push(*point);
             continue;
         }
         let quote = CostPolicy::from_snapshot(original).quote(ROAD_COST, candidate.budget);
         if !quote.affordable() {
+            lane.unaffordable.push(*point);
             continue;
         }
         let authorized = quote.authorize()?;

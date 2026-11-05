@@ -714,6 +714,7 @@ export function buildRoadMutationPreview(
       ...impact,
       routeName: routeNameAndColor(state, impact.routeId).name,
     })),
+    warnings: preview.warnings,
     rejection: preview.rejection,
   };
 }

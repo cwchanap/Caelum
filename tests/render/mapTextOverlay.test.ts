@@ -920,6 +920,112 @@ describe("selectMapTextOverlayItems", () => {
       expect(items[0]?.text).not.toContain("$500");
       expect(items[0]?.a11yText).toBe("Road, Free");
     });
+
+    it("tones the badge for genuinely blocked tiles only", () => {
+      const items = itemsOfKind(
+        createTestGameState(),
+        previewUi(
+          previewResponse({
+            changedTiles: [{ x: 2, y: 2 }],
+            skippedTiles: [{ x: 3, y: 2 }],
+            cost: 100,
+            warnings: [
+              {
+                code: "tilesBlocked",
+                context: { footprint: [{ x: 3, y: 2 }] },
+              },
+            ],
+          }),
+        ),
+        "cursorBadge",
+      );
+
+      expect(items[0]?.text).toBe("⦿ Road · $100 · 1 tile blocked");
+      expect(items[0]?.a11yText).toBe("Road, $100, 1 tile blocked");
+      expect(items[0]?.tone).toBe("warning");
+    });
+
+    it("shows both concise causes when a stroke is blocked and unaffordable", () => {
+      const items = itemsOfKind(
+        createTestGameState(),
+        previewUi(
+          previewResponse({
+            changedTiles: [{ x: 2, y: 2 }],
+            skippedTiles: [
+              { x: 3, y: 2 },
+              { x: 4, y: 2 },
+              { x: 5, y: 2 },
+            ],
+            cost: 100,
+            warnings: [
+              {
+                code: "tilesBlocked",
+                context: { footprint: [{ x: 3, y: 2 }] },
+              },
+              {
+                code: "tilesUnaffordable",
+                context: {
+                  footprint: [
+                    { x: 4, y: 2 },
+                    { x: 5, y: 2 },
+                  ],
+                },
+              },
+            ],
+          }),
+        ),
+        "cursorBadge",
+      );
+
+      expect(items[0]?.text).toBe(
+        "⦿ Road · $100 · 1 tile blocked · Not enough money, 2 tiles skipped",
+      );
+      expect(items[0]?.tone).toBe("warning");
+    });
+
+    it("lets a track preview drive the track badge with cost and warnings", () => {
+      const items = itemsOfKind(
+        createTestGameState(),
+        {
+          ...createUiState(),
+          activeTool: "track" as const,
+          hoverTile: { x: 2, y: 2 },
+          roadPreviewGeneration: 1,
+          roadMutationPreview: previewResponse({
+            generation: 1,
+            changedTiles: [{ x: 2, y: 2 }],
+            cost: 500,
+          }),
+        },
+        "cursorBadge",
+      );
+
+      expect(items[0]?.text).toBe("⦿ Track · $500");
+      expect(items[0]?.tone).toBeUndefined();
+    });
+
+    it("surfaces a track rejection instead of the local validity glyph", () => {
+      const items = itemsOfKind(
+        createTestGameState(),
+        {
+          ...createUiState(),
+          activeTool: "track" as const,
+          hoverTile: { x: 2, y: 2 },
+          roadPreviewGeneration: 1,
+          roadMutationPreview: previewResponse({
+            generation: 1,
+            cost: 500,
+            rejection: { code: "blockedTile", context: {} },
+          }),
+        },
+        "cursorBadge",
+      );
+
+      // A Rust rejection supersedes the nominal charge and the local ⊘ hint.
+      expect(items[0]?.text).toBe("⦿ Track · That tile is blocked. ⊘");
+      expect(items[0]?.text).not.toContain("$500");
+      expect(items[0]?.tone).toBe("warning");
+    });
   });
 
   describe("route failure items", () => {
