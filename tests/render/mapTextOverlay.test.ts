@@ -461,9 +461,10 @@ describe("selectMapTextOverlayItems", () => {
         hoverTile: { x: 3, y: 3 },
       };
 
-      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe(
-        "⦿ Small House 0°",
-      );
+      expect(itemsOfKind(state, ui, "cursorBadge")[0]).toMatchObject({
+        text: "⦿ Small House 0° · $4,000",
+        a11yText: "Small House 0°, $4,000",
+      });
 
       // Off the residential zone the footprint is unplaceable -> ⊘ flag.
       const offZone = itemsOfKind(
@@ -471,7 +472,10 @@ describe("selectMapTextOverlayItems", () => {
         { ...ui, hoverTile: { x: 8, y: 8 } },
         "cursorBadge",
       );
-      expect(offZone[0]?.text).toBe("⦿ Small House 0° ⊘");
+      expect(offZone[0]).toMatchObject({
+        text: "⦿ Small House 0° · $4,000 ⊘",
+        a11yText: "Small House 0°, $4,000, cannot place",
+      });
     });
 
     it("labels the road tool per preset and flags unplaceable tiles", () => {
@@ -525,6 +529,107 @@ describe("selectMapTextOverlayItems", () => {
         itemsOfKind(withTracks(state, [{ x: 2, y: 2 }]), ui, "cursorBadge")[0]
           ?.text,
       ).toBe("⦿ Track ⊘");
+    });
+
+    it("labels the stop and station tools with their catalog prices", () => {
+      let state = withRoads(createTestGameState(), [{ x: 2, y: 3 }]);
+      state = withTracks(state, [{ x: 4, y: 4 }]);
+      const stopUi: UiState = {
+        ...createUiState(),
+        activeTool: "busStop",
+        hoverTile: { x: 2, y: 2 },
+      };
+      const stationUi: UiState = {
+        ...createUiState(),
+        activeTool: "metroStation",
+        hoverTile: { x: 4, y: 4 },
+      };
+
+      expect(itemsOfKind(state, stopUi, "cursorBadge")[0]).toMatchObject({
+        text: "⦿ Bus Stop · $2,000",
+        a11yText: "Bus Stop, $2,000",
+      });
+      expect(
+        itemsOfKind(
+          state,
+          { ...stopUi, hoverTile: { x: 6, y: 6 } },
+          "cursorBadge",
+        )[0],
+      ).toMatchObject({
+        text: "⦿ Bus Stop · $2,000 ⊘",
+        a11yText: "Bus Stop, $2,000, cannot place",
+      });
+      expect(itemsOfKind(state, stationUi, "cursorBadge")[0]).toMatchObject({
+        text: "⦿ Metro Station · $25,000",
+        a11yText: "Metro Station, $25,000",
+      });
+      expect(
+        itemsOfKind(
+          state,
+          { ...stationUi, hoverTile: { x: 5, y: 5 } },
+          "cursorBadge",
+        )[0],
+      ).toMatchObject({
+        text: "⦿ Metro Station · $25,000 ⊘",
+        a11yText: "Metro Station, $25,000, cannot place",
+      });
+    });
+
+    it("shows Free for stop, station, and building placements in Creative economy", () => {
+      const base = createTestGameState();
+      const creative: GameState = {
+        ...base,
+        rules: { ...base.rules, economyPreset: "creative" },
+      };
+      let state = withRoads(creative, [{ x: 2, y: 3 }]);
+      state = withTracks(state, [{ x: 4, y: 4 }]);
+      state = withAreas(state, "residential", [
+        { x: 6, y: 6 },
+        { x: 7, y: 6 },
+      ]);
+
+      expect(
+        itemsOfKind(
+          state,
+          {
+            ...createUiState(),
+            activeTool: "busStop" as const,
+            hoverTile: { x: 2, y: 2 },
+          },
+          "cursorBadge",
+        )[0],
+      ).toMatchObject({
+        text: "⦿ Bus Stop · Free",
+        a11yText: "Bus Stop, Free",
+      });
+      expect(
+        itemsOfKind(
+          state,
+          {
+            ...createUiState(),
+            activeTool: "metroStation" as const,
+            hoverTile: { x: 4, y: 4 },
+          },
+          "cursorBadge",
+        )[0],
+      ).toMatchObject({
+        text: "⦿ Metro Station · Free",
+        a11yText: "Metro Station, Free",
+      });
+      expect(
+        itemsOfKind(
+          state,
+          {
+            ...createUiState(),
+            selectedBuilding: "smallHouse" as const,
+            hoverTile: { x: 6, y: 6 },
+          },
+          "cursorBadge",
+        )[0],
+      ).toMatchObject({
+        text: "⦿ Small House 0° · Free",
+        a11yText: "Small House 0°, Free",
+      });
     });
 
     it("labels the roundabout tool by size and preview outcome", () => {
@@ -608,18 +713,21 @@ describe("selectMapTextOverlayItems", () => {
       ).toBe("⦿ Area Residential ⊘");
     });
 
-    it("emits no badge for tools without a cursor label", () => {
-      const items = itemsOfKind(
-        createTestGameState(),
-        {
-          ...createUiState(),
-          activeTool: "busStop",
-          hoverTile: { x: 2, y: 2 },
-        },
-        "cursorBadge",
-      );
-      expect(items).toHaveLength(0);
-    });
+    it.each(["inspect", "busRoute", "metroLine"] as const)(
+      "emits no badge for tools without a cursor label (%s)",
+      (tool) => {
+        const items = itemsOfKind(
+          createTestGameState(),
+          {
+            ...createUiState(),
+            activeTool: tool,
+            hoverTile: { x: 2, y: 2 },
+          },
+          "cursorBadge",
+        );
+        expect(items).toHaveLength(0);
+      },
+    );
   });
 
   describe("mutation previews in the cursor badge", () => {
@@ -824,6 +932,7 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       )[0];
       expect(accepted?.text).toBe("⦿ Road · $100");
+      expect(accepted?.a11yText).toBe("Road, $100");
       expect(accepted?.tone).toBeUndefined();
     });
 
@@ -1024,6 +1133,56 @@ describe("selectMapTextOverlayItems", () => {
       expect(items[0]?.text).toBe("⦿ Track · That tile is blocked. ⊘");
       expect(items[0]?.text).not.toContain("$500");
       expect(items[0]?.tone).toBe("warning");
+    });
+
+    it("keeps an all-skipped no-op preview neutral", () => {
+      const items = itemsOfKind(
+        createTestGameState(),
+        previewUi(previewResponse({ skippedTiles: [{ x: 3, y: 2 }] })),
+        "cursorBadge",
+      );
+
+      expect(items[0]).toMatchObject({
+        text: "⦿ Road",
+        a11yText: "Road",
+      });
+      expect(items[0]?.tone).toBeUndefined();
+    });
+
+    it("tones a blocked cause only when it names a footprint", () => {
+      const silent = itemsOfKind(
+        createTestGameState(),
+        previewUi(
+          previewResponse({
+            skippedTiles: [{ x: 3, y: 2 }],
+            warnings: [
+              { code: "tilesBlocked" as const, context: { footprint: [] } },
+            ],
+          }),
+        ),
+        "cursorBadge",
+      );
+      expect(silent[0]?.text).toBe("⦿ Road · Free");
+      expect(silent[0]?.tone).toBeUndefined();
+
+      const blocked = itemsOfKind(
+        createTestGameState(),
+        previewUi(
+          previewResponse({
+            skippedTiles: [{ x: 3, y: 2 }],
+            warnings: [
+              {
+                code: "tilesBlocked" as const,
+                context: { footprint: [{ x: 3, y: 2 }] },
+              },
+            ],
+          }),
+        ),
+        "cursorBadge",
+      );
+      expect(blocked[0]?.text).toBe("⦿ Road · Free · 1 tile blocked");
+      expect(blocked[0]?.a11yText).toBe("Road, Free, 1 tile blocked");
+      expect(blocked[0]?.tone).toBe("warning");
     });
   });
 

@@ -9,6 +9,7 @@ import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import {
   buildRoadMutationPreview,
+  formatBudget,
   selectRouteEditorView,
   selectRouteFailures,
   staleHeldRoadPreview,
@@ -20,6 +21,7 @@ import type { UiState } from "../ui/uiState";
 import { pointAndTangentAt } from "./pathGeometry";
 import {
   canPlaceBuilding,
+  canPlaceBusStop,
   getTile,
   isAreaPaintable,
   isBuildingAffordableForPresentation,
@@ -81,6 +83,20 @@ function placementBadge(label: string, ok: boolean): CursorBadge {
   };
 }
 
+function pricedPlacementBadge(
+  label: string,
+  cost: number,
+  state: GameState,
+  ok: boolean,
+): CursorBadge {
+  const price =
+    state.rules.economyPreset === "creative" ? "Free" : formatBudget(cost);
+  return {
+    text: `${label} · ${price}${ok ? "" : " ⊘"}`,
+    a11yText: `${a11yLabel(label)}, ${price}${ok ? "" : ", cannot place"}`,
+  };
+}
+
 /** Neutral badge while Rust's answer is still in flight: no verdict yet. */
 function pendingBadge(label: string): CursorBadge {
   return {
@@ -111,7 +127,9 @@ function previewBadge(
   const warnings = preview.warnings
     .filter(
       (warning) =>
-        warning.code === "tilesBlocked" || warning.code === "tilesUnaffordable",
+        (warning.code === "tilesBlocked" ||
+          warning.code === "tilesUnaffordable") &&
+        (warning.context.footprint?.length ?? 0) > 0,
     )
     .map(warningMessage);
   const warningText = warnings.join(" · ");
@@ -147,9 +165,32 @@ function cursorBadgeText(
     const ok =
       isBuildingAffordableForPresentation(state, ui.selectedBuilding) &&
       canPlaceBuilding(state, ui.selectedBuilding, cursor, ui.buildingRotation);
-    return placementBadge(`⦿ ${def.label} ${ui.buildingRotation}°`, ok);
+    return pricedPlacementBadge(
+      `⦿ ${def.label} ${ui.buildingRotation}°`,
+      def.cost,
+      state,
+      ok,
+    );
   }
   switch (ui.activeTool) {
+    case "busStop": {
+      const def = BUILDING_CATALOG.busStop;
+      return pricedPlacementBadge(
+        `⦿ ${def.label}`,
+        def.cost,
+        state,
+        canPlaceBusStop(state, cursor),
+      );
+    }
+    case "metroStation": {
+      const def = BUILDING_CATALOG.metroStation;
+      return pricedPlacementBadge(
+        `⦿ ${def.label}`,
+        def.cost,
+        state,
+        canPlaceBuilding(state, "metroStation", cursor, ui.buildingRotation),
+      );
+    }
     case "road": {
       const glyph =
         ui.roadPreset === "oneWay"
