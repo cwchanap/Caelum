@@ -1412,7 +1412,7 @@ fn blocked_track_stroke_warns_only_the_blocked_tiles() {
 
 #[test]
 fn blocked_road_stroke_warns_only_the_blocked_tiles() {
-    let engine = blank_engine();
+    let mut engine = blank_engine();
     let points = vec![point(2, 2), point(3, 2), point(99, 2)];
 
     let preview = engine.preview_road_mutation(RoadMutationPreviewRequest {
@@ -1425,6 +1425,7 @@ fn blocked_road_stroke_warns_only_the_blocked_tiles() {
     assert_eq!(preview.rejection, None);
     assert_eq!(preview.changed_tiles, vec![point(2, 2), point(3, 2)]);
     assert_eq!(preview.skipped_tiles, vec![point(99, 2)]);
+    assert_eq!(preview.cost, ROAD_COST * 2);
     let blocked = preview
         .warnings
         .iter()
@@ -1435,6 +1436,30 @@ fn blocked_road_stroke_warns_only_the_blocked_tiles() {
         .warnings
         .iter()
         .all(|warning| warning.code != WarningCode::TilesUnaffordable));
+
+    let before_budget = engine.snapshot().budget;
+    let committed = engine.dispatch(GameIntent::LayRoadLine {
+        points,
+        preset: RoadPreset::TwoWay,
+    });
+    assert!(committed.applied, "{committed:?}");
+    let after = engine.snapshot();
+    assert_eq!(after.budget, before_budget - preview.cost);
+    assert_eq!(
+        after
+            .map
+            .tiles
+            .iter()
+            .filter(|tile| tile.kind == "road")
+            .count(),
+        preview.changed_tiles.len()
+    );
+    for changed in &preview.changed_tiles {
+        assert_eq!(after.map.tile(*changed).unwrap().kind, "road");
+    }
+    for skipped in &preview.skipped_tiles {
+        assert!(after.map.tile(*skipped).is_none());
+    }
 }
 
 #[test]

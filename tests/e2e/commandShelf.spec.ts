@@ -5,6 +5,7 @@ import {
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
+  drainGameplayQueue,
   hoverMapTile,
   mapTileViewportPoint,
   openCommandDestination,
@@ -406,6 +407,142 @@ test("shows road previews at the cursor and a dismissible failed commit", async 
   await expect(page.getByTestId("command-panel")).toHaveCount(0);
 });
 
+test("keeps the Dismiss control inside the feedback band with long details", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1280, height: 800 });
+  await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const slot = page.getByTestId("action-feedback-slot");
+  const feedback = page.getByTestId("action-feedback");
+  const dismiss = feedback.getByRole("button", { name: "Dismiss" });
+
+  const expectDismissContained = async () => {
+    const slotBox = await slot.boundingBox();
+    const toastBox = await feedback.boundingBox();
+    const dismissBox = await dismiss.boundingBox();
+    expect(slotBox, "feedback band has a bounding box").not.toBeNull();
+    expect(toastBox, "feedback toast has a bounding box").not.toBeNull();
+    expect(dismissBox, "Dismiss has a bounding box").not.toBeNull();
+    expect(
+      dismissBox!.x,
+      "Dismiss left inside the toast",
+    ).toBeGreaterThanOrEqual(toastBox!.x);
+    expect(
+      dismissBox!.x + dismissBox!.width,
+      "Dismiss right inside the toast",
+    ).toBeLessThanOrEqual(toastBox!.x + toastBox!.width);
+    expect(
+      dismissBox!.y,
+      "Dismiss top inside the toast",
+    ).toBeGreaterThanOrEqual(toastBox!.y);
+    expect(
+      dismissBox!.y + dismissBox!.height,
+      "Dismiss bottom inside the toast",
+    ).toBeLessThanOrEqual(toastBox!.y + toastBox!.height);
+    expect(toastBox!.x, "toast left inside the band").toBeGreaterThanOrEqual(
+      slotBox!.x,
+    );
+    expect(
+      toastBox!.x + toastBox!.width,
+      "toast right inside the band",
+    ).toBeLessThanOrEqual(slotBox!.x + slotBox!.width);
+    expect(toastBox!.y, "toast top inside the band").toBeGreaterThanOrEqual(
+      slotBox!.y,
+    );
+    expect(
+      toastBox!.y + toastBox!.height,
+      "toast bottom inside the band",
+    ).toBeLessThanOrEqual(slotBox!.y + slotBox!.height);
+    expect(
+      dismissBox!.y + dismissBox!.height,
+      "Dismiss inside the viewport",
+    ).toBeLessThanOrEqual(800);
+  };
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await debugSetBudget(page, 0);
+  await clickMapTile(canvas, { x: 2, y: 10 });
+  await expect(feedback).toHaveAttribute("data-source", "rejection");
+  await expect(dismiss).toBeVisible();
+  await expectDismissContained();
+
+  await dismiss.focus();
+  await page.keyboard.press("Enter");
+  await expect(feedback).toHaveCount(0);
+
+  await debugSetBudget(page, 120_000);
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  await clickMapTile(canvas, { x: 5, y: 3 });
+  await clickMapTile(canvas, { x: 9, y: 3 });
+  await page.evaluate(async () => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          setTool: (tool: string) => unknown;
+          setRoutePattern: (pattern: string) => unknown;
+          handleTileClick: (point: { x: number; y: number }) => unknown;
+          saveRouteDraft: () => Promise<unknown>;
+          getSnapshot: () => {
+            shell: { routeDraft: { canSave: boolean } | null };
+          };
+        };
+      }
+    ).__caelumRuntime;
+    if (!runtime) {
+      throw new Error("window.__caelumRuntime is unavailable");
+    }
+    for (let route = 0; route < 4; route += 1) {
+      runtime.setTool("busRoute");
+      runtime.setRoutePattern("shuttle");
+      await runtime.handleTileClick({ x: 5, y: 3 });
+      await runtime.handleTileClick({ x: 9, y: 3 });
+      for (let attempt = 0; attempt < 200; attempt += 1) {
+        if (runtime.getSnapshot().shell.routeDraft?.canSave === true) break;
+        await new Promise((resolve) => setTimeout(resolve, 25));
+      }
+      await runtime.saveRouteDraft();
+    }
+  });
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).state.transit.routes.length)
+    .toBe(4);
+
+  await selectBuildLeaf(page, "roads", "road-oneWay");
+  await clickMapTile(canvas, { x: 7, y: 4 });
+  await expect(feedback).toHaveAttribute("data-source", "roadDirection");
+  await expect(feedback.locator("li")).toHaveCount(4);
+
+  const body = feedback.locator(".action-feedback-body");
+  await expect(body).toHaveCount(1);
+  expect(
+    await body.evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    ),
+    "long details overflow the message body",
+  ).toBe(true);
+  expect(
+    await feedback.evaluate(
+      (element) => element.scrollHeight === element.clientHeight,
+    ),
+    "the toast itself does not scroll",
+  ).toBe(true);
+  await expectDismissContained();
+
+  const toastBeforeScroll = await feedback.boundingBox();
+  const dismissBeforeScroll = await dismiss.boundingBox();
+  await body.evaluate((element) => {
+    element.scrollTop = element.scrollHeight;
+  });
+  expect(await feedback.boundingBox()).toEqual(toastBeforeScroll);
+  expect(await dismiss.boundingBox()).toEqual(dismissBeforeScroll);
+  await expectDismissContained();
+
+  await dismiss.click();
+  await expect(feedback).toHaveCount(0);
+});
+
 test("keeps visible Data labels owned while a road tool is armed", async ({
   page,
 }) => {
@@ -535,6 +672,11 @@ test("gates road clicks by preset and clears stale badge answers on retraction",
   await expect(badge).not.toHaveClass(/map-text-warning/);
 
   await clickMapTile(canvas, existingRoad);
+  await drainGameplayQueue(page);
+  expect(await tileAt(existingRoad)).toEqual(authoredRoad);
+  expect((await runtimeSnapshot(page)).state.budget).toBe(120_000);
+  await expect(feedback).toHaveCount(0);
+
   await clickMapTile(canvas, { x: 3, y: 13 });
   await expect
     .poll(async () => (await tileAt({ x: 3, y: 13 }))?.kind)
@@ -572,6 +714,10 @@ test("gates road clicks by preset and clears stale badge answers on retraction",
   await expect(badge).toContainText("Already road");
   await expect(badge).not.toHaveClass(/map-text-warning/);
   await page.mouse.up();
+  await drainGameplayQueue(page);
+  expect(await tileAt(existingRoad)).toEqual(authoredRoad);
+  expect((await runtimeSnapshot(page)).state.budget).toBe(119_100);
+  await expect(feedback).toHaveCount(0);
 
   await clickMapTile(canvas, { x: 4, y: 13 });
   await expect
