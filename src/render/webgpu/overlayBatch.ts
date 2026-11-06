@@ -532,7 +532,9 @@ function drawBusStopPreview(
   state: GameState,
   hoverTile: Point,
 ): void {
-  const validPlacement = canPlaceBusStop(state, hoverTile);
+  const validPlacement =
+    isBuildingAffordableForPresentation(state, "busStop") &&
+    canPlaceBusStop(state, hoverTile);
   const fill = validPlacement ? PREVIEW_VALID : PREVIEW_INVALID;
   const stroke = validPlacement ? PREVIEW_VALID_STROKE : PREVIEW_INVALID_STROKE;
   fillTile(g, hoverTile, fill);

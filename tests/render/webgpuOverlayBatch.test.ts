@@ -1220,6 +1220,18 @@ describe("buildOverlayRanges placement and mutation previews", () => {
       hoverTile: { x: 3, y: 3 },
     });
     expect(hasVertexNear(valid, colors.previewValid, 96, 96)).toBe(true);
+
+    // Adjacent road but unaffordable -> invalid tint, matching the badge's
+    // ⊘ verdict for the same anchor.
+    const { underRoutes: broke } = buildOverlayRanges(
+      { ...roadState, budget: 100 },
+      {
+        ...createUiState(),
+        activeTool: "busStop",
+        hoverTile: { x: 3, y: 3 },
+      },
+    );
+    expect(hasVertexNear(broke, colors.previewInvalid, 96, 96)).toBe(true);
   });
 });
 
