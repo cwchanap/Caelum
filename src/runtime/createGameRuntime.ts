@@ -1317,6 +1317,11 @@ export async function createGameRuntime(
     mutation: RoadMutation,
     generation: number,
   ): void => {
+    // A fresh request supersedes a debounced hover send still waiting to
+    // fire: its captured generation can never match again, and leaving the
+    // obsolete timer installed blocks both the stale-refresh trailing timer
+    // and reissueRoadMutationPreview while it runs to a no-op.
+    clearHoverPreviewTimer();
     if (dead || workingSave.isBusy()) return;
     // Any fresh request answers whatever world change marked the preview
     // stale, whether or not it was scheduled as a refresh.

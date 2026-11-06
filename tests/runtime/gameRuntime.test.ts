@@ -2852,6 +2852,39 @@ describe("Game Runtime", () => {
       });
     });
 
+    it("re-issues a stale-marked preview after a superseded hover debounce", async () => {
+      const previews = deferredPreviewBackend(fullRustSnapshot());
+      const runtime = await createGameRuntime({
+        createHost: createFakeGameHost,
+        hoverPreviewDebounceMs: 50,
+        backend: previews.backend,
+      });
+
+      runtime.setTool("road");
+      runtime.setHoverTile({ x: 5, y: 5 });
+      // The drag's immediate preview request (gen 2) supersedes the
+      // still-pending hover debounce (gen 1). The obsolete timer must be
+      // cancelled: it cannot service a world refresh — it exits on
+      // generation mismatch — and while installed it blocks scheduling a
+      // real trailing timer and any reissue.
+      runtime.startDrag({ x: 5, y: 5 });
+      expect(previews.roadRequestGenerations).toEqual([2]);
+
+      await runtime.debugSetBudget(9_999);
+      previews.resolveRoad(2, roadPreview(2, { x: 5, y: 5 }));
+      await flushPromises();
+
+      vi.advanceTimersByTime(50);
+      await flushPromises();
+
+      expect(previews.roadRequestGenerations).toEqual([2, 3]);
+      previews.resolveRoad(3, roadPreview(3, { x: 5, y: 5 }));
+      await flushPromises();
+      const settled = runtime.getSnapshot();
+      expect(settled.ui.roadMutationPreviewPending).toBe(false);
+      expect(settled.ui.roadMutationPreview?.generation).toBe(3);
+    });
+
     it("re-requests the cursor preview after a rejected drag commit while a stale debounce is pending", async () => {
       const previews = deferredPreviewBackend(fullRustSnapshot());
       const runtime = await createGameRuntime({
