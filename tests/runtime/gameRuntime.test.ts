@@ -2731,7 +2731,7 @@ describe("Game Runtime", () => {
       expect(previews.roadRequestGenerations).toHaveLength(0);
     });
 
-    it("clears the pending badge when a debounced request abandons during a busy save", async () => {
+    it("clears the pending badge when a debounced request abandons during a busy save, then re-issues it on save end", async () => {
       const initial = fullRustSnapshot();
       const delegate = createMemoryCitySaveStore();
       const city = {
@@ -2781,6 +2781,19 @@ describe("Game Runtime", () => {
 
       store.releaseNext("updateCity");
       await save;
+      await flushPromises();
+
+      // Busy-end re-issues the still-armed hover preview rather than leaving
+      // the badge cleared until the pointer happens to move again.
+      const reissued = runtime.getSnapshot();
+      const reissueGeneration = reissued.ui.roadPreviewGeneration;
+      expect(reissued.ui.roadMutationPreviewPending).toBe(true);
+      expect(previews.roadRequestGenerations).toEqual([reissueGeneration]);
+      previews.resolveRoad(
+        reissueGeneration,
+        roadPreview(reissueGeneration, { x: 5, y: 5 }),
+      );
+      await flushPromises();
 
       runtime.setHoverTile({ x: 6, y: 5 });
       const rearmed = runtime.getSnapshot();
@@ -2797,7 +2810,10 @@ describe("Game Runtime", () => {
       vi.advanceTimersByTime(50);
       await flushPromises();
       const generation = rearmed.ui.roadPreviewGeneration;
-      expect(previews.roadRequestGenerations).toEqual([generation]);
+      expect(previews.roadRequestGenerations).toEqual([
+        reissueGeneration,
+        generation,
+      ]);
       previews.resolveRoad(generation, roadPreview(generation, { x: 6, y: 5 }));
       await flushPromises();
       const resolved = runtime.getSnapshot();
@@ -3091,6 +3107,35 @@ describe("Game Runtime", () => {
 
     await runtime.setSpeed(2);
     expect(backend.intents).toContainEqual({ type: "setSpeed", speed: 2 });
+  });
+
+  it("clears an armed preview's pending flag when sandbox reset fails", async () => {
+    const previews = deferredPreviewBackend(fullRustSnapshot());
+    const resetError: SandboxResetError = {
+      code: "templateInvariantViolation",
+      context: { templateId: "crossroads" },
+    };
+    previews.backend.reset = vi.fn(
+      async () => ({ ok: false, error: resetError }) as const,
+    );
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: previews.backend,
+    });
+
+    runtime.setTool("road");
+    runtime.setHoverTile({ x: 5, y: 5 });
+    expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(true);
+
+    const resetSnapshot = await runtime.reset();
+
+    // The invalidation drops the in-flight response, so its markers must
+    // clear too — a stuck pending badge is a request that no longer exists.
+    expect(resetSnapshot.sandboxResetError).toEqual(resetError);
+    expect(resetSnapshot.ui.roadMutationPreviewPending).toBe(false);
+    expect(resetSnapshot.ui.roadMutationPreview).toBeNull();
+    expect(resetSnapshot.ui.roadMutationPreviewError).toBeNull();
   });
 
   it("clears a typed sandbox reset error after the next successful reset", async () => {

@@ -739,6 +739,18 @@ describe("selectMapTextOverlayItems", () => {
         text: "⦿ Metro Station · $25,000 ⊘",
         a11yText: "Metro Station, $25,000, cannot place",
       });
+
+      // Unaffordable anchors flag the same ⊘ as unplaceable ones — the
+      // backend rejects them with InsufficientBudget either way.
+      const broke = { ...state, budget: 100 };
+      expect(itemsOfKind(broke, stopUi, "cursorBadge")[0]).toMatchObject({
+        text: "⦿ Bus Stop · $2,000 ⊘",
+        a11yText: "Bus Stop, $2,000, cannot place",
+      });
+      expect(itemsOfKind(broke, stationUi, "cursorBadge")[0]).toMatchObject({
+        text: "⦿ Metro Station · $25,000 ⊘",
+        a11yText: "Metro Station, $25,000, cannot place",
+      });
     });
 
     it("shows Free for stop, station, and building placements in Creative economy", () => {

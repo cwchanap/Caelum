@@ -552,34 +552,12 @@ fn preview_network_candidate(
                 cost: context.cost,
             })
         }
-        RoadMutation::LayTrack { point } => {
-            let candidate = transit::lay_track_costed(snapshot, point)?.into_snapshot();
-            let context = dispatch_context(snapshot, &candidate, &[*point], transit::TRACK_COST);
-            Ok(RoadMutationResult {
-                snapshot: candidate,
-                changed_tiles: context.changed_tiles,
-                skipped_tiles: context.skipped_tiles,
-                blocked_tiles: Vec::new(),
-                unaffordable_tiles: Vec::new(),
-                cost: context.cost,
-            })
-        }
-        RoadMutation::LayTrackLine { points } => {
-            let outcome = transit::lay_track_line_outcome(snapshot, points)?;
-            let context = dispatch_context(snapshot, &outcome.snapshot, points, outcome.cost);
-            Ok(RoadMutationResult {
-                snapshot: outcome.snapshot,
-                changed_tiles: context.changed_tiles,
-                skipped_tiles: context.skipped_tiles,
-                blocked_tiles: outcome.blocked_tiles,
-                unaffordable_tiles: outcome.unaffordable_tiles,
-                cost: context.cost,
-            })
-        }
         RoadMutation::LayRoad { .. }
         | RoadMutation::LayRoadLine { .. }
         | RoadMutation::CycleRoadDirection { .. }
-        | RoadMutation::PlaceRoundabout { .. } => road::apply_road_mutation(snapshot, mutation),
+        | RoadMutation::PlaceRoundabout { .. }
+        | RoadMutation::LayTrack { .. }
+        | RoadMutation::LayTrackLine { .. } => road::apply_road_mutation(snapshot, mutation),
     }?;
     Ok(crate::engine::normalize_road_mutation_result(
         snapshot, result,

@@ -6,6 +6,7 @@ import {
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
+  drainGameplayQueue,
   hoverMapTile,
   openCommandDestination,
   removeMapTile,
@@ -394,17 +395,7 @@ test("settles the roundabout badge after rejected and applied clicks without mov
   expect(overlaps(toastBox!, canvasBox!)).toBe(false);
 
   await feedback.locator(".action-feedback-message").click();
-  await page.evaluate(() => {
-    const runtime = (
-      window as unknown as {
-        __caelumRuntime?: { tick: (delta: number) => Promise<unknown> };
-      }
-    ).__caelumRuntime;
-    if (!runtime) {
-      throw new Error("window.__caelumRuntime is unavailable");
-    }
-    return runtime.tick(0);
-  });
+  await drainGameplayQueue(page);
   const afterToastClick = await runtimeSnapshot(page);
   expect(afterToastClick.state.map.roadStructures.length).toBe(1);
   expect(afterToastClick.state.budget).toBe(120_000);

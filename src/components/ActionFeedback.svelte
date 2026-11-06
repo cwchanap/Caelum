@@ -35,7 +35,18 @@
       data-source={feedback.source}
       data-tone={feedback.tone}
     >
-      <div class="action-feedback-body">
+      <!-- The 72px band makes this the only scrollable region; keyboard users
+           need tabindex to scroll overflowed details (axe
+           scrollable-region-focusable). Svelte can't detect the overflow, so
+           the a11y warning is a false positive here. -->
+      <!-- eslint-disable-next-line svelte/no-unused-svelte-ignore -->
+      <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+      <div
+        class="action-feedback-body"
+        tabindex="0"
+        role="region"
+        aria-label={feedback.message}
+      >
         {#if feedback.tone === "error"}
           <svg
             class="action-feedback-icon"

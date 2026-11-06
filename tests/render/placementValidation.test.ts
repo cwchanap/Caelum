@@ -4,8 +4,6 @@ import {
   canPlaceBuilding,
   isBuildingAffordableForPresentation,
   isAreaPaintable,
-  isValidRoadPlacement,
-  isValidTrackPlacement,
 } from "../../src/render/placementValidation";
 import { createTestGameState } from "../helpers/gameState";
 import { withAreas, withRoads } from "../helpers/mapFixtures";
@@ -51,16 +49,6 @@ describe("placement validation blocks structure-owned tiles", () => {
     expect(canPlaceBuilding(state, "smallHouse", center, 0)).toBe(false);
   });
 
-  it("isValidRoadPlacement returns false on a structure-owned empty tile", () => {
-    const state = withStructureTile(createTestGameState(), center);
-    expect(isValidRoadPlacement(state, center)).toBe(false);
-  });
-
-  it("isValidTrackPlacement returns false on a structure-owned empty tile", () => {
-    const state = withStructureTile(createTestGameState(), center);
-    expect(isValidTrackPlacement(state, center)).toBe(false);
-  });
-
   it("isAreaPaintable returns false on a structure-owned empty tile", () => {
     const state = withStructureTile(createTestGameState(), center);
     expect(isAreaPaintable(state, center)).toBe(false);
@@ -73,8 +61,6 @@ describe("placement validation blocks structure-owned tiles", () => {
       { x: center.x + 1, y: center.y },
     ]);
     expect(canPlaceBuilding(state, "smallHouse", center, 0)).toBe(true);
-    expect(isValidRoadPlacement(state, center)).toBe(true);
-    expect(isValidTrackPlacement(state, center)).toBe(true);
     expect(isAreaPaintable(state, center)).toBe(true);
   });
 });

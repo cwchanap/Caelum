@@ -81,6 +81,11 @@ pub(crate) fn lay_track_costed(
     state: &GameSnapshot,
     point: &Point,
 ) -> GameplayResult<CostedMutation> {
+    // Track already on the tile is a harmless no-op — the same skip the line
+    // stroke applies per tile — not a blocked placement and not a charge.
+    if get_tile(&state.map, point).is_some_and(|tile| tile.has_track) {
+        return Ok(CostedMutation::free(state.clone()));
+    }
     let authorized = CostPolicy::from_snapshot(state)
         .quote(TRACK_COST, state.budget)
         .authorize()?;
@@ -157,7 +162,20 @@ pub(crate) fn lay_track_line_outcome(
         changed = true;
     }
 
+    crate::road::deduplicate_points(&mut blocked_tiles);
+    crate::road::deduplicate_points(&mut unaffordable_tiles);
+
     if !changed {
+        // Every requested tile already carried track: a harmless no-op like
+        // the single-tile path, not an invalid stroke.
+        if blocked_tiles.is_empty() && unaffordable_tiles.is_empty() {
+            return Ok(TrackLineOutcome {
+                snapshot: next,
+                cost,
+                blocked_tiles,
+                unaffordable_tiles,
+            });
+        }
         return Err(GameplayRejection::at(
             RejectionCode::InvalidTrackStroke,
             points[0],
