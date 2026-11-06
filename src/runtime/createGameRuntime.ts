@@ -35,6 +35,7 @@ import {
   roadMutationForUi,
 } from "./roadMutations";
 import {
+  clearRoadMutationPreview,
   createUiState,
   type CommandDestination,
   type RouteDraftCheckpoint,
@@ -285,6 +286,11 @@ export async function createGameRuntime(
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
   let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set when a world-changing update wants the armed hover preview
+  // re-issued. Instead of one IPC per applied tick, the mark collapses a
+  // burst into one trailing request; any fresh request (or invalidation)
+  // resolves it.
+  let roadPreviewStale = false;
   // Preview requests run outside the gameplay queue, so they need their own
   // runtime epoch when a foreground transaction temporarily replaces the
   // backend snapshot. Responses from an older epoch cannot publish into a
@@ -553,28 +559,46 @@ export async function createGameRuntime(
       activeRoadMutation === null &&
       hoverPreviewTimer === null;
     if (nextMutation === null && previewWorldChanged) {
-      clearHoverPreviewTimer();
-      invalidateRoadPreview();
-      nextUi = {
-        ...nextUi,
-        roadMutationPreview: null,
-        roadMutationPreviewError: null,
-        roadMutationPreviewPending: false,
-      };
+      // Only invalidate when a preview is actually armed: under Select and
+      // other non-road tools a budget-changing tick must not churn the
+      // coordinator or allocate a cleared UiState on every commit.
+      if (
+        nextUi.roadMutationPreview !== null ||
+        nextUi.roadMutationPreviewError !== null ||
+        nextUi.roadMutationPreviewPending ||
+        activeRoadMutation !== null ||
+        hoverPreviewTimer !== null
+      ) {
+        invalidateRoadPreview();
+        nextUi = clearRoadMutationPreview(nextUi);
+      }
     } else if (
       nextMutation !== null &&
       (previewWorldChanged || missingPreviewRecovery)
     ) {
-      const generation = nextUi.roadPreviewGeneration + 1;
-      const snapshot = commit(nextState, {
-        ...nextUi,
-        roadPreviewGeneration: generation,
-        roadMutationPreviewPending: true,
-      });
-      sendRoadMutationPreviewRequest(nextMutation, generation);
-      if (refreshedRouteDraft !== null)
-        requestRoutePreview(refreshedRouteDraft);
-      return snapshot;
+      if (missingPreviewRecovery || hoverPreviewDebounceMs <= 0) {
+        const generation = nextUi.roadPreviewGeneration + 1;
+        const snapshot = commit(nextState, {
+          ...nextUi,
+          roadPreviewGeneration: generation,
+          roadMutationPreviewPending: true,
+        });
+        sendRoadMutationPreviewRequest(nextMutation, generation);
+        if (refreshedRouteDraft !== null)
+          requestRoutePreview(refreshedRouteDraft);
+        return snapshot;
+      }
+      // Throttle instead of sending per tick: mark the armed preview stale
+      // and let one trailing timer re-derive the mutation after the debounce
+      // window. The held preview stays on screen meanwhile, and a burst of
+      // budget/scene-changing updates collapses into a single IPC.
+      roadPreviewStale = true;
+      if (hoverPreviewTimer === null) {
+        hoverPreviewTimer = setTimeout(() => {
+          hoverPreviewTimer = null;
+          reissueRoadMutationPreview();
+        }, hoverPreviewDebounceMs);
+      }
     }
     const snapshot = commit(nextState, nextUi);
     if (refreshedRouteDraft !== null) requestRoutePreview(refreshedRouteDraft);
@@ -589,10 +613,8 @@ export async function createGameRuntime(
   };
 
   const stopRuntime = (): void => {
-    clearHoverPreviewTimer();
     previewCoordinator.invalidateRoute();
-    previewCoordinator.invalidateRoadMutation();
-    activeRoadMutation = null;
+    invalidateRoadPreview();
     if (ui.roadMutationPreviewPending) {
       ui = { ...ui, roadMutationPreviewPending: false };
     }
@@ -606,18 +628,12 @@ export async function createGameRuntime(
   const failBackend = (error: unknown): RuntimeSnapshot => {
     backendError = error instanceof Error ? error.message : String(error);
     dead = true;
-    previewCoordinator.invalidateRoute();
-    previewCoordinator.invalidateRoadMutation();
-    activeRoadMutation = null;
     workingSave.dispose();
     stopRuntime();
     // Clear stale preview UI so a fatal error doesn't leave the road preview
     // overlay visible or the route draft stuck at previewPending forever.
     const clearedUi: UiState = {
-      ...ui,
-      roadMutationPreview: null,
-      roadMutationPreviewError: null,
-      roadMutationPreviewPending: false,
+      ...clearRoadMutationPreview(ui),
       routeDraft:
         ui.routeDraft === null
           ? ui.routeDraft
@@ -938,28 +954,27 @@ export async function createGameRuntime(
     invalidateRoadPreview();
     const result = commit(
       state,
-      clearGameplayFeedback({
-        ...ui,
-        activeTool: route === undefined ? "metroLine" : "busRoute",
-        selectedNodeKind: null,
-        selectedVehicleId: null,
-        selectedBuilding: null,
-        selectedArea: null,
-        activeBuildGroup: null,
-        activeCommandDestination: "lines",
-        selectedId: null,
-        routeDraft,
-        routeDraftHistory: emptyRouteDraftHistory(),
-        routeDraftNotice: null,
-        routePreviewError: null,
-        routePreviewHostError: null,
-        selectedRouteId: routeId,
-        routeFailureFocus: null,
-        drag: null,
-        roadMutationPreview: null,
-        roadMutationPreviewError: null,
-        roadMutationPreviewPending: false,
-      }),
+      clearRoadMutationPreview(
+        clearGameplayFeedback({
+          ...ui,
+          activeTool: route === undefined ? "metroLine" : "busRoute",
+          selectedNodeKind: null,
+          selectedVehicleId: null,
+          selectedBuilding: null,
+          selectedArea: null,
+          activeBuildGroup: null,
+          activeCommandDestination: "lines",
+          selectedId: null,
+          routeDraft,
+          routeDraftHistory: emptyRouteDraftHistory(),
+          routeDraftNotice: null,
+          routePreviewError: null,
+          routePreviewHostError: null,
+          selectedRouteId: routeId,
+          routeFailureFocus: null,
+          drag: null,
+        }),
+      ),
     );
     requestRoutePreview(routeDraft);
     return result;
@@ -1292,7 +1307,6 @@ export async function createGameRuntime(
       ui.selectedBuilding !== null ||
       ui.selectedArea !== null
     ) {
-      clearHoverPreviewTimer();
       invalidateRoadPreview();
       return commit(state, nextToolUiState("inspect", ui));
     }
@@ -1304,6 +1318,9 @@ export async function createGameRuntime(
     generation: number,
   ): void => {
     if (dead || workingSave.isBusy()) return;
+    // Any fresh request answers whatever world change marked the preview
+    // stale, whether or not it was scheduled as a refresh.
+    roadPreviewStale = false;
     const requestRuntimeEpoch = previewRuntimeEpoch;
     activeRoadMutation = mutation;
     void previewCoordinator
@@ -1317,12 +1334,16 @@ export async function createGameRuntime(
         ) {
           return;
         }
+        activeRoadMutation = null;
         commit(state, {
           ...ui,
           roadMutationPreview: { ...response, mutation },
           roadMutationPreviewError: null,
           roadMutationPreviewPending: false,
         });
+        // The world kept moving while this request was in flight — issue the
+        // one trailing refresh those updates collapsed into.
+        if (roadPreviewStale) reissueRoadMutationPreview();
       })
       .catch((error: unknown) => {
         if (
@@ -1333,6 +1354,7 @@ export async function createGameRuntime(
         ) {
           return;
         }
+        activeRoadMutation = null;
         commit(state, {
           ...ui,
           roadMutationPreview: null,
@@ -1340,6 +1362,7 @@ export async function createGameRuntime(
             error instanceof Error ? error.message : String(error),
           roadMutationPreviewPending: false,
         });
+        if (roadPreviewStale) reissueRoadMutationPreview();
       });
   };
 
@@ -1361,6 +1384,32 @@ export async function createGameRuntime(
     return pending;
   };
 
+  /** Re-derives the hover-implied mutation and sends one preview request when
+   *  nothing is already armed or in flight. Covers the two ways the armed
+   *  preview loses its request without one being re-issued: the save busy
+   *  gate dropping re-requests while drained ticks invalidate it (the
+   *  workingSave publish hook calls this when the gate releases), and a
+   *  stale-marked refresh whose timer just fired. */
+  const reissueRoadMutationPreview = (): void => {
+    if (
+      dead ||
+      workingSave.isBusy() ||
+      activeRoadMutation !== null ||
+      hoverPreviewTimer !== null
+    ) {
+      return;
+    }
+    const mutation = roadMutationForUi(state, ui);
+    if (mutation === null) return;
+    const generation = ui.roadPreviewGeneration + 1;
+    commit(state, {
+      ...ui,
+      roadPreviewGeneration: generation,
+      roadMutationPreviewPending: true,
+    });
+    sendRoadMutationPreviewRequest(mutation, generation);
+  };
+
   /** Commit a UI transition and, if the resulting state implies a road mutation,
    *  fold the preview-generation bump into the SAME commit so only one
    *  `publish` fires. Replaces the prior pattern of committing the UI, then
@@ -1370,14 +1419,8 @@ export async function createGameRuntime(
     if (workingSave.isBusy()) return getSnapshot();
     const mutation = dead ? null : roadMutationForUi(state, nextUi);
     if (mutation === null) {
-      clearHoverPreviewTimer();
       invalidateRoadPreview();
-      return commit(state, {
-        ...nextUi,
-        roadMutationPreview: null,
-        roadMutationPreviewError: null,
-        roadMutationPreviewPending: false,
-      });
+      return commit(state, clearRoadMutationPreview(nextUi));
     }
     const generation = nextUi.roadPreviewGeneration + 1;
     const snapshot = commit(state, {
@@ -1391,15 +1434,14 @@ export async function createGameRuntime(
 
   const invalidateRoadPreview = (): void => {
     clearHoverPreviewTimer();
+    roadPreviewStale = false;
     previewCoordinator.invalidateRoadMutation();
     activeRoadMutation = null;
   };
 
   const installRestoredGameplay = (update: PresentationUpdate): void => {
-    clearHoverPreviewTimer();
     previewRuntimeEpoch += 1;
     previewCoordinator.invalidateRoute();
-    previewCoordinator.invalidateRoadMutation();
     invalidateRoadPreview();
     activeRouteSaveTokens.clear();
     nextRouteDraftInstanceId = 1;
@@ -1409,7 +1451,6 @@ export async function createGameRuntime(
     backendError = null;
     rejection = null;
     sandboxResetError = null;
-    activeRoadMutation = null;
   };
 
   const workingSave = createWorkingSaveRuntime({
@@ -1422,6 +1463,11 @@ export async function createGameRuntime(
     installRestoredGameplay,
     publish: () => {
       publish();
+      // Ticks drained while saving invalidate the armed hover preview, but
+      // the busy gate drops every re-request — so once the gate releases,
+      // re-issue it or the badge keeps its cleared verdict until the pointer
+      // moves again.
+      reissueRoadMutationPreview();
     },
     isRuntimeDead: () => dead,
   });
@@ -1499,9 +1545,13 @@ export async function createGameRuntime(
     reset() {
       if (dead) return Promise.resolve(getSnapshot());
       if (workingSave.isBusy()) return Promise.resolve(getSnapshot());
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
+      // The invalidation above drops any in-flight preview response, so its
+      // UI markers must clear too — otherwise a failed reset publishes the
+      // old ui with roadMutationPreviewPending still armed for a request
+      // that no longer exists.
+      commit(state, clearRoadMutationPreview(ui));
       return queueBackend(async () => {
         const result = await backend.reset();
         if (!result.ok) {
@@ -1521,7 +1571,6 @@ export async function createGameRuntime(
     resetUi() {
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, createUiState());
@@ -1530,7 +1579,6 @@ export async function createGameRuntime(
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
       if (ui.routeDraft !== null) return getSnapshot();
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       const next = nextToolUiState(tool, ui);
@@ -1551,7 +1599,6 @@ export async function createGameRuntime(
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
       if (ui.routeDraft !== null) return getSnapshot();
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, nextBuildingUiState(building, ui));
@@ -1560,7 +1607,6 @@ export async function createGameRuntime(
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
       if (ui.routeDraft !== null) return getSnapshot();
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commit(state, nextAreaUiState(area, ui));
@@ -1618,7 +1664,6 @@ export async function createGameRuntime(
       // Single commit: switch to the road tool (which clears building/area and
       // closes the drawer via nextToolUiState) and set the preset together, so
       // one click fully arms the tool with no intermediate render.
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commitWithRoadPreview({
@@ -1633,7 +1678,6 @@ export async function createGameRuntime(
       // Roundabouts are fixed click stamps. Switching sizes is one UI commit
       // and invalidates any in-flight road preview so an older footprint can
       // never populate the newly armed stamp.
-      clearHoverPreviewTimer();
       previewCoordinator.invalidateRoute();
       invalidateRoadPreview();
       return commitWithRoadPreview({
@@ -1697,20 +1741,10 @@ export async function createGameRuntime(
       if (dead) return getSnapshot();
       if (workingSave.isBusy()) return getSnapshot();
       invalidateRoadPreview();
+      const cleared = clearRoadMutationPreview(ui);
       return commit(
         state,
-        ui.drag === null &&
-          ui.roadMutationPreview === null &&
-          ui.roadMutationPreviewError === null &&
-          !ui.roadMutationPreviewPending
-          ? ui
-          : {
-              ...ui,
-              drag: null,
-              roadMutationPreview: null,
-              roadMutationPreviewError: null,
-              roadMutationPreviewPending: false,
-            },
+        ui.drag === null && cleared === ui ? ui : { ...cleared, drag: null },
       );
     },
     commitDrag() {
@@ -1728,13 +1762,7 @@ export async function createGameRuntime(
       // could no longer match by identity.
       const roadPreset = ui.roadPreset;
       invalidateRoadPreview();
-      commit(state, {
-        ...ui,
-        drag: null,
-        roadMutationPreview: null,
-        roadMutationPreviewError: null,
-        roadMutationPreviewPending: false,
-      });
+      commit(state, { ...clearRoadMutationPreview(ui), drag: null });
       if (gesture.tool === "area") {
         return enqueueDispatch({
           type: "paintAreaRectangle",
@@ -1851,15 +1879,9 @@ export async function createGameRuntime(
         // the old changed-tiles/cost/route-impacts overlay is stale, and
         // invalidating `activeRoadMutation` prevents an in-flight preview
         // response from repopulating it after the click.
-        clearHoverPreviewTimer();
         invalidateRoadPreview();
         const roadPreset = ui.roadPreset;
-        commit(state, {
-          ...ui,
-          roadMutationPreview: null,
-          roadMutationPreviewError: null,
-          roadMutationPreviewPending: false,
-        });
+        commit(state, clearRoadMutationPreview(ui));
         return enqueueComputedDispatch(() =>
           roadClickIntent(state, point, roadPreset),
         );
@@ -1867,14 +1889,8 @@ export async function createGameRuntime(
 
       if (ui.activeTool === "roundabout") {
         const size = ui.roundaboutSize;
-        clearHoverPreviewTimer();
         invalidateRoadPreview();
-        commit(state, {
-          ...ui,
-          roadMutationPreview: null,
-          roadMutationPreviewError: null,
-          roadMutationPreviewPending: false,
-        });
+        commit(state, clearRoadMutationPreview(ui));
         return enqueueDispatch({
           type: "placeRoundabout",
           origin: point,
@@ -2126,7 +2142,6 @@ export async function createGameRuntime(
       if (samePoint(point, ui.hoverTile)) {
         return commit(state, ui);
       }
-      clearHoverPreviewTimer();
       invalidateRoadPreview();
       // Every hover change (including non-null moves) invalidates generation
       // so late responses cannot pass a stale generation. When the new hover
@@ -2143,12 +2158,7 @@ export async function createGameRuntime(
       const mutation =
         point === null || dead ? null : roadMutationForUi(state, nextUi);
       if (mutation === null) {
-        return commit(state, {
-          ...nextUi,
-          roadMutationPreview: null,
-          roadMutationPreviewError: null,
-          roadMutationPreviewPending: false,
-        });
+        return commit(state, clearRoadMutationPreview(nextUi));
       }
       if (point === null || dead) {
         return commit(state, nextUi);

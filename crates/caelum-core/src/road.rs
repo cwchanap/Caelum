@@ -152,8 +152,35 @@ fn apply_linear_tiles_in_order(
             }
             0
         }
-        RoadMutation::LayTrack { .. } | RoadMutation::LayTrackLine { .. } => {
-            return Err(GameplayRejection::new(RejectionCode::BlockedTile));
+        RoadMutation::LayTrack { point } => {
+            let costed = crate::transit::lay_track_costed(original, point)?;
+            *candidate = costed.into_snapshot();
+            // The charge tracks the actual write: an already-laid tile is a
+            // free no-op, a newly tracked tile reports the nominal cost.
+            if original.map.tile(*point) != candidate.map.tile(*point) {
+                changed_tiles.push(*point);
+                crate::transit::TRACK_COST
+            } else {
+                skipped_tiles.push(*point);
+                0
+            }
+        }
+        RoadMutation::LayTrackLine { points } => {
+            let outcome = crate::transit::lay_track_line_outcome(original, points)?;
+            *candidate = outcome.snapshot;
+            *blocked_tiles = outcome.blocked_tiles;
+            *unaffordable_tiles = outcome.unaffordable_tiles;
+            for point in points {
+                if original.map.tile(*point) != candidate.map.tile(*point) {
+                    changed_tiles.push(*point);
+                } else {
+                    skipped_tiles.push(*point);
+                }
+            }
+            deduplicate_points(changed_tiles);
+            deduplicate_points(skipped_tiles);
+            skipped_tiles.retain(|point| !changed_tiles.contains(point));
+            outcome.cost
         }
     };
 
@@ -1263,7 +1290,7 @@ fn is_valid_road_placement(state: &GameSnapshot, point: Point) -> bool {
     })
 }
 
-fn deduplicate_points(points: &mut Vec<Point>) {
+pub(crate) fn deduplicate_points(points: &mut Vec<Point>) {
     let mut seen = HashSet::new();
     points.retain(|point| seen.insert(*point));
 }

@@ -1536,7 +1536,9 @@ fn existing_road_is_a_harmless_skip_not_a_blocked_cause() {
 }
 
 #[test]
-fn fully_skipped_track_stroke_rejects_with_the_attempted_footprint() {
+fn fully_skipped_track_stroke_is_a_no_op_not_a_rejection() {
+    // Every requested tile already carries track: same harmless skip the line
+    // applies per tile mid-stroke — never a rejection, a warning, or a charge.
     let mut engine = blank_engine();
     for point in [point(2, 2), point(3, 2)] {
         let laid = engine.dispatch(GameIntent::LayTrack { point });
@@ -1550,28 +1552,23 @@ fn fully_skipped_track_stroke_rejects_with_the_attempted_footprint() {
         },
         generation: 1,
     });
-    assert_eq!(
-        preview.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::InvalidTrackStroke),
-    );
-    assert_eq!(preview.changed_tiles, points);
+    assert_eq!(preview.rejection, None);
+    assert!(preview.changed_tiles.is_empty());
+    assert_eq!(preview.skipped_tiles, points);
+    assert_eq!(preview.cost, 0);
     assert!(preview.warnings.is_empty());
 
     let committed = engine.dispatch(GameIntent::LayTrackLine {
         points: points.clone(),
     });
     assert!(!committed.applied);
-    assert_eq!(
-        committed
-            .rejection
-            .as_ref()
-            .map(|rejection| &rejection.code),
-        Some(&RejectionCode::InvalidTrackStroke),
-    );
+    assert_eq!(committed.rejection, None);
 }
 
 #[test]
-fn single_track_tile_on_existing_track_still_rejects() {
+fn single_track_tile_on_existing_track_is_a_no_op() {
+    // Single-tile parity with the line stroke: already-laid track is skipped
+    // instead of rejected, matching "already-built tiles never warn".
     let mut engine = blank_engine();
     let laid = engine.dispatch(GameIntent::LayTrack { point: point(2, 2) });
     assert!(laid.applied, "track fixture: {laid:?}");
@@ -1580,19 +1577,12 @@ fn single_track_tile_on_existing_track_still_rejects() {
         mutation: RoadMutation::LayTrack { point: point(2, 2) },
         generation: 1,
     });
-    assert_eq!(
-        preview.rejection.as_ref().map(|rejection| &rejection.code),
-        Some(&RejectionCode::BlockedTile),
-    );
-    assert_eq!(preview.changed_tiles, vec![point(2, 2)]);
+    assert_eq!(preview.rejection, None);
+    assert!(preview.changed_tiles.is_empty());
+    assert_eq!(preview.skipped_tiles, vec![point(2, 2)]);
+    assert_eq!(preview.cost, 0);
 
     let committed = engine.dispatch(GameIntent::LayTrack { point: point(2, 2) });
     assert!(!committed.applied);
-    assert_eq!(
-        committed
-            .rejection
-            .as_ref()
-            .map(|rejection| &rejection.code),
-        Some(&RejectionCode::BlockedTile),
-    );
+    assert_eq!(committed.rejection, None);
 }

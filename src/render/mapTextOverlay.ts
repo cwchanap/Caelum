@@ -25,8 +25,6 @@ import {
   getTile,
   isAreaPaintable,
   isBuildingAffordableForPresentation,
-  isValidRoadPlacement,
-  isValidTrackPlacement,
 } from "./placementValidation";
 
 /**
@@ -105,6 +103,14 @@ function pendingBadge(label: string): CursorBadge {
   };
 }
 
+/** The badge shown while a preview request is outstanding, or the plain tool
+ *  label when none is coming (no mutation implies no request). */
+function pendingOrNeutralBadge(label: string, pending: boolean): CursorBadge {
+  return pending
+    ? pendingBadge(label)
+    : { text: label, a11yText: a11yLabel(label) };
+}
+
 function previewBadge(
   label: string,
   state: GameState,
@@ -179,7 +185,8 @@ function cursorBadgeText(
         `⦿ ${def.label}`,
         def.cost,
         state,
-        canPlaceBusStop(state, cursor),
+        isBuildingAffordableForPresentation(state, "busStop") &&
+          canPlaceBusStop(state, cursor),
       );
     }
     case "metroStation": {
@@ -188,7 +195,8 @@ function cursorBadgeText(
         `⦿ ${def.label}`,
         def.cost,
         state,
-        canPlaceBuilding(state, "metroStation", cursor, ui.buildingRotation),
+        isBuildingAffordableForPresentation(state, "metroStation") &&
+          canPlaceBuilding(state, "metroStation", cursor, ui.buildingRotation),
       );
     }
     case "road": {
@@ -200,53 +208,33 @@ function cursorBadgeText(
             : "";
       const label = `⦿ Road${glyph}`;
       if (staleHeldPreview) {
-        return ui.roadMutationPreviewPending
-          ? pendingBadge(label)
-          : { text: label, a11yText: a11yLabel(label) };
+        return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
       }
       if (preview !== null) {
         return previewBadge(label, state, preview);
       }
       const tile = getTile(state.map, cursor);
-      if (tile?.kind === "road" && roadMutationForUi(state, ui) === null) {
+      const mutation = roadMutationForUi(state, ui);
+      if (tile?.kind === "road" && mutation === null) {
         return { text: "Already road", a11yText: "Already road" };
       }
-      if (roadMutationForUi(state, ui) !== null) {
-        return ui.roadMutationPreviewPending
-          ? pendingBadge(label)
-          : { text: label, a11yText: a11yLabel(label) };
-      }
-      // Bare roads can be cycled; structure-owned roads (junctions/roundabouts)
-      // reject cycleRoadDirection, so exclude them from the existing-road fallback.
-      const ok =
-        isValidRoadPlacement(state, cursor) ||
-        (tile?.kind === "road" && tile.roadStructureId === undefined);
-      return placementBadge(label, ok);
+      return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
     }
     case "track": {
       const label = "⦿ Track";
       if (staleHeldPreview) {
-        return ui.roadMutationPreviewPending
-          ? pendingBadge(label)
-          : { text: label, a11yText: a11yLabel(label) };
+        return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
       }
       if (preview !== null) {
         return previewBadge(label, state, preview);
       }
-      if (roadMutationForUi(state, ui) !== null) {
-        return ui.roadMutationPreviewPending
-          ? pendingBadge(label)
-          : { text: label, a11yText: a11yLabel(label) };
-      }
-      return placementBadge(label, isValidTrackPlacement(state, cursor));
+      return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
     }
     case "roundabout": {
       const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
       const label = `⦿ Roundabout ${sizeLabel}`;
       if (preview === null || staleHeldPreview) {
-        return ui.roadMutationPreviewPending
-          ? pendingBadge(label)
-          : { text: label, a11yText: a11yLabel(label) };
+        return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
       }
       return previewBadge(label, state, preview);
     }
@@ -266,9 +254,7 @@ function cursorBadgeText(
       // the remove tool is always a remove drag (tool switches clear the
       // gesture), so `drag === null` is the whole idle check.
       if (staleHeldPreview) {
-        return ui.roadMutationPreviewPending
-          ? pendingBadge(label)
-          : { text: label, a11yText: a11yLabel(label) };
+        return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
       }
       if (
         preview === null ||

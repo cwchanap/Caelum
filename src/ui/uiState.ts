@@ -108,6 +108,26 @@ export interface UiState {
   activeCommandDestination: CommandDestination | null;
 }
 
+/** Clears the held road-mutation preview together with its pending and error
+ *  markers — the three fields describe one request's lifecycle, so they move
+ *  as a unit. Returns the same object when nothing is armed, so callers can
+ *  run it unconditionally without forcing a commit. */
+export function clearRoadMutationPreview(ui: UiState): UiState {
+  if (
+    ui.roadMutationPreview === null &&
+    ui.roadMutationPreviewError === null &&
+    !ui.roadMutationPreviewPending
+  ) {
+    return ui;
+  }
+  return {
+    ...ui,
+    roadMutationPreview: null,
+    roadMutationPreviewError: null,
+    roadMutationPreviewPending: false,
+  };
+}
+
 export function createUiState(): UiState {
   return {
     activeTool: "inspect",

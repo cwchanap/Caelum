@@ -132,27 +132,6 @@ export function isBuildingAffordableForPresentation(
   );
 }
 
-export function isValidRoadPlacement(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    tile?.kind === "empty" &&
-    tile?.roadStructureId === undefined &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
-}
-
-export function isValidTrackPlacement(state: GameState, point: Point): boolean {
-  const tile = getTile(state.map, point);
-  return (
-    (tile?.kind === "empty" || tile?.kind === "road") &&
-    tile?.hasTrack !== true &&
-    tile?.roadStructureId === undefined &&
-    !isBuildingOccupied(state, point) &&
-    !isTransitNodeAt(state, point)
-  );
-}
-
 export function isAreaPaintable(state: GameState, point: Point): boolean {
   const tile = getTile(state.map, point);
   return (
