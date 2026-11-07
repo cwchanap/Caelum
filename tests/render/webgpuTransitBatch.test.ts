@@ -455,9 +455,11 @@ describe("buildTransitBatch committed legs", () => {
     );
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
+    expect(hasVertexNear(vertices, "#e04f39", 80, 45.5)).toBe(true);
+    expect(hasVertexNear(vertices, "#e04f39", 82.5, 48)).toBe(true);
+    // Bevel triangle fills the outer notch without overlapping the inner corner
     const rim = (5 / 2) * Math.SQRT1_2;
-    expect(hasVertexNear(vertices, "#e04f39", 80 + rim, 48 - rim)).toBe(true);
-    expect(hasVertexNear(vertices, "#e04f39", 80 - rim, 48 + rim)).toBe(true);
+    expect(hasVertexNear(vertices, "#e04f39", 80 - rim, 48 + rim)).toBe(false);
   });
 
   it("does not fill a collinear joint between solid steps", () => {
@@ -470,9 +472,53 @@ describe("buildTransitBatch committed legs", () => {
     );
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
-    const rim = (5 / 2) * Math.SQRT1_2;
-    expect(hasVertexNear(vertices, "#e04f39", 80 + rim, 48 - rim)).toBe(false);
-    expect(hasVertexNear(vertices, "#e04f39", 80 - rim, 48 + rim)).toBe(false);
+    expect(hasVertexNear(vertices, "#e04f39", 80, 48)).toBe(false);
+  });
+
+  it("fills the corner notch across legs meeting at a stop", () => {
+    const leg1Path: TransitPath = {
+      kind: "road",
+      steps: [
+        {
+          position: { x: 1, y: 1 },
+          enteringHeading: "east",
+          leavingHeading: "east",
+          movement: "straight",
+          geometry: { kind: "line", from: { x: 1, y: 1 }, to: { x: 2, y: 1 } },
+          travelSeconds: 1.25,
+        },
+      ],
+      totalTravelSeconds: 1.25,
+    };
+    const leg2Path: TransitPath = {
+      kind: "road",
+      steps: [
+        {
+          position: { x: 2, y: 1 },
+          enteringHeading: "east",
+          leavingHeading: "south",
+          movement: "rightTurn",
+          geometry: { kind: "line", from: { x: 2, y: 1 }, to: { x: 2, y: 2 } },
+          travelSeconds: 1.75,
+        },
+      ],
+      totalTravelSeconds: 1.75,
+    };
+    const state = stateWithLegs(
+      [
+        routeLeg("a", "b", "connected", leg1Path),
+        routeLeg("b", "c", "connected", leg2Path),
+      ],
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 1 },
+        { x: 2, y: 2 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(hasVertexNear(vertices, "#e04f39", 80, 45.5)).toBe(true);
+    expect(hasVertexNear(vertices, "#e04f39", 82.5, 48)).toBe(true);
   });
 
   it("emits no arrowheads for a pathless failed leg", () => {
