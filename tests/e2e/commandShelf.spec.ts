@@ -245,7 +245,7 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
   await expect(page.getByTestId("route-preview-status")).toHaveText(
     /connected/i,
   );
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
   await expect(page.getByTestId("command-tool-select")).toHaveAttribute(
     "aria-pressed",
     "true",

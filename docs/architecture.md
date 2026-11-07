@@ -34,12 +34,17 @@ from a budget delta.
 Atomic purchases remain atomic, while road and track strokes authorize and
 accumulate each newly authored paid tile in input order. Scenario-authored
 `place_building_core()` remains free. WASM and Tauri only forward the existing
-Rust results. TypeScript never derives or enforces authoritative cost policy: route
-previews are geometry-only, with no vehicle cost or affordability, while
-road-mutation previews still surface Rust's `RejectionCode::InsufficientBudget`
-for construction-budget failures. Beyond formatting, the only place cost
-reaches the UI is the Lines service row, which displays Rust snapshot-derived
-`estimatedDeploymentCost`; deployment itself is an atomic Rust purchase, and
+Rust results. TypeScript never derives or enforces authoritative cost policy:
+new-route previews carry a nullable, read-only `initialFleet` quote — the same
+nominal price and `CostPolicy` affordability the shared Rust fleet helper
+computes from the live flow-aware service cycle at the 600-second default
+target — while road-mutation previews still surface Rust's
+`RejectionCode::InsufficientBudget` for construction-budget failures. The
+quote is a point-in-time estimate: deployment itself is an atomic Rust
+purchase that re-authorizes the real price at dispatch, and an unaffordable
+quote simply skips the automatic deployment while still saving the line.
+Beyond formatting, cost reaches the UI in the new-draft Save label and the
+Lines service row's Rust snapshot-derived `estimatedDeploymentCost`;
 TypeScript's only direct economy-preset interpretation for affordability or
 cost behavior remains the read-only building-hover helper.
 
