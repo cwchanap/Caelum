@@ -183,6 +183,56 @@ function pixelCorner(): PathGeometry {
   };
 }
 
+function cornerJointPath(): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: { x: 1, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: { kind: "line", from: { x: 1, y: 1 }, to: { x: 2, y: 1 } },
+        travelSeconds: 1.25,
+      },
+      {
+        position: { x: 2, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "south",
+        movement: "rightTurn",
+        geometry: { kind: "line", from: { x: 2, y: 1 }, to: { x: 2, y: 2 } },
+        travelSeconds: 1.75,
+      },
+    ],
+    totalTravelSeconds: 3,
+  };
+}
+
+function straightJointPath(): TransitPath {
+  return {
+    kind: "road",
+    steps: [
+      {
+        position: { x: 1, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: { kind: "line", from: { x: 1, y: 1 }, to: { x: 2, y: 1 } },
+        travelSeconds: 1.25,
+      },
+      {
+        position: { x: 2, y: 1 },
+        enteringHeading: "east",
+        leavingHeading: "east",
+        movement: "straight",
+        geometry: { kind: "line", from: { x: 2, y: 1 }, to: { x: 3, y: 1 } },
+        travelSeconds: 1.25,
+      },
+    ],
+    totalTravelSeconds: 2.5,
+  };
+}
+
 /** Render-only roundabout-style arc: quarter circle around (2,2), r=1. */
 function arcPath(): TransitPath {
   return {
@@ -393,6 +443,36 @@ describe("buildTransitBatch committed legs", () => {
 
     const covered = coveredStripFraction(vertices, "#e04f39", pixelCorner());
     expect(covered).toBeGreaterThan(0.95);
+  });
+
+  it("fills the butt-cap notch where two solid steps turn at a shared tile", () => {
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "connected", cornerJointPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 2 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const rim = (5 / 2) * Math.SQRT1_2;
+    expect(hasVertexNear(vertices, "#e04f39", 80 + rim, 48 - rim)).toBe(true);
+    expect(hasVertexNear(vertices, "#e04f39", 80 - rim, 48 + rim)).toBe(true);
+  });
+
+  it("does not fill a collinear joint between solid steps", () => {
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "connected", straightJointPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 3, y: 1 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const rim = (5 / 2) * Math.SQRT1_2;
+    expect(hasVertexNear(vertices, "#e04f39", 80 + rim, 48 - rim)).toBe(false);
+    expect(hasVertexNear(vertices, "#e04f39", 80 - rim, 48 + rim)).toBe(false);
   });
 
   it("emits no arrowheads for a pathless failed leg", () => {

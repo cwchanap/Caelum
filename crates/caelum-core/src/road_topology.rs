@@ -759,18 +759,9 @@ fn transition_geometry(
     let from_position = TripPosition::from(from);
     let to_position = TripPosition::from(to);
     match movement {
-        MovementKind::Straight => PathGeometry::Line {
-            from: from_position,
-            to: to_position,
-        },
-        MovementKind::RightTurn | MovementKind::LeftTurn => {
-            let (incoming_dx, incoming_dy) = offset_components(incoming);
-            PathGeometry::QuadraticBezier {
+        MovementKind::Straight | MovementKind::RightTurn | MovementKind::LeftTurn => {
+            PathGeometry::Line {
                 from: from_position,
-                control: TripPosition {
-                    x: f64::from(from.x) + f64::from(incoming_dx) * 0.5,
-                    y: f64::from(from.y) + f64::from(incoming_dy) * 0.5,
-                },
                 to: to_position,
             }
         }
