@@ -535,11 +535,6 @@ pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u3
     ((round_trip_seconds / f64::from(target_headway_seconds)).ceil() as usize).max(1)
 }
 
-/// The one initial-fleet sizing shared by preview, deployment, and saved-line
-/// metrics: the required count and its checked **nominal** cost for one
-/// already derived, traffic-aware `round_trip_seconds` at
-/// `target_headway_seconds`. `None` means the count or cost overflowed `i32`;
-/// each caller keeps its existing overflow semantics.
 pub(crate) fn initial_fleet(
     round_trip_seconds: f64,
     mode: TransitMode,

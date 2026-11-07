@@ -7,7 +7,7 @@ use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest,
 };
 use caelum_core::road::RoadMutation;
-use caelum_core::transit::{BUS_COST, ROAD_COST};
+use caelum_core::transit::{BUS_COST, METRO_COST, ROAD_COST};
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -171,10 +171,6 @@ fn blank_engine() -> GameEngine {
     GameEngine::from_sandbox_request(request).expect("blank grid fixture request is valid")
 }
 
-/// Serpentine two-stop network: four parallel road rows joined end-to-end
-/// leave the router one forced corridor between the terminals, so private-car
-/// congestion can push the traffic-aware round trip past the 600 s default
-/// headway and the initial fleet needs more than one bus.
 fn congested_serpentine_engine() -> GameEngine {
     let mut engine = blank_engine();
     for y in [2, 4, 6, 8] {
@@ -706,6 +702,11 @@ fn metro_preview_is_geometry_only_with_zero_budget() {
         .iter()
         .all(|leg| leg.status == RouteLegStatus::Connected));
     assert!(response.rejection.is_none(), "{response:?}");
+    let quote = response
+        .initial_fleet
+        .expect("a valid new metro draft publishes an initial-fleet quote");
+    assert_eq!(quote.cost, METRO_COST);
+    assert!(!quote.affordable);
     let wire = serde_json::to_value(&response).expect("preview serializes");
     assert!(wire.get("initialVehicleCost").is_none());
     assert!(wire.get("affordable").is_none());
