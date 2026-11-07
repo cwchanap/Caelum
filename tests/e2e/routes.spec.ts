@@ -315,6 +315,7 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   expect(fleetQuote?.affordable).toBe(true);
   const saveAndRun = page.getByRole("button", {
     name: `Save & run · ${formatBudget(fleetQuote!.cost)}`,
+    exact: true,
   });
   await expect(saveAndRun).toBeVisible();
   await saveAndRun.click();
