@@ -51,6 +51,7 @@ describe("Tauri backend", () => {
             missingWaypointIds: [],
             warnings: [],
             rejection: null,
+            initialFleet: null,
           };
       }
     });
