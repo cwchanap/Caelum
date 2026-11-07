@@ -189,15 +189,6 @@
     </ul>
   {/if}
 
-  {#if editor.initialFleet !== null && !editor.initialFleet.affordable}
-    <ul class="route-preview-warnings" data-testid="route-fleet-warning">
-      <li>
-        Need {formatBudget(editor.initialFleet.cost)} for the initial fleet; available
-        {formatBudget(editor.budget)}
-      </li>
-    </ul>
-  {/if}
-
   <div class="route-editor-actions">
     <button
       type="button"
@@ -207,9 +198,9 @@
       >{editor.previewPending
         ? "Checking route…"
         : editor.source === "create"
-          ? editor.initialFleet?.affordable === true
+          ? editor.initialFleet !== null
             ? `Save & run · ${formatBudget(editor.initialFleet.cost)}`
-            : "Save without fleet"
+            : "Save & run"
           : "Save route"}</button
     >
     <button type="button" class="route-cancel" onclick={onCancel}>Cancel</button

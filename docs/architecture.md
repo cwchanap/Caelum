@@ -41,8 +41,11 @@ computes from the live flow-aware service cycle at the 600-second default
 target — while road-mutation previews still surface Rust's
 `RejectionCode::InsufficientBudget` for construction-budget failures. The
 quote is a point-in-time estimate: deployment itself is an atomic Rust
-purchase that re-authorizes the real price at dispatch, and an unaffordable
-quote simply skips the automatic deployment while still saving the line.
+purchase that re-authorizes the real price at dispatch. Save attempts the
+deployment whenever a quote exists — even one marked unaffordable, since the
+budget may have changed since the preview — and an `insufficientBudget`
+rejection still leaves the created line saved, annotated `savedWithoutFleet`
+so feedback reads "Saved without fleet: …".
 Beyond formatting, cost reaches the UI in the new-draft Save label and the
 Lines service row's Rust snapshot-derived `estimatedDeploymentCost`;
 TypeScript's only direct economy-preset interpretation for affordability or

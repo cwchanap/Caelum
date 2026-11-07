@@ -149,7 +149,7 @@ describe("RouteEditor", () => {
     expect(screen.queryByTestId("route-fleet-warning")).toBeNull();
   });
 
-  it("warns and offers Save without fleet when the fleet is unaffordable", async () => {
+  it("prices initial fleet in Save & run and defaults to Save & run without a quote", async () => {
     const { rerender } = render(RouteEditor, {
       props: editorProps(
         createDraftView({
@@ -160,19 +160,14 @@ describe("RouteEditor", () => {
     });
 
     expect(
-      screen.getByRole("button", { name: "Save without fleet" }),
+      screen.getByRole("button", { name: "Save & run · $16,000" }),
     ).toBeEnabled();
-    expect(screen.getByTestId("route-fleet-warning")).toHaveTextContent(
-      "Need $16,000 for the initial fleet; available $4,000",
-    );
+    expect(screen.queryByTestId("route-fleet-warning")).toBeNull();
 
     await rerender(
       editorProps(createDraftView({ initialFleet: null, budget: 0 })),
     );
-    expect(
-      screen.getByRole("button", { name: "Save without fleet" }),
-    ).toBeEnabled();
-    expect(screen.queryByTestId("route-fleet-warning")).toBeNull();
+    expect(screen.getByRole("button", { name: "Save & run" })).toBeEnabled();
   });
 
   it("offers Reload after a stale revision and keeps Cancel available", () => {

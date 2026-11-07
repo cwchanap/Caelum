@@ -7,7 +7,7 @@
 
 ## Player outcome
 
-A new Bus or Metro draft shows the **nominal initial-fleet price**, consistent with existing Lines prices. A valid, affordable draft offers **Save & run · $X**. A new draft whose fleet is unaffordable warns **Need $X for the initial fleet; available $Y** and offers **Save without fleet**, which creates the line without an automatic fleet purchase. Creative also displays the nominal price but `CostPolicy` authorizes the purchase without charging the budget. Editing an existing route remains **Save route**, without a purchase.
+A new Bus or Metro draft shows the **nominal initial-fleet price**, consistent with existing Lines prices. A valid new draft offers **Save & run · $X** whenever a quote exists, affordable or not — the quote's affordability is only a point-in-time hint, so Save always attempts the fleet purchase. If Rust rejects the purchase for budget, the line still saves and feedback reads **Saved without fleet: Needs $X; only $Y is available.** Creative also displays the nominal price but `CostPolicy` authorizes the purchase without charging the budget. Editing an existing route remains **Save route**, without a purchase.
 
 Fix the visible hook at ordinary road corners using **one shared path geometry** for the drawn line, vehicles, and map picking, matching the attached `uat2-route-line-corner-hook` screenshot. Preserve travel timing and game topology; a sharp turn at the tile centre is acceptable.
 
@@ -40,14 +40,13 @@ Consolidate the current price formula in **all three** Rust callers: `preview_ro
 
 Derive a single create-only `initialFleet` in `selectRouteEditorView` from the **current-generation** preview. Reuse existing `formatBudget` and budget display; do not duplicate Rust policy.
 
-- New create + `initialFleet.affordable === true`: **Save & run · $X** where X is the quoted nominal price.
-- New create + `initialFleet.affordable === false`: **Save without fleet**, plus a nonblocking warning showing nominal cost and money available.
-- New create + **null quote**: **Save without fleet** without inventing a price or warning. Valid route creation remains allowed, as today.
+- New create + **any quote** (`affordable` true or false): **Save & run · $X** where X is the quoted nominal price. A stale `affordable: false` must not suppress the deploy attempt — the budget may have changed since the preview.
+- New create + **null quote**: **Save & run** without inventing a price. Valid route creation remains allowed, as today, and no deployment is attempted.
 - Edit: **Save route**, unchanged. Pending/rejected/stale previews keep the **existing** `canSaveRouteDraft` gate and Checking route state; a missing quote does **not** create a new disabled-Save condition.
 
-At Save click, capture `deploy = draft.preview?.initialFleet?.affordable === true` with the existing draft token. Keep the queued create, ID diff, accepted-create commit, and duplicate/superseded Save protections. If `deploy` is false, skip only `deployInitialFleet` while still saving the line. If true, keep the existing create-then-deploy sequence.
+At Save click, capture `deploy = isCreate && draft.preview?.initialFleet !== null` with the existing draft token. Keep the queued create, ID diff, accepted-create commit, and duplicate/superseded Save protections. If `deploy` is false, skip only `deployInitialFleet` while still saving the line. If true, keep the existing create-then-deploy sequence.
 
-The quote is only a point-in-time estimate. If budget/flow changes before the actual dispatch, Rust recomputes and authorizes purchase. An unexpected deployment rejection still leaves the created route and existing manual Deploy fallback, with the existing rejection feedback. Do not add a second Save handler or backend mutation.
+The quote is only a point-in-time estimate. If budget/flow changes before the actual dispatch, Rust recomputes and authorizes purchase. An `insufficientBudget` deployment rejection still leaves the created route and existing manual Deploy fallback; the runtime annotates that rejection's context with `savedWithoutFleet: true` so feedback reads **Saved without fleet: Needs $X; only $Y is available.** Other deployment rejections keep the existing rejection feedback. Do not add a second Save handler or backend mutation.
 
 ## 3. Corner geometry: align route strokes, vehicles, and picking
 
@@ -57,7 +56,7 @@ This is one shared geometry source for the **committed route stroke, highlight h
 
 Replace the existing `right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent` test in `crates/caelum-core/tests/road_topology.rs` with an assertion that turns have line geometry between their expected centres and cannot bulge outside those endpoints. Do not do a three-layer source/offset/vertex investigation for the already identified bug.
 
-If the adjoining non-dashed solid segments leave a visible outer notch from butt caps, fill that joint with the existing `SolidGeometry.circle` in `transitBatch.ts::drawSteps`. Limit this to genuine solid step joints; no duplicate corner transformation in TypeScript, generic miter system, additional scene state, or new picking geometry. The current independent shared-corridor offsets can already leave minor kinks; accept those until UAT demonstrates a practical problem.
+If the adjoining non-dashed solid segments leave a visible outer notch from butt caps, fill that joint in `transitBatch.ts` with corner triangles (`fillCornerNotch`) across consecutive solid steps and across legs meeting at a stop. Limit this to genuine solid joints; no duplicate corner transformation in TypeScript, generic miter system, additional scene state, or new picking geometry. The current independent shared-corridor offsets can already leave minor kinks; accept those until UAT demonstrates a practical problem.
 
 ## Non-goals
 
@@ -68,8 +67,8 @@ If the adjoining non-dashed solid segments leave a visible outer notch from butt
 
 ## Acceptance criteria
 
-1. A new connected Bus or Metro draft shows a Rust-derived **nominal** initial-fleet quote and **Save & run · $X** when affordable; Creative displays nominal cost while remaining authorized at zero budget deduction.
-2. An unaffordable new draft warns with needed and available amounts, and **Save without fleet** saves one line without an automatic deployment. A valid null-quote draft can still be saved without fleet.
+1. A new connected Bus or Metro draft shows a Rust-derived **nominal** initial-fleet quote and **Save & run · $X** whenever a quote exists; Creative displays nominal cost while remaining authorized at zero budget deduction.
+2. Save always attempts the fleet purchase for a quoted create; a real `insufficientBudget` rejection leaves the line saved and reports **Saved without fleet** with needed and available amounts. A valid null-quote draft saves without attempting deployment.
 3. Edit Save stays unchanged. Existing rejected-create, duplicate/superseded Save, and deployment-time rejection behavior is preserved.
 4. The same Rust fleet cost helper serves preview, deployment, and saved-line metrics; sizing uses the live flow-aware cycle and default 600-second target.
 5. Ordinary right/left turns use shared **line** geometry: overlay, bus movement, and map picking agree, with no visible hook. Preserve other movement types and accept minor existing shared-corridor kinks pending UAT.

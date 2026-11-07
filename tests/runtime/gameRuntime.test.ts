@@ -6035,10 +6035,11 @@ describe("route creation and management", () => {
         requiredBudget: 800,
         availableBudget: 0,
         affectedRouteIds: [route.id],
+        savedWithoutFleet: true,
       },
     });
     expect(snapshot.shell.actionFeedback?.message).toBe(
-      "Needs $800; only $0 is available.",
+      "Saved without fleet: Needs $800; only $0 is available.",
     );
     expect(row).toMatchObject({
       status: { primary: "noFleet" },
@@ -6112,7 +6113,7 @@ describe("route creation and management", () => {
     });
   });
 
-  it("saves the route without deploying when the quoted fleet is unaffordable", async () => {
+  it("dispatches deployInitialFleet even when the quoted fleet was marked unaffordable at preview time", async () => {
     const base = backendSpy(routeSnapshot());
     const backend: BackendSpy = {
       ...base,
@@ -6135,10 +6136,11 @@ describe("route creation and management", () => {
         pattern: "loop",
         waypointIds: ["stop-001", "stop-002"],
       },
+      {
+        type: "deployInitialFleet",
+        lineId: "route-001",
+      },
     ]);
-    const created = runtime.getSnapshot().state.transit.routes.at(-1);
-    expect(created?.stopIds).toEqual(["stop-001", "stop-002"]);
-    expect(created?.vehicleIds).toEqual([]);
   });
 
   it("does not dispatch assignVehicle when the backend rejects the route", async () => {

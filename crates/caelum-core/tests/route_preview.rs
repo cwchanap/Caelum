@@ -687,7 +687,7 @@ fn route_preview_returns_typed_validation_with_generation() {
 }
 
 #[test]
-fn metro_preview_is_geometry_only_with_zero_budget() {
+fn metro_preview_quotes_initial_fleet_with_zero_budget() {
     let mut engine = editable_metro_network_engine();
     engine.set_budget_for_test(0);
     let response = engine.preview_route(RoutePreviewRequest {
@@ -707,9 +707,6 @@ fn metro_preview_is_geometry_only_with_zero_budget() {
         .expect("a valid new metro draft publishes an initial-fleet quote");
     assert_eq!(quote.cost, METRO_COST);
     assert!(!quote.affordable);
-    let wire = serde_json::to_value(&response).expect("preview serializes");
-    assert!(wire.get("initialVehicleCost").is_none());
-    assert!(wire.get("affordable").is_none());
 }
 
 #[test]

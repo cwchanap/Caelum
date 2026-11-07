@@ -166,6 +166,7 @@ export interface RejectionContext {
   availableBudget?: number;
   /** Present on every Rust rejection; optional so omitted serde payloads normalize cleanly. */
   affectedRouteIds?: string[];
+  savedWithoutFleet?: boolean;
 }
 
 export interface GameplayRejection {

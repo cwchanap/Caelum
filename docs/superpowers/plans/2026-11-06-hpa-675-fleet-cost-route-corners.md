@@ -30,14 +30,14 @@
 
 **Proof:** One structural quote is consistent with existing saved-line estimates and the actual Rust purchase without mutating the city during preview.
 
-## Task 2 — Present the quote and honor Save without fleet
+## Task 2 — Present the quote and always attempt deployment on Save
 
-**Use the ticket's two UI cases** in `tests/ui/routeEditor.test.ts`: a connected new Bus draft showing `Save & run · $X` and an unaffordable draft showing the warning and `Save without fleet`. Reuse existing route-editor edit/disabled-state tests; do not add parallel pending/stale/Creative tests.
+**Use the ticket's UI case** in `tests/ui/routeEditor.test.ts`: a connected new Bus draft showing `Save & run · $X` for any quote, affordable or not, and `Save & run` when the quote is null. Reuse existing route-editor edit/disabled-state tests; do not add parallel pending/stale/Creative tests.
 
-1. Add one create-only nullable `initialFleet` to `RouteEditorView`, selected from the current-generation preview; reuse `formatBudget` and existing budget. `cost` is **nominal** even in Creative; `affordable` is Rust's `CostPolicy` answer.
-2. In `RouteEditor.svelte`, use **Save & run · $X** only when `initialFleet?.affordable === true`; otherwise new drafts say **Save without fleet**. Show needed/available warning only when a real quote exists and affordability is false. A valid draft with null quote can still Save without fleet. Edits remain **Save route**; no new `canSaveRouteDraft` restriction.
-3. In existing `saveRouteDraft`, capture `deploy = draft.preview?.initialFleet?.affordable === true` together with its draft token. Continue saving the route in the existing queue. Only skip the post-create `deployInitialFleet` when `deploy` is false. Preserve accepted-create publication, ID diff, token deduplication, and superseded draft behavior.
-4. In `tests/runtime/gameRuntime.test.ts`, add **one** unaffordable-create check that sends `createRoute` and **no** `deployInitialFleet`. Rerun the existing happy-path deployment and `keeps a created Bus line and manual Deploy fallback after budget rejection` tests; the latter already exercises a real deployment-time failure.
+1. Add one create-only nullable `initialFleet` to `RouteEditorView`, selected from the current-generation preview; reuse `formatBudget`. `cost` is **nominal** even in Creative; `affordable` is Rust's `CostPolicy` answer and remains a hint only.
+2. In `RouteEditor.svelte`, show **Save & run · $X** whenever `initialFleet !== null` and **Save & run** when it is null; no affordability warning or relabel. Edits remain **Save route**; no new `canSaveRouteDraft` restriction.
+3. In existing `saveRouteDraft`, capture `deploy = isCreate && draft.preview?.initialFleet !== null` together with its draft token. Continue saving the route in the existing queue and always run the post-create `deployInitialFleet` when `deploy` is true. Preserve accepted-create publication, ID diff, token deduplication, and superseded draft behavior.
+4. When the deployment rejects with `insufficientBudget`, annotate the rejection context with `savedWithoutFleet: true` so feedback reads **Saved without fleet: …**, and republish. In `tests/runtime/gameRuntime.test.ts`, cover one deploy-rejection save that still creates the line and surfaces the annotated message; rerun the existing happy-path deployment and deployment-time rejection tests.
 
 **Proof:** New drafts' button text matches the actual dispatched operation, and no valid Save becomes disabled merely because a quote is null.
 
@@ -47,7 +47,7 @@
 
 1. Replace the existing `right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent` assertion in `crates/caelum-core/tests/road_topology.rs` with a focused regression: ordinary right/left turns have straight `Line` geometry connecting adjacent tile centres and do **not** bulge past the two endpoints. Preserve the existing continuity test for consecutive steps.
 2. In `crates/caelum-core/src/road_topology.rs::transition_geometry`, combine `RightTurn | LeftTurn` with the existing `Straight` line arm. Leave U-turn and roundabout geometry unchanged. With one upstream geometry source, route strokes, highlight halos, draft paths, buses, line picking, and direction arrows stay aligned automatically.
-3. Check actual solid-stroke joins in `src/render/webgpu/transitBatch.ts::drawSteps`. If two non-dashed, adjacent steps leave an outer notch because their ends are butt-capped, draw a `SolidGeometry.circle` at their shared point using the existing line width and color. Do **not** add a generic miter system, special picking geometry, a second TS turn representation, or extra render state. Keep broken-route dashes as dashes.
+3. Check actual solid-stroke joins in `src/render/webgpu/transitBatch.ts`. If two non-dashed, adjacent steps or consecutive legs leave an outer notch because their ends are butt-capped, fill it with corner triangles (`fillCornerNotch`) using the existing line width and color, threading the previous step's end tangent across leg boundaries. Do **not** add a generic miter system, special picking geometry, a second TS turn representation, or extra render state. Keep broken-route dashes and dashed drafts unfilled.
 4. Rerun existing route geometry, WebGPU transit/vehicle, and map picking tests. A single Rust corner-shape regression suffices for the source defect; add a render vertex assertion only if the join fix actually requires it.
 
 **Proof:** At an ordinary corner, the route and bus follow exactly the same tile-centre path, with no overshoot. Shared-corridor offset joins may still kink slightly; accept that existing limitation pending UAT.
@@ -77,8 +77,8 @@ bun run build
 
 - [ ] One existing draft PR contains spec, plan, code, and tests.
 - [ ] One nullable nominal-price quote on Rust preview uses the 600-second default and existing CostPolicy; preview, deployment and saved-line metrics reuse the price helper.
-- [ ] New Bus and Metro drafts display the correct action and cost.
-- [ ] Insufficient-budget Save creates the route and does **not** attempt fleet deployment.
+- [ ] New Bus and Metro drafts display **Save & run · $X** for any quote and **Save & run** for a null quote.
+- [ ] Save attempts fleet deployment for every quoted create; an `insufficientBudget` rejection leaves the line saved and reports **Saved without fleet**.
 - [ ] Creative shows the same nominal price as other Lines UI, and CostPolicy still authorizes a free purchase.
 - [ ] Existing route Edit still updates without purchasing a fleet.
 - [ ] Old create/deploy rejection and stale-save protections remain intact.

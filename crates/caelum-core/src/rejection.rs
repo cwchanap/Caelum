@@ -71,6 +71,8 @@ pub struct RejectionContext {
     pub available_budget: Option<i32>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub affected_route_ids: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none", default)]
+    pub saved_without_fleet: Option<bool>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
