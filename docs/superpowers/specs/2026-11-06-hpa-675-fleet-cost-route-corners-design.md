@@ -49,7 +49,7 @@ At Save click, capture `deploy = draft.preview?.initialFleet?.affordable === tru
 
 The quote is only a point-in-time estimate. If budget/flow changes before the actual dispatch, Rust recomputes and authorizes purchase. An unexpected deployment rejection still leaves the created route and existing manual Deploy fallback, with the existing rejection feedback. Do not add a second Save handler or backend mutation.
 
-## 3. Corner rendering: fix only the visible route stroke
+## 3. Corner geometry: align route strokes, vehicles, and picking
 
 **Chosen design:** fix ordinary turn geometry at the Rust source, `crates/caelum-core/src/road_topology.rs::transition_geometry`. Merge `MovementKind::RightTurn | MovementKind::LeftTurn` into the `Straight` line-geometry arm. The line connects the same adjacent tile centres without the current quadratic control-point overshoot.
 
