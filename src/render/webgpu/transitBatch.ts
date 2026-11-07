@@ -43,15 +43,48 @@ function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
 }
 
-function leavesButtCapNotch(
-  incoming: TripPosition,
-  outgoing: TripPosition,
-): boolean {
-  const scale =
-    Math.hypot(incoming.x, incoming.y) * Math.hypot(outgoing.x, outgoing.y);
-  if (scale === 0) return false;
-  const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
-  return Math.abs(cross) > scale * 1e-6;
+function fillCornerNotch(
+  g: SolidGeometry,
+  previousEnd: ReturnType<typeof pointAndTangentAt>,
+  start: ReturnType<typeof pointAndTangentAt>,
+  lineWidth: number,
+  color: Rgba,
+): void {
+  const p1 = previousEnd.point;
+  const p2 = start.point;
+  const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  if (dist > 12) return;
+
+  const t1 = previousEnd.tangent;
+  const t2 = start.tangent;
+  const len1 = Math.hypot(t1.x, t1.y);
+  const len2 = Math.hypot(t2.x, t2.y);
+  if (len1 === 0 || len2 === 0) return;
+
+  const u1 = { x: t1.x / len1, y: t1.y / len1 };
+  const u2 = { x: t2.x / len2, y: t2.y / len2 };
+  const cross = u1.x * u2.y - u1.y * u2.x;
+  if (Math.abs(cross) < 1e-4) return;
+
+  const halfWidth = lineWidth / 2;
+  const n1 = { x: -u1.y * halfWidth, y: u1.x * halfWidth };
+  const n2 = { x: -u2.y * halfWidth, y: u2.x * halfWidth };
+
+  // If cross > 0, the turn is to the left in screen space (+n is inside, -n is outside).
+  // If cross < 0, the turn is to the right in screen space (-n is inside, +n is outside).
+  const sign = cross > 0 ? -1 : 1;
+  const o1 = { x: p1.x + sign * n1.x, y: p1.y + sign * n1.y };
+  const o2 = { x: p2.x + sign * n2.x, y: p2.y + sign * n2.y };
+
+  if (dist < 0.5) {
+    const p = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
+    g.triangle(p, o1, o2, color);
+  } else {
+    const i1 = { x: p1.x - sign * n1.x, y: p1.y - sign * n1.y };
+    const i2 = { x: p2.x - sign * n2.x, y: p2.y - sign * n2.y };
+    g.triangle(o1, o2, i2, color);
+    g.triangle(o1, i2, i1, color);
+  }
 }
 
 export interface RenderableLine {
@@ -215,21 +248,19 @@ function drawSteps(
   routeId: string,
   corridors: CorridorGroups,
   dash?: { dash: number; gap: number },
-): void {
-  let previousEnd: ReturnType<typeof pointAndTangentAt> | undefined;
+  initialPreviousEnd?: ReturnType<typeof pointAndTangentAt>,
+): ReturnType<typeof pointAndTangentAt> | undefined {
+  let previousEnd = dash === undefined ? initialPreviousEnd : undefined;
   for (const step of path.steps) {
     const geometry = toPixelGeometry(
       offsetForRoute(step.geometry, routeId, corridors),
       tileCenter,
     );
-    const start = pointAndTangentAt(geometry, 0);
-    if (
-      dash === undefined &&
-      previousEnd !== undefined &&
-      sameTripPosition(previousEnd.point, start.point) &&
-      leavesButtCapNotch(previousEnd.tangent, start.tangent)
-    ) {
-      g.circle(start.point, lineWidth / 2, color);
+    if (dash === undefined) {
+      const start = pointAndTangentAt(geometry, 0);
+      if (previousEnd !== undefined) {
+        fillCornerNotch(g, previousEnd, start, lineWidth, color);
+      }
     }
     if (geometry.kind === "line") {
       if (dash !== undefined) {
@@ -249,8 +280,11 @@ function drawSteps(
     } else {
       g.curve(geometry, lineWidth, color);
     }
-    previousEnd = pointAndTangentAt(geometry, 1);
+    if (dash === undefined) {
+      previousEnd = pointAndTangentAt(geometry, 1);
+    }
   }
+  return previousEnd;
 }
 
 function drawEndpointConnector(
@@ -278,12 +312,14 @@ function drawLegs(
   routeId: string,
   corridors: CorridorGroups,
 ): void {
+  let previousEnd: ReturnType<typeof pointAndTangentAt> | undefined;
   for (const leg of legs) {
     const path = presentationPath(leg);
     const from = nodes.get(leg.fromWaypointId);
     const to = nodes.get(leg.toWaypointId);
     if (path !== null) {
-      drawSteps(
+      const isDashed = leg.status !== "connected";
+      previousEnd = drawSteps(
         g,
         path,
         color,
@@ -291,7 +327,8 @@ function drawLegs(
         routeId,
         corridors,
         // Canvas renderLeg dashes only the failed last-valid geometry.
-        leg.status !== "connected" ? BROKEN_LEG_DASH : undefined,
+        isDashed ? BROKEN_LEG_DASH : undefined,
+        previousEnd,
       );
       const firstStep = path.steps[0];
       const lastStep = path.steps[path.steps.length - 1];
