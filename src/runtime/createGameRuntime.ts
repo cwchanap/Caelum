@@ -996,6 +996,7 @@ export async function createGameRuntime(
     };
     const isCreate = draft.source.kind === "create";
     const mode = draft.mode;
+    const deploy = draft.preview?.initialFleet?.affordable === true;
     const tokenKey = `${token.instanceId}:${token.generation}:${token.source}`;
     if (activeRouteSaveTokens.has(tokenKey)) {
       return getSnapshot();
@@ -1042,7 +1043,12 @@ export async function createGameRuntime(
         );
         const result = await backend.dispatch(intent);
         const deployCreatedLine = (): Promise<RuntimeSnapshot> | null => {
-          if (!isCreate || !result.applied || result.update.scene === null) {
+          if (
+            !deploy ||
+            !isCreate ||
+            !result.applied ||
+            result.update.scene === null
+          ) {
             return null;
           }
           const ids =
