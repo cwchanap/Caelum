@@ -7,9 +7,9 @@
 
 ## Player outcome
 
-Creating a new Bus or Metro line tells the player what the initial fleet will **actually cost** before they save. A valid, affordable draft offers **Save & run · $X**. A draft without enough money says **Need $X for the initial fleet; available $Y** and offers **Save without fleet**. That action saves the route as today, but deliberately skips an unaffordable deployment. An existing route edit continues to say **Save route** and never purchases a fleet.
+A new Bus or Metro draft shows the **nominal initial-fleet price**, consistent with existing Lines prices. A valid, affordable draft offers **Save & run · $X**. A new draft whose fleet is unaffordable warns **Need $X for the initial fleet; available $Y** and offers **Save without fleet**, which creates the line without an automatic fleet purchase. Creative also displays the nominal price but `CostPolicy` authorizes the purchase without charging the budget. Editing an existing route remains **Save route**, without a purchase.
 
-Draw route lines through ordinary road corners without the visible overshoot/hook shown in the attached `uat2-route-line-corner-hook` screenshot. Do not change transit movement or road routing merely to alter the overlay.
+Fix the visible hook at ordinary road corners using **one shared path geometry** for the drawn line, vehicles, and map picking, matching the attached `uat2-route-line-corner-hook` screenshot. Preserve travel timing and game topology; a sharp turn at the tile centre is acceptable.
 
 ## Current architecture and verified findings
 
@@ -18,43 +18,46 @@ Draw route lines through ordinary road corners without the visible overshoot/hoo
 - `crates/caelum-core/src/preview.rs` already resolves draft legs in Rust, but its `RoutePreviewResponse` has geometry and timing only. Its `total_travel_seconds` uses stored leg estimates; it is **not** the live congestion-aware cycle time charged by the fleet purchase.
 - `crates/caelum-core/src/service_control.rs` owns the default 600-second target, congestion-aware round-trip calculation, `required_fleet`, `vehicle_cost`, and atomic `deploy_initial_fleet`. `CostPolicy` owns Standard-versus-Creative affordability and deduction.
 - Both Tauri and WASM already expose `previewRoute`. The smallest seam is an additive nullable quote on that existing response; no new intent, backend API, or command.
-- `src/render/webgpu/transitBatch.ts` draws each route step from the source geometry after shared-corridor offsetting. `src/render/routeGeometry.ts` owns those offsets. Rust `road_topology::transition_geometry` emits a quadratic for right/left turns with a control point extending along the entering heading; a turn whose endpoints lie on the outgoing road row can consequently bulge beyond that row, matching the reported hook. Confirm with a real path fixture before selecting the final change.
+- `road_topology::transition_geometry` constructs ordinary right/left turns as quadratic curves with control at `from + 0.5 × incoming`; the curve visibly overshoots even at zero corridor offset. Critically, `presentationForRoute` is used by route strokes **and** vehicle rendering and map picking. A stroke-only correction would make buses and click targets disagree with the line. Change the Rust source geometry instead, with only a small visual joint fill in the renderer.
 
 ## 1. Rust-derived quote on the existing draft preview
 
-Add two explicit nullable fields to Rust `RoutePreviewResponse`, mirrored in `src/runtime/backend/types.ts`:
+Add **one** nullable structured field to Rust `RoutePreviewResponse`, mirrored in `src/runtime/backend/types.ts`:
 
-- `initialFleetCost: number | null`: **effective amount payable on Save & run**, after the existing economy preset. Standard displays the authoritative required-fleet purchase price; Creative displays $0 because the charge is waived.
-- `initialFleetAffordable: boolean | null`: `CostPolicy`'s affordability decision using the same snapshot as the quote. In Creative, this is true when a valid fleet quote exists.
+```rust
+initial_fleet: Option<InitialFleetQuote> // { cost: i32, affordable: bool }
+```
 
-Populate these only for a **new**, fully connected, valid Bus/Metro draft with a calculable service cycle. Edits, rejected/partial drafts, and non-service modes return explicit nulls. Return null rather than manufacture a numeric price when requirements cannot be computed.
+The TS wire field is `initialFleet: { cost: number; affordable: boolean } | null`. `cost` is the **nominal** cost (what every existing Lines price displays), including for Creative. `affordable` comes directly from `CostPolicy::from_snapshot(snapshot).quote(cost, snapshot.budget)` and is true in Creative when a valid quote exists. No new payable-cost getter, special Creative display rule, or duplicate TS fleet formula.
 
-Use one small Rust helper shared by the preview quote and `deploy_initial_fleet` to compute the **initial fleet requirement and nominal price** using existing service-control logic: live `vehicle_step_seconds` and `round_trip_seconds`, `required_fleet(..., DEFAULT_TARGET_HEADWAY_SECONDS)`, checked multiplication by the existing vehicle price. Make the actual quote through `CostPolicy::from_snapshot(snapshot).quote(nominal, snapshot.budget)`. Expose a tiny read-only payable amount accessor on the existing quote if needed. Avoid duplicating fleet sizing or economy rules in TypeScript and avoid introducing a service-plan abstraction.
+Populate the quote only for new, fully connected, valid Bus/Metro drafts with a calculable service cycle. Edits, rejected/partial drafts, and unavailable cycle/overflow cases return `None`. The saved line's `estimatedDeploymentCost` remains nominal and unchanged. Normalize `initialFleet: response.initialFleet ?? null` in `normalizeRoutePreviewResponse` for WASM/Tauri parity.
 
-Keep the saved line's existing `estimatedDeploymentCost` and its current semantics unchanged; this ticket is about the new-draft purchase before saving. The preview quote is informational. The real deployment still recomputes and authorizes against current gameplay state.
+Consolidate the current price formula in **all three** Rust callers: `preview_route`, `deploy_initial_fleet`, and `service_control::metrics`. A small `initial_fleet(round_trip_seconds, mode, target_headway_seconds) -> Option<(usize, i32)>` helper can reuse `required_fleet`, `vehicle_cost`, and checked conversion/multiplication. Each caller computes its congestion-aware cycle through the existing `round_trip_seconds(legs, mode, flow)` path and then calls the helper; `metrics()` already needs that cycle for other fields, so avoid calculating it twice. The deploy path maps a missing/overflowing quote to its existing rejection and **re-authorizes** immediately before mutation; no new gameplay intent or host method.
 
-Normalize nullable quote fields across WASM/Tauri in `normalizeRoutePreviewResponse` (a WASM `None` may arrive as `undefined`). All preview fixtures must use the same explicit null contract.
+`RoutePreviewResponse.total_travel_seconds` sums stored estimates and must **not** be used to derive the quote. The preview remains read-only: no budget reservation, mutation, caching, or new service-plan abstraction.
 
 ## 2. Draft footer and save semantics
 
-Derive a minimal create-only `initialFleetCost` and `initialFleetAffordable` view from the **current-generation** draft preview in `selectRouteEditorView`. Reuse `formatBudget`, the current route status/warnings, and current game budget for the explanatory copy; the displayed price and affordability always come from Rust.
+Derive a single create-only `initialFleet` in `selectRouteEditorView` from the **current-generation** preview. Reuse existing `formatBudget` and budget display; do not duplicate Rust policy.
 
-- Valid + affordable + quote present: primary button **Save & run · $X**; no warning.
-- Valid + unaffordable + quote present: clear non-blocking warning with both quoted cost and available money, and button **Save without fleet**. Saving must still be enabled.
-- Still checking/rejected/disconnected/quote unavailable: retain the disabled Save and useful status; do not display an invented zero price.
-- Edit source: existing **Save route** action, unchanged by the quote fields.
+- New create + `initialFleet.affordable === true`: **Save & run · $X** where X is the quoted nominal price.
+- New create + `initialFleet.affordable === false`: **Save without fleet**, plus a nonblocking warning showing nominal cost and money available.
+- New create + **null quote**: **Save without fleet** without inventing a price or warning. Valid route creation remains allowed, as today.
+- Edit: **Save route**, unchanged. Pending/rejected/stale previews keep the **existing** `canSaveRouteDraft` gate and Checking route state; a missing quote does **not** create a new disabled-Save condition.
 
-At Save-click time, capture the **current, valid preview's** affordability decision together with the existing draft instance/generation token. For a new draft that the player explicitly saved **without** fleet, perform the existing `createRoute` and commit the accepted route, but **skip** `deployInitialFleet`. For **Save & run**, keep the current accepted-create-then-deploy flow. Do not build a second save handler or change `CreateRoute`'s fleet-free Rust contract.
+At Save click, capture `deploy = draft.preview?.initialFleet?.affordable === true` with the existing draft token. Keep the queued create, ID diff, accepted-create commit, and duplicate/superseded Save protections. If `deploy` is false, skip only `deployInitialFleet` while still saving the line. If true, keep the existing create-then-deploy sequence.
 
-If cash or traffic changes between preview and deployment, Rust remains authoritative. An initially affordable preview can still encounter a real deployment rejection: retain the created line, show the existing budget failure, and leave manual Deploy available. An outdated preview response cannot replace the current draft because the runtime already checks its epoch, instance, and generation. Preserve the existing Save de-duplication and superseded-draft behavior.
+The quote is only a point-in-time estimate. If budget/flow changes before the actual dispatch, Rust recomputes and authorizes purchase. An unexpected deployment rejection still leaves the created route and existing manual Deploy fallback, with the existing rejection feedback. Do not add a second Save handler or backend mutation.
 
 ## 3. Corner rendering: fix only the visible route stroke
 
-Start with the UAT's L-corner and a simple Rust-style two-step right/left-turn fixture. Capture (a) source turn geometry, (b) `offsetForRoute` result and (c) final `buildTransitBatch` vertices. This identifies whether the visible bulge originates in the source quadratic, the corridor offset, or both.
+**Chosen design:** fix ordinary turn geometry at the Rust source, `crates/caelum-core/src/road_topology.rs::transition_geometry`. Merge `MovementKind::RightTurn | MovementKind::LeftTurn` into the `Straight` line-geometry arm. The line connects the same adjacent tile centres without the current quadratic control-point overshoot.
 
-The expected fix is **render-only**, localized to the transit route stroke geometry/drawing helper in `src/render/webgpu/transitBatch.ts` (or one small adjacent pure function): render ordinary 90-degree turn steps as a clean turn through the adjoining road-tile point, without the quadratic control-point excursion, while maintaining a continuous path when neighboring corridor offsets differ. Apply consistently to committed lines, emphasized halos, broken-line dashes, and draft strokes as relevant. Preserve line width and existing shared-corridor separation; avoid a new generic stroke/join engine.
+This is one shared geometry source for the **committed route stroke, highlight halo, broken-route dashes, draft preview, sampled vehicle positions, direction arrows, and map picking**. It does change the displayed vehicle path: buses turn sharply at tile centres instead of swinging outside the road. It does **not** change travel time, route connectivity, turn classifications, economy, or routing decisions. Preserve quadratic U-turns and roundabout behavior.
 
-Do **not** alter the Rust `PathGeometry` used by vehicle movement, change routes, change the map topology, or modify roundabout/U-turn geometry unless a targeted reproduction proves it necessary. If the minimal isolated test shows the real problem is solely in an existing offset helper, fix that helper instead and retain original movement geometry. Use the test to justify the final choice; do not blindly change both layers.
+Replace the existing `right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent` test in `crates/caelum-core/tests/road_topology.rs` with an assertion that turns have line geometry between their expected centres and cannot bulge outside those endpoints. Do not do a three-layer source/offset/vertex investigation for the already identified bug.
+
+If the adjoining non-dashed solid segments leave a visible outer notch from butt caps, fill that joint with the existing `SolidGeometry.circle` in `transitBatch.ts::drawSteps`. Limit this to genuine solid step joints; no duplicate corner transformation in TypeScript, generic miter system, additional scene state, or new picking geometry. The current independent shared-corridor offsets can already leave minor kinks; accept those until UAT demonstrates a practical problem.
 
 ## Non-goals
 
@@ -65,13 +68,13 @@ Do **not** alter the Rust `PathGeometry` used by vehicle movement, change routes
 
 ## Acceptance criteria
 
-1. A new connected Bus and Metro draft shows a Rust-derived effective price and offers **Save & run · $X** when affordable.
-2. Insufficient-budget Standard drafts warn with needed and available amounts **before Save**, and **Save without fleet** creates one line with zero vehicles and no attempted deployment. Creative can start service for $0 effective charge.
-3. Edit Save stays unchanged. Rejected create, duplicate click, superseded draft, and deployment-time budget rejection keep their existing safe behavior.
-4. The price/required fleet uses Rust's current traffic-aware cycle rule and stays consistent with a same-state actual fleet purchase, including a route needing multiple vehicles.
-5. L-corner route strokes have no bump/hook, including under shared-corridor offsets; straight lines, roundabout arcs, dashed broken legs, and draft visibility remain correct.
-6. Focused Rust, TS selector/UI/runtime, WebGPU vertex, and existing browser route tests pass. Architecture docs describe the new read-only route-preview quote.
+1. A new connected Bus or Metro draft shows a Rust-derived **nominal** initial-fleet quote and **Save & run · $X** when affordable; Creative displays nominal cost while remaining authorized at zero budget deduction.
+2. An unaffordable new draft warns with needed and available amounts, and **Save without fleet** saves one line without an automatic deployment. A valid null-quote draft can still be saved without fleet.
+3. Edit Save stays unchanged. Existing rejected-create, duplicate/superseded Save, and deployment-time rejection behavior is preserved.
+4. The same Rust fleet cost helper serves preview, deployment, and saved-line metrics; sizing uses the live flow-aware cycle and default 600-second target.
+5. Ordinary right/left turns use shared **line** geometry: overlay, bus movement, and map picking agree, with no visible hook. Preserve other movement types and accept minor existing shared-corridor kinks pending UAT.
+6. A focused happy path and representative failure, existing regression coverage, workspace Rust tests and standard Bun checks pass; architecture docs describe the new quote.
 
 ## Tradeoffs
 
-The quote is a point-in-time estimate: the engine re-authorizes at the actual deployment. This is appropriate for a hobby game and avoids new reservation/transaction infrastructure. The corner change should stay visual unless tests show that movement geometry itself is invalid. No screenshots need to become brittle golden-image tests.
+The quote is informational: budget and traffic can change before the engine re-authorizes deployment; avoiding a reservation system is deliberate. The serious corner regression would be splitting the drawn line from vehicles and map picking; this design prevents that by changing their shared Rust geometry, at the cost of a sharper bus rotation at tile centres. Independent corridor offsets may still leave small kinks at shared corners; accept those until UAT provides evidence, rather than build a new join engine or pixel-perfect screenshot matrix.
