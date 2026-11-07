@@ -41,7 +41,7 @@
 
 **Proof:** New drafts' button text matches the actual dispatched operation, and no valid Save becomes disabled merely because a quote is null.
 
-## Task 3 — Reproduce and repair the 90-degree route overlay
+## Task 3 — Replace overshooting turn geometry at its Rust source
 
 **Decision already made from code review: fix the shared Rust source, not a renderer-only path fork.**
 
