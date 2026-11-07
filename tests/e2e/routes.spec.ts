@@ -203,7 +203,7 @@ async function createDamageRoute(
   }
   await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Loop" }).check();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
 }
 
 async function newestBusRoute(page: import("@playwright/test").Page) {
@@ -308,7 +308,17 @@ test("create, manage, and delete a bus route", async ({ page }) => {
     .getByTestId("route-draft")
     .getByRole("button", { name: "Remove" })
     .click();
-  await page.getByRole("button", { name: "Save & run" }).click();
+
+  await waitForRoutePreview(page, 2);
+  const fleetQuote = (await runtimeSnapshot(page)).ui.routeDraft?.preview
+    ?.initialFleet;
+  expect(fleetQuote?.affordable).toBe(true);
+  const saveAndRun = page.getByRole("button", {
+    name: `Save & run · ${formatBudget(fleetQuote!.cost)}`,
+    exact: true,
+  });
+  await expect(saveAndRun).toBeVisible();
+  await saveAndRun.click();
 
   // The route now appears in the management panel.
   await openCommandDestination(page, "lines");
@@ -543,7 +553,7 @@ test("create a metro line on laid track", async ({ page }) => {
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
 
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("panel-lines")).toBeVisible();
@@ -582,7 +592,7 @@ test("finishing a bus route starts its initial fleet", async ({ page }) => {
   }
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
 
   // Save & run commits the route before the initial fleet dispatch. Poll the
   // live Rust-derived transit state until both commits are observable.
@@ -639,7 +649,7 @@ test("starts a bus service and recovers fleet after a route edit", async ({
   }
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
 
@@ -903,7 +913,7 @@ test("tunes a Save & run bus service from its line summary", async ({
     await clickMapTile(canvas, stop);
   }
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
   await expect
@@ -1149,7 +1159,7 @@ test("turns between paired roads and edits the committed route", async ({
     .toEqual({ pending: false, rejection: null });
   await openCommandDestination(page, "lines");
   await page.getByRole("radio", { name: "Loop" }).check();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
 
   // Poll until the route is committed — the Save dispatch is async.
   await expect
@@ -1209,7 +1219,7 @@ test("rebuilds an exact-anchor missing station and repairs its routes", async ({
   await clickMapTile(canvas, first);
   await clickMapTile(canvas, second);
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
   // Poll until the metro line is committed — the Save dispatch is async.
   await expect
     .poll(async () => {
@@ -1265,7 +1275,7 @@ test("starts a Metro service with Save & run and tunes its target headway", asyn
   await clickMapTile(canvas, { x: 8, y: 2 });
   await clickMapTile(canvas, { x: 12, y: 2 });
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
   await openCommandDestination(page, "lines");
 
   await expect
@@ -1377,7 +1387,7 @@ test("navigates from a selected stop to its serving line and back", async ({
     await clickMapTile(canvas, stop);
   }
   await openCommandDestination(page, "lines");
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
 
   // The Save dispatch is asynchronous; wait for the committed route and the
   // cleared draft before leaving geometry mode.

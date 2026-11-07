@@ -1,12 +1,13 @@
 use caelum_core::model::{
-    EconomyPreset, Heading, LegFailureReason, Point, RoadStructure, RoundaboutSize, Route,
-    RouteLegKind, RouteLegStatus, ServicePattern, TransitMode,
+    ActiveTrip, CitizenRoutine, EconomyPreset, Heading, LegFailureReason, Point, PrivateCarTrip,
+    RoadStructure, RoundaboutSize, Route, RouteLegKind, RouteLegStatus, ServicePattern, Sim,
+    TransitMode, TripPosition, TripPurpose, TripStatus,
 };
 use caelum_core::preview::{
     RoadMutationPreviewRequest, RouteImpact, RouteImpactKind, RoutePreviewRequest,
 };
 use caelum_core::road::RoadMutation;
-use caelum_core::transit::ROAD_COST;
+use caelum_core::transit::{BUS_COST, METRO_COST, ROAD_COST};
 use caelum_core::{GameEngine, GameIntent, RejectionCode, RoadPreset};
 
 fn point(x: i32, y: i32) -> Point {
@@ -162,6 +163,64 @@ fn shared_access_existing_route_engine() -> GameEngine {
             .preferred_heading = None;
     }
     GameEngine::from_snapshot(snapshot).expect("shared-access route fixture snapshot")
+}
+
+fn blank_engine() -> GameEngine {
+    let mut request = caelum_core::canonical_default_request();
+    request.template_id = "blankGrid".to_string();
+    GameEngine::from_sandbox_request(request).expect("blank grid fixture request is valid")
+}
+
+fn congested_serpentine_engine() -> GameEngine {
+    let mut engine = blank_engine();
+    for y in [2, 4, 6, 8] {
+        road_line(&mut engine, (2..=27).map(|x| point(x, y)).collect());
+    }
+    for connector in [point(27, 3), point(2, 5), point(27, 7)] {
+        dispatch(&mut engine, GameIntent::LayRoad { point: connector });
+    }
+    for stop in [point(2, 1), point(2, 9)] {
+        dispatch(&mut engine, GameIntent::AddBusStop { point: stop });
+    }
+    let corridor = engine
+        .preview_route(valid_route_preview(0))
+        .legs
+        .into_iter()
+        .find_map(|leg| leg.current_path)
+        .expect("serpentine fixture legs are connected");
+    let mut snapshot = engine.snapshot();
+    for index in 0..12 {
+        let sim_id = format!("sim-{index:03}");
+        snapshot.sims.push(Sim {
+            id: sim_id.clone(),
+            home: point(2, 1),
+            position: point(2, 1),
+            routine: CitizenRoutine::Worker {
+                shift_template: "standard".to_string(),
+                workplace: None,
+            },
+            next_activity: None,
+        });
+        snapshot.active_trips.push(ActiveTrip {
+            id: format!("traffic-{index:03}"),
+            sim_id,
+            purpose: TripPurpose::CommuteOutbound,
+            origin: point(2, 1),
+            destination: point(2, 9),
+            position: TripPosition { x: 2.0, y: 1.0 },
+            status: TripStatus::Driving,
+            deadline: 300.0,
+            route_plan: None,
+            current_leg_index: 0,
+            patience_remaining: 30.0,
+            current_leg_wait_seconds: 0.0,
+            private_car_trip: Some(PrivateCarTrip {
+                path: corridor.clone(),
+                arrival_time: 100.0,
+            }),
+        });
+    }
+    GameEngine::from_snapshot(snapshot).expect("congested fixture loads")
 }
 
 fn assert_exact_leg_shape(
@@ -623,6 +682,7 @@ fn route_preview_returns_typed_validation_with_generation() {
         });
         assert_eq!(response.generation, generation);
         assert_eq!(response.rejection.expect("typed rejection").code, code);
+        assert!(response.initial_fleet.is_none());
     }
 }
 
@@ -642,6 +702,11 @@ fn metro_preview_is_geometry_only_with_zero_budget() {
         .iter()
         .all(|leg| leg.status == RouteLegStatus::Connected));
     assert!(response.rejection.is_none(), "{response:?}");
+    let quote = response
+        .initial_fleet
+        .expect("a valid new metro draft publishes an initial-fleet quote");
+    assert_eq!(quote.cost, METRO_COST);
+    assert!(!quote.affordable);
     let wire = serde_json::to_value(&response).expect("preview serializes");
     assert!(wire.get("initialVehicleCost").is_none());
     assert!(wire.get("affordable").is_none());
@@ -755,6 +820,54 @@ fn edit_preview_rejects_stale_revision_with_full_context() {
     assert_eq!(rejection.context.route_id.as_deref(), Some("route-001"));
     assert_eq!(rejection.context.expected_revision, Some(4));
     assert_eq!(rejection.context.actual_revision, Some(0));
+}
+
+#[test]
+fn new_draft_preview_quotes_the_fleet_the_same_state_purchase_charges() {
+    let mut engine = congested_serpentine_engine();
+    let preview = engine.preview_route(valid_route_preview(70));
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    let quote = preview
+        .initial_fleet
+        .expect("a valid new draft publishes an initial-fleet quote");
+    assert!(
+        quote.affordable,
+        "fixture budget covers the fleet: {quote:?}"
+    );
+
+    let before_budget = engine.snapshot().budget;
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    assert!(created.applied, "{created:?}");
+    let deployed = engine.dispatch(GameIntent::DeployInitialFleet {
+        line_id: "route-001".into(),
+    });
+    assert!(deployed.applied, "{deployed:?}");
+
+    let fleet = engine.snapshot().transit.routes[0].vehicle_ids.len();
+    assert!(fleet >= 2, "fixture should require multiple buses: {fleet}");
+    assert_eq!(quote.cost, fleet as i32 * BUS_COST);
+    assert_eq!(engine.snapshot().budget, before_budget - quote.cost);
+}
+
+#[test]
+fn edit_preview_carries_no_initial_fleet_quote() {
+    let engine = existing_route_engine();
+    let route = newest_route(&engine.snapshot()).clone();
+    let preview = engine.preview_route(RoutePreviewRequest {
+        mode: TransitMode::Bus,
+        pattern: route.pattern,
+        waypoint_ids: route.stop_ids.clone(),
+        route_id: Some(route.id.clone()),
+        expected_revision: Some(route.revision),
+        generation: 71,
+    });
+
+    assert!(preview.rejection.is_none(), "{preview:?}");
+    assert!(preview.initial_fleet.is_none());
 }
 
 #[test]

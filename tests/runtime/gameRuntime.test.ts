@@ -360,6 +360,8 @@ function routePreview(
             code: "disconnectedLeg",
             context: { affectedRouteIds: [] },
           },
+    initialFleet:
+      status === "connected" ? { cost: 16_000, affordable: true } : null,
   };
 }
 
@@ -5291,6 +5293,7 @@ describe("route creation and management", () => {
           affectedRouteIds: ["route-001"],
         },
       },
+      initialFleet: null,
     });
     await flushPromises();
 
@@ -6107,6 +6110,35 @@ describe("route creation and management", () => {
       mode: "bus",
       lineId: "route-001",
     });
+  });
+
+  it("saves the route without deploying when the quoted fleet is unaffordable", async () => {
+    const base = backendSpy(routeSnapshot());
+    const backend: BackendSpy = {
+      ...base,
+      async previewRoute(request) {
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          initialFleet: { cost: 16_000, affordable: false },
+        };
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    await runtime.saveRouteDraft();
+
+    expect(backend.intents).toEqual([
+      {
+        type: "createRoute",
+        mode: "bus",
+        pattern: "loop",
+        waypointIds: ["stop-001", "stop-002"],
+      },
+    ]);
+    const created = runtime.getSnapshot().state.transit.routes.at(-1);
+    expect(created?.stopIds).toEqual(["stop-001", "stop-002"]);
+    expect(created?.vehicleIds).toEqual([]);
   });
 
   it("does not dispatch assignVehicle when the backend rejects the route", async () => {

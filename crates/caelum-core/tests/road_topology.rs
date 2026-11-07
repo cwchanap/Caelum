@@ -2,7 +2,7 @@
 
 use caelum_core::model::{
     GameMap, Heading, LegFailureReason, MovementKind, PathGeometry, Point, RoadStructure,
-    RoundaboutSize, Tile, TransitPath,
+    RoundaboutSize, Tile, TransitPath, TripPosition,
 };
 use caelum_core::road_topology::{RoadState, RoadTopology};
 use caelum_core::roundabouts::{roundabout_structure_id, roundabout_template};
@@ -679,7 +679,7 @@ fn l_t_cross_and_uturn_paths_report_their_actual_movement_steps() {
 }
 
 #[test]
-fn right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent() {
+fn right_and_left_turn_geometry_is_a_straight_line_between_tile_centres() {
     for (fixture, movement) in [
         (l_junction_fixture(), MovementKind::RightTurn),
         (t_junction_fixture(), MovementKind::LeftTurn),
@@ -693,13 +693,14 @@ fn right_and_left_turn_geometry_uses_a_non_collinear_incoming_tangent() {
             .iter()
             .find(|step| step.movement == movement)
             .unwrap();
-        let PathGeometry::QuadraticBezier { from, control, to } = &step.geometry else {
-            panic!("turn must use quadratic geometry");
+        let PathGeometry::Line { from, to } = &step.geometry else {
+            panic!("turn must connect adjacent tile centres with a straight line");
         };
-        let cross = (control.x - from.x) * (to.y - from.y) - (control.y - from.y) * (to.x - from.x);
-        assert!(cross.abs() > f64::EPSILON, "turn control lies on chord");
-        assert_eq!(from.y, control.y, "eastbound entry tangent must be flat");
-        assert!(from.x < control.x, "entry tangent must point east");
+        assert_eq!(*from, TripPosition::from(step.position));
+        assert_eq!(
+            *to,
+            TripPosition::from(offset(step.position, step.leaving_heading))
+        );
     }
 }
 

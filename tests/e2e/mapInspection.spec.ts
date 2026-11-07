@@ -115,7 +115,7 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
   }
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
-  await page.getByRole("button", { name: "Save & run" }).click();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
 
   await expect
     .poll(
