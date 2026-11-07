@@ -996,7 +996,7 @@ export async function createGameRuntime(
     };
     const isCreate = draft.source.kind === "create";
     const mode = draft.mode;
-    const deploy = draft.preview?.initialFleet?.affordable === true;
+    const deploy = isCreate && draft.preview?.initialFleet !== null;
     const tokenKey = `${token.instanceId}:${token.generation}:${token.source}`;
     if (activeRouteSaveTokens.has(tokenKey)) {
       return getSnapshot();
@@ -1042,23 +1042,40 @@ export async function createGameRuntime(
             : [],
         );
         const result = await backend.dispatch(intent);
-        const deployCreatedLine = (): Promise<RuntimeSnapshot> | null => {
+        const deployCreatedLine = async (
+          saved: RuntimeSnapshot,
+        ): Promise<RuntimeSnapshot> => {
           if (
             !deploy ||
             !isCreate ||
             !result.applied ||
             result.update.scene === null
           ) {
-            return null;
+            return saved;
           }
           const ids =
             mode === "bus"
               ? result.update.scene.routes.map((route) => route.id)
               : result.update.scene.metroLines.map((line) => line.id);
           const newIds = ids.filter((id) => !existingIds.has(id));
-          return newIds.length === 1
-            ? dispatchNow({ type: "deployInitialFleet", lineId: newIds[0] })
-            : null;
+          if (newIds.length !== 1) {
+            return saved;
+          }
+          const deployed = await dispatchNow({
+            type: "deployInitialFleet",
+            lineId: newIds[0],
+          });
+          if (rejection?.code === "insufficientBudget") {
+            rejection = {
+              ...rejection,
+              context: {
+                ...rejection.context,
+                savedWithoutFleet: true,
+              },
+            };
+            return publish();
+          }
+          return deployed;
         };
         const current = ui.routeDraft;
         const tokenIsCurrent = isCurrent(current);
@@ -1106,7 +1123,7 @@ export async function createGameRuntime(
             },
             intent,
           );
-          return deployCreatedLine() ?? saved;
+          return deployCreatedLine(saved);
         }
         // Non-fatal rejection with a current token: surface into the draft
         // panel so the editor does not keep showing a stale "Connected"
@@ -1150,10 +1167,10 @@ export async function createGameRuntime(
               },
               intent,
             );
-            return deployCreatedLine() ?? supersededResult;
+            return deployCreatedLine(supersededResult);
           }
           const supersededResult = commitDispatchResult(result, ui, intent);
-          return deployCreatedLine() ?? supersededResult;
+          return deployCreatedLine(supersededResult);
         }
         return commitDispatchResult(result, ui, intent);
       },

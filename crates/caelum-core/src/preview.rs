@@ -249,8 +249,15 @@ fn new_draft_initial_fleet(
     if request.route_id.is_some() || response.rejection.is_some() {
         return None;
     }
-    let flow = crate::traffic::derive_road_flow(snapshot);
-    let round_trip_seconds = round_trip_seconds(&response.legs, request.mode, &flow)?;
+    let empty_flow = crate::traffic::RoadFlow::new();
+    let dynamic_flow;
+    let flow = if request.mode == TransitMode::Bus && !snapshot.active_trips.is_empty() {
+        dynamic_flow = crate::traffic::derive_road_flow(snapshot);
+        &dynamic_flow
+    } else {
+        &empty_flow
+    };
+    let round_trip_seconds = round_trip_seconds(&response.legs, request.mode, flow)?;
     let (_required, cost) = initial_fleet(
         round_trip_seconds,
         request.mode,

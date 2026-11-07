@@ -499,9 +499,7 @@ fn metrics(
         required_fleet,
     );
     let estimated_deployment_cost = if assigned_fleet == 0 {
-        target_headway_seconds
-            .and_then(|target| initial_fleet(round_trip_seconds, mode, target))
-            .map(|(_required, cost)| cost)
+        required_fleet.and_then(|required| initial_fleet_cost(required, mode))
     } else {
         None
     };
@@ -541,10 +539,14 @@ pub(crate) fn initial_fleet(
     target_headway_seconds: u32,
 ) -> Option<(usize, i32)> {
     let required = required_fleet(round_trip_seconds, target_headway_seconds);
-    let cost = i32::try_from(required)
-        .ok()?
-        .checked_mul(vehicle_cost(mode))?;
+    let cost = initial_fleet_cost(required, mode)?;
     Some((required, cost))
+}
+
+pub(crate) fn initial_fleet_cost(required: usize, mode: TransitMode) -> Option<i32> {
+    i32::try_from(required)
+        .ok()?
+        .checked_mul(vehicle_cost(mode))
 }
 
 /// Derive per-line service metrics keyed by line ID for both transit modes.

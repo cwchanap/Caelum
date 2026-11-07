@@ -22,14 +22,17 @@ function assertNever(value: never, label: string): string {
 export function rejectionMessage(rejection: GameplayRejection): string {
   const { code, context } = rejection;
   switch (code) {
-    case "insufficientBudget":
-      return (
+    case "insufficientBudget": {
+      const detail =
         "Needs $" +
         money(context.requiredBudget ?? 0) +
         "; only $" +
         money(context.availableBudget ?? 0) +
-        " is available."
-      );
+        " is available.";
+      return context.savedWithoutFleet
+        ? `Saved without fleet: ${detail}`
+        : detail;
+    }
     case "routeChangedWhileEditing":
       return "This route changed while you were editing it. Reload the saved route.";
     case "routeRevisionExhausted":
