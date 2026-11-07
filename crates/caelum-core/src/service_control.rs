@@ -280,11 +280,7 @@ pub(crate) fn deploy_initial_fleet(
     let flow = crate::traffic::derive_road_flow(state);
     let round_trip_seconds = round_trip_seconds(legs, mode, &flow)
         .ok_or_else(|| route_rejection(RejectionCode::DisconnectedLeg, line_id))?;
-    let required = required_fleet(round_trip_seconds, target);
-    let required_i32 =
-        i32::try_from(required).map_err(|_| GameplayRejection::budget(i32::MAX, state.budget))?;
-    let total_cost = required_i32
-        .checked_mul(vehicle_cost(mode))
+    let (required, total_cost) = initial_fleet(round_trip_seconds, mode, target)
         .ok_or_else(|| GameplayRejection::budget(i32::MAX, state.budget))?;
     let authorized = CostPolicy::from_snapshot(state)
         .quote(total_cost, state.budget)
@@ -503,9 +499,9 @@ fn metrics(
         required_fleet,
     );
     let estimated_deployment_cost = if assigned_fleet == 0 {
-        required_fleet
-            .and_then(|required| i32::try_from(required).ok())
-            .and_then(|required| required.checked_mul(vehicle_cost(mode)))
+        target_headway_seconds
+            .and_then(|target| initial_fleet(round_trip_seconds, mode, target))
+            .map(|(_required, cost)| cost)
     } else {
         None
     };
@@ -537,6 +533,23 @@ fn metrics(
 /// `max(1, ceil(round_trip_seconds / target_headway_seconds))`.
 pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u32) -> usize {
     ((round_trip_seconds / f64::from(target_headway_seconds)).ceil() as usize).max(1)
+}
+
+/// The one initial-fleet sizing shared by preview, deployment, and saved-line
+/// metrics: the required count and its checked **nominal** cost for one
+/// already derived, traffic-aware `round_trip_seconds` at
+/// `target_headway_seconds`. `None` means the count or cost overflowed `i32`;
+/// each caller keeps its existing overflow semantics.
+pub(crate) fn initial_fleet(
+    round_trip_seconds: f64,
+    mode: TransitMode,
+    target_headway_seconds: u32,
+) -> Option<(usize, i32)> {
+    let required = required_fleet(round_trip_seconds, target_headway_seconds);
+    let cost = i32::try_from(required)
+        .ok()?
+        .checked_mul(vehicle_cost(mode))?;
+    Some((required, cost))
 }
 
 /// Derive per-line service metrics keyed by line ID for both transit modes.
@@ -735,7 +748,11 @@ fn resolve_service_cursor(
 /// (never `last_valid_path` or cached `estimated_seconds`) and the same live
 /// per-step timing rule vehicle movement uses. Empty terminal reversals
 /// contribute zero seconds; non-positive step durations are skipped.
-fn round_trip_seconds(legs: &[RouteLegPath], mode: TransitMode, flow: &RoadFlow) -> Option<f64> {
+pub(crate) fn round_trip_seconds(
+    legs: &[RouteLegPath],
+    mode: TransitMode,
+    flow: &RoadFlow,
+) -> Option<f64> {
     let mut total = 0.0;
     for leg in legs {
         let path = leg.current_path.as_ref()?;

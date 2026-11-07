@@ -70,7 +70,7 @@ pub use model::{
 pub use persistence::{check_schema_version, check_snapshot_schema, SnapshotLoadError};
 pub use presentation::{PresentationFrame, PresentationScene, PresentationUpdate};
 pub use preview::{
-    AuthoredRoadTilePreview, GameplayWarning, RoadMutationPreviewRequest,
+    AuthoredRoadTilePreview, GameplayWarning, InitialFleetQuote, RoadMutationPreviewRequest,
     RoadMutationPreviewResponse, RouteImpact, RouteImpactKind, RoutePreviewRequest,
     RoutePreviewResponse, TurnSummary, WarningCode,
 };

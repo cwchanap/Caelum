@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
+use crate::cost_policy::CostPolicy;
 use crate::engine::{dispatch_context, RoutingContext};
 use crate::model::{
     GameSnapshot, Heading, MovementKind, Point, RoadStructure, RouteLegPath, RouteLegStatus,
@@ -13,6 +14,7 @@ use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
 use crate::roundabouts::{attempted_roundabout_structure, roundabout_cost};
 use crate::route_lifecycle::merge_resolved_legs;
+use crate::service_control::{initial_fleet, round_trip_seconds, DEFAULT_TARGET_HEADWAY_SECONDS};
 use crate::transit;
 use crate::transit_nodes::validate_present_compatible_node;
 
@@ -54,6 +56,13 @@ pub struct GameplayWarning {
     pub context: RejectionContext,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialFleetQuote {
+    pub cost: i32,
+    pub affordable: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutePreviewResponse {
@@ -64,6 +73,7 @@ pub struct RoutePreviewResponse {
     pub missing_waypoint_ids: Vec<String>,
     pub warnings: Vec<GameplayWarning>,
     pub rejection: Option<GameplayRejection>,
+    pub initial_fleet: Option<InitialFleetQuote>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -131,6 +141,7 @@ pub fn preview_route(
         missing_waypoint_ids,
         warnings: Vec::new(),
         rejection: None,
+        initial_fleet: None,
     };
 
     let existing = match existing_route(snapshot, &request) {
@@ -225,8 +236,32 @@ pub fn preview_route(
         .filter_map(|leg| leg.estimated_seconds)
         .sum();
     response.turn_summary = summarize_turns(&response.legs);
+    response.initial_fleet = new_draft_initial_fleet(snapshot, &request, &response);
 
     response
+}
+
+fn new_draft_initial_fleet(
+    snapshot: &GameSnapshot,
+    request: &RoutePreviewRequest,
+    response: &RoutePreviewResponse,
+) -> Option<InitialFleetQuote> {
+    if request.route_id.is_some() || response.rejection.is_some() {
+        return None;
+    }
+    let flow = crate::traffic::derive_road_flow(snapshot);
+    let round_trip_seconds = round_trip_seconds(&response.legs, request.mode, &flow)?;
+    let (_required, cost) = initial_fleet(
+        round_trip_seconds,
+        request.mode,
+        DEFAULT_TARGET_HEADWAY_SECONDS,
+    )?;
+    Some(InitialFleetQuote {
+        cost,
+        affordable: CostPolicy::from_snapshot(snapshot)
+            .quote(cost, snapshot.budget)
+            .affordable(),
+    })
 }
 
 pub fn preview_road_mutation(

@@ -360,6 +360,7 @@ function routePreview(
             code: "disconnectedLeg",
             context: { affectedRouteIds: [] },
           },
+    initialFleet: null,
   };
 }
 
@@ -5291,6 +5292,7 @@ describe("route creation and management", () => {
           affectedRouteIds: ["route-001"],
         },
       },
+      initialFleet: null,
     });
     await flushPromises();
 
