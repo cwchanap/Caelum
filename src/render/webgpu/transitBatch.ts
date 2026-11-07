@@ -8,6 +8,7 @@ import type {
 import type { UiState } from "../../ui/uiState";
 import { tileCenter, tileSize } from "../boardTransform";
 import { colors } from "../colors";
+import { pointAndTangentAt } from "../pathGeometry";
 import {
   canonicalCorridorPrimitive,
   corridorOffsets,
@@ -40,6 +41,17 @@ const ACCESS_INDICATOR_COLOR = parseColor(colors.hover);
 
 function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
+}
+
+function leavesButtCapNotch(
+  incoming: TripPosition,
+  outgoing: TripPosition,
+): boolean {
+  const scale =
+    Math.hypot(incoming.x, incoming.y) * Math.hypot(outgoing.x, outgoing.y);
+  if (scale === 0) return false;
+  const cross = incoming.x * outgoing.y - incoming.y * outgoing.x;
+  return Math.abs(cross) > scale * 1e-6;
 }
 
 export interface RenderableLine {
@@ -204,11 +216,21 @@ function drawSteps(
   corridors: CorridorGroups,
   dash?: { dash: number; gap: number },
 ): void {
+  let previousEnd: ReturnType<typeof pointAndTangentAt> | undefined;
   for (const step of path.steps) {
     const geometry = toPixelGeometry(
       offsetForRoute(step.geometry, routeId, corridors),
       tileCenter,
     );
+    const start = pointAndTangentAt(geometry, 0);
+    if (
+      dash === undefined &&
+      previousEnd !== undefined &&
+      sameTripPosition(previousEnd.point, start.point) &&
+      leavesButtCapNotch(previousEnd.tangent, start.tangent)
+    ) {
+      g.circle(start.point, lineWidth / 2, color);
+    }
     if (geometry.kind === "line") {
       if (dash !== undefined) {
         g.dashedLine(
@@ -227,6 +249,7 @@ function drawSteps(
     } else {
       g.curve(geometry, lineWidth, color);
     }
+    previousEnd = pointAndTangentAt(geometry, 1);
   }
 }
 
