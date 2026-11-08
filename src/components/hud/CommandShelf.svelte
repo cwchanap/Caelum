@@ -385,6 +385,21 @@
       min-width: 96px;
       padding-left: 8px;
     }
+
+    .command-shelf__mode-value {
+      max-width: 96px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+
+    .command-shelf__badge--overlay {
+      max-width: 64px;
+    }
+
+    .command-shelf__shortcut {
+      display: none;
+    }
   }
 
   @media (prefers-reduced-motion: reduce) {
