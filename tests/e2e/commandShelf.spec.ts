@@ -20,6 +20,22 @@ const desktopViewports = [
   { name: "wide", width: 1440, height: 900 },
 ] as const;
 
+interface Box {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+function boxesIntersect(a: Box, b: Box): boolean {
+  return (
+    a.x < b.x + b.width &&
+    a.x + a.width > b.x &&
+    a.y < b.y + b.height &&
+    a.y + a.height > b.y
+  );
+}
+
 function expectInsideViewport(
   box: { x: number; y: number; width: number; height: number } | null,
   viewport: { width: number; height: number },
@@ -163,6 +179,66 @@ for (const viewport of desktopViewports) {
     });
     await expect(population).toBeVisible();
     await expect(avgWait).toBeVisible();
+  });
+
+  test(`keeps the map zoom controls clickable clear of the dock at ${viewport.name} (${viewport.width}x${viewport.height})`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await createDefaultCity(page);
+
+    const zoomControls = [
+      page.getByTestId("map-zoom-in"),
+      page.getByTestId("map-zoom-out"),
+      page.getByTestId("map-zoom-fit"),
+    ] as const;
+    const zoomFit = page.getByTestId("map-zoom-fit");
+    await expect(zoomFit).toBeDisabled();
+    await page.getByTestId("map-zoom-in").click();
+    await expect(zoomFit).toBeEnabled();
+
+    const shelf = page.getByTestId("command-shelf");
+    const expectZoomControlsClear = async () => {
+      const shelfBox = await shelf.boundingBox();
+      expect(shelfBox).not.toBeNull();
+      for (const button of zoomControls) {
+        const testid = await button.getAttribute("data-testid");
+        const box = await button.boundingBox();
+        expect(box, `${testid} has a bounding box`).not.toBeNull();
+        expect(
+          boxesIntersect(box!, shelfBox!),
+          `${testid} must not intersect the command shelf`,
+        ).toBe(false);
+        const hit = await button.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          const target = document.elementFromPoint(
+            rect.x + rect.width / 2,
+            rect.y + rect.height / 2,
+          );
+          return target === element || element.contains(target);
+        });
+        expect(hit, `${testid} is the hit target at its centre`).toBe(true);
+      }
+    };
+    await expectZoomControlsClear();
+
+    await openCommandDestination(page, "data");
+    await page
+      .getByTestId("panel-data")
+      .getByRole("group", { name: "Overlays" })
+      .getByRole("button", { name: "Traffic", exact: true })
+      .click();
+    await expect(
+      page.getByTestId("command-destination-data").locator(".chip"),
+    ).toBeVisible();
+    await expectZoomControlsClear();
+    await page.getByRole("button", { name: "Close Data" }).click();
+
+    await expect(page.getByTestId("command-active-mode")).toBeVisible();
+    await zoomFit.click();
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera)
+      .toBeNull();
   });
 }
 
