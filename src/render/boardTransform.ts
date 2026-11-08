@@ -51,11 +51,6 @@ const MAX_TILE_CSS_PX = 96;
 export const ZOOM_STEP = 1.25;
 const PAN_STEP_FRACTION = 0.2;
 
-/** Fixed board-top and board-bottom bands the floating HUD owns. The camera
- *  fits and clamps inside the rectangle they leave — the safe viewport —
- *  while rendering, culling, and picking still use the full board. App.svelte
- *  pins the same values as --hud-top/--hud-bottom so the DOM HUD and the
- *  camera always agree. */
 export const HUD_INSET = { top: 72, bottom: 88 } as const;
 
 interface SafeRect {
@@ -65,8 +60,6 @@ interface SafeRect {
   height: number;
 }
 
-/** The camera's viewport: the full board width minus the HUD bands, with a
- *  nonnegative height so tiny boards degenerate instead of inverting. */
 function safeRect(board: BoardSize): SafeRect {
   return {
     x: 0,
@@ -86,9 +79,9 @@ interface CanvasSizeTarget {
 /**
  * World px → board CSS px. With no camera the whole map is fitted and
  * centered inside the safe viewport; a camera zooms and pans that fit
- * (clamped so the view stays on the map and reachable tiles never sit under
- * the HUD). Every consumer — GPU host, pointer mapping, DOM text overlay —
- * uses this one function so they agree on where a tile is.
+ * (clamped so the view stays on the map). Every consumer — GPU host, pointer
+ * mapping, DOM text overlay — uses this one function so they agree on where
+ * a tile is.
  */
 export function getBoardTransform(
   board: BoardSize,
@@ -212,8 +205,7 @@ function fittedAsNull(camera: Camera): Camera | null {
 }
 
 /** Zoom by `factor`, keeping the world point under `anchor` (board CSS px)
- *  fixed on screen. Zoom controls pass the safe-viewport centre; the wheel
- *  passes the actual pointer position. */
+ *  fixed on screen. */
 export function zoomCameraAt(
   board: BoardSize,
   map: MapSize,

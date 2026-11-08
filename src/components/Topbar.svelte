@@ -100,7 +100,9 @@
     {#each stats as stat (stat.key)}
       <div class="readout">
         <span class="readout-label">{stat.label}</span>
-        <span class="readout-value">{shell[stat.key]}</span>
+        <span class="readout-value" title={shell[stat.key]}
+          >{shell[stat.key]}</span
+        >
       </div>
     {/each}
     {#if shell.tripIssues !== null}

@@ -1,5 +1,10 @@
 import { expect, test, type Page } from "@playwright/test";
-import { HUD_INSET, maxZoom, tileSize } from "../../src/render/boardTransform";
+import {
+  fitScale,
+  HUD_INSET,
+  maxZoom,
+  tileSize,
+} from "../../src/render/boardTransform";
 import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
 import { encodeVehicleInstances } from "../../src/render/webgpu/vehicleInstances";
 import type { Point } from "../../src/domain/types";
@@ -207,58 +212,73 @@ test("reaches the bottom-right and top-left edge tiles at maximum zoom", async (
   const canvasBox = await canvas.boundingBox();
   expect(canvasBox).not.toBeNull();
 
-  // Arm a single-tile build so a corner click has an observable effect.
   await selectBuildLeaf(page, "roads", "road-twoWay");
 
-  // Zoom to maximum through the on-canvas control.
   for (let step = 0; step < 12; step += 1) {
     await page.getByTestId("map-zoom-in").click();
   }
   const { state, camera } = await runtimeSnapshot(page);
   expect(camera).not.toBeNull();
-  expect(camera!.zoom, "camera reaches the maximum zoom").toBeCloseTo(
-    maxZoom({ width: canvasBox!.width, height: canvasBox!.height }, state.map),
-    6,
-  );
+  const board = { width: canvasBox!.width, height: canvasBox!.height };
+  const peak = maxZoom(board, state.map);
+  expect(camera!.zoom, "camera reaches the maximum zoom").toBeCloseTo(peak, 6);
 
-  const centerOn = (point: Point) =>
-    page.evaluate((target) => {
-      const runtime = (
-        window as unknown as {
-          __caelumRuntime?: {
-            adjustCamera: (action: {
-              kind: "centerOn";
-              point: Point;
-            }) => unknown;
-          };
-        }
-      ).__caelumRuntime;
-      if (!runtime) {
-        throw new Error("window.__caelumRuntime is unavailable");
-      }
-      runtime.adjustCamera({ kind: "centerOn", point: target });
-    }, point);
+  // Focus the map and pan with the player's arrow keys; each press moves the
+  // view by PAN_STEP_FRACTION of the safe viewport.
+  await page.getByTestId("game-canvas-host").focus();
+  const panWithArrows = async (x: number, y: number) => {
+    for (let step = 0; step < 10; step += 1) {
+      if (x > 0) await page.keyboard.press("ArrowRight");
+      if (x < 0) await page.keyboard.press("ArrowLeft");
+      if (y > 0) await page.keyboard.press("ArrowDown");
+      if (y < 0) await page.keyboard.press("ArrowUp");
+    }
+  };
+
+  const tilePx = fitScale(board, state.map) * peak * tileSize;
+  const safe = {
+    width: board.width,
+    height: board.height - HUD_INSET.top - HUD_INSET.bottom,
+  };
+  const half = { x: safe.width / (2 * tilePx), y: safe.height / (2 * tilePx) };
+  const clampedCenter = (corner: { x: number; y: number }) => ({
+    x: corner.x === 0 ? half.x : state.map.width - half.x,
+    y: corner.y === 0 ? half.y : state.map.height - half.y,
+  });
 
   const tileAt = async (point: { x: number; y: number }) =>
     (await runtimeSnapshot(page)).state.map.tiles.find(
       (tile) => tile.x === point.x && tile.y === point.y,
     );
 
-  // Pan to each map corner and click its edge tile: the safe-rect clamp must
-  // keep the tile clear of both HUD bands so the click still lands.
   const corners = [
-    { x: state.map.width - 1, y: state.map.height - 1 },
-    { x: 0, y: 0 },
+    {
+      tile: { x: state.map.width - 1, y: state.map.height - 1 },
+      pan: { x: 1, y: 1 },
+    },
+    { tile: { x: 0, y: 0 }, pan: { x: -1, y: -1 } },
   ] as const;
-  for (const corner of corners) {
-    await centerOn(corner);
-    const point = await mapTileViewportPoint(canvas, corner);
+  for (const { tile, pan } of corners) {
+    await panWithArrows(pan.x, pan.y);
+    const panned = (await runtimeSnapshot(page)).camera;
+    expect(panned).not.toBeNull();
+    expect(panned!.zoom).toBeCloseTo(peak, 6);
+    const expected = clampedCenter(tile);
+    expect(
+      panned!.center,
+      `keyboard pan clamps onto the ${tile.x === 0 ? "top-left" : "bottom-right"} corner`,
+    ).toEqual({
+      x: expect.closeTo(expected.x, 5),
+      y: expect.closeTo(expected.y, 5),
+    });
+
+    const point = await mapTileViewportPoint(canvas, tile);
     expect(point.x).toBeGreaterThanOrEqual(0);
     expect(point.x).toBeLessThanOrEqual(canvasBox!.width);
     expect(point.y).toBeGreaterThanOrEqual(HUD_INSET.top);
     expect(point.y).toBeLessThanOrEqual(canvasBox!.height - HUD_INSET.bottom);
 
-    await clickMapTile(canvas, corner);
-    await expect.poll(async () => (await tileAt(corner))?.kind).toBe("road");
+    await clickMapTile(canvas, tile);
+    await expect.poll(async () => (await tileAt(tile))?.kind).toBe("road");
   }
 });

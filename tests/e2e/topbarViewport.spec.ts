@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { createDefaultCity, debugSetBudget } from "./helpers";
+import {
+  createDefaultCity,
+  debugSetBudget,
+  dragMapTiles,
+  selectBuildLeaf,
+} from "./helpers";
 
 const viewports = [
   { width: 1024, height: 768 },
@@ -26,10 +31,12 @@ interface TopbarGeometry {
     value?: string;
     left: number;
     right: number;
-    textRight: number;
+    clipped: boolean;
   }>;
+  cityNameWidth: number;
   cityNameRight: number;
   cityNameTitle: string | null;
+  saveStatus: string | null;
 }
 
 async function topbarGeometry(
@@ -66,16 +73,7 @@ async function topbarGeometry(
             `Readout is missing a .readout-value child: ${readout.outerHTML}`,
           );
         }
-        const firstChild = value.firstChild;
-        if (firstChild === null) {
-          throw new Error(
-            `.readout-value has no measurable text node: ${value.outerHTML}`,
-          );
-        }
         const box = readout.getBoundingClientRect();
-        const range = document.createRange();
-        range.selectNodeContents(firstChild);
-        const textBox = range.getBoundingClientRect();
         return {
           label: readout
             .querySelector<HTMLElement>(".readout-label")
@@ -83,7 +81,7 @@ async function topbarGeometry(
           value: value.textContent?.trim(),
           left: box.left,
           right: box.right,
-          textRight: textBox.right,
+          clipped: value.scrollWidth > value.clientWidth + 1,
         };
       });
 
@@ -98,8 +96,13 @@ async function topbarGeometry(
       clock: clusterBox(".topbar-cluster--clock"),
       stats: clusterBox(".topbar-cluster--stats"),
       readouts,
+      cityNameWidth: cityNameBox.width,
       cityNameRight: cityNameBox.right,
       cityNameTitle: cityName.getAttribute("title"),
+      saveStatus:
+        topbar
+          .querySelector<HTMLElement>('[data-testid="topbar-save-status"]')
+          ?.textContent?.trim() ?? null,
     };
   });
 }
@@ -126,9 +129,42 @@ async function applyLongValueFixture(
   await expect(page.getByTestId("topbar").getByText("$20,000")).toBeVisible();
 }
 
-/** The three clusters must tile left-to-right without overlapping, every
- *  stats readout must stay inside its card, and an ellipsized city name must
- *  stay inside the city card. */
+async function applyDirtyFixture(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 2, y: 14 }, { x: 5, y: 14 });
+  await expect(page.getByTestId("topbar-save-status")).toHaveText(
+    "Unsaved changes",
+  );
+}
+
+/** The trip-warning chip only renders for non-null `tripIssues`, which no
+ *  debug seam can force; inject the same element the component emits so the
+ *  geometry assertion measures the compact layout with the warning present.
+ *  Must run after every fixture that commits a snapshot, or Svelte drops the
+ *  appended node. */
+async function injectTripWarningChip(
+  page: import("@playwright/test").Page,
+): Promise<void> {
+  await page.evaluate(() => {
+    const stats = document.querySelector<HTMLElement>(
+      '[data-testid="topbar"] .topbar-cluster--stats',
+    );
+    if (stats === null) throw new Error("Stats cluster is missing");
+    if (stats.querySelector('[data-testid="topbar-trip-issues"]') === null) {
+      const chip = document.createElement("span");
+      chip.className = "chip topbar-trip-issues";
+      chip.dataset.testid = "topbar-trip-issues";
+      chip.title = "3 late · 1 unserved";
+      chip.textContent = "3 late · 1 unserved";
+      stats.appendChild(chip);
+    }
+  });
+  await expect(page.getByTestId("topbar-trip-issues")).toBeVisible();
+}
+
 function collectOverlapFailures(
   viewport: (typeof viewports)[number],
   geometry: TopbarGeometry,
@@ -149,19 +185,17 @@ function collectOverlapFailures(
       `${viewport.width}px city name overflows the city cluster: ${JSON.stringify(geometry)}`,
     );
   }
-  for (let index = 0; index < geometry.readouts.length - 1; index += 1) {
-    const current = geometry.readouts[index];
-    const next = geometry.readouts[index + 1];
-    if (current.textRight > next.left) {
+  for (const readout of geometry.readouts) {
+    if (readout.clipped === true) {
       failures.push(
-        `${viewport.width}px ${current.label} overlaps ${next.label}: ${JSON.stringify(geometry)}`,
+        `${viewport.width}px ${readout.label} value ${readout.value} is clipped: ${JSON.stringify(geometry)}`,
       );
     }
   }
 
   const lastReadout = geometry.readouts.at(-1);
   if (lastReadout === undefined) throw new Error("No visible topbar readouts");
-  if (lastReadout.textRight > geometry.stats.right + 1) {
+  if (lastReadout.right > geometry.stats.right + 1) {
     failures.push(
       `${viewport.width}px last readout overflows the stats cluster: ${JSON.stringify(geometry)}`,
     );
@@ -178,21 +212,28 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
     await page.setViewportSize(viewport);
     await createDefaultCity(page, LONG_CITY_NAME);
     await expect(page.getByTestId("topbar")).toBeVisible();
+    await expect(page.getByTestId("topbar-save-status")).toHaveText("Saved");
 
     const geometry = await topbarGeometry(page);
     failures.push(...collectOverlapFailures(viewport, geometry));
-    // An ellipsized long city name still exposes the full name via title.
     expect(geometry.cityNameTitle).toBe(LONG_CITY_NAME);
 
+    await applyDirtyFixture(page);
     await applyLongValueFixture(page);
-    const longGeometry = await topbarGeometry(page);
-    expect(longGeometry.readouts).toEqual(
+    await injectTripWarningChip(page);
+    const stressed = await topbarGeometry(page);
+    expect(stressed.readouts).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ label: "Money", value: "$-120,000" }),
         expect.objectContaining({ label: "Daily cost", value: "$20,000" }),
       ]),
     );
-    failures.push(...collectOverlapFailures(viewport, longGeometry));
+    expect(stressed.saveStatus).toBe("Unsaved changes");
+    failures.push(...collectOverlapFailures(viewport, stressed));
+    expect(
+      stressed.cityNameWidth,
+      `${viewport.width}px city name keeps a usable ellipsized width: ${JSON.stringify(stressed)}`,
+    ).toBeGreaterThanOrEqual(40);
   }
 
   expect(failures).toEqual([]);

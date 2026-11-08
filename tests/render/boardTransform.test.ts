@@ -29,7 +29,6 @@ function mockRect(width: number, height: number) {
   };
 }
 
-/** The inset-aware viewport the camera fits and clamps against. */
 function safeViewport(board: { width: number; height: number }) {
   return {
     x: 0,
@@ -50,12 +49,10 @@ describe("board transform", () => {
     expect(transform.scale).toBeCloseTo(safe.height / (map.height * tileSize));
     expect(transform.width).toBeCloseTo(map.width * tileSize * transform.scale);
     expect(transform.height).toBeCloseTo(safe.height);
-    // The fitted map fills the safe band and letterboxes inside it.
     expect(transform.offsetY).toBeCloseTo(safe.y);
     expect(transform.offsetX).toBeCloseTo(
       safe.x + (safe.width - transform.width) / 2,
     );
-    // Fit tiles stay clear of the HUD bands at both edges.
     expect(transform.offsetY + transform.height).toBeCloseTo(
       safe.y + safe.height,
     );
@@ -184,7 +181,7 @@ describe("camera", () => {
     expect(zoomedFar.zoom).toBe(maxZoom(board, map));
 
     // Dragging far past the top-left corner stops with the map edge at the
-    // safe-viewport edge, below the top HUD band.
+    // safe-viewport edge.
     const panned = panCamera(board, map, zoomedFar, 1e6, 1e6);
     const transform = getBoardTransform(board, map, panned);
     expect(transform.offsetX).toBeCloseTo(0);
@@ -208,8 +205,6 @@ describe("camera", () => {
     expect(zoomed.zoom).toBe(maxZoom(board, map));
     const safe = safeViewport(board);
 
-    // Panning far towards the bottom-right clamps the map's bottom-right
-    // corner exactly onto the safe rectangle — above the dock, never under it.
     const bottomRight = panCamera(board, map, zoomed, -1e6, -1e6);
     const afterBottomRight = getBoardTransform(board, map, bottomRight);
     expect(afterBottomRight.offsetX + afterBottomRight.width).toBeCloseTo(
@@ -219,7 +214,6 @@ describe("camera", () => {
       safe.y + safe.height,
     );
 
-    // Same for top-left: the corner lands on the safe rectangle's top-left.
     const topLeft = panCamera(board, map, zoomed, 1e6, 1e6);
     const afterTopLeft = getBoardTransform(board, map, topLeft);
     expect(afterTopLeft.offsetX).toBeCloseTo(safe.x);
@@ -245,7 +239,6 @@ describe("camera", () => {
       applyCameraAction(board, map, camera, { kind: "pan", x: 1, y: 0 }),
     ).toEqual(camera);
 
-    // No 0/0 NaN centre: a fitted camera resolves to finite offsets.
     for (const candidate of [camera, null]) {
       const transform = getBoardTransform(board, map, candidate);
       expect(transform.scale).toBe(0);
