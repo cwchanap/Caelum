@@ -1,25 +1,26 @@
 import type { AreaKind } from "../domain/types";
 
 export const colors = {
-  empty: "#d7e2df",
+  empty: "#c3d99a",
   road: "#5f6d75",
   roadCenterline: "#d7dde0",
   roundaboutIsland: "#71847a",
   track: "#33302b",
   oneWayArrow: "#e8eef0",
-  areaResidential: "#8bcf8b",
+  areaResidential: "#e0a18c",
   areaCommercial: "#d8b45f",
   areaIndustrial: "#8d7f99",
   areaOffice: "#82a7d8",
   areaCivic: "#5fb8a6",
-  areaPark: "#4f9a61",
+  areaPark: "#6ea75c",
+  treeCanopy: "#3c6b35",
   grid: "#b6c2c8",
   bus: "#e04f39",
   metro: "#2867b2",
   buildingBus: "#e8734f",
   buildingTerminal: "#c7472f",
   buildingMetro: "#3d7fd4",
-  buildingHouse: "#7bbf72",
+  buildingHouse: "#a96a52",
   buildingCommercial: "#cfa24a",
   buildingIndustrial: "#776a84",
   buildingOffice: "#4e87c8",
@@ -36,8 +37,8 @@ export const colors = {
   previewValidStroke: "#c8ff5c",
   previewInvalidStroke: "#ff5b5b",
   hover: "#111820",
-  badgeBackground: "rgba(17, 24, 32, 0.88)",
-  badgeText: "#e8eef0",
+  badgeBackground: "rgba(255, 252, 243, 0.92)",
+  badgeText: "#2f3a3f",
 } as const;
 
 export const areaColors = {

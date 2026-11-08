@@ -100,11 +100,11 @@
               class="command-shelf__shortcut"
               aria-hidden="true">{BUILD_KEY.toUpperCase()}</kbd
             >{:else if destination.id === "lines"}<span
-              class="command-shelf__badge"
+              class="chip command-shelf__badge"
               aria-label={`${command.lineCount} lines`}
               >{command.lineCount}</span
             >{:else if destination.id === "data" && command.activeOverlayLabel !== null}<span
-              class="command-shelf__badge command-shelf__badge--overlay"
+              class="chip command-shelf__badge command-shelf__badge--overlay"
               >{command.activeOverlayLabel}</span
             >{/if}
         </span>
@@ -172,12 +172,12 @@
 
 <style>
   .command-shelf {
-    --shelf-surface: var(--surface-raised, #111d22);
-    --shelf-line: var(--line-strong, rgba(255, 255, 255, 0.16));
-    --shelf-ink: var(--ink, #e6f1f4);
-    --shelf-muted: var(--ink-mid, #9aaeb6);
-    --shelf-signal: var(--cyan, #3fe0c5);
-    --shelf-danger: var(--red, #ff5b5b);
+    --shelf-surface: var(--surface-raised, #fffdf6);
+    --shelf-line: var(--line-strong, rgba(62, 54, 38, 0.28));
+    --shelf-ink: var(--ink, #2f3a3f);
+    --shelf-muted: var(--ink-mid, #5d6d72);
+    --shelf-signal: var(--accent, #0f8a70);
+    --shelf-danger: var(--danger, #bd4a3f);
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;
@@ -188,7 +188,7 @@
     background: linear-gradient(
       180deg,
       var(--shelf-surface),
-      var(--surface, #0d161a)
+      var(--surface, #faf6ea)
     );
     border: 1px solid var(--shelf-line);
     font-family: var(--font-body, system-ui, sans-serif);
@@ -228,7 +228,7 @@
     cursor: pointer;
     font: inherit;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 600;
     transition:
       color 150ms ease,
       background-color 150ms ease,
@@ -251,8 +251,8 @@
   .command-shelf__destination:hover,
   .command-shelf__tool:hover {
     color: var(--shelf-ink);
-    background: rgba(63, 224, 197, 0.08);
-    border-color: rgba(63, 224, 197, 0.24);
+    background: color-mix(in srgb, var(--shelf-signal) 8%, transparent);
+    border-color: color-mix(in srgb, var(--shelf-signal) 24%, transparent);
     transform: translateY(-1px);
   }
 
@@ -265,8 +265,8 @@
   .command-shelf__destination.is-active,
   .command-shelf__tool.is-active {
     color: var(--shelf-signal);
-    background: rgba(63, 224, 197, 0.12);
-    border-color: rgba(63, 224, 197, 0.42);
+    background: color-mix(in srgb, var(--shelf-signal) 12%, transparent);
+    border-color: color-mix(in srgb, var(--shelf-signal) 42%, transparent);
   }
 
   .command-shelf__icon {
@@ -278,12 +278,9 @@
   .command-shelf__badge {
     min-width: 20px;
     padding: 1px 5px;
-    border: 1px solid rgba(63, 224, 197, 0.45);
-    border-radius: 999px;
+    border-color: color-mix(in srgb, var(--shelf-signal) 45%, transparent);
     color: var(--shelf-signal);
-    font-family: var(--font-mono, monospace);
-    font-size: 10px;
-    line-height: 1.3;
+    font-variant-numeric: tabular-nums;
     text-align: center;
   }
 
@@ -302,7 +299,7 @@
     border: 1px solid var(--shelf-line);
     border-radius: 4px;
     color: var(--shelf-muted);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body, system-ui, sans-serif);
     font-size: 10px;
     line-height: 1.2;
     text-align: center;
@@ -315,8 +312,8 @@
 
   .command-shelf__tool--danger.is-active {
     color: var(--shelf-danger);
-    background: rgba(255, 91, 91, 0.12);
-    border-color: rgba(255, 91, 91, 0.42);
+    background: color-mix(in srgb, var(--shelf-danger) 12%, transparent);
+    border-color: color-mix(in srgb, var(--shelf-danger) 42%, transparent);
   }
 
   .command-shelf__tool-mark {
@@ -334,7 +331,7 @@
 
   .command-shelf__eyebrow {
     color: var(--shelf-muted);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body, system-ui, sans-serif);
     font-size: 10px;
     letter-spacing: 0.08em;
     text-transform: uppercase;
@@ -342,9 +339,9 @@
 
   .command-shelf__mode-value {
     color: var(--shelf-ink);
-    font-family: var(--font-mono, monospace);
+    font-family: var(--font-body, system-ui, sans-serif);
     font-size: 12px;
-    font-weight: 700;
+    font-weight: 600;
   }
 
   .command-shelf__gate {

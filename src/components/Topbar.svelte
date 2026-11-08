@@ -49,7 +49,7 @@
   <div class="controls">
     <button
       type="button"
-      class="ctrl-pause"
+      class="btn ctrl-pause"
       data-action="pause"
       aria-pressed={paused}
       onclick={onTogglePause}
@@ -59,7 +59,7 @@
 
     <div
       class:speed-group--paused={paused}
-      class="speed-group"
+      class="segmented speed-group"
       role="group"
       aria-label="Simulation speed"
     >

@@ -17,7 +17,7 @@
 </script>
 
 <aside
-  class="inspection-card"
+  class="card inspection-card"
   data-testid="panel-inspect"
   aria-label="Inspector"
 >
@@ -44,7 +44,7 @@
                 <li class="platform-route">
                   <button
                     type="button"
-                    class="route-chip"
+                    class="chip route-chip"
                     style={`--route-color: ${route.color}`}
                     aria-label={`Open service controls for ${route.name}`}
                     data-testid={`open-service-${route.id}`}
@@ -65,7 +65,7 @@
                     {#each route.moveTargets as target (target.platformId)}
                       <button
                         type="button"
-                        class="move-route"
+                        class="btn move-route"
                         aria-label={`Move ${route.name} to Platform ${target.label}`}
                         data-testid={`move-${route.id}-${target.platformId}`}
                         onclick={() =>
@@ -93,7 +93,7 @@
       <div class="platform-route">
         <button
           type="button"
-          class="route-chip"
+          class="chip route-chip"
           style={`--route-color: ${inspector.lineColor}`}
           aria-label={`Open service controls for ${inspector.lineName}`}
           data-testid={`open-service-${inspector.lineId}`}

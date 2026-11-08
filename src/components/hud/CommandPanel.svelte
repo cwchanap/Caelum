@@ -33,7 +33,7 @@
   <section
     bind:this={region}
     id={`command-panel-${destination}`}
-    class="command-panel"
+    class="card command-panel"
     class:command-panel--pinned={pinned}
     data-testid="command-panel"
     data-command-panel={destination}
@@ -44,6 +44,7 @@
       <h2 id={`command-panel-title-${destination}`}>{title}</h2>
       <button
         type="button"
+        class="btn"
         disabled={!canClose}
         onclick={onClose}
         aria-label={`Close ${title}`}>×</button
@@ -64,17 +65,12 @@
   }
 
   .command-panel {
-    --panel-surface: var(--surface, #0d161a);
-    --panel-line: var(--line-strong, rgba(255, 255, 255, 0.16));
-    --panel-ink: var(--ink, #e6f1f4);
-    --panel-muted: var(--ink-mid, #9aaeb6);
-    --panel-signal: var(--cyan, #3fe0c5);
+    --panel-surface: var(--surface, #faf6ea);
+    --panel-line: var(--line-strong, rgba(62, 54, 38, 0.28));
+    --panel-ink: var(--ink, #2f3a3f);
+    --panel-muted: var(--ink-mid, #5d6d72);
+    --panel-signal: var(--accent, #0f8a70);
     overflow: hidden;
-    color: var(--panel-ink);
-    background: var(--panel-surface);
-    border: 1px solid var(--panel-line);
-    border-radius: 8px;
-    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.25);
     pointer-events: auto;
   }
 
@@ -96,6 +92,7 @@
     margin: 0;
     font-family: var(--font-display, system-ui, sans-serif);
     font-size: 18px;
+    font-weight: 600;
     line-height: 1.2;
   }
 

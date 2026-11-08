@@ -65,7 +65,7 @@ export interface WebGpuRenderer {
 /** Interleaved vehicle instance layout (see WebGpuVehicleBatch). */
 export const VEHICLE_INSTANCE_FLOATS = 11;
 
-const CLEAR_COLOR: GPUColor = { r: 0.8431, g: 0.8863, b: 0.8745, a: 1 };
+const CLEAR_COLOR: GPUColor = { r: 0.7647, g: 0.851, b: 0.6039, a: 1 };
 
 // GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST. @webgpu/types is ambient
 // types only, so the numeric flags are used directly (no runtime globals in

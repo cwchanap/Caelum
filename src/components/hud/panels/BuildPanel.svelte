@@ -127,7 +127,7 @@
       <div class="build-nav">
         <button
           type="button"
-          class="build-back"
+          class="btn build-back"
           data-action="build-back"
           data-testid="build-back"
           aria-label="Back to build categories"
@@ -236,7 +236,7 @@
     border: 1px solid var(--line-strong);
     background: var(--surface-sunk);
     color: var(--ink-mid);
-    font-family: var(--font-mono);
+    font-family: var(--font-body);
     font-size: 9px;
     font-weight: 600;
     line-height: 1.3;

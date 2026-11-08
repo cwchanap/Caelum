@@ -51,7 +51,7 @@
     />
     <OverlayLegend activeOverlay={snapshot.ui.activeOverlay} />
   {/if}
-  <div class="board-zoom" role="group" aria-label="Map view">
+  <div class="segmented board-zoom" role="group" aria-label="Map view">
     <button
       type="button"
       data-testid="map-zoom-in"
