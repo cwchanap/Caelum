@@ -38,6 +38,11 @@ const METRO_LINE_WIDTH = 8;
 const STOP_MARKER_COLOR = parseColor(colors.bus);
 const STATION_MARKER_COLOR = parseColor(colors.metro);
 const ACCESS_INDICATOR_COLOR = parseColor(colors.hover);
+const STOP_MARKER_RADIUS = 7;
+const STATION_MARKER_HALF = 7;
+const STATION_MARKER_CORNER = 3;
+const MARKER_RIM_WIDTH = 2;
+const MARKER_FILL_COLOR = parseColor("#ffffff");
 
 function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
@@ -433,6 +438,49 @@ function drawStopAccessIndicators(g: SolidGeometry, state: GameState): void {
   }
 }
 
+function roundedSquare(
+  g: SolidGeometry,
+  center: TripPosition,
+  half: number,
+  cornerRadius: number,
+  color: Rgba,
+): void {
+  const inner = half - cornerRadius;
+  g.rect(center.x - inner, center.y - half, inner * 2, half * 2, color);
+  g.rect(center.x - half, center.y - inner, half * 2, inner * 2, color);
+  for (const dx of [-1, 1]) {
+    for (const dy of [-1, 1]) {
+      g.circle(
+        { x: center.x + dx * inner, y: center.y + dy * inner },
+        cornerRadius,
+        color,
+        8,
+      );
+    }
+  }
+}
+
+function markerColors(
+  lines: readonly RenderableLine[],
+  emphasizedIds: ReadonlySet<string>,
+): Map<string, Rgba> {
+  const byWaypoint = new Map<string, Rgba>();
+  for (const line of lines) {
+    const color = withAlpha(
+      parseColor(line.color),
+      emphasizedIds.size === 0 || emphasizedIds.has(line.id)
+        ? 1
+        : UNRELATED_ROUTE_OPACITY,
+    );
+    for (const waypointId of line.waypointIds) {
+      if (!byWaypoint.has(waypointId)) {
+        byWaypoint.set(waypointId, color);
+      }
+    }
+  }
+  return byWaypoint;
+}
+
 function waypointGeometry(
   line: RenderableLine,
   waypointId: string,
@@ -553,14 +601,26 @@ export function buildTransitBatch(
   }
   drawStopAccessIndicators(g, state);
 
+  const markerColorsByWaypoint = markerColors(lines, emphasizedIds);
   for (const stop of state.transit.stops) {
     if (stop.status !== "present") continue;
     const point = tileCenter(stop.position);
-    g.rect(point.x - 5, point.y - 5, 10, 10, STOP_MARKER_COLOR);
+    const rim = markerColorsByWaypoint.get(stop.id) ?? STOP_MARKER_COLOR;
+    g.circle(point, STOP_MARKER_RADIUS, rim);
+    g.circle(point, STOP_MARKER_RADIUS - MARKER_RIM_WIDTH, MARKER_FILL_COLOR);
   }
   for (const station of state.transit.stations) {
     if (station.status !== "present") continue;
-    g.circle(tileCenter(station.position), 8, STATION_MARKER_COLOR);
+    const point = tileCenter(station.position);
+    const rim = markerColorsByWaypoint.get(station.id) ?? STATION_MARKER_COLOR;
+    roundedSquare(g, point, STATION_MARKER_HALF, STATION_MARKER_CORNER, rim);
+    roundedSquare(
+      g,
+      point,
+      STATION_MARKER_HALF - MARKER_RIM_WIDTH,
+      STATION_MARKER_CORNER - MARKER_RIM_WIDTH,
+      MARKER_FILL_COLOR,
+    );
   }
   drawRouteNodeCues(g, state, lines, corridors, emphasizedIds);
 

@@ -3,7 +3,14 @@ import {
   pickMapTarget,
   type MapPickTargets,
 } from "../../src/render/webgpu/pickMapTarget";
-import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
+import {
+  VEHICLE_INSTANCE_FLOATS,
+  VEHICLE_LANE_OFFSET_PX,
+} from "../../src/render/webgpu/renderer";
+import {
+  VEHICLE_HALF_LENGTH,
+  VEHICLE_HALF_WIDTH,
+} from "../../src/render/webgpu/vehicleInstances";
 import type {
   GameState,
   Point,
@@ -246,6 +253,53 @@ describe("pickMapTarget", () => {
     );
 
     expect(pick).toBeNull();
+  });
+
+  it("picks the vehicle at its rendered body center and visible edge", () => {
+    const origin = { x: 304, y: 272 };
+    const targets = pickTargets(
+      [{ id: "vehicle-001", point: origin }],
+      createTestGameState(),
+    );
+
+    expect(
+      pickMapTarget(
+        targets,
+        { x: origin.x, y: origin.y - VEHICLE_LANE_OFFSET_PX },
+        { x: 9, y: 8 },
+      ),
+    ).toEqual({ vehicleId: "vehicle-001", lineId: null });
+    expect(
+      pickMapTarget(
+        targets,
+        {
+          x: origin.x + VEHICLE_HALF_LENGTH - 2,
+          y: origin.y - VEHICLE_LANE_OFFSET_PX - VEHICLE_HALF_WIDTH + 1,
+        },
+        { x: 9, y: 8 },
+      ),
+    ).toEqual({ vehicleId: "vehicle-001", lineId: null });
+  });
+
+  it("does not let the enlarged body steal a click on the adjacent building tile", () => {
+    let state = createTestGameState();
+    state = placeTestBuilding(state, "smallHouse", { x: 9, y: 7 }, 0);
+    const origin = { x: 304, y: 260 };
+    const targets = pickTargets([{ id: "vehicle-001", point: origin }], state);
+
+    expect(
+      pickMapTarget(
+        targets,
+        {
+          x: origin.x,
+          y: origin.y - VEHICLE_LANE_OFFSET_PX - VEHICLE_HALF_WIDTH,
+        },
+        { x: 9, y: 7 },
+      ),
+    ).toBeNull();
+    expect(
+      pickMapTarget(targets, { x: origin.x, y: origin.y - 3 }, { x: 9, y: 8 }),
+    ).toEqual({ vehicleId: "vehicle-001", lineId: null });
   });
 
   it("picks the nearest of two samples", () => {

@@ -65,6 +65,8 @@ export interface WebGpuRenderer {
 /** Interleaved vehicle instance layout (see WebGpuVehicleBatch). */
 export const VEHICLE_INSTANCE_FLOATS = 11;
 
+export const VEHICLE_LANE_OFFSET_PX = 8;
+
 const CLEAR_COLOR: GPUColor = { r: 0.7647, g: 0.851, b: 0.6039, a: 1 };
 
 // GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST. @webgpu/types is ambient
@@ -104,6 +106,8 @@ const VEHICLE_SHADER = /* wgsl */ `
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) color: vec4f,
+  @location(1) quad: vec2f,
+  @location(2) extents: vec2f,
 };
 
 @vertex
@@ -123,11 +127,11 @@ fn vsMain(
   let sin = sin(angle);
   // Canvas-era parity: the old 2D renderer drew fillRect(-7, -14, 14, 8).
   // The body spans
-  // double the half-extents and its center sits one width + 2px perpendicular
-  // off the path centerline (local y = -(2*hw + 2) = -10 for hw = 4).
+  // double the half-extents and its center sits at a fixed lane offset
+  // perpendicular off the path centerline, decoupled from the half-width.
   let local = vec2f(
     corner.x * (extents.x * 2.0),
-    corner.y * (extents.y * 2.0) - (extents.y * 2.0 + 2.0),
+    corner.y * (extents.y * 2.0) - ${VEHICLE_LANE_OFFSET_PX.toFixed(1)},
   );
   let rotated = vec2f(
     local.x * cos - local.y * sin,
@@ -140,11 +144,20 @@ fn vsMain(
     1.0,
   );
   output.color = color;
+  output.quad = corner * extents * 2.0;
+  output.extents = extents;
   return output;
 }
 
 @fragment
 fn fsMain(output: VertexOutput) -> @location(0) vec4f {
+  let edge = min(
+    output.extents.x - abs(output.quad.x),
+    output.extents.y - abs(output.quad.y),
+  );
+  if (edge < 1.5) {
+    return vec4f(1.0, 1.0, 1.0, output.color.a);
+  }
   return output.color;
 }
 `;

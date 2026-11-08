@@ -42,10 +42,21 @@ export function interpolationAlpha(
  *  a (pixels). The stride is the shader's 11 floats; transformInstances fills
  *  the two trailing slots with the world→clip factors. */
 const INSTANCE_FLOATS = VEHICLE_INSTANCE_FLOATS;
-const VEHICLE_HALF_LENGTH = 7;
-const VEHICLE_HALF_WIDTH = 4;
+export const VEHICLE_HALF_LENGTH = 9;
+export const VEHICLE_HALF_WIDTH = 5;
 const BUS_COLOR: Rgba = parseColor(colors.bus);
 const METRO_COLOR: Rgba = parseColor(colors.metro);
+
+function lineColors(state: GameState): Map<string, Rgba> {
+  const colorsById = new Map<string, Rgba>();
+  for (const route of state.transit.routes) {
+    colorsById.set(route.id, parseColor(route.color));
+  }
+  for (const line of state.transit.metroLines) {
+    colorsById.set(line.id, parseColor(line.color));
+  }
+  return colorsById;
+}
 
 function itineraryFor(
   state: GameState,
@@ -216,6 +227,7 @@ export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
 } {
   const { previous, latest, alpha, paused } = input;
   const corridors = corridorsFor(latest);
+  const lineColorsById = lineColors(latest);
   const previousById = new Map<string, Vehicle>();
   if (previous !== null) {
     for (const vehicle of previous.transit.vehicles) {
@@ -245,7 +257,8 @@ export function encodeVehicleInstances(input: EncodeVehicleInstancesInput): {
     // 1. Route-emphasis opacity, 2. cull after sampling with a one-tile
     // margin, 3. encode — in that order per the design's pipeline.
     const color = withAlpha(
-      vehicle.mode === "bus" ? BUS_COLOR : METRO_COLOR,
+      lineColorsById.get(vehicle.lineId) ??
+        (vehicle.mode === "bus" ? BUS_COLOR : METRO_COLOR),
       emphasizedOpacity(input, vehicle),
     );
     const margin = tileSize;

@@ -732,7 +732,7 @@ describe("buildTransitBatch emphasis", () => {
 });
 
 describe("buildTransitBatch nodes and cues", () => {
-  it("draws stop squares and station circles", () => {
+  it("draws white-rimmed stop discs and rounded-square stations", () => {
     const base = createTestGameState();
     const state = {
       ...base,
@@ -759,10 +759,59 @@ describe("buildTransitBatch nodes and cues", () => {
     };
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
-    // Stop square (80,80) ± 5.
-    expect(hasVertexNear(vertices, colors.bus, 75, 75)).toBe(true);
-    // Station circle fan centered at (144,80) with radius 8.
-    expect(hasVertexNear(vertices, colors.metro, 144, 80)).toBe(true);
+    // Unserved stop disc (80,80): white fill at the fan center, bus-mode rim
+    // out to radius 7 — no solid 10x10 square.
+    expect(hasVertexNear(vertices, "#ffffff", 80, 80)).toBe(true);
+    expect(hasVertexNear(vertices, colors.bus, 87, 80)).toBe(true);
+    expect(hasVertexNear(vertices, colors.bus, 75, 75)).toBe(false);
+    // Station rounded square (144,80): white fill inside a metro-mode rim
+    // whose rounded silhouette leaves the sharp (137,73) corner empty.
+    expect(hasVertexNear(vertices, "#ffffff", 140, 85)).toBe(true);
+    expect(hasVertexNear(vertices, colors.metro, 137, 76)).toBe(true);
+    expect(hasVertexNear(vertices, colors.metro, 137, 73)).toBe(false);
+    expect(hasVertexNear(vertices, colors.metro, 144, 80)).toBe(false);
+  });
+
+  it("rims served markers in the serving line's color", () => {
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stations: [
+          {
+            id: "station-1",
+            status: "present" as const,
+            position: { x: 4, y: 4 },
+            platforms: [],
+          },
+        ],
+        routes: [{ ...base.transit.routes[0], color: "#33cc77" }],
+        metroLines: [
+          {
+            id: "metro-001",
+            name: "Metro 1",
+            color: "#3366cc",
+            stationIds: ["station-1"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [],
+            pathBroken: false,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
+          },
+        ],
+      },
+    };
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(hasVertexNear(vertices, "#33cc77", 55, 48)).toBe(true);
+    expect(hasVertexNear(vertices, colors.bus, 55, 48)).toBe(false);
+    expect(hasVertexNear(vertices, "#3366cc", 137, 140)).toBe(true);
+    expect(hasVertexNear(vertices, colors.metro, 137, 140)).toBe(false);
+    expect(hasVertexNear(vertices, "#ffffff", 140, 140)).toBe(true);
   });
 
   it("draws the passenger-to-road access indicator", () => {
@@ -847,7 +896,8 @@ describe("buildTransitBatch nodes and cues", () => {
 
     expect(verticesOfColor(vertices, colors.hover)).toEqual([]);
     // The stop marker itself still renders.
-    expect(hasVertexNear(vertices, colors.bus, 139, 139)).toBe(true);
+    expect(hasVertexNear(vertices, colors.bus, 151, 144)).toBe(true);
+    expect(hasVertexNear(vertices, "#ffffff", 144, 144)).toBe(true);
   });
 
   it("draws route node cues on the presented path", () => {
