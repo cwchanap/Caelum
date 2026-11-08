@@ -8,7 +8,7 @@ import type {
 import { createGameRuntime } from "../../src/runtime/createGameRuntime";
 import { createJsdomGameHost } from "../helpers/gameHost";
 import type { RuntimeController } from "../../src/runtime/types";
-import { tileSize } from "../../src/render/boardTransform";
+import { HUD_INSET, tileSize } from "../../src/render/boardTransform";
 import { createTestGameState } from "../helpers/gameState";
 import {
   createPresentationUpdate,
@@ -183,9 +183,10 @@ async function mount() {
   });
   const map = runtime.getSnapshot().state.map;
   const boardWidth = map.width * tileSize;
-  const boardHeight = map.height * tileSize;
+  const boardHeight = map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom;
 
-  // Map client coords 1:1 onto tiles: clientX = tileX * tileSize + half.
+  // Map client coords 1:1 onto tiles: clientX = tileX * tileSize + half,
+  // clientY offset by the top HUD band.
   Element.prototype.getBoundingClientRect = vi.fn(
     () =>
       ({
@@ -215,7 +216,7 @@ async function mount() {
 
 const center = (tile: { x: number; y: number }) => ({
   clientX: tile.x * tileSize + tileSize / 2,
-  clientY: tile.y * tileSize + tileSize / 2,
+  clientY: tile.y * tileSize + tileSize / 2 + HUD_INSET.top,
 });
 
 function dispatch(canvas: HTMLCanvasElement, type: string, init: object) {

@@ -2,7 +2,10 @@ import { describe, expect, it, vi } from "vitest";
 import {
   applyCameraAction,
   canvasToTile,
+  clampCamera,
+  fitScale,
   getBoardTransform,
+  HUD_INSET,
   maxZoom,
   panCamera,
   syncCanvasSize,
@@ -26,17 +29,36 @@ function mockRect(width: number, height: number) {
   };
 }
 
-describe("board transform", () => {
-  it("fits the whole map into the board and centers the letterbox", () => {
-    const map = createTestGameState().map;
-    const transform = getBoardTransform({ width: 1280, height: 800 }, map);
+/** The inset-aware viewport the camera fits and clamps against. */
+function safeViewport(board: { width: number; height: number }) {
+  return {
+    x: 0,
+    y: HUD_INSET.top,
+    width: board.width,
+    height: board.height - HUD_INSET.top - HUD_INSET.bottom,
+  };
+}
 
-    // The 18-tile map height binds against the 800px board.
-    expect(transform.scale).toBeCloseTo(800 / (map.height * tileSize));
+describe("board transform", () => {
+  it("fits the whole map into the safe viewport between the HUD bands", () => {
+    const map = createTestGameState().map;
+    const board = { width: 1280, height: 800 };
+    const transform = getBoardTransform(board, map);
+    const safe = safeViewport(board);
+
+    // The 18-tile map height binds against the safe viewport, not the board.
+    expect(transform.scale).toBeCloseTo(safe.height / (map.height * tileSize));
     expect(transform.width).toBeCloseTo(map.width * tileSize * transform.scale);
-    expect(transform.height).toBeCloseTo(800);
-    expect(transform.offsetX).toBeCloseTo((1280 - transform.width) / 2);
-    expect(transform.offsetY).toBe(0);
+    expect(transform.height).toBeCloseTo(safe.height);
+    // The fitted map fills the safe band and letterboxes inside it.
+    expect(transform.offsetY).toBeCloseTo(safe.y);
+    expect(transform.offsetX).toBeCloseTo(
+      safe.x + (safe.width - transform.width) / 2,
+    );
+    // Fit tiles stay clear of the HUD bands at both edges.
+    expect(transform.offsetY + transform.height).toBeCloseTo(
+      safe.y + safe.height,
+    );
   });
 
   it("syncs canvas dimensions to its rendered bounds", () => {
@@ -60,12 +82,15 @@ describe("board transform", () => {
     const map = createTestGameState().map;
 
     canvas.width = map.width * 32;
-    canvas.height = map.height * 32;
+    canvas.height = map.height * 32 + HUD_INSET.top + HUD_INSET.bottom;
     Object.defineProperty(canvas, "getBoundingClientRect", {
       value: () => mockRect(canvas.width, canvas.height),
     });
 
-    expect(canvasToTile(canvas, 16, 16, map)).toEqual({ x: 0, y: 0 });
+    expect(canvasToTile(canvas, 16, HUD_INSET.top + 16, map)).toEqual({
+      x: 0,
+      y: 0,
+    });
     expect(canvasToTile(canvas, canvas.width + 1, 16, map)).toBeNull();
   });
 
@@ -73,20 +98,32 @@ describe("board transform", () => {
     const canvas = document.createElement("canvas");
     const map = createTestGameState().map;
     Object.defineProperty(canvas, "getBoundingClientRect", {
-      value: () => mockRect(map.width * tileSize, map.height * tileSize),
+      value: () =>
+        mockRect(
+          map.width * tileSize,
+          map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom,
+        ),
     });
     // Zoom 2 shows half the map; the view origin sits at tile (10, 4).
     const camera = { zoom: 2, center: { x: 17, y: 8.5 } };
 
-    expect(canvasToTile(canvas, 1, 1, map, camera)).toEqual({ x: 10, y: 4 });
-    expect(canvasToTile(canvas, 65, 1, map, camera)).toEqual({ x: 11, y: 4 });
+    expect(canvasToTile(canvas, 1, HUD_INSET.top + 1, map, camera)).toEqual({
+      x: 10,
+      y: 4,
+    });
+    expect(canvasToTile(canvas, 65, HUD_INSET.top + 1, map, camera)).toEqual({
+      x: 11,
+      y: 4,
+    });
   });
 
   it("rejects captured-pointer coordinates past the canvas edge", () => {
     const canvas = document.createElement("canvas");
     const map = createTestGameState().map;
+    const boardHeight =
+      map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom;
     Object.defineProperty(canvas, "getBoundingClientRect", {
-      value: () => mockRect(map.width * tileSize, map.height * tileSize),
+      value: () => mockRect(map.width * tileSize, boardHeight),
     });
     const camera = { zoom: 2, center: { x: 17, y: 8.5 } };
 
@@ -96,9 +133,7 @@ describe("board transform", () => {
       canvasToTile(canvas, map.width * tileSize + 1, 1, map, camera),
     ).toBeNull();
     expect(canvasToTile(canvas, -1, 1, map, camera)).toBeNull();
-    expect(
-      canvasToTile(canvas, 1, map.height * tileSize + 4, map, camera),
-    ).toBeNull();
+    expect(canvasToTile(canvas, 1, boardHeight + 4, map, camera)).toBeNull();
     expect(canvasToTile(canvas, 1, -4, map, camera)).toBeNull();
   });
 });
@@ -149,11 +184,11 @@ describe("camera", () => {
     expect(zoomedFar.zoom).toBe(maxZoom(board, map));
 
     // Dragging far past the top-left corner stops with the map edge at the
-    // board edge.
+    // safe-viewport edge, below the top HUD band.
     const panned = panCamera(board, map, zoomedFar, 1e6, 1e6);
     const transform = getBoardTransform(board, map, panned);
     expect(transform.offsetX).toBeCloseTo(0);
-    expect(transform.offsetY).toBeCloseTo(0);
+    expect(transform.offsetY).toBeCloseTo(HUD_INSET.top);
 
     // Zooming out past the whole map is the fitted view again.
     expect(zoomCameraAt(board, map, zoomedFar, 1e-6, { x: 0, y: 0 })).toBe(
@@ -163,6 +198,60 @@ describe("camera", () => {
     expect(applyCameraAction(board, map, zoomedFar, { kind: "fit" })).toBe(
       null,
     );
+  });
+
+  it("keeps every map edge reachable inside the safe viewport at maximum zoom", () => {
+    const zoomed = zoomCameraAt(board, map, null, 1000, {
+      x: board.width / 2,
+      y: board.height / 2,
+    })!;
+    expect(zoomed.zoom).toBe(maxZoom(board, map));
+    const safe = safeViewport(board);
+
+    // Panning far towards the bottom-right clamps the map's bottom-right
+    // corner exactly onto the safe rectangle — above the dock, never under it.
+    const bottomRight = panCamera(board, map, zoomed, -1e6, -1e6);
+    const afterBottomRight = getBoardTransform(board, map, bottomRight);
+    expect(afterBottomRight.offsetX + afterBottomRight.width).toBeCloseTo(
+      safe.x + safe.width,
+    );
+    expect(afterBottomRight.offsetY + afterBottomRight.height).toBeCloseTo(
+      safe.y + safe.height,
+    );
+
+    // Same for top-left: the corner lands on the safe rectangle's top-left.
+    const topLeft = panCamera(board, map, zoomed, 1e6, 1e6);
+    const afterTopLeft = getBoardTransform(board, map, topLeft);
+    expect(afterTopLeft.offsetX).toBeCloseTo(safe.x);
+    expect(afterTopLeft.offsetY).toBeCloseTo(safe.y);
+  });
+
+  it("stays finite and no-ops when the HUD bands consume the whole board", () => {
+    const board = {
+      width: 1280,
+      height: HUD_INSET.top + HUD_INSET.bottom,
+    };
+    const camera = { zoom: 2, center: { x: 40, y: 30 } };
+
+    expect(fitScale(board, map)).toBe(0);
+    expect(Number.isFinite(maxZoom(board, map))).toBe(true);
+    expect(clampCamera(board, map, camera)).toEqual(camera);
+    expect(zoomCameraAt(board, map, camera, 2, { x: 0, y: 0 })).toEqual(camera);
+    expect(panCamera(board, map, camera, 40, 40)).toEqual(camera);
+    expect(applyCameraAction(board, map, camera, { kind: "zoomIn" })).toEqual(
+      camera,
+    );
+    expect(
+      applyCameraAction(board, map, camera, { kind: "pan", x: 1, y: 0 }),
+    ).toEqual(camera);
+
+    // No 0/0 NaN centre: a fitted camera resolves to finite offsets.
+    for (const candidate of [camera, null]) {
+      const transform = getBoardTransform(board, map, candidate);
+      expect(transform.scale).toBe(0);
+      expect(Number.isFinite(transform.offsetX)).toBe(true);
+      expect(Number.isFinite(transform.offsetY)).toBe(true);
+    }
   });
 
   it("centers the focused tile's marker while preserving the active zoom", () => {
@@ -175,12 +264,27 @@ describe("camera", () => {
 
     expect(camera).toEqual({ zoom: 3, center: { x: 30.5, y: 20.5 } });
     const transform = getBoardTransform(board, map, camera);
+    const safe = safeViewport(board);
     expect(transform.offsetX + 30.5 * tileSize * transform.scale).toBeCloseTo(
-      board.width / 2,
+      safe.x + safe.width / 2,
     );
     expect(transform.offsetY + 20.5 * tileSize * transform.scale).toBeCloseTo(
-      board.height / 2,
+      safe.y + safe.height / 2,
     );
+  });
+
+  it("sizes keyboard pan steps from the safe viewport", () => {
+    const zoomed = zoomCameraAt(board, map, null, 4, {
+      x: board.width / 2,
+      y: board.height / 2,
+    })!;
+    const safe = safeViewport(board);
+    expect(
+      applyCameraAction(board, map, zoomed, { kind: "pan", x: 0, y: 1 }),
+    ).toEqual(panCamera(board, map, zoomed, 0, -safe.height * 0.2));
+    expect(
+      applyCameraAction(board, map, zoomed, { kind: "pan", x: 1, y: 0 }),
+    ).toEqual(panCamera(board, map, zoomed, -safe.width * 0.2, 0));
   });
 
   it("centers at a bounded 2x zoom from the fitted view", () => {
@@ -200,7 +304,7 @@ describe("camera", () => {
       ),
     ).toEqual({ zoom: 2, center: { x: 30.5, y: 20.5 } });
     expect(
-      applyCameraAction({ width: 8064, height: 5184 }, map, null, {
+      applyCameraAction({ width: 8064, height: 5360 }, map, null, {
         kind: "centerOn",
         point,
       }),

@@ -2088,7 +2088,39 @@ describe("ShellCommandState and ShellCityState", () => {
     expect(selectShellState(state, createUiState()).topbar).toMatchObject({
       late: "4",
       unserved: "2",
-      networkSummary: "4 late · 2 unserved",
+      tripIssues: "4 late · 2 unserved",
     });
+    expect(selectShellState(state, createUiState()).topbar).not.toHaveProperty(
+      "networkSummary",
+    );
+  });
+
+  it("formats tripIssues from numeric metrics and clears it when clean", () => {
+    const base = createTestGameState();
+
+    const both = selectShellState(
+      {
+        ...base,
+        metrics: { ...base.metrics, lateTrips: 3, unservedTrips: 1 },
+      },
+      createUiState(),
+    ).topbar.tripIssues;
+    expect(both).toBe("3 late · 1 unserved");
+
+    const lateOnly = selectShellState(
+      { ...base, metrics: { ...base.metrics, lateTrips: 3 } },
+      createUiState(),
+    ).topbar.tripIssues;
+    expect(lateOnly).toBe("3 late");
+
+    const unservedOnly = selectShellState(
+      { ...base, metrics: { ...base.metrics, unservedTrips: 2 } },
+      createUiState(),
+    ).topbar.tripIssues;
+    expect(unservedOnly).toBe("2 unserved");
+
+    expect(
+      selectShellState(base, createUiState()).topbar.tripIssues,
+    ).toBeNull();
   });
 });

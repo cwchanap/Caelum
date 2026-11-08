@@ -28,11 +28,6 @@
   --warning: #a86f0e;
   --danger: #bd4a3f;
 
-  /* Desktop Signal Console geometry */
-  --topbar-height: 64px;
-  --command-shelf-height: 92px;
-  --feedback-slot-height: 72px;
-
   /* Type stack */
   --font-display: "Bricolage Grotesque", "Trebuchet MS", sans-serif;
   --font-body: "Inter", system-ui, sans-serif;
@@ -160,121 +155,87 @@ body {
   position: relative;
   display: grid;
   grid-template-columns: minmax(0, 1fr);
-  grid-template-rows:
-    var(--topbar-height)
-    minmax(0, 1fr)
-    var(--feedback-slot-height)
-    var(--command-shelf-height);
+  grid-template-rows: minmax(0, 1fr);
   width: 100vw;
   height: 100vh;
-  background:
-    linear-gradient(
-      transparent 0,
-      transparent calc(100% - 1px),
-      var(--line) 100%
-    ),
-    linear-gradient(
-      90deg,
-      transparent 0,
-      transparent calc(100% - 1px),
-      var(--line) 100%
-    );
-  background-size: 32px 32px;
+  overflow: hidden;
 }
 
 /* ──────────────────────────────────────────────────────────────────────────
-   TOPBAR — operations console header strip
+   TOPBAR — floating HUD strip over the full-bleed map.
+   The container is transparent and passes pointer events through; only the
+   cluster cards intercept input.
    ────────────────────────────────────────────────────────────────────────── */
 
 .topbar {
-  grid-column: 1 / -1;
-  display: flex;
-  align-items: stretch;
-  gap: 0;
-  padding: 0;
-  background: linear-gradient(
-    180deg,
-    var(--surface-raised) 0%,
-    var(--surface) 100%
-  );
-  border-bottom: 1px solid var(--line-strong);
-  font-size: 13px;
-  position: relative;
-  z-index: 5;
-}
-
-.topbar::after {
-  content: "";
   position: absolute;
+  top: 10px;
   left: 0;
   right: 0;
-  bottom: -1px;
-  height: 1px;
-  background: linear-gradient(
-    90deg,
-    transparent 0%,
-    var(--accent) 20%,
-    var(--accent) 22%,
-    transparent 24%,
-    transparent 60%,
-    var(--accent-warm) 78%,
-    var(--accent-warm) 80%,
-    transparent 82%
-  );
-  opacity: 0.5;
-}
-
-.brand {
+  z-index: 32;
   display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 0 24px;
-  border-right: 1px solid var(--line);
-  position: relative;
-  animation: slide-in 0.5s ease-out;
-}
-
-.brand-mark {
-  width: 14px;
-  height: 14px;
-  background: var(--accent-warm);
-  transform: rotate(45deg);
-  box-shadow:
-    0 0 0 1px var(--surface),
-    0 0 0 2px var(--accent-warm),
-    0 0 12px var(--accent-warm);
-  animation: mark-pulse 2.4s ease-in-out infinite;
-}
-
-.brand-name {
-  font-family: var(--font-display);
-  font-weight: 600;
-  font-size: 22px;
-  letter-spacing: -0.02em;
-  font-feature-settings: "ss01" on;
-  line-height: 1;
-}
-
-.brand-tag {
-  font-family: var(--font-body);
-  font-size: 10px;
-  font-weight: 600;
-  letter-spacing: 0.18em;
-  color: var(--ink-dim);
-  text-transform: uppercase;
-  border-left: 1px solid var(--line);
-  padding-left: 12px;
-  align-self: stretch;
-  display: flex;
-  align-items: center;
-}
-
-.readouts {
-  display: flex;
+  justify-content: space-between;
   align-items: stretch;
-  flex: 1;
+  gap: 10px;
+  padding: 0 16px;
+  pointer-events: none;
   min-width: 0;
+}
+
+.topbar-cluster {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 8px 14px;
+  pointer-events: auto;
+  min-height: 52px;
+  animation: slide-in 0.4s var(--ease-out) backwards;
+}
+
+.topbar-cluster--city {
+  flex-shrink: 1;
+  min-width: 0;
+}
+
+.topbar-cluster--clock {
+  flex-shrink: 0;
+  animation-delay: 0.05s;
+}
+
+.topbar-cluster--stats {
+  gap: 14px;
+  padding: 8px 16px;
+  animation-delay: 0.1s;
+}
+
+.topbar-city {
+  display: flex;
+  flex-direction: column;
+  justify-content: center;
+  gap: 2px;
+  min-width: 0;
+}
+
+.topbar-city-name {
+  font-family: var(--font-display);
+  font-size: 16px;
+  font-weight: 600;
+  letter-spacing: -0.01em;
+  color: var(--ink-strong);
+  white-space: nowrap;
   overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 200px;
+}
+
+.topbar-save-status {
+  flex-shrink: 0;
+}
+
+.topbar-trip-issues {
+  flex-shrink: 0;
+  border-color: color-mix(in srgb, var(--warning) 55%, var(--line));
+  color: var(--warning);
 }
 
 .readout {
@@ -282,30 +243,8 @@ body {
   flex-direction: column;
   justify-content: center;
   gap: 2px;
-  padding: 0 22px;
-  border-right: 1px solid var(--line-faint);
   min-width: 0;
   position: relative;
-  animation: slide-in 0.5s ease-out backwards;
-}
-
-.readout:nth-child(1) {
-  animation-delay: 0.05s;
-}
-.readout:nth-child(2) {
-  animation-delay: 0.1s;
-}
-.readout:nth-child(3) {
-  animation-delay: 0.15s;
-}
-.readout:nth-child(4) {
-  animation-delay: 0.2s;
-}
-.readout:nth-child(5) {
-  animation-delay: 0.25s;
-}
-.readout:nth-child(6) {
-  animation-delay: 0.3s;
 }
 
 .readout-label {
@@ -316,6 +255,7 @@ body {
   color: var(--ink-mid);
   text-transform: uppercase;
   line-height: 1;
+  white-space: nowrap;
 }
 
 .readout-value {
@@ -337,15 +277,6 @@ body {
 }
 .readout--ok .readout-value {
   color: var(--accent);
-}
-
-.controls {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 0 18px;
-  border-left: 1px solid var(--line);
-  margin-left: auto;
 }
 
 .ctrl-pause {
@@ -410,12 +341,13 @@ body {
   inset: 0;
 }
 
-/* Zoom controls float in the board's bottom-left corner, under panels. */
+/* Zoom controls float in the board's bottom-right corner inside the bottom
+ * HUD band, clear of the centred command dock. */
 .board-zoom {
   position: absolute;
-  z-index: 3;
-  left: 16px;
-  bottom: 16px;
+  z-index: 33;
+  right: 24px;
+  bottom: 26px;
 }
 
 .board-zoom button {
@@ -487,8 +419,8 @@ body {
 
 .overlay-legend {
   position: absolute;
-  z-index: 3;
-  top: 24px;
+  z-index: 31;
+  top: calc(var(--hud-top) + 12px);
   left: 24px;
   width: min(280px, calc(100% - 48px));
   padding: 12px;
@@ -537,32 +469,6 @@ body {
   height: 14px;
   border: 1px solid var(--line-strong);
   border-radius: 1px;
-}
-
-/* Frame the canvas with corner crosshairs */
-.shell::before {
-  content: "";
-  position: absolute;
-  top: 88px;
-  left: 16px;
-  right: 16px;
-  bottom: 16px;
-  pointer-events: none;
-  background:
-    linear-gradient(var(--accent), var(--accent)) top left / 14px 1px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) top left / 1px 14px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) top right / 14px 1px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) top right / 1px 14px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom left / 14px 1px
-      no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom left / 1px 14px
-      no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom right / 14px 1px
-      no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom right / 1px 14px
-      no-repeat;
-  opacity: 0.4;
-  z-index: 4;
 }
 
 .panel-section {
@@ -1534,55 +1440,10 @@ body {
 .game-workspace {
   position: relative;
   grid-column: 1;
-  grid-row: 2;
+  grid-row: 1;
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-}
-
-.shell > .command-shelf {
-  grid-column: 1;
-  grid-row: 4;
-}
-
-.shell::before {
-  top: calc(var(--topbar-height) + 16px);
-  bottom: calc(
-    var(--command-shelf-height) + var(--feedback-slot-height) + 16px
-  );
-}
-
-.topbar {
-  min-width: 0;
-  min-height: var(--topbar-height);
-}
-
-.brand {
-  flex: 0 0 auto;
-  padding-inline: 16px;
-}
-
-.readouts {
-  min-width: 0;
-}
-
-.readout {
-  flex: 1 1 auto;
-  padding-inline: 12px;
-}
-
-.topbar-readout--network {
-  flex: 0 0 220px;
-  min-width: 220px;
-}
-
-.topbar-readout--wide {
-  display: flex;
-}
-
-.controls {
-  flex: 0 0 auto;
-  padding-inline: 12px;
 }
 
 .ctrl-pause,
@@ -1595,20 +1456,17 @@ body {
   min-width: 44px;
 }
 
+/* Command panels float above the command dock inside the safe band between
+ * the two HUD insets. */
 .command-panel {
   position: absolute;
-  z-index: 20;
+  z-index: 35;
   left: 0;
   right: 0;
-  bottom: calc(
-    var(--command-shelf-height) + var(--feedback-slot-height) + 16px
-  );
+  bottom: calc(var(--hud-bottom) + 12px);
   width: calc(100vw - 32px);
   max-width: 920px;
-  max-height: calc(
-    100vh - var(--topbar-height) - var(--command-shelf-height) -
-      var(--feedback-slot-height) - 32px
-  );
+  max-height: calc(100vh - var(--hud-top) - var(--hud-bottom) - 36px);
   margin-inline: auto;
   overflow: hidden;
 }
@@ -1637,22 +1495,22 @@ body {
 }
 
 .command-panel__body {
-  max-height: calc(
-    100vh - var(--topbar-height) - var(--command-shelf-height) -
-      var(--feedback-slot-height) - 88px
-  );
+  max-height: calc(100vh - var(--hud-top) - var(--hud-bottom) - 92px);
   overflow-y: auto;
   overscroll-behavior: contain;
 }
 
+/* The feedback toast floats just under the clock cluster; the transparent
+ * slot passes pointer events through except on the visible toast. */
 .action-feedback-slot {
-  grid-column: 1;
-  grid-row: 3;
+  position: absolute;
+  z-index: 34;
+  top: calc(var(--hud-top) + 6px);
+  left: 50%;
+  transform: translateX(-50%);
   display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  min-width: 0;
-  padding-right: 16px;
+  justify-content: center;
+  pointer-events: none;
 }
 
 .action-feedback {
@@ -1660,10 +1518,11 @@ body {
   align-items: center;
   gap: 8px;
   min-height: 44px;
-  max-height: 100%;
+  max-height: 120px;
   max-width: min(640px, calc(100vw - 32px));
   padding: 12px;
   border-color: var(--accent);
+  pointer-events: auto;
 }
 
 .action-feedback-body {
@@ -1708,11 +1567,11 @@ body {
 
 .inspection-card {
   position: absolute;
-  z-index: 10;
-  top: 16px;
+  z-index: 33;
+  top: calc(var(--hud-top) + 12px);
   right: 16px;
   width: min(360px, calc(100% - 32px));
-  max-height: calc(100% - 32px);
+  max-height: calc(100% - var(--hud-top) - var(--hud-bottom) - 24px);
   overflow-y: auto;
 }
 
@@ -1747,23 +1606,19 @@ body {
   transform: translateY(-1px);
 }
 
+/* The command shelf is a compact floating dock centred in the bottom HUD
+ * band. Its skin (padding/borders) lives in the component; geometry and the
+ * layer sit here. */
 .command-shelf {
-  display: grid;
-  grid-template-columns: 1fr auto 1fr;
-  align-items: center;
-  min-height: var(--command-shelf-height);
-  padding: 10px 16px;
-  border: 0;
-  border-top: 1px solid var(--line-strong);
-  background: linear-gradient(
-    180deg,
-    var(--surface-raised) 0%,
-    var(--surface) 100%
-  );
+  position: absolute;
+  z-index: 30;
+  left: 50%;
+  bottom: 12px;
+  transform: translateX(-50%);
+  max-width: calc(100vw - 32px);
 }
 
 .command-shelf__destinations {
-  grid-column: 2;
   justify-content: center;
 }
 
@@ -1772,7 +1627,6 @@ body {
 }
 
 .command-shelf__tools {
-  grid-column: 3;
   justify-content: flex-end;
   min-width: 0;
 }
@@ -1789,22 +1643,6 @@ body {
 .build-detail {
   max-height: none;
   overflow: visible;
-}
-
-@media (min-width: 1024px) and (max-width: 1199px) {
-  .brand-tag {
-    display: none;
-  }
-
-  .topbar-readout--wide {
-    display: none;
-  }
-}
-
-@media (min-width: 1200px) {
-  .topbar-readout--wide {
-    display: flex;
-  }
 }
 
 .sr-only {

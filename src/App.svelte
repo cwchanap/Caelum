@@ -33,6 +33,7 @@
     SELECT_KEY,
     TRACK_KEY,
   } from "./ui/shortcuts";
+  import { HUD_INSET } from "./render/boardTransform";
   import type {
     BuildGroup,
     BuildItemAction,
@@ -742,16 +743,10 @@
     class="shell"
     data-testid="game-shell"
     data-command-destination={snapshot?.ui.activeCommandDestination ?? "none"}
+    style={`--hud-top: ${HUD_INSET.top}px; --hud-bottom: ${HUD_INSET.bottom}px;`}
   >
     {#if snapshot !== null}
-      <Topbar
-        shell={snapshot.shell.topbar}
-        paused={snapshot.state.paused}
-        speed={snapshot.state.speed}
-        onTogglePause={handleTogglePause}
-        onSetSpeed={handleSetSpeed}
-      />
-
+      {@const currentSnapshot = snapshot}
       <div class="game-workspace">
         <GameCanvas
           bind:this={gameCanvas}
@@ -759,6 +754,18 @@
           {snapshot}
           onShellError={handleShellError}
         />
+
+        <Topbar
+          shell={snapshot.shell.topbar}
+          cityName={snapshot.persistence.activeCity?.name ?? ""}
+          busy={snapshot.persistence.busy}
+          dirty={snapshot.persistence.dirty}
+          paused={snapshot.state.paused}
+          speed={snapshot.state.speed}
+          onTogglePause={handleTogglePause}
+          onSetSpeed={handleSetSpeed}
+        />
+
         {#if snapshot.shell.inspector !== null && snapshot.ui.activeCommandDestination === null}
           <InspectPanel
             inspector={snapshot.shell.inspector}
@@ -766,120 +773,119 @@
             onOpenServiceControls={handleOpenServiceControls}
           />
         {/if}
-      </div>
 
-      {@const currentSnapshot = snapshot}
-      {#if snapshot.ui.activeCommandDestination === "build"}
-        <CommandPanel
-          destination="build"
-          title="Build"
-          canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleCloseCommandPanel("build")}
-        >
-          <BuildPanel
-            activeBuildGroup={currentSnapshot.ui.activeBuildGroup}
-            activeTool={currentSnapshot.ui.activeTool}
-            selectedArea={currentSnapshot.ui.selectedArea}
-            selectedBuilding={currentSnapshot.ui.selectedBuilding}
-            roadPreset={currentSnapshot.ui.roadPreset}
-            roundaboutSize={currentSnapshot.ui.roundaboutSize}
-            buildingRotation={currentSnapshot.ui.buildingRotation}
-            onSetBuildGroup={handleSetBuildGroup}
-            onSelectItem={handleSelectBuildItem}
-            onRotateBuilding={handleRotateBuilding}
-          />
-        </CommandPanel>
-      {:else if snapshot.ui.activeCommandDestination === "lines"}
-        <CommandPanel
-          destination="lines"
-          title="Lines"
-          canClose={true}
-          pinned={currentSnapshot.ui.routeDraft !== null}
-          onClose={() => handleCloseCommandPanel("lines")}
-        >
-          <LinesPanel
-            activeTool={currentSnapshot.ui.activeTool}
-            selectedBuilding={currentSnapshot.ui.selectedBuilding}
-            routeDraft={currentSnapshot.shell.routeDraft}
-            routes={currentSnapshot.shell.routes}
-            onSetTool={(tool) => handleSetTool(tool)}
-            onSelectWaypoint={handleSelectRouteWaypoint}
-            onRemove={handleRemoveRouteWaypoint}
-            onUndo={handleUndoRouteDraft}
-            onRedo={handleRedoRouteDraft}
-            onMove={handleMoveRouteWaypoint}
-            onReverse={handleReverseRouteDraft}
-            onPattern={handleSetRoutePattern}
-            onSave={handleSaveRouteDraft}
-            onCancel={handleCancelRouteDraft}
-            onReload={handleReloadRouteDraft}
-            onRenameRoute={handleRenameRoute}
-            onRecolorRoute={handleRecolorRoute}
-            onToggleRouteActive={handleToggleRouteActive}
-            onDeleteRoute={handleDeleteRoute}
-            onFocusRouteFailure={handleFocusRouteFailure}
-            onEditRoute={handleStartRouteEdit}
-            onSelectRoute={handleSelectRoute}
-            onFocusWaitLocation={handleFocusWaitLocation}
-            onSetServiceTargetHeadway={handleSetServiceTargetHeadway}
-            onDeployInitialFleet={handleDeployInitialFleet}
-            onAddServiceVehicle={handleAddServiceVehicle}
-            onRetireServiceVehicle={handleRetireServiceVehicle}
-            {pendingServiceActions}
-          />
-        </CommandPanel>
-      {:else if snapshot.ui.activeCommandDestination === "data"}
-        <CommandPanel
-          destination="data"
-          title="Data"
-          canClose={currentSnapshot.ui.routeDraft === null}
-          onClose={() => handleCloseCommandPanel("data")}
-        >
-          <DataPanel
-            activeOverlay={currentSnapshot.ui.activeOverlay}
-            metrics={currentSnapshot.shell.topbar}
-            onSetOverlay={handleSetOverlay}
-          />
-        </CommandPanel>
-      {:else if snapshot.ui.activeCommandDestination === "city"}
-        {#if currentSnapshot.persistence.activeCity !== null}
+        {#if snapshot.ui.activeCommandDestination === "build"}
           <CommandPanel
-            destination="city"
-            title="City"
+            destination="build"
+            title="Build"
             canClose={currentSnapshot.ui.routeDraft === null}
-            onClose={() => handleCloseCommandPanel("city")}
+            onClose={() => handleCloseCommandPanel("build")}
           >
-            <CityPanel
-              shell={currentSnapshot.shell.city}
-              activeCity={currentSnapshot.persistence.activeCity}
-              {cities}
-              busy={currentSnapshot.persistence.busy}
-              dirty={currentSnapshot.persistence.dirty}
-              error={cityError}
-              onSave={() => void handleSaveCity()}
-              onLoad={(cityId) => void handleLoadCity(cityId)}
-              onRename={(cityId, name) => void handleRenameCity(cityId, name)}
-              onDelete={(cityId) => void handleDeleteCity(cityId)}
-              onNewCity={handleShowNewCity}
-              onRetryList={cityListError === null
-                ? undefined
-                : () => void refreshCities()}
+            <BuildPanel
+              activeBuildGroup={currentSnapshot.ui.activeBuildGroup}
+              activeTool={currentSnapshot.ui.activeTool}
+              selectedArea={currentSnapshot.ui.selectedArea}
+              selectedBuilding={currentSnapshot.ui.selectedBuilding}
+              roadPreset={currentSnapshot.ui.roadPreset}
+              roundaboutSize={currentSnapshot.ui.roundaboutSize}
+              buildingRotation={currentSnapshot.ui.buildingRotation}
+              onSetBuildGroup={handleSetBuildGroup}
+              onSelectItem={handleSelectBuildItem}
+              onRotateBuilding={handleRotateBuilding}
             />
           </CommandPanel>
+        {:else if snapshot.ui.activeCommandDestination === "lines"}
+          <CommandPanel
+            destination="lines"
+            title="Lines"
+            canClose={true}
+            pinned={currentSnapshot.ui.routeDraft !== null}
+            onClose={() => handleCloseCommandPanel("lines")}
+          >
+            <LinesPanel
+              activeTool={currentSnapshot.ui.activeTool}
+              selectedBuilding={currentSnapshot.ui.selectedBuilding}
+              routeDraft={currentSnapshot.shell.routeDraft}
+              routes={currentSnapshot.shell.routes}
+              onSetTool={(tool) => handleSetTool(tool)}
+              onSelectWaypoint={handleSelectRouteWaypoint}
+              onRemove={handleRemoveRouteWaypoint}
+              onUndo={handleUndoRouteDraft}
+              onRedo={handleRedoRouteDraft}
+              onMove={handleMoveRouteWaypoint}
+              onReverse={handleReverseRouteDraft}
+              onPattern={handleSetRoutePattern}
+              onSave={handleSaveRouteDraft}
+              onCancel={handleCancelRouteDraft}
+              onReload={handleReloadRouteDraft}
+              onRenameRoute={handleRenameRoute}
+              onRecolorRoute={handleRecolorRoute}
+              onToggleRouteActive={handleToggleRouteActive}
+              onDeleteRoute={handleDeleteRoute}
+              onFocusRouteFailure={handleFocusRouteFailure}
+              onEditRoute={handleStartRouteEdit}
+              onSelectRoute={handleSelectRoute}
+              onFocusWaitLocation={handleFocusWaitLocation}
+              onSetServiceTargetHeadway={handleSetServiceTargetHeadway}
+              onDeployInitialFleet={handleDeployInitialFleet}
+              onAddServiceVehicle={handleAddServiceVehicle}
+              onRetireServiceVehicle={handleRetireServiceVehicle}
+              {pendingServiceActions}
+            />
+          </CommandPanel>
+        {:else if snapshot.ui.activeCommandDestination === "data"}
+          <CommandPanel
+            destination="data"
+            title="Data"
+            canClose={currentSnapshot.ui.routeDraft === null}
+            onClose={() => handleCloseCommandPanel("data")}
+          >
+            <DataPanel
+              activeOverlay={currentSnapshot.ui.activeOverlay}
+              metrics={currentSnapshot.shell.topbar}
+              onSetOverlay={handleSetOverlay}
+            />
+          </CommandPanel>
+        {:else if snapshot.ui.activeCommandDestination === "city"}
+          {#if currentSnapshot.persistence.activeCity !== null}
+            <CommandPanel
+              destination="city"
+              title="City"
+              canClose={currentSnapshot.ui.routeDraft === null}
+              onClose={() => handleCloseCommandPanel("city")}
+            >
+              <CityPanel
+                shell={currentSnapshot.shell.city}
+                activeCity={currentSnapshot.persistence.activeCity}
+                {cities}
+                busy={currentSnapshot.persistence.busy}
+                dirty={currentSnapshot.persistence.dirty}
+                error={cityError}
+                onSave={() => void handleSaveCity()}
+                onLoad={(cityId) => void handleLoadCity(cityId)}
+                onRename={(cityId, name) => void handleRenameCity(cityId, name)}
+                onDelete={(cityId) => void handleDeleteCity(cityId)}
+                onNewCity={handleShowNewCity}
+                onRetryList={cityListError === null
+                  ? undefined
+                  : () => void refreshCities()}
+              />
+            </CommandPanel>
+          {/if}
         {/if}
-      {/if}
 
-      <ActionFeedback
-        feedback={snapshot.shell.actionFeedback}
-        onDismiss={handleDismissRejection}
-      />
+        <ActionFeedback
+          feedback={snapshot.shell.actionFeedback}
+          onDismiss={handleDismissRejection}
+        />
 
-      <CommandShelf
-        bind:this={commandShelf}
-        command={currentSnapshot.shell.command}
-        onSetDestination={handleSetCommandDestination}
-        onSetTool={(tool) => handleSetTool(tool)}
-      />
+        <CommandShelf
+          bind:this={commandShelf}
+          command={currentSnapshot.shell.command}
+          onSetDestination={handleSetCommandDestination}
+          onSetTool={(tool) => handleSetTool(tool)}
+        />
+      </div>
     {/if}
   </main>
 {/if}
