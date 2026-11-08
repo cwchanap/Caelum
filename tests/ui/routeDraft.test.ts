@@ -30,7 +30,7 @@ function connectedPreview(generation: number): RoutePreviewResponse {
     missingWaypointIds: [],
     warnings: [],
     rejection: null,
-    initialFleet: null,
+    initialFleetCost: null,
   };
 }
 

@@ -682,31 +682,29 @@ fn route_preview_returns_typed_validation_with_generation() {
         });
         assert_eq!(response.generation, generation);
         assert_eq!(response.rejection.expect("typed rejection").code, code);
-        assert!(response.initial_fleet.is_none());
+        assert!(response.initial_fleet_cost.is_none());
     }
 }
 
 #[test]
 fn metro_preview_quotes_initial_fleet_with_zero_budget() {
-    let mut engine = editable_metro_network_engine();
-    engine.set_budget_for_test(0);
-    let response = engine.preview_route(RoutePreviewRequest {
-        expected_revision: Some(4),
-        generation: 31,
-        ..valid_metro_route_preview(31)
-    });
+    let snapshot = editable_metro_network_engine().snapshot();
+    for preset in [EconomyPreset::Standard, EconomyPreset::Creative] {
+        let engine = engine_for(&snapshot, preset, 0);
+        let response = engine.preview_route(RoutePreviewRequest {
+            expected_revision: Some(4),
+            generation: 31,
+            ..valid_metro_route_preview(31)
+        });
 
-    assert!(!response.legs.is_empty(), "{response:?}");
-    assert!(response
-        .legs
-        .iter()
-        .all(|leg| leg.status == RouteLegStatus::Connected));
-    assert!(response.rejection.is_none(), "{response:?}");
-    let quote = response
-        .initial_fleet
-        .expect("a valid new metro draft publishes an initial-fleet quote");
-    assert_eq!(quote.cost, METRO_COST);
-    assert!(!quote.affordable);
+        assert!(!response.legs.is_empty(), "{response:?}");
+        assert!(response
+            .legs
+            .iter()
+            .all(|leg| leg.status == RouteLegStatus::Connected));
+        assert!(response.rejection.is_none(), "{response:?}");
+        assert_eq!(response.initial_fleet_cost, Some(METRO_COST));
+    }
 }
 
 #[test]
@@ -825,12 +823,8 @@ fn new_draft_preview_quotes_the_fleet_the_same_state_purchase_charges() {
     let preview = engine.preview_route(valid_route_preview(70));
     assert!(preview.rejection.is_none(), "{preview:?}");
     let quote = preview
-        .initial_fleet
+        .initial_fleet_cost
         .expect("a valid new draft publishes an initial-fleet quote");
-    assert!(
-        quote.affordable,
-        "fixture budget covers the fleet: {quote:?}"
-    );
 
     let before_budget = engine.snapshot().budget;
     let created = engine.dispatch(GameIntent::CreateRoute {
@@ -846,8 +840,8 @@ fn new_draft_preview_quotes_the_fleet_the_same_state_purchase_charges() {
 
     let fleet = engine.snapshot().transit.routes[0].vehicle_ids.len();
     assert!(fleet >= 2, "fixture should require multiple buses: {fleet}");
-    assert_eq!(quote.cost, fleet as i32 * BUS_COST);
-    assert_eq!(engine.snapshot().budget, before_budget - quote.cost);
+    assert_eq!(quote, fleet as i32 * BUS_COST);
+    assert_eq!(engine.snapshot().budget, before_budget - quote);
 }
 
 #[test]
@@ -864,7 +858,7 @@ fn edit_preview_carries_no_initial_fleet_quote() {
     });
 
     assert!(preview.rejection.is_none(), "{preview:?}");
-    assert!(preview.initial_fleet.is_none());
+    assert!(preview.initial_fleet_cost.is_none());
 }
 
 #[test]

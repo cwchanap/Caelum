@@ -2,7 +2,6 @@ use std::collections::HashSet;
 
 use serde::{Deserialize, Serialize};
 
-use crate::cost_policy::CostPolicy;
 use crate::engine::{dispatch_context, RoutingContext};
 use crate::model::{
     GameSnapshot, Heading, MovementKind, Point, RoadStructure, RouteLegPath, RouteLegStatus,
@@ -56,13 +55,6 @@ pub struct GameplayWarning {
     pub context: RejectionContext,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct InitialFleetQuote {
-    pub cost: i32,
-    pub affordable: bool,
-}
-
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutePreviewResponse {
@@ -73,7 +65,8 @@ pub struct RoutePreviewResponse {
     pub missing_waypoint_ids: Vec<String>,
     pub warnings: Vec<GameplayWarning>,
     pub rejection: Option<GameplayRejection>,
-    pub initial_fleet: Option<InitialFleetQuote>,
+    /// Nominal price, including in Creative, rather than the amount deducted.
+    pub initial_fleet_cost: Option<i32>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -141,7 +134,7 @@ pub fn preview_route(
         missing_waypoint_ids,
         warnings: Vec::new(),
         rejection: None,
-        initial_fleet: None,
+        initial_fleet_cost: None,
     };
 
     let existing = match existing_route(snapshot, &request) {
@@ -236,39 +229,31 @@ pub fn preview_route(
         .filter_map(|leg| leg.estimated_seconds)
         .sum();
     response.turn_summary = summarize_turns(&response.legs);
-    response.initial_fleet = new_draft_initial_fleet(snapshot, &request, &response);
+    response.initial_fleet_cost = new_draft_initial_fleet_cost(snapshot, &request, &response);
 
     response
 }
 
-fn new_draft_initial_fleet(
+fn new_draft_initial_fleet_cost(
     snapshot: &GameSnapshot,
     request: &RoutePreviewRequest,
     response: &RoutePreviewResponse,
-) -> Option<InitialFleetQuote> {
+) -> Option<i32> {
     if request.route_id.is_some() || response.rejection.is_some() {
         return None;
     }
-    let empty_flow = crate::traffic::RoadFlow::new();
-    let dynamic_flow;
-    let flow = if request.mode == TransitMode::Bus && !snapshot.active_trips.is_empty() {
-        dynamic_flow = crate::traffic::derive_road_flow(snapshot);
-        &dynamic_flow
+    let flow = if request.mode == TransitMode::Bus {
+        crate::traffic::derive_road_flow(snapshot)
     } else {
-        &empty_flow
+        crate::traffic::RoadFlow::new()
     };
-    let round_trip_seconds = round_trip_seconds(&response.legs, request.mode, flow)?;
-    let (_required, cost) = initial_fleet(
+    let round_trip_seconds = round_trip_seconds(&response.legs, request.mode, &flow)?;
+    initial_fleet(
         round_trip_seconds,
         request.mode,
         DEFAULT_TARGET_HEADWAY_SECONDS,
-    )?;
-    Some(InitialFleetQuote {
-        cost,
-        affordable: CostPolicy::from_snapshot(snapshot)
-            .quote(cost, snapshot.budget)
-            .affordable(),
-    })
+    )
+    .map(|(_required, cost)| cost)
 }
 
 pub fn preview_road_mutation(

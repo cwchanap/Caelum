@@ -505,7 +505,7 @@ describe("WebGpuRenderer", () => {
             missingWaypointIds: [],
             warnings: [],
             rejection: null,
-            initialFleet: null,
+            initialFleetCost: null,
           },
         },
         ...overrides,

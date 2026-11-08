@@ -455,6 +455,7 @@ describe("buildTransitBatch committed legs", () => {
     );
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
+    expect(hasVertexNear(vertices, "#e04f39", 80, 48)).toBe(true);
     expect(hasVertexNear(vertices, "#e04f39", 80, 45.5)).toBe(true);
     expect(hasVertexNear(vertices, "#e04f39", 82.5, 48)).toBe(true);
     // Bevel triangle fills the outer notch without overlapping the inner corner
@@ -517,8 +518,60 @@ describe("buildTransitBatch committed legs", () => {
     );
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
-    expect(hasVertexNear(vertices, "#e04f39", 80, 45.5)).toBe(true);
-    expect(hasVertexNear(vertices, "#e04f39", 82.5, 48)).toBe(true);
+    const rows = verticesOfColor(vertices, "#e04f39");
+    const corners = [
+      [80, 48],
+      [80, 45.5],
+      [82.5, 48],
+    ];
+    expect(
+      rows.some(
+        (_, index) =>
+          index % 3 === 0 &&
+          corners.every(([x, y]) =>
+            rows
+              .slice(index, index + 3)
+              .some(
+                ([vx, vy]) =>
+                  Math.abs(vx - x) < 0.01 && Math.abs(vy - y) < 0.01,
+              ),
+          ),
+      ),
+    ).toBe(true);
+  });
+
+  it("does not fill a corner within a dashed broken leg", () => {
+    const state = stateWithLegs(
+      [routeLeg("a", "b", "networkDisconnected", cornerJointPath())],
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 2 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(hasVertexNear(vertices, "#e04f39", 80, 48)).toBe(false);
+  });
+
+  it("does not join solid legs across a pathless broken leg", () => {
+    const path = cornerJointPath();
+    if (path.kind !== "road") throw new Error("expected a road path");
+    const first = { ...path, steps: [path.steps[0]] };
+    const second = { ...path, steps: [path.steps[1]] };
+    const state = stateWithLegs(
+      [
+        routeLeg("a", "b", "connected", first),
+        routeLeg("b", "c", "networkDisconnected", null),
+        routeLeg("c", "d", "connected", second),
+      ],
+      [
+        { x: 1, y: 1 },
+        { x: 2, y: 2 },
+      ],
+    );
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(hasVertexNear(vertices, "#e04f39", 80, 48)).toBe(false);
   });
 
   it("emits no arrowheads for a pathless failed leg", () => {
@@ -834,7 +887,7 @@ describe("buildTransitBatch draft stroke", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleet: null,
+          initialFleetCost: null,
         },
       },
     };
@@ -867,7 +920,7 @@ describe("buildTransitBatch draft stroke", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleet: null,
+          initialFleetCost: null,
         },
       },
     };
@@ -897,7 +950,7 @@ describe("buildTransitBatch draft stroke", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleet: null,
+          initialFleetCost: null,
         },
       },
     };
@@ -937,7 +990,7 @@ describe("buildTransitBatch draft stroke", () => {
       missingWaypointIds: [],
       warnings: [],
       rejection: null,
-      initialFleet: null,
+      initialFleetCost: null,
     };
 
     // A new draft has no corridor slot: drawn centered on the corridor.
@@ -994,7 +1047,7 @@ describe("buildTransitBatch scope", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleet: null,
+          initialFleetCost: null,
         },
       },
     };

@@ -525,13 +525,12 @@ export function selectRouteEditorView(
     canUndo: ui.routeDraftHistory.past.length > 0,
     canRedo: ui.routeDraftHistory.future.length > 0,
     notice: ui.routeDraftNotice,
-    initialFleet:
+    initialFleetCost:
       draft.source.kind === "create" &&
       draft.preview !== null &&
       draft.preview.generation === draft.generation
-        ? draft.preview.initialFleet
+        ? draft.preview.initialFleetCost
         : null,
-    budget: state.budget,
   };
 }
 

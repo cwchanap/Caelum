@@ -42,8 +42,7 @@ export function createDraftView(
     canRedo: false,
     notice: null,
     failures: [],
-    initialFleet: { cost: 16_000, affordable: true },
-    budget: 120_000,
+    initialFleetCost: 16_000,
     ...overrides,
   };
 }

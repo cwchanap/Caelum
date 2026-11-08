@@ -3,7 +3,7 @@
 **Spec:** [2026-11-06-hpa-675-fleet-cost-route-corners-design.md](../specs/2026-11-06-hpa-675-fleet-cost-route-corners-design.md)  
 **Linear:** https://linear.app/cwchanap/issue/HPA-675/fix-line-pricing-and-the-route-corner-hook-from-the-second-uat  
 **Baseline:** main @ ec2f7e8  
-**Delivery:** One PR only. This plan is committed first for review; perform implementation, tests, and cleanup on this same branch/PR. No art generation.
+**Delivery:** This PR contains the plan, implementation, tests, and cleanup. No art generation.
 
 ## Existing code to change
 
@@ -21,11 +21,11 @@
 
 **Write targeted Rust tests first**, reusing the existing route-preview fixture:
 - Happy path: a connected new Bus route needing **multiple vehicles** gets a nominal quote matching the same-state Rust fleet purchase; test Metro by reusing existing route preview/service coverage rather than duplicating the matrix.
-- Representative negative case: an edit preview has `initialFleet: null`. Reuse existing `CostPolicy` tests for Creative/insufficient budget; do not add another Creative matrix.
+- Representative negative case: an edit preview has `initialFleetCost: null`. Reuse existing `CostPolicy` tests for Creative/insufficient budget; do not add another Creative matrix.
 
-1. Add one small helper in `service_control.rs` that takes an already derived, traffic-aware `round_trip_seconds` plus mode and target, then returns the required count and checked **nominal** cost. Call it from **all three** sites: `deploy_initial_fleet`, `metrics` (for `estimated_deployment_cost`), and `preview_route`. The `metrics` path already computes cycle time for display, so do not recalculate it there. Preserve the current deployment error semantics for invalid cycle or overflow.
-2. In `preview_route`, after successful new-create leg validation, use Rust's existing road flow and `DEFAULT_TARGET_HEADWAY_SECONDS` (600) to build `initial_fleet: Option<InitialFleetQuote { cost, affordable }>`. Use `CostPolicy.quote(nominal, budget).affordable()`; never show an effective payable $0 for Creative. Do not use `RoutePreviewResponse.total_travel_seconds` or duplicate fleet math in TS.
-3. Extend the existing TS route-preview contract with `initialFleet: { cost: number; affordable: boolean } | null`; normalize `?? null` across WASM/Tauri. Update compile-time fixtures for the new required field without multiplying redundant scenario tests.
+1. Add one small helper in `service_control.rs` that takes an already derived, traffic-aware `round_trip_seconds` plus mode and target, then returns the required count and checked **nominal** cost. Preview and deployment call it; `metrics` already has the required count and calls the shared `initial_fleet_cost` pricing helper directly. Preserve the current deployment error semantics for invalid cycle or overflow.
+2. In `preview_route`, after successful new-create leg validation, use Rust's existing road flow and `DEFAULT_TARGET_HEADWAY_SECONDS` (600) to build `initial_fleet_cost: Option<i32>`. Show the nominal price in Creative; Rust's `CostPolicy` authorizes the actual purchase. Do not use `RoutePreviewResponse.total_travel_seconds` or duplicate fleet math in TS.
+3. Extend the existing TS route-preview contract with `initialFleetCost: number | null`; normalize `?? null` across WASM/Tauri. Update compile-time fixtures for the new required field without multiplying redundant scenario tests.
 4. Do not introduce a Rust intent, new host method, extra state owner, purchase reservation, or schema migration.
 
 **Proof:** One structural quote is consistent with existing saved-line estimates and the actual Rust purchase without mutating the city during preview.
@@ -34,9 +34,9 @@
 
 **Use the ticket's UI case** in `tests/ui/routeEditor.test.ts`: a connected new Bus draft showing `Save & run · $X` for any quote, affordable or not, and `Save & run` when the quote is null. Reuse existing route-editor edit/disabled-state tests; do not add parallel pending/stale/Creative tests.
 
-1. Add one create-only nullable `initialFleet` to `RouteEditorView`, selected from the current-generation preview; reuse `formatBudget`. `cost` is **nominal** even in Creative; `affordable` is Rust's `CostPolicy` answer and remains a hint only.
-2. In `RouteEditor.svelte`, show **Save & run · $X** whenever `initialFleet !== null` and **Save & run** when it is null; no affordability warning or relabel. Edits remain **Save route**; no new `canSaveRouteDraft` restriction.
-3. In existing `saveRouteDraft`, capture `deploy = isCreate && draft.preview?.initialFleet !== null` together with its draft token. Continue saving the route in the existing queue and always run the post-create `deployInitialFleet` when `deploy` is true. Preserve accepted-create publication, ID diff, token deduplication, and superseded draft behavior.
+1. Add one create-only nullable `initialFleetCost` to `RouteEditorView`, selected from the current-generation preview; reuse `formatBudget`. The price is **nominal** even in Creative.
+2. In `RouteEditor.svelte`, show **Save & run · $X** whenever `initialFleetCost !== null` and **Save & run** when it is null; no affordability warning or relabel. Edits remain **Save route**; no new `canSaveRouteDraft` restriction.
+3. In existing `saveRouteDraft`, capture `deploy = isCreate && draft.preview.initialFleetCost !== null` together with its draft token. Continue saving the route in the existing queue and always run the post-create `deployInitialFleet` when `deploy` is true. Preserve accepted-create publication, ID diff, token deduplication, and superseded draft behavior.
 4. When the deployment rejects with `insufficientBudget`, annotate the rejection context with `savedWithoutFleet: true` so feedback reads **Saved without fleet: …**, and republish. In `tests/runtime/gameRuntime.test.ts`, cover one deploy-rejection save that still creates the line and surfaces the annotated message; rerun the existing happy-path deployment and deployment-time rejection tests.
 
 **Proof:** New drafts' button text matches the actual dispatched operation, and no valid Save becomes disabled merely because a quote is null.
@@ -75,17 +75,17 @@ bun run build
 
 ## Completion checklist
 
-- [ ] One existing draft PR contains spec, plan, code, and tests.
-- [ ] One nullable nominal-price quote on Rust preview uses the 600-second default and existing CostPolicy; preview, deployment and saved-line metrics reuse the price helper.
-- [ ] New Bus and Metro drafts display **Save & run · $X** for any quote and **Save & run** for a null quote.
-- [ ] Save attempts fleet deployment for every quoted create; an `insufficientBudget` rejection leaves the line saved and reports **Saved without fleet**.
-- [ ] Creative shows the same nominal price as other Lines UI, and CostPolicy still authorizes a free purchase.
-- [ ] Existing route Edit still updates without purchasing a fleet.
-- [ ] Old create/deploy rejection and stale-save protections remain intact.
-- [ ] Right/left turns use upstream Rust Line geometry shared by route overlay, vehicles, arrows and picking; preserve U-turns/roundabouts and accept existing minor shared-corridor kink risk.
-- [ ] Workspace-wide Rust tests and Bun checks pass; record exact commands and results in the PR.
-- [ ] No art/SFX, docking, new APIs, save migration, backward compatibility, or extra PR.
+- [x] One PR contains spec, plan, code, and tests.
+- [x] One nullable nominal-price quote on Rust preview uses the 600-second default; preview, deployment and saved-line metrics reuse the price helper, while CostPolicy authorizes deployment.
+- [x] New Bus and Metro drafts display **Save & run · $X** for any quote and **Save & run** for a null quote.
+- [x] Save attempts fleet deployment for every quoted create; an `insufficientBudget` rejection leaves the line saved and reports **Saved without fleet**.
+- [x] Creative shows the same nominal price as other Lines UI, and CostPolicy still authorizes a free purchase.
+- [x] Existing route Edit still updates without purchasing a fleet.
+- [x] Old create/deploy rejection and stale-save protections remain intact.
+- [x] Right/left turns use upstream Rust Line geometry shared by route overlay, vehicles, arrows and picking; preserve U-turns/roundabouts and accept existing minor shared-corridor kink risk.
+- [x] Workspace-wide Rust tests and Bun checks pass; record exact commands and results in the PR.
+- [x] No art/SFX, docking, new APIs, save migration, backward compatibility, or extra PR.
 
 ## Implementation boundary
 
-Review this design-only draft before coding. Subsequent commits go to **this same PR**. Use the narrowest tested change and prefer editing existing files/tests over adding utilities unless they remove actual duplication.
+Implementation and review follow-up stay in **this same PR**. Prefer the narrowest tested change and edit existing files/tests over adding utilities unless they remove actual duplication.

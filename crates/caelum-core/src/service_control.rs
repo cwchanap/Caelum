@@ -533,6 +533,7 @@ pub(crate) fn required_fleet(round_trip_seconds: f64, target_headway_seconds: u3
     ((round_trip_seconds / f64::from(target_headway_seconds)).ceil() as usize).max(1)
 }
 
+/// Size the initial fleet and return its checked nominal price.
 pub(crate) fn initial_fleet(
     round_trip_seconds: f64,
     mode: TransitMode,
@@ -543,6 +544,7 @@ pub(crate) fn initial_fleet(
     Some((required, cost))
 }
 
+/// Price an already-sized fleet without deriving its service cycle again.
 pub(crate) fn initial_fleet_cost(required: usize, mode: TransitMode) -> Option<i32> {
     i32::try_from(required)
         .ok()?

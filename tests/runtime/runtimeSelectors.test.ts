@@ -540,7 +540,7 @@ describe("route selectors", () => {
       missingWaypointIds: [],
       warnings: [],
       rejection: null,
-      initialFleet: null,
+      initialFleetCost: null,
     };
   }
 
@@ -1752,7 +1752,7 @@ describe("route selectors", () => {
       missingWaypointIds: ["stop-999"],
       warnings: [],
       rejection: previewRejection,
-      initialFleet: null,
+      initialFleetCost: null,
     };
     const ui = {
       ...createUiState(),
