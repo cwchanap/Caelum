@@ -193,18 +193,40 @@ for (const viewport of desktopViewports) {
       page.getByTestId("map-zoom-fit"),
     ] as const;
     const zoomFit = page.getByTestId("map-zoom-fit");
+    const board = page.getByTestId("game-canvas-host");
+    const shelf = page.getByTestId("command-shelf");
+    const camera = async () => (await runtimeSnapshot(page)).camera;
+
+    await expect(zoomFit).toBeDisabled();
+    await page.getByTestId("map-zoom-in").click();
+    await expect(zoomFit).toBeEnabled();
+    await expect.poll(camera).not.toBeNull();
+
+    await page.getByTestId("map-zoom-out").click();
+    await expect.poll(camera).toBeNull();
     await expect(zoomFit).toBeDisabled();
     await page.getByTestId("map-zoom-in").click();
     await expect(zoomFit).toBeEnabled();
 
-    const shelf = page.getByTestId("command-shelf");
     const expectZoomControlsClear = async () => {
+      const boardBox = await board.boundingBox();
       const shelfBox = await shelf.boundingBox();
+      expect(boardBox).not.toBeNull();
       expect(shelfBox).not.toBeNull();
+      const boardBottom = boardBox!.y + boardBox!.height;
+      const safeBandTop = boardBottom - HUD_INSET.bottom;
       for (const button of zoomControls) {
         const testid = await button.getAttribute("data-testid");
         const box = await button.boundingBox();
         expect(box, `${testid} has a bounding box`).not.toBeNull();
+        expect(
+          box!.y,
+          `${testid} stays inside the bottom safe band`,
+        ).toBeGreaterThanOrEqual(safeBandTop - 1);
+        expect(
+          box!.y + box!.height,
+          `${testid} stays inside the bottom safe band`,
+        ).toBeLessThanOrEqual(boardBottom + 1);
         expect(
           boxesIntersect(box!, shelfBox!),
           `${testid} must not intersect the command shelf`,
@@ -236,9 +258,8 @@ for (const viewport of desktopViewports) {
 
     await expect(page.getByTestId("command-active-mode")).toBeVisible();
     await zoomFit.click();
-    await expect
-      .poll(async () => (await runtimeSnapshot(page)).camera)
-      .toBeNull();
+    await expect.poll(camera).toBeNull();
+    await expectZoomControlsClear();
   });
 }
 

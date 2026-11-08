@@ -300,3 +300,35 @@ test("reaches the bottom-right and top-left edge tiles at maximum zoom", async (
     await expect.poll(async () => (await tileAt(tile))?.kind).toBe("road");
   }
 });
+
+test("keeps the fitted bottom-left edge tile clickable at the compact width", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1024, height: 768 });
+  await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  const tile = { x: 0, y: 17 };
+  const point = await mapTileViewportPoint(canvas, tile);
+  const covered = await page.evaluate(({ x, y }) => {
+    const target = document.elementFromPoint(x, y);
+    return (
+      target !== null && target.closest(".board-zoom, .command-shelf") !== null
+    );
+  }, point);
+  expect(covered, "fitted edge tile must not be covered by HUD controls").toBe(
+    false,
+  );
+
+  await clickMapTile(canvas, tile);
+  await expect
+    .poll(
+      async () =>
+        (await runtimeSnapshot(page)).state.map.tiles.find(
+          (candidate) => candidate.x === tile.x && candidate.y === tile.y,
+        )?.kind,
+    )
+    .toBe("road");
+});
