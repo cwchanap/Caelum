@@ -390,8 +390,6 @@ test("settles the roundabout badge after rejected and applied clicks without mov
     b.x < a.x + a.width &&
     a.y < b.y + b.height &&
     b.y < a.y + a.height;
-  // The toast floats over the full-bleed canvas under the clock cluster; it
-  // must stay inside the top region and clear of the cursor badge.
   expect(toastBox!.y).toBeGreaterThanOrEqual(0);
   expect(toastBox!.y + toastBox!.height).toBeLessThanOrEqual(
     HUD_INSET.top + 96,

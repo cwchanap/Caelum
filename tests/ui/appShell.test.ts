@@ -1137,21 +1137,17 @@ describe("App command shell", () => {
     const clusters = topbar.querySelectorAll(".topbar-cluster");
     expect(clusters).toHaveLength(3);
 
-    // Left cluster: real city name plus the save status chip.
     const cityName = screen.getByTestId("topbar-city-name");
     expect(cityName).toHaveTextContent("Harbour City");
     expect(cityName).toHaveAttribute("title", "Harbour City");
     expect(screen.getByTestId("topbar-save-status")).toHaveTextContent("Saved");
 
-    // Centre cluster: pause/resume, the day/time readout and speed actions.
     expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
     expect(screen.getByText("Time")).toBeVisible();
     expect(screen.getByRole("button", { name: "1x" })).toBeVisible();
     expect(screen.getByRole("button", { name: "2x" })).toBeVisible();
     expect(screen.getByRole("button", { name: "4x" })).toBeVisible();
 
-    // Right cluster: money, daily cost, residents, average wait and the
-    // compact warning chip. The old Network readout stays out of the topbar.
     expect(screen.getByText("Money")).toBeVisible();
     expect(screen.getByText("Daily cost")).toBeVisible();
     expect(screen.getByText("$2,900")).toBeVisible();

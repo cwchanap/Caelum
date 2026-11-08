@@ -101,7 +101,6 @@ for (const viewport of desktopViewports) {
     const shelfBox = await shelf.boundingBox();
     expect(canvasBox).not.toBeNull();
     expect(shelfBox).not.toBeNull();
-    // The map is full-bleed; the dock floats inside the bottom HUD band.
     expect(canvasBox!.height).toBeGreaterThanOrEqual(viewport.height - 1);
     expect(shelfBox!.y).toBeGreaterThanOrEqual(
       viewport.height - HUD_INSET.bottom - 1,

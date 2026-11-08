@@ -55,8 +55,6 @@ export interface ShellTopbarState {
   late: string;
   unserved: string;
   avgWait: string;
-  /** Preformatted warning chip ("3 late · 1 unserved"), null when both
-   *  numeric trip counts are zero. */
   tripIssues: string | null;
 }
 
