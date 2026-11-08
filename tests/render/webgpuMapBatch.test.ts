@@ -133,15 +133,13 @@ describe("buildMapBatch tile layer", () => {
     state = withRoads(state, [{ x: 5, y: 5 }]);
     const batch = buildMapBatch(state);
 
-    // Tile (2,3) is a vacant office lot: a tinted fill plus a dashed
-    // perimeter in the full zone colour.
+    // Tile (2,3) is empty with an office zone: tinted fill, dashed perimeter.
     const lotFill = withAlpha(parseColor(colors.areaOffice), LOT_FILL_ALPHA);
     expect(hasVertexNearRgba(batch, lotFill, 64, 96)).toBe(true);
     expect(hasVertexNear(batch, colors.areaOffice, 64, 95)).toBe(true);
     // Tile (5,5) is a road: filled with the road color.
     expect(hasVertexNear(batch, colors.road, 5 * 32, 5 * 32)).toBe(true);
-    // Grid lines run along the tile boundary (lineWidth 1, centered) and
-    // span the board, so their vertices land on the board edge.
+    // Grid strokes run along the tile boundary (lineWidth 1, centered).
     expect(hasVertexNear(batch, colors.grid, 64.5, 0)).toBe(true);
     expect(hasVertexNear(batch, colors.grid, 0, 96.5)).toBe(true);
   });
