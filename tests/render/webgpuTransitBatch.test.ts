@@ -814,6 +814,59 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(hasVertexNear(vertices, "#ffffff", 140, 140)).toBe(true);
   });
 
+  it("draws coincident node cues beneath the marker's white fill", () => {
+    const state = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const rows = rowsOf(vertices);
+    let cueIndex = -1;
+    let fillIndex = -1;
+    rows.forEach((row, index) => {
+      if (Math.abs(row[0] - 48) > 0.01 || Math.abs(row[1] - 48) > 0.01) {
+        return;
+      }
+      if (sameColor(row, "#e04f39")) cueIndex = index;
+      if (sameColor(row, "#ffffff")) fillIndex = index;
+    });
+    expect(cueIndex).toBeGreaterThanOrEqual(0);
+    expect(fillIndex).toBeGreaterThan(cueIndex);
+  });
+
+  it("rims a shared marker with the emphasized serving line's color", () => {
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const route = base.transit.routes[0];
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: [
+          route,
+          { ...route, id: "route-002", name: "Route 2", color: "#2f9e44" },
+        ],
+      },
+    };
+
+    const plain = buildTransitBatch(state, createUiState(), 1).vertices;
+    expect(hasVertexNear(plain, "#e04f39", 55, 48)).toBe(true);
+
+    const selected = buildTransitBatch(
+      state,
+      { ...createUiState(), selectedRouteId: "route-002" },
+      1,
+    ).vertices;
+    expect(hasVertexNear(selected, "#2f9e44", 55, 48)).toBe(true);
+    const routeOneRgb = colorOf("#e04f39").slice(0, 3);
+    const rimRows = rowsOf(selected).filter(
+      (row) =>
+        Math.abs(row[0] - 55) < 0.01 &&
+        Math.abs(row[1] - 48) < 0.01 &&
+        row
+          .slice(2, 5)
+          .every((value, index) => Math.abs(value - routeOneRgb[index]) < 1e-4),
+    );
+    expect(rimRows).toEqual([]);
+  });
+
   it("draws the passenger-to-road access indicator", () => {
     const base = createTestGameState();
     const state = {
