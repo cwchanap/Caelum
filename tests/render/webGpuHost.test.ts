@@ -288,8 +288,7 @@ function createFixture(options?: {
   };
 }
 
-/** Client coordinates for the center of `tile` (the fitted map sits below
- *  the top HUD band, so the client y is offset by HUD_INSET.top). */
+/** Client coordinates for the center of `tile`. */
 const center = (tile: {
   x: number;
   y: number;
