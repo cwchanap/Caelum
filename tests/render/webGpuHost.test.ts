@@ -29,9 +29,16 @@ import {
   tileSize,
   type Camera,
 } from "../../src/render/boardTransform";
+import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
 import { createFakeDevice } from "../helpers/fakeWebGpu";
+
+vi.mock("../../src/render/webgpu/mapBatch", async (importOriginal) => {
+  const mod =
+    await importOriginal<typeof import("../../src/render/webgpu/mapBatch")>();
+  return { ...mod, buildMapBatch: vi.fn(mod.buildMapBatch) };
+});
 
 // jsdom ships no PointerEvent and no Pointer Capture API. The WebGPU host
 // guards those, but to exercise the real DOM event -> callback wiring we stub
@@ -1798,6 +1805,76 @@ describe("createWebGpuHost frame contents", () => {
     expect(last.solids[0]!.vertices).not.toEqual(
       emphasized.solids[0]!.vertices,
     );
+
+    fx.host.stop();
+  });
+});
+
+describe("createWebGpuHost grid mode scene caching", () => {
+  const callsForState = (state: GameState): number =>
+    vi.mocked(buildMapBatch).mock.calls.filter(([arg]) => arg === state).length;
+
+  it("retessellates on tool changes but not on ticks or pans", () => {
+    const fx = createFixture({
+      state: unpaused(createTestGameState()),
+      ui: { activeTool: "road" },
+    });
+    vi.mocked(buildMapBatch).mockClear();
+    const state = fx.getState();
+    fx.host.start();
+    fx.fireFrame(16);
+    fx.fireFrame(33);
+    fx.fireFrame(50);
+    expect(callsForState(state)).toBe(1);
+
+    fx.callbacks.onCameraChange({ zoom: 2, center: { x: 14, y: 9 } });
+    fx.fireFrame(66);
+    fx.fireFrame(83);
+    expect(callsForState(state)).toBe(1);
+
+    fx.setUi({ activeTool: "inspect" });
+    fx.fireFrame(100);
+    expect(callsForState(state)).toBe(2);
+
+    fx.setUi({ activeTool: "road" });
+    fx.fireFrame(116);
+    expect(callsForState(state)).toBe(3);
+
+    fx.host.stop();
+  });
+
+  it("retessellates once when the board shrinks across the faint band", () => {
+    const fx = createFixture({
+      state: unpaused(createTestGameState()),
+      ui: { activeTool: "road" },
+    });
+    vi.mocked(buildMapBatch).mockClear();
+    const state = fx.getState();
+    fx.host.start();
+    fx.fireFrame(16);
+    expect(callsForState(state)).toBe(1);
+
+    fx.container.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 400,
+          height: 400,
+          left: 0,
+          top: 0,
+          right: 400,
+          bottom: 400,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    globalThis.window?.dispatchEvent(new Event("resize"));
+    fx.fireFrame(33);
+    expect(callsForState(state)).toBe(2);
+
+    fx.callbacks.onCameraChange({ zoom: 1.2, center: { x: 14, y: 9 } });
+    fx.fireFrame(50);
+    expect(callsForState(state)).toBe(2);
 
     fx.host.stop();
   });
