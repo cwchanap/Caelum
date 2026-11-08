@@ -364,6 +364,12 @@ body {
   bottom: 26px;
 }
 
+@media (max-width: 1199px) {
+  .board-zoom {
+    bottom: calc(var(--hud-bottom) + 12px);
+  }
+}
+
 .board-zoom button {
   min-width: 34px;
   min-height: 30px;

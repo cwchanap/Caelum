@@ -353,6 +353,40 @@
     white-space: nowrap;
   }
 
+  @media (max-width: 1199px) {
+    .command-shelf {
+      gap: 10px;
+      padding: 8px 10px;
+    }
+
+    .command-shelf__destinations,
+    .command-shelf__tools {
+      gap: 6px;
+    }
+
+    .command-shelf__tools {
+      padding-left: 10px;
+    }
+
+    .command-shelf__destination {
+      gap: 6px;
+      padding: 7px 9px;
+    }
+
+    .command-shelf__label {
+      gap: 6px;
+    }
+
+    .command-shelf__tool {
+      padding: 7px 8px;
+    }
+
+    .command-shelf__mode {
+      min-width: 96px;
+      padding-left: 8px;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .command-shelf__destination,
     .command-shelf__tool {
