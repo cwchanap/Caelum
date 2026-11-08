@@ -8,7 +8,7 @@ import type {
 import type { UiState } from "../../ui/uiState";
 import { tileCenter, tileSize } from "../boardTransform";
 import { colors } from "../colors";
-import { pointAndTangentAt } from "../pathGeometry";
+import { pointAndTangentAt, type GeometrySample } from "../pathGeometry";
 import {
   canonicalCorridorPrimitive,
   corridorOffsets,
@@ -43,16 +43,18 @@ function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
 }
 
+/** Join the outer edges of neighboring solid strokes at a turn. */
 function fillCornerNotch(
   g: SolidGeometry,
-  previousEnd: ReturnType<typeof pointAndTangentAt>,
-  start: ReturnType<typeof pointAndTangentAt>,
+  previousEnd: GeometrySample,
+  start: GeometrySample,
   lineWidth: number,
   color: Rgba,
 ): void {
   const p1 = previousEnd.point;
   const p2 = start.point;
   const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y);
+  // Bridge nearby corridor offsets, not unrelated leg endpoints.
   if (dist > 12) return;
 
   const t1 = previousEnd.tangent;
@@ -64,19 +66,19 @@ function fillCornerNotch(
   const u1 = { x: t1.x / len1, y: t1.y / len1 };
   const u2 = { x: t2.x / len2, y: t2.y / len2 };
   const cross = u1.x * u2.y - u1.y * u2.x;
-  if (Math.abs(cross) < 1e-4) return;
+  if (Math.abs(cross) < 1e-4) return; // Nearly parallel strokes need no join.
 
   const halfWidth = lineWidth / 2;
   const n1 = { x: -u1.y * halfWidth, y: u1.x * halfWidth };
   const n2 = { x: -u2.y * halfWidth, y: u2.x * halfWidth };
 
-  // If cross > 0, the turn is to the left in screen space (+n is inside, -n is outside).
-  // If cross < 0, the turn is to the right in screen space (-n is inside, +n is outside).
+  // In screen coordinates, positive cross is a right turn and negative is a left turn.
   const sign = cross > 0 ? -1 : 1;
   const o1 = { x: p1.x + sign * n1.x, y: p1.y + sign * n1.y };
   const o2 = { x: p2.x + sign * n2.x, y: p2.y + sign * n2.y };
 
   if (dist < 0.5) {
+    // Subpixel offsets can use a single bevel triangle.
     const p = { x: (p1.x + p2.x) / 2, y: (p1.y + p2.y) / 2 };
     g.triangle(p, o1, o2, color);
   } else {
@@ -248,8 +250,8 @@ function drawSteps(
   routeId: string,
   corridors: CorridorGroups,
   dash?: { dash: number; gap: number },
-  initialPreviousEnd?: ReturnType<typeof pointAndTangentAt>,
-): ReturnType<typeof pointAndTangentAt> | undefined {
+  initialPreviousEnd?: GeometrySample,
+): GeometrySample | undefined {
   let previousEnd = dash === undefined ? initialPreviousEnd : undefined;
   for (const step of path.steps) {
     const geometry = toPixelGeometry(
@@ -312,7 +314,7 @@ function drawLegs(
   routeId: string,
   corridors: CorridorGroups,
 ): void {
-  let previousEnd: ReturnType<typeof pointAndTangentAt> | undefined;
+  let previousEnd: GeometrySample | undefined;
   for (const leg of legs) {
     const path = presentationPath(leg);
     const from = nodes.get(leg.fromWaypointId);
@@ -326,7 +328,7 @@ function drawLegs(
         lineWidth,
         routeId,
         corridors,
-        // Canvas renderLeg dashes only the failed last-valid geometry.
+        // Only failed last-valid geometry is dashed.
         isDashed ? BROKEN_LEG_DASH : undefined,
         previousEnd,
       );
@@ -350,16 +352,19 @@ function drawLegs(
           drawEndpointConnector(g, pathEnd, to, color, lineWidth);
         }
       }
-    } else if (from !== undefined && to !== undefined) {
-      // Broken leg with no last-valid geometry: dotted endpoint-to-endpoint.
-      g.dashedLine(
-        tileCenter(from),
-        tileCenter(to),
-        lineWidth,
-        BROKEN_LEG_DASH.dash,
-        BROKEN_LEG_DASH.gap,
-        color,
-      );
+    } else {
+      previousEnd = undefined;
+      if (from !== undefined && to !== undefined) {
+        // Broken leg with no last-valid geometry: dotted endpoint-to-endpoint.
+        g.dashedLine(
+          tileCenter(from),
+          tileCenter(to),
+          lineWidth,
+          BROKEN_LEG_DASH.dash,
+          BROKEN_LEG_DASH.gap,
+          color,
+        );
+      }
     }
   }
 }

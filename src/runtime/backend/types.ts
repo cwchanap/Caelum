@@ -339,11 +339,6 @@ export interface GameplayWarning {
   context: GameplayRejection["context"];
 }
 
-export interface InitialFleetQuote {
-  cost: number;
-  affordable: boolean;
-}
-
 export interface RoutePreviewResponse {
   generation: number;
   legs: RouteLegPath[];
@@ -352,7 +347,7 @@ export interface RoutePreviewResponse {
   missingWaypointIds: string[];
   warnings: GameplayWarning[];
   rejection: GameplayRejection | null;
-  initialFleet: InitialFleetQuote | null;
+  initialFleetCost: number | null;
 }
 
 export interface RoadMutationPreviewRequest {

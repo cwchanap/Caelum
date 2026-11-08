@@ -10,7 +10,7 @@ function editDraftView(
   return createDraftView({
     source: "edit",
     title: "Editing Route 1",
-    initialFleet: null,
+    initialFleetCost: null,
     ...overrides,
   });
 }
@@ -138,35 +138,15 @@ describe("RouteEditor", () => {
     expect(screen.getByRole("button", { name: "Save route" })).toBeVisible();
   });
 
-  it("prices the initial fleet on a connected new draft's Save button", () => {
-    render(RouteEditor, {
+  it("prices initial fleet in Save & run and defaults to Save & run without a quote", async () => {
+    const { rerender } = render(RouteEditor, {
       props: editorProps(createDraftView()),
     });
 
     expect(
       screen.getByRole("button", { name: "Save & run · $16,000" }),
     ).toBeEnabled();
-    expect(screen.queryByTestId("route-fleet-warning")).toBeNull();
-  });
-
-  it("prices initial fleet in Save & run and defaults to Save & run without a quote", async () => {
-    const { rerender } = render(RouteEditor, {
-      props: editorProps(
-        createDraftView({
-          initialFleet: { cost: 16_000, affordable: false },
-          budget: 4_000,
-        }),
-      ),
-    });
-
-    expect(
-      screen.getByRole("button", { name: "Save & run · $16,000" }),
-    ).toBeEnabled();
-    expect(screen.queryByTestId("route-fleet-warning")).toBeNull();
-
-    await rerender(
-      editorProps(createDraftView({ initialFleet: null, budget: 0 })),
-    );
+    await rerender(editorProps(createDraftView({ initialFleetCost: null })));
     expect(screen.getByRole("button", { name: "Save & run" })).toBeEnabled();
   });
 

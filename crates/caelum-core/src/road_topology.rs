@@ -759,12 +759,16 @@ fn transition_geometry(
     let from_position = TripPosition::from(from);
     let to_position = TripPosition::from(to);
     match movement {
-        MovementKind::Straight | MovementKind::RightTurn | MovementKind::LeftTurn => {
-            PathGeometry::Line {
-                from: from_position,
-                to: to_position,
-            }
-        }
+        // Centre-to-centre lines avoid overshooting the road at ordinary turns.
+        MovementKind::Straight
+        | MovementKind::RightTurn
+        | MovementKind::LeftTurn
+        | MovementKind::RoundaboutEntry
+        | MovementKind::RoundaboutCirculation
+        | MovementKind::RoundaboutExit => PathGeometry::Line {
+            from: from_position,
+            to: to_position,
+        },
         MovementKind::UTurn => {
             // The control point bows the curve to the LEFT of the incoming
             // heading. `(dy, -dx)` is the left perpendicular of the incoming
@@ -783,12 +787,6 @@ fn transition_geometry(
                 to: to_position,
             }
         }
-        MovementKind::RoundaboutEntry
-        | MovementKind::RoundaboutCirculation
-        | MovementKind::RoundaboutExit => PathGeometry::Line {
-            from: from_position,
-            to: to_position,
-        },
     }
 }
 

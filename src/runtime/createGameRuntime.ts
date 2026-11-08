@@ -996,7 +996,7 @@ export async function createGameRuntime(
     };
     const isCreate = draft.source.kind === "create";
     const mode = draft.mode;
-    const deploy = isCreate && draft.preview?.initialFleet !== null;
+    const deploy = isCreate && draft.preview.initialFleetCost !== null;
     const tokenKey = `${token.instanceId}:${token.generation}:${token.source}`;
     if (activeRouteSaveTokens.has(tokenKey)) {
       return getSnapshot();
@@ -1061,11 +1061,16 @@ export async function createGameRuntime(
           if (newIds.length !== 1) {
             return saved;
           }
+          const previousRejection = rejection;
           const deployed = await dispatchNow({
             type: "deployInitialFleet",
             lineId: newIds[0],
           });
-          if (rejection?.code === "insufficientBudget") {
+          if (
+            rejection !== previousRejection &&
+            rejection === deployed.rejection &&
+            rejection?.code === "insufficientBudget"
+          ) {
             rejection = {
               ...rejection,
               context: {

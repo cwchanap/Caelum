@@ -360,8 +360,7 @@ function routePreview(
             code: "disconnectedLeg",
             context: { affectedRouteIds: [] },
           },
-    initialFleet:
-      status === "connected" ? { cost: 16_000, affordable: true } : null,
+    initialFleetCost: status === "connected" ? 16_000 : null,
   };
 }
 
@@ -5293,7 +5292,7 @@ describe("route creation and management", () => {
           affectedRouteIds: ["route-001"],
         },
       },
-      initialFleet: null,
+      initialFleetCost: null,
     });
     await flushPromises();
 
@@ -6020,6 +6019,8 @@ describe("route creation and management", () => {
     runtime.handleTileClick({ x: 11, y: 3 });
     await flushPromises();
 
+    const published: RuntimeSnapshot[] = [];
+    runtime.subscribe((snapshot) => published.push(snapshot));
     await runtime.saveRouteDraft();
 
     const snapshot = runtime.getSnapshot();
@@ -6039,6 +6040,9 @@ describe("route creation and management", () => {
       },
     });
     expect(snapshot.shell.actionFeedback?.message).toBe(
+      "Saved without fleet: Needs $800; only $0 is available.",
+    );
+    expect(published.at(-1)?.shell.actionFeedback?.message).toBe(
       "Saved without fleet: Needs $800; only $0 is available.",
     );
     expect(row).toMatchObject({
@@ -6113,14 +6117,14 @@ describe("route creation and management", () => {
     });
   });
 
-  it("dispatches deployInitialFleet even when the quoted fleet was marked unaffordable at preview time", async () => {
+  it("saves a connected route without deploying when its fleet quote is unavailable", async () => {
     const base = backendSpy(routeSnapshot());
     const backend: BackendSpy = {
       ...base,
       async previewRoute(request) {
         return {
           ...routePreview(request.generation, request.waypointIds),
-          initialFleet: { cost: 16_000, affordable: false },
+          initialFleetCost: null,
         };
       },
     };
@@ -6129,17 +6133,10 @@ describe("route creation and management", () => {
 
     await runtime.saveRouteDraft();
 
-    expect(backend.intents).toEqual([
-      {
-        type: "createRoute",
-        mode: "bus",
-        pattern: "loop",
-        waypointIds: ["stop-001", "stop-002"],
-      },
-      {
-        type: "deployInitialFleet",
-        lineId: "route-001",
-      },
+    expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
+    expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+    expect(backend.intents.map((intent) => intent.type)).toEqual([
+      "createRoute",
     ]);
   });
 
@@ -6646,6 +6643,55 @@ describe("route creation and management", () => {
     expect(snapshot.backendError).toBeNull();
     expect(snapshot.rejection).toBeNull();
     expect(snapshot.shell.actionFeedback).toBeNull();
+  });
+
+  it("does not annotate an unrelated budget rejection after a superseded save's no-op deployment", async () => {
+    const deferred = deferredDispatchBackend(routeSnapshot());
+    const backend: DeferredDispatchBackend = {
+      ...deferred,
+      async dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          return {
+            update: createPresentationUpdate(
+              deferred.snapshotInternal(),
+              false,
+            ),
+            applied: false,
+            rejection: null,
+          };
+        }
+        return deferred.dispatch(intent);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    const earlier = runtime.setSpeed(2);
+    await flushPromises();
+    const save = runtime.saveRouteDraft();
+    runtime.cancelRouteDraft();
+    runtime.setTool("busRoute");
+
+    const unrelated: GameplayRejection = {
+      code: "insufficientBudget",
+      context: {
+        requiredBudget: 200,
+        availableBudget: 100,
+        affectedRouteIds: [],
+      },
+    };
+    backend.rejectNextDispatchWith(unrelated);
+    await backend.resolveNext();
+    await earlier;
+    await flushPromises();
+    expect(runtime.getSnapshot().rejection).toEqual(unrelated);
+
+    await backend.resolveNext();
+    await save;
+
+    expect(runtime.getSnapshot().state.transit.routes).toHaveLength(1);
+    expect(runtime.getSnapshot().ui.routeDraft).not.toBeNull();
+    expect(runtime.getSnapshot().rejection).toEqual(unrelated);
   });
 
   it("suppresses deployment failure after a replacement draft is cancelled", async () => {

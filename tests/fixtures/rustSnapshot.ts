@@ -228,7 +228,7 @@ export function previewBackendStubs(): Pick<
         missingWaypointIds: [],
         warnings: [],
         rejection: null,
-        initialFleet: null,
+        initialFleetCost: null,
       };
     },
     async previewRoadMutation(request) {

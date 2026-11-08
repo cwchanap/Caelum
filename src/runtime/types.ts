@@ -24,7 +24,6 @@ import type { RouteDraft } from "../ui/routeDraft";
 import type {
   AuthoredRoadTilePreview,
   GameplayWarning,
-  InitialFleetQuote,
   RoadMutation,
   SandboxResetError,
 } from "./backend/types";
@@ -162,8 +161,7 @@ export interface RouteEditorView {
   canUndo: boolean;
   canRedo: boolean;
   notice: RouteDraftNotice | null;
-  initialFleet: InitialFleetQuote | null;
-  budget: number;
+  initialFleetCost: number | null;
 }
 
 export interface RouteServiceStatus {

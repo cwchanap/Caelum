@@ -198,8 +198,8 @@
       >{editor.previewPending
         ? "Checking route…"
         : editor.source === "create"
-          ? editor.initialFleet !== null
-            ? `Save & run · ${formatBudget(editor.initialFleet.cost)}`
+          ? editor.initialFleetCost !== null
+            ? `Save & run · ${formatBudget(editor.initialFleetCost)}`
             : "Save & run"
           : "Save route"}</button
     >
