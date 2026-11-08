@@ -8,6 +8,7 @@ import {
   type Mock,
 } from "vitest";
 import type {
+  GameMap,
   GameState,
   RoadPathStep,
   RouteLegPath,
@@ -1813,32 +1814,97 @@ describe("createWebGpuHost frame contents", () => {
 describe("createWebGpuHost grid mode scene caching", () => {
   const callsForState = (state: GameState): number =>
     vi.mocked(buildMapBatch).mock.calls.filter(([arg]) => arg === state).length;
+  const callsForMap = (map: GameMap): number =>
+    vi.mocked(buildMapBatch).mock.calls.filter(([arg]) => arg.map === map)
+      .length;
 
-  it("retessellates on tool changes but not on ticks or pans", () => {
+  it("retessellates on tool or revision changes but not on ticks or pans", () => {
     const fx = createFixture({
       state: unpaused(createTestGameState()),
       ui: { activeTool: "road" },
     });
     vi.mocked(buildMapBatch).mockClear();
-    const state = fx.getState();
+    const map = fx.getState().map;
     fx.host.start();
     fx.fireFrame(16);
+    expect(callsForMap(map)).toBe(1);
+
+    fx.setState({ ...fx.getState(), time: 100 });
     fx.fireFrame(33);
     fx.fireFrame(50);
-    expect(callsForState(state)).toBe(1);
+    expect(callsForMap(map)).toBe(1);
 
-    fx.callbacks.onCameraChange({ zoom: 2, center: { x: 14, y: 9 } });
+    fx.callbacks.onCameraChange({ zoom: 1, center: { x: 20, y: 12 } });
     fx.fireFrame(66);
     fx.fireFrame(83);
-    expect(callsForState(state)).toBe(1);
+    expect(callsForMap(map)).toBe(1);
+
+    fx.setSceneRevision(2);
+    fx.fireFrame(100);
+    expect(callsForMap(map)).toBe(2);
 
     fx.setUi({ activeTool: "inspect" });
-    fx.fireFrame(100);
-    expect(callsForState(state)).toBe(2);
+    fx.fireFrame(116);
+    expect(callsForMap(map)).toBe(3);
 
     fx.setUi({ activeTool: "road" });
-    fx.fireFrame(116);
+    fx.fireFrame(133);
+    expect(callsForMap(map)).toBe(4);
+
+    fx.host.stop();
+  });
+
+  it("arms the grid for building placement in both size bands", () => {
+    const fx = createFixture({
+      state: unpaused(createTestGameState()),
+      ui: { activeTool: "inspect" },
+    });
+    const spy = vi.mocked(buildMapBatch);
+    spy.mockClear();
+    const state = fx.getState();
+    const lastMode = () => spy.mock.calls.at(-1)?.[1];
+    fx.host.start();
+    fx.fireFrame(16);
+    expect(callsForState(state)).toBe(1);
+    expect(lastMode()).toBe("hidden");
+
+    fx.setUi({ selectedBuilding: "smallHouse" });
+    fx.fireFrame(33);
+    expect(callsForState(state)).toBe(2);
+    expect(lastMode()).toBe("normal");
+
+    fx.setUi({ selectedBuilding: null });
+    fx.fireFrame(50);
     expect(callsForState(state)).toBe(3);
+    expect(lastMode()).toBe("hidden");
+
+    fx.container.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: 400,
+          height: 400,
+          left: 0,
+          top: 0,
+          right: 400,
+          bottom: 400,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    globalThis.window?.dispatchEvent(new Event("resize"));
+    fx.fireFrame(66);
+    expect(callsForState(state)).toBe(3);
+
+    fx.setUi({ selectedBuilding: "smallHouse" });
+    fx.fireFrame(83);
+    expect(callsForState(state)).toBe(4);
+    expect(lastMode()).toBe("faint");
+
+    fx.setUi({ selectedBuilding: null });
+    fx.fireFrame(100);
+    expect(callsForState(state)).toBe(5);
+    expect(lastMode()).toBe("hidden");
 
     fx.host.stop();
   });

@@ -108,6 +108,16 @@ export function gridModeForTool(tool: Tool, tileCssPx: number): GridMode {
   return tileCssPx < GRID_FAINT_TILE_PX ? "faint" : "normal";
 }
 
+export function gridModeForUi(
+  ui: { activeTool: Tool; selectedBuilding: BuildingType | null },
+  tileCssPx: number,
+): GridMode {
+  if (ui.activeTool === "inspect" && ui.selectedBuilding !== null) {
+    return tileCssPx < GRID_FAINT_TILE_PX ? "faint" : "normal";
+  }
+  return gridModeForTool(ui.activeTool, tileCssPx);
+}
+
 function tileHash(x: number, y: number, salt: number): number {
   let h =
     (Math.imul(x, 0x27d4eb2d) ^
