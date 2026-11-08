@@ -62,6 +62,13 @@ function hueDistance(a: number, b: number): number {
   return distance > 180 ? 360 - distance : distance;
 }
 
+function blockFor(selector: string): string {
+  const match = styles.match(
+    new RegExp(`${selector.replace(/[.*]/g, "\\$&")}\\s*{([^}]*)}`),
+  );
+  return match?.[1] ?? "";
+}
+
 describe("sunny diorama visual foundation", () => {
   it("retires the colour-specific console tokens for role names", () => {
     const callers = `${styles}\n${hudSources}`;
@@ -90,6 +97,33 @@ describe("sunny diorama visual foundation", () => {
       expect(styles).toContain(role);
     }
     expect(styles).toContain('"Inter"');
+    expect(styles).not.toContain("TRANSIT OPERATIONS CONSOLE");
+    expect(styles).not.toContain("Dark mode only");
+  });
+
+  it("keeps essential labels on readable ink", () => {
+    for (const selector of [
+      ".readout-label",
+      ".brief-id",
+      ".dispatch-key",
+      ".platform-empty",
+    ]) {
+      const block = blockFor(selector);
+      expect(block).not.toContain("--ink-faint");
+      expect(block).toContain("--ink-mid");
+    }
+  });
+
+  it("applies the display face to existing headings", () => {
+    for (const selector of [
+      ".new-city-card h1",
+      ".city-library-card h1",
+      ".build-nav h3",
+    ]) {
+      const block = blockFor(selector);
+      expect(block).toContain("font-family: var(--font-display)");
+      expect(block).toContain("font-weight: 600");
+    }
   });
 
   it("sweeps the dark-console colour literals", () => {

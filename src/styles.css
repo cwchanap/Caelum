@@ -1,7 +1,7 @@
 /* ──────────────────────────────────────────────────────────────────────────
-   CAELUM // TRANSIT OPERATIONS CONSOLE
-   A dispatcher's command terminal. Engineered grid, signal accents,
-   monospace data readouts. Dark mode only — this is a control room.
+   CAELUM // SUNNY DIORAMA
+   A warm, readable city-builder surface. Cream cards, hairline borders,
+   signal accents, tabular Inter readouts. Light theme only.
    ────────────────────────────────────────────────────────────────────────── */
 
 :root {
@@ -76,10 +76,6 @@ body {
     ),
     var(--bg);
 }
-
-/* ──────────────────────────────────────────────────────────────────────────
-   PRIMITIVES — shared chrome for the current HUD controls
-   ────────────────────────────────────────────────────────────────────────── */
 
 .btn {
   font-family: var(--font-body);
@@ -317,7 +313,7 @@ body {
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.24em;
-  color: var(--ink-faint);
+  color: var(--ink-mid);
   text-transform: uppercase;
   line-height: 1;
 }
@@ -774,6 +770,14 @@ body {
   border-color: var(--line-strong);
 }
 
+.build-nav h3 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .build-crumb {
   font-family: var(--font-display);
   font-size: 12px;
@@ -926,7 +930,7 @@ body {
   font-family: var(--font-body);
   font-size: 9px;
   letter-spacing: 0.24em;
-  color: var(--ink-faint);
+  color: var(--ink-mid);
   text-transform: uppercase;
   margin: 0 0 10px;
 }
@@ -949,7 +953,7 @@ body {
   font-size: 9px;
   font-weight: 600;
   letter-spacing: 0.2em;
-  color: var(--ink-faint);
+  color: var(--ink-mid);
   text-transform: uppercase;
   padding-top: 2px;
 }
@@ -1030,7 +1034,7 @@ body {
   font-size: 10px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
-  color: var(--ink-faint);
+  color: var(--ink-mid);
 }
 
 .platform-routes {
@@ -1905,6 +1909,13 @@ body {
   padding: 32px;
 }
 
+.new-city-card h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--ink);
+}
+
 .new-city-card label {
   display: grid;
   gap: 8px;
@@ -1931,6 +1942,13 @@ body {
   width: min(56rem, 100%);
   display: grid;
   gap: 1rem;
+}
+
+.city-library-card h1 {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  color: var(--ink);
 }
 
 .city-library-actions,
