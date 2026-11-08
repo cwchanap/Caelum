@@ -33,7 +33,7 @@
 </script>
 
 <main class="new-city-screen" data-testid="new-city-screen">
-  <form class="new-city-card" onsubmit={submit}>
+  <form class="card new-city-card" onsubmit={submit}>
     <p class="new-city-kicker">CAELUM // LOCAL CITY</p>
     <h1>New City</h1>
 
@@ -72,11 +72,13 @@
       <p class="new-city-error" role="alert">{error}</p>
     {/if}
 
-    <button type="submit" disabled={!canCreate}>
+    <button class="btn" type="submit" disabled={!canCreate}>
       {busy ? "Creating…" : "Create City"}
     </button>
     {#if onCancel !== undefined}
-      <button type="button" disabled={busy} onclick={onCancel}>Cancel</button>
+      <button class="btn" type="button" disabled={busy} onclick={onCancel}
+        >Cancel</button
+      >
     {/if}
   </form>
 </main>

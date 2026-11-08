@@ -72,14 +72,14 @@
     place-items: center;
     gap: 8px;
     padding: 10px;
-    border: 1px solid var(--line, rgba(255, 255, 255, 0.08));
+    border: 1px solid var(--line, rgba(62, 54, 38, 0.15));
     border-radius: 8px;
-    color: var(--ink, #e6f1f4);
-    background: var(--surface-raised, #111d22);
+    color: var(--ink, #2f3a3f);
+    background: var(--surface-raised, #fffdf6);
     cursor: pointer;
     font: inherit;
     font-size: 13px;
-    font-weight: 700;
+    font-weight: 600;
     text-align: center;
     transition:
       color 150ms ease,
@@ -88,12 +88,12 @@
   }
 
   .command-plate:hover {
-    border-color: rgba(63, 224, 197, 0.4);
-    background: rgba(63, 224, 197, 0.08);
+    border-color: color-mix(in srgb, var(--accent, #0f8a70) 40%, transparent);
+    background: color-mix(in srgb, var(--accent, #0f8a70) 8%, transparent);
   }
 
   .command-plate:focus-visible {
-    outline: 2px solid var(--cyan, #3fe0c5);
+    outline: 2px solid var(--accent, #0f8a70);
     outline-offset: 3px;
   }
 

@@ -30,7 +30,7 @@
   </div>
   {#if feedback !== null}
     <div
-      class={`action-feedback action-feedback--${feedback.tone}`}
+      class={`card action-feedback action-feedback--${feedback.tone}`}
       data-testid="action-feedback"
       data-source={feedback.source}
       data-tone={feedback.tone}
@@ -92,7 +92,7 @@
       {#if feedback.dismissible}
         <button
           type="button"
-          class="action-feedback-dismiss"
+          class="btn action-feedback-dismiss"
           aria-label="Dismiss"
           onclick={onDismiss}
         >

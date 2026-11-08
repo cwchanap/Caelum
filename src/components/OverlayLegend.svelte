@@ -14,7 +14,7 @@
 
 {#if descriptor !== null}
   <div
-    class="overlay-legend"
+    class="card overlay-legend"
     data-testid="overlay-legend"
     role="region"
     aria-label="{descriptor.label} legend"

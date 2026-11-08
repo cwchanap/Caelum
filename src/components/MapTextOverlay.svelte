@@ -52,9 +52,9 @@
   // top/bottom padding of .map-text-item in styles.css.
   const LABEL_RISE_PX = 28;
 
-  // Estimated label width: 12px JetBrains Mono advances ~7.5px/char; padding
-  // is 6px each side plus slack for the inset border. Overestimating is safe —
-  // it only flips the label to a roomier side sooner.
+  // Estimated label width: 12px Inter advances ~7.5px/char at this weight;
+  // padding is 6px each side plus slack for the inset border. Overestimating
+  // is safe — it only flips the label to a roomier side sooner.
   const CHAR_PX = 7.5;
   const PAD_PX = 16;
   const EDGE_PX = 8;
