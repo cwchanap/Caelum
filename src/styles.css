@@ -237,9 +237,14 @@ body {
 }
 
 .topbar-trip-issues {
-  flex-shrink: 0;
+  display: inline-block;
+  flex-shrink: 1;
+  min-width: 0;
   padding: 1px 6px;
   font-size: 10px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
   border-color: color-mix(in srgb, var(--warning) 55%, var(--line));
   color: var(--warning);
 }
@@ -249,6 +254,7 @@ body {
   flex-direction: column;
   justify-content: center;
   gap: 2px;
+  flex-shrink: 0;
   min-width: 0;
   position: relative;
   overflow: hidden;

@@ -140,11 +140,6 @@ async function applyDirtyFixture(
   );
 }
 
-/** The trip-warning chip only renders for non-null `tripIssues`, which no
- *  debug seam can force; inject the same element the component emits so the
- *  geometry assertion measures the compact layout with the warning present.
- *  Must run after every fixture that commits a snapshot, or Svelte drops the
- *  appended node. */
 async function injectTripWarningChip(
   page: import("@playwright/test").Page,
 ): Promise<void> {
@@ -157,8 +152,8 @@ async function injectTripWarningChip(
       const chip = document.createElement("span");
       chip.className = "chip topbar-trip-issues";
       chip.dataset.testid = "topbar-trip-issues";
-      chip.title = "3 late · 1 unserved";
-      chip.textContent = "3 late · 1 unserved";
+      chip.title = "3000 late · 1000 unserved";
+      chip.textContent = "3000 late · 1000 unserved";
       stats.appendChild(chip);
     }
   });

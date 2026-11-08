@@ -223,8 +223,6 @@ test("reaches the bottom-right and top-left edge tiles at maximum zoom", async (
   const peak = maxZoom(board, state.map);
   expect(camera!.zoom, "camera reaches the maximum zoom").toBeCloseTo(peak, 6);
 
-  // Focus the map and pan with the player's arrow keys; each press moves the
-  // view by PAN_STEP_FRACTION of the safe viewport.
   await page.getByTestId("game-canvas-host").focus();
   const panWithArrows = async (x: number, y: number) => {
     for (let step = 0; step < 10; step += 1) {
