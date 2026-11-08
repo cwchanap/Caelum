@@ -1822,6 +1822,7 @@ describe("createWebGpuHost grid mode scene caching", () => {
     const fx = createFixture({
       state: unpaused(createTestGameState()),
       ui: { activeTool: "road" },
+      camera: { zoom: 2, center: { x: 14, y: 9 } },
     });
     vi.mocked(buildMapBatch).mockClear();
     const map = fx.getState().map;
@@ -1834,8 +1835,11 @@ describe("createWebGpuHost grid mode scene caching", () => {
     fx.fireFrame(50);
     expect(callsForMap(map)).toBe(1);
 
-    fx.callbacks.onCameraChange({ zoom: 1, center: { x: 20, y: 12 } });
+    const beforePan = fx.renderer.frames.at(-1)!.solids[0]!.vertices;
+    fx.callbacks.onCameraChange({ zoom: 2, center: { x: 16, y: 10 } });
     fx.fireFrame(66);
+    const afterPan = fx.renderer.frames.at(-1)!.solids[0]!.vertices;
+    expect(afterPan).not.toEqual(beforePan);
     fx.fireFrame(83);
     expect(callsForMap(map)).toBe(1);
 

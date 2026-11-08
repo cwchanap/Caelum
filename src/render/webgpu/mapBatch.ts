@@ -160,6 +160,8 @@ function fillTileRect(
   g.rect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize, color);
 }
 
+/** Tessellates one canvas-style strokeRect edge (lineWidth centered on the
+ *  path). */
 function strokeTileEdge(
   g: SolidGeometry,
   tile: Point,
