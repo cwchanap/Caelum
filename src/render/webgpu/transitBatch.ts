@@ -465,17 +465,18 @@ function markerColors(
   emphasizedIds: ReadonlySet<string>,
 ): Map<string, Rgba> {
   const byWaypoint = new Map<string, Rgba>();
+  const emphasizedClaims = new Set<string>();
   for (const line of lines) {
+    const emphasized = emphasizedIds.size === 0 || emphasizedIds.has(line.id);
     const color = withAlpha(
       parseColor(line.color),
-      emphasizedIds.size === 0 || emphasizedIds.has(line.id)
-        ? 1
-        : UNRELATED_ROUTE_OPACITY,
+      emphasized ? 1 : UNRELATED_ROUTE_OPACITY,
     );
     for (const waypointId of line.waypointIds) {
-      if (!byWaypoint.has(waypointId)) {
-        byWaypoint.set(waypointId, color);
-      }
+      if (emphasizedClaims.has(waypointId)) continue;
+      if (!emphasized && byWaypoint.has(waypointId)) continue;
+      byWaypoint.set(waypointId, color);
+      if (emphasized) emphasizedClaims.add(waypointId);
     }
   }
   return byWaypoint;
@@ -600,6 +601,7 @@ export function buildTransitBatch(
     }
   }
   drawStopAccessIndicators(g, state);
+  drawRouteNodeCues(g, state, lines, corridors, emphasizedIds);
 
   const markerColorsByWaypoint = markerColors(lines, emphasizedIds);
   for (const stop of state.transit.stops) {
@@ -622,7 +624,6 @@ export function buildTransitBatch(
       MARKER_FILL_COLOR,
     );
   }
-  drawRouteNodeCues(g, state, lines, corridors, emphasizedIds);
 
   return { vertices: g.toFloat32Array(), routeStyleKey };
 }
