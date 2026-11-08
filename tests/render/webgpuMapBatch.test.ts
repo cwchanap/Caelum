@@ -6,6 +6,7 @@ import {
   LOT_FILL_ALPHA,
   buildMapBatch,
   gridModeForTool,
+  gridModeForUi,
 } from "../../src/render/webgpu/mapBatch";
 import {
   SOLID_VERTEX_FLOATS,
@@ -205,6 +206,33 @@ describe("buildMapBatch grid modes", () => {
     }
     expect(gridModeForTool("road", GRID_FAINT_TILE_PX)).toBe("normal");
     expect(gridModeForTool("road", GRID_FAINT_TILE_PX + 4)).toBe("normal");
+  });
+
+  it("arms the grid for building placement while the tool stays inspect", () => {
+    expect(
+      gridModeForUi(
+        { activeTool: "inspect", selectedBuilding: "smallHouse" },
+        GRID_FAINT_TILE_PX + 4,
+      ),
+    ).toBe("normal");
+    expect(
+      gridModeForUi(
+        { activeTool: "inspect", selectedBuilding: "smallHouse" },
+        GRID_FAINT_TILE_PX - 0.5,
+      ),
+    ).toBe("faint");
+    expect(
+      gridModeForUi(
+        { activeTool: "inspect", selectedBuilding: null },
+        GRID_FAINT_TILE_PX + 4,
+      ),
+    ).toBe("hidden");
+    expect(
+      gridModeForUi(
+        { activeTool: "road", selectedBuilding: null },
+        GRID_FAINT_TILE_PX - 0.5,
+      ),
+    ).toBe("faint");
   });
 });
 
@@ -597,8 +625,7 @@ describe("buildMapBatch building layer", () => {
         ),
       ).toBe(true);
     }
-    // Outline stroke (lineWidth 2, centered on the tile boundary) hugs the
-    // footprint perimeter only: six edges, one quad each.
+    // Outline stroke (lineWidth 2, centered on the tile boundary).
     expect(
       hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 4 * 32 - 1, 5 * 32),
     ).toBe(true);

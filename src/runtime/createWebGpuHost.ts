@@ -18,7 +18,7 @@ import { SOLID_VERTEX_FLOATS } from "../render/webgpu/primitives";
 import {
   type GridMode,
   buildMapBatch,
-  gridModeForTool,
+  gridModeForUi,
 } from "../render/webgpu/mapBatch";
 import {
   buildTransitBatch,
@@ -367,7 +367,7 @@ export function createWebGpuHostWithRenderer(
     const { latest, previous, alpha } = observeState(nowMs);
     const ui = ctx.getUi();
     const revision = ctx.getSceneRevision();
-    const gridMode = gridModeForTool(ui.activeTool, tileCssPx);
+    const gridMode = gridModeForUi(ui, tileCssPx);
     const overlays = buildOverlayRanges(latest, ui);
     const map = latest.map;
     const { instances, vehicleIds } = encodeVehicleInstances({
