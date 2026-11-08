@@ -3,8 +3,13 @@ import { SOLID_VERTEX_FLOATS } from "../../src/render/webgpu/primitives";
 import {
   createWebGpuRenderer,
   VEHICLE_INSTANCE_FLOATS,
+  VEHICLE_LANE_OFFSET_PX,
   type WebGpuRenderFrame,
 } from "../../src/render/webgpu/renderer";
+import {
+  VEHICLE_HALF_LENGTH,
+  VEHICLE_HALF_WIDTH,
+} from "../../src/render/webgpu/vehicleInstances";
 import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
 import { buildTransitBatch } from "../../src/render/webgpu/transitBatch";
 import { buildOverlayRanges } from "../../src/render/webgpu/overlayBatch";
@@ -173,13 +178,14 @@ describe("WebGpuRenderer", () => {
     expect(clipHalfExtent).toBeLessThan(0.02);
   });
 
-  it("offsets the vehicle body 10px perpendicular with 14x8 extents like the Canvas fillRect", () => {
-    // Canvas-era parity: the old 2D renderer drew fillRect(-7, -14, 14, 8)
-    // after translate+rotate — a 14x8 body whose center sits 10px
-    // perpendicular off the path centerline. A path-centered half-size quad is
-    // invisible inside
-    // the same-colored route line (WKWebView parity bug). Evaluate the real
-    // WGSL local transform (captured from createShaderModule) at the quad
+  it("offsets the vehicle body by a fixed lane offset with the enlarged extents", () => {
+    // Canvas-era parity, adapted for HPA-678: the old 2D renderer drew
+    // fillRect(-7, -14, 14, 8) after translate+rotate — a body offset
+    // perpendicular off the path centerline so it is not invisible inside the
+    // same-colored route line (WKWebView parity bug). The offset is now the
+    // fixed VEHICLE_LANE_OFFSET_PX, decoupled from the half-width so a wider
+    // body does not slide into neighbouring tiles. Evaluate the real WGSL
+    // local transform (captured from createShaderModule) at the quad
     // corners; rotation is rigid, so the pre-rotation frame pins the shape.
     const { device, shaders } = createFakeDevice();
     createWebGpuRenderer(device, "bgra8unorm");
@@ -198,19 +204,36 @@ describe("WebGpuRenderer", () => {
       extents: { x: number; y: number },
     ) => [number, number];
 
-    const extents = { x: 7, y: 4 };
-    const corners = [
-      { x: -0.5, y: -0.5 },
-      { x: 0.5, y: -0.5 },
-      { x: -0.5, y: 0.5 },
-      { x: 0.5, y: 0.5 },
-    ].map((corner) => localAt(corner, extents));
-    // Local frame spans exactly the Canvas rect [-7, 7] x [-14, -6]:
-    // 14x8 body, center (0, -10) — 10px perpendicular off the path.
-    expect(Math.min(...corners.map(([x]) => x))).toBe(-7);
-    expect(Math.max(...corners.map(([x]) => x))).toBe(7);
-    expect(Math.min(...corners.map(([, y]) => y))).toBe(-14);
-    expect(Math.max(...corners.map(([, y]) => y))).toBe(-6);
+    const cornersFor = (extents: { x: number; y: number }) =>
+      [
+        { x: -0.5, y: -0.5 },
+        { x: 0.5, y: -0.5 },
+        { x: -0.5, y: 0.5 },
+        { x: 0.5, y: 0.5 },
+      ].map((corner) => localAt(corner, extents));
+    const bodyCenterY = (corners: [number, number][]) =>
+      (Math.min(...corners.map(([, y]) => y)) +
+        Math.max(...corners.map(([, y]) => y))) /
+      2;
+
+    const extents = { x: VEHICLE_HALF_LENGTH, y: VEHICLE_HALF_WIDTH };
+    const corners = cornersFor(extents);
+    expect(Math.min(...corners.map(([x]) => x))).toBe(-9);
+    expect(Math.max(...corners.map(([x]) => x))).toBe(9);
+    expect(Math.min(...corners.map(([, y]) => y))).toBe(-13);
+    expect(Math.max(...corners.map(([, y]) => y))).toBe(-3);
+    const wider = cornersFor({ x: extents.x, y: extents.y + 4 });
+    expect(bodyCenterY(wider)).toBe(-VEHICLE_LANE_OFFSET_PX);
+    expect(bodyCenterY(corners)).toBe(-VEHICLE_LANE_OFFSET_PX);
+  });
+
+  it("carries the white body rim inside the one instanced vehicle pass", () => {
+    const { device, shaders } = createFakeDevice();
+    createWebGpuRenderer(device, "bgra8unorm");
+    const shader = shaders[1]!;
+    expect(shader).toContain("@location(1) quad: vec2f");
+    expect(shader).toContain("output.quad = corner * extents * 2.0");
+    expect(shader).toContain("vec4f(1.0, 1.0, 1.0");
   });
 
   it("reuses one grow-only buffer per role across frames", () => {

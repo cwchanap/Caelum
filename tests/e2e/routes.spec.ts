@@ -42,7 +42,8 @@ const OCCLUSION_ROUTE_STOPS = [
 ] as const;
 const OCCLUSION_COVERED_STOP = { x: 21, y: 5 } as const;
 const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
-// colors.bus parsed: the WebGPU stop-marker fill (10x10 world pixels).
+// The WebGPU stop-marker white fill (radius-7 disc with a route-colored rim).
+const stopMarkerRgb = [255, 255, 255] as const;
 const busMarkerRgb = [224, 79, 57] as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
 
@@ -108,16 +109,22 @@ async function expectRoadsideStopAnchors(
     };
   });
 
-  // The WebGPU canvas presents flat-colored geometry. Probe four world-pixel
-  // points a 10x10 stop marker covers around each tile center: all four must
-  // match the bus color at passenger stops, while a road-access tile can only
-  // carry the thinner (5px) route-line stroke, which never covers all four.
-  const inset = 3;
+  // The WebGPU canvas presents flat-colored geometry. Probe eight world-pixel
+  // points around each stop marker's tile center: four inside the white fill
+  // (±2px diagonals) and four on the route-colored rim (±6px cardinals) of the
+  // radius-7 disc. A road-access tile can only carry the thinner (5px)
+  // route-line stroke, which never reproduces that fill-plus-rim signature.
+  const inset = 2;
+  const rim = 6;
   const offsets = [
     { dx: -inset, dy: -inset },
     { dx: inset, dy: -inset },
     { dx: -inset, dy: inset },
     { dx: inset, dy: inset },
+    { dx: -rim, dy: 0 },
+    { dx: rim, dy: 0 },
+    { dx: 0, dy: -rim },
+    { dx: 0, dy: rim },
   ];
   const probes: PixelProbe[] = anchors.flatMap(({ passenger, road }) =>
     [passenger, road].flatMap((tile) =>
@@ -127,17 +134,21 @@ async function expectRoadsideStopAnchors(
   await expect
     .poll(async () => {
       const samples = await sampleTilePixels(page, probes);
-      const bus = busMarkerRgb;
+      const near = (
+        sample: [number, number, number] | null,
+        rgb: readonly [number, number, number] | number[],
+      ) =>
+        sample !== null &&
+        Math.abs(sample[0] - rgb[0]) <= 8 &&
+        Math.abs(sample[1] - rgb[1]) <= 8 &&
+        Math.abs(sample[2] - rgb[2]) <= 8;
       const markerBlobAt = (index: number) =>
         samples
-          .slice(index, index + offsets.length)
-          .every(
-            (sample) =>
-              sample !== null &&
-              Math.abs(sample[0] - bus[0]) <= 8 &&
-              Math.abs(sample[1] - bus[1]) <= 8 &&
-              Math.abs(sample[2] - bus[2]) <= 8,
-          );
+          .slice(index, index + 4)
+          .every((sample) => near(sample, stopMarkerRgb)) &&
+        samples
+          .slice(index + 4, index + offsets.length)
+          .every((sample) => near(sample, busMarkerRgb));
       return {
         passengerMarkers: anchors.every((_, anchorIndex) =>
           markerBlobAt(anchorIndex * offsets.length * 2),

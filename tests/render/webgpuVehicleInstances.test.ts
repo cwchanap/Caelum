@@ -10,6 +10,8 @@ import type {
 import {
   encodeVehicleInstances,
   interpolationAlpha,
+  VEHICLE_HALF_LENGTH,
+  VEHICLE_HALF_WIDTH,
   type WorldViewport,
 } from "../../src/render/webgpu/vehicleInstances";
 import {
@@ -619,7 +621,7 @@ describe("emphasis, culling, and instance encoding", () => {
       }).instances,
     );
     expect(dimmed[0][8]).toBeCloseTo(UNRELATED_ROUTE_OPACITY);
-    // RGB stays the route-neutral vehicle color while alpha dims.
+    // RGB stays the serving route's color while alpha dims.
     const bus = parseColor("#e04f39");
     expect(dimmed[0][5]).toBeCloseTo(bus[0]);
     expect(dimmed[0][6]).toBeCloseTo(bus[1]);
@@ -661,6 +663,17 @@ describe("emphasis, culling, and instance encoding", () => {
     ).tangent;
     expectNear(instances[0][2], Math.atan2(tangent.y, tangent.x));
     expect(instances[1][2]).toBe(0);
+  });
+
+  it("encodes the enlarged body half-extents per instance", () => {
+    const legs = legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]);
+    const latest = stateWithVehicles(legs, [busVehicle({ stepProgress: 0.5 })]);
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    expect(instances[0][3]).toBe(VEHICLE_HALF_LENGTH);
+    expect(instances[0][4]).toBe(VEHICLE_HALF_WIDTH);
+    expect(VEHICLE_HALF_LENGTH).toBeGreaterThan(7);
+    expect(VEHICLE_HALF_WIDTH).toBeGreaterThan(4);
   });
 
   it("culls against the viewport plus a one-tile margin", () => {
@@ -933,6 +946,32 @@ describe("corridor-offset lane sampling", () => {
     ).toBeGreaterThan(1);
   });
 
+  it("encodes each vehicle in its own line's color", () => {
+    const latest = twoRouteState([
+      busVehicle({ id: "vehicle-001", lineId: "route-001", stepProgress: 0.5 }),
+      busVehicle({ id: "vehicle-002", lineId: "route-002", stepProgress: 0.5 }),
+    ]);
+    const instances = instancesOf(
+      encodeVehicleInstances({
+        previous: null,
+        latest,
+        ui: createUiState(),
+        alpha: 1,
+        paused: false,
+        viewport: FULL_MAP,
+      }).instances,
+    );
+
+    const routeOne = parseColor("#e04f39");
+    const routeTwo = parseColor("#2f9e44");
+    expectNear(instances[0][5], routeOne[0]);
+    expectNear(instances[0][6], routeOne[1]);
+    expectNear(instances[0][7], routeOne[2]);
+    expectNear(instances[1][5], routeTwo[0]);
+    expectNear(instances[1][6], routeTwo[1]);
+    expectNear(instances[1][7], routeTwo[2]);
+  });
+
   it("interpolates along the offset lane for same-step motion", () => {
     const previous = twoRouteState([
       busVehicle({
@@ -1072,6 +1111,36 @@ describe("unrouted and parked vehicles", () => {
     const metroPixel = pixel({ x: 4, y: 4 });
     expectNear(instances[1][0], metroPixel.x);
     expectNear(instances[1][1], metroPixel.y);
+  });
+
+  it("falls back to the mode color on an unmatched lineId", () => {
+    const latest = stateWithVehicles(
+      legWithSteps([lineStep({ x: 1, y: 1 }, { x: 5, y: 1 })]),
+      [
+        busVehicle({
+          id: "vehicle-bus",
+          lineId: "route-999",
+          parkedPosition: { x: 3, y: 3 },
+        }),
+        busVehicle({
+          id: "vehicle-metro",
+          mode: "metro",
+          lineId: "metro-999",
+          parkedPosition: { x: 4, y: 4 },
+        }),
+      ],
+    );
+    const instances = instancesOf(encode({ latest, alpha: 1 }));
+
+    expect(instances).toHaveLength(2);
+    const bus = parseColor("#e04f39");
+    const metro = parseColor("#2867b2");
+    expectNear(instances[0][5], bus[0]);
+    expectNear(instances[0][6], bus[1]);
+    expectNear(instances[0][7], bus[2]);
+    expectNear(instances[1][5], metro[0]);
+    expectNear(instances[1][6], metro[1]);
+    expectNear(instances[1][7], metro[2]);
   });
 
   it("anchors a parked vehicle on its route lane when the leg path is broken", () => {
@@ -1311,7 +1380,9 @@ describe("same-step fallback and metro sampling", () => {
       ...base,
       transit: {
         ...base.transit,
-        metroLines: [{ ...base.transit.metroLines[0], legs: metroLegs }],
+        metroLines: [
+          { ...base.transit.metroLines[0], color: "#12aa66", legs: metroLegs },
+        ],
         vehicles: [metroVehicle(0.2)],
       },
     };
@@ -1319,7 +1390,9 @@ describe("same-step fallback and metro sampling", () => {
       ...base,
       transit: {
         ...base.transit,
-        metroLines: [{ ...base.transit.metroLines[0], legs: metroLegs }],
+        metroLines: [
+          { ...base.transit.metroLines[0], color: "#12aa66", legs: metroLegs },
+        ],
         vehicles: [metroVehicle(0.8)],
       },
     };
@@ -1333,6 +1406,10 @@ describe("same-step fallback and metro sampling", () => {
     expectNear(instances[0][1], expected.y);
     // Metro vehicles never rotate to the tangent.
     expect(instances[0][2]).toBe(0);
+    const line = parseColor("#12aa66");
+    expectNear(instances[0][5], line[0]);
+    expectNear(instances[0][6], line[1]);
+    expectNear(instances[0][7], line[2]);
   });
 
   it("snaps to latest when the step geometry kind changed under the cursor", () => {

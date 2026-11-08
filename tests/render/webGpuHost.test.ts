@@ -26,6 +26,10 @@ import {
   type WebGpuRenderer,
 } from "../../src/render/webgpu/renderer";
 import {
+  VEHICLE_HALF_LENGTH,
+  VEHICLE_HALF_WIDTH,
+} from "../../src/render/webgpu/vehicleInstances";
+import {
   HUD_INSET,
   tileSize,
   type Camera,
@@ -1754,8 +1758,8 @@ describe("createWebGpuHost frame contents", () => {
 
     const instances = fx.renderer.frames.at(-1)!.vehicles[0]!.instances;
     expect(instances[2]).toBeCloseTo(Math.PI / 2, 5);
-    expect(instances[3]).toBeCloseTo(7, 5);
-    expect(instances[4]).toBeCloseTo(4, 5);
+    expect(instances[3]).toBeCloseTo(VEHICLE_HALF_LENGTH, 5);
+    expect(instances[4]).toBeCloseTo(VEHICLE_HALF_WIDTH, 5);
     expect(instances[5]).toBeCloseTo(2 / 896, 9);
     expect(instances[6]).toBeCloseTo(-2 / 736, 9);
 

@@ -5,7 +5,10 @@ import {
   maxZoom,
   tileSize,
 } from "../../src/render/boardTransform";
-import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
+import {
+  VEHICLE_INSTANCE_FLOATS,
+  VEHICLE_LANE_OFFSET_PX,
+} from "../../src/render/webgpu/renderer";
 import { encodeVehicleInstances } from "../../src/render/webgpu/vehicleInstances";
 import type { Point } from "../../src/domain/types";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
@@ -36,7 +39,7 @@ const LINE_PATH_TILES = [
  *  back out of the frame's instance buffer. */
 function pausedVehicleSamples(
   snapshot: RuntimeSnapshot,
-): { id: string; point: Point }[] {
+): { id: string; point: Point; angle: number }[] {
   const { instances, vehicleIds } = encodeVehicleInstances({
     previous: null,
     latest: snapshot.state,
@@ -56,7 +59,15 @@ function pausedVehicleSamples(
       x: instances[index * VEHICLE_INSTANCE_FLOATS]!,
       y: instances[index * VEHICLE_INSTANCE_FLOATS + 1]!,
     },
+    angle: instances[index * VEHICLE_INSTANCE_FLOATS + 2]!,
   }));
+}
+
+function renderedBodyCenter(sample: { point: Point; angle: number }): Point {
+  return {
+    x: sample.point.x + Math.sin(sample.angle) * VEHICLE_LANE_OFFSET_PX,
+    y: sample.point.y - Math.cos(sample.angle) * VEHICLE_LANE_OFFSET_PX,
+  };
 }
 
 async function nextFrame(page: Page): Promise<void> {
@@ -153,7 +164,16 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
 
   const presented = await runtimeSnapshot(page);
   const samples = pausedVehicleSamples(presented);
-  const sample = samples.at(0);
+  const sample =
+    samples.find((candidate) => {
+      const center = renderedBodyCenter(candidate);
+      return (
+        Math.floor(center.x / tileSize) ===
+          Math.floor(candidate.point.x / tileSize) &&
+        Math.floor(center.y / tileSize) ===
+          Math.floor(candidate.point.y / tileSize)
+      );
+    }) ?? samples.at(0);
   const vehicle = presented.state.transit.vehicles.find(
     (candidate) => candidate.id === sample?.id,
   );
@@ -166,7 +186,7 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
   }
 
   await nextFrame(page);
-  await clickWorldPoint(canvas, sample.point);
+  await clickWorldPoint(canvas, renderedBodyCenter(sample));
 
   const inspector = page.getByTestId("panel-inspect");
   const vehiclePanel = inspector.getByTestId("vehicle-panel");
