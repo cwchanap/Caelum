@@ -789,6 +789,14 @@ export function selectShellState(
     0,
   );
   const networkSummary = `${state.metrics.lateTrips} late · ${state.metrics.unservedTrips} unserved`;
+  const tripIssueParts = [
+    state.metrics.lateTrips > 0 ? `${state.metrics.lateTrips} late` : "",
+    state.metrics.unservedTrips > 0
+      ? `${state.metrics.unservedTrips} unserved`
+      : "",
+  ].filter((part) => part !== "");
+  const tripIssues =
+    tripIssueParts.length === 0 ? null : tripIssueParts.join(" · ");
   const routeDraft = selectRouteEditorView(state, ui, rejection);
 
   const command: ShellCommandState = {
@@ -815,8 +823,8 @@ export function selectShellState(
       population: `${state.populationCount}`,
       late: `${state.metrics.lateTrips}`,
       unserved: `${state.metrics.unservedTrips}`,
-      networkSummary,
       avgWait: `${Math.floor(state.metrics.averageWaitSeconds)}s`,
+      tripIssues,
     },
     command,
     city: {

@@ -54,8 +54,10 @@ export interface ShellTopbarState {
   population: string;
   late: string;
   unserved: string;
-  networkSummary: string;
   avgWait: string;
+  /** Preformatted warning chip ("3 late · 1 unserved"), null when both
+   *  numeric trip counts are zero. */
+  tripIssues: string | null;
 }
 
 export interface ShellCommandState {

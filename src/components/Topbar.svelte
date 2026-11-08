@@ -4,49 +4,63 @@
 
   interface Props {
     shell: ShellTopbarState;
+    cityName: string;
+    busy: boolean;
+    dirty: boolean;
     paused: boolean;
     speed: GameState["speed"];
     onTogglePause: () => void;
     onSetSpeed: (speed: 1 | 2 | 4) => void;
   }
 
-  const readouts: Array<{
-    key: keyof ShellTopbarState;
+  const stats: Array<{
+    key: "budget" | "dailyOperatingCost" | "population" | "avgWait";
     label: string;
-    wide?: boolean;
   }> = [
     { key: "budget", label: "Money" },
     { key: "dailyOperatingCost", label: "Daily cost" },
-    { key: "time", label: "Time" },
-    { key: "networkSummary", label: "Network" },
-    { key: "population", label: "Population", wide: true },
-    { key: "avgWait", label: "Avg Wait", wide: true },
+    { key: "population", label: "Population" },
+    { key: "avgWait", label: "Avg Wait" },
   ];
 
-  let { shell, paused, speed, onTogglePause, onSetSpeed }: Props = $props();
+  let {
+    shell,
+    cityName,
+    busy,
+    dirty,
+    paused,
+    speed,
+    onTogglePause,
+    onSetSpeed,
+  }: Props = $props();
+
+  const saveLabel = $derived(
+    busy ? "Working…" : dirty ? "Unsaved changes" : "Saved",
+  );
 </script>
 
 <section class="topbar" data-testid="topbar">
-  <div class="brand">
-    <span class="brand-mark" aria-hidden="true"></span>
-    <span class="brand-name">CAELUM</span>
-    <span class="brand-tag">Transit Ops</span>
-  </div>
-
-  <div class="readouts">
-    {#each readouts as readout (readout.key)}
-      <div
-        class:topbar-readout--wide={readout.wide === true}
-        class:topbar-readout--network={readout.key === "networkSummary"}
-        class="readout"
+  <div class="card topbar-cluster topbar-cluster--city">
+    <div class="topbar-city">
+      <span class="readout-label">Active city</span>
+      <span
+        class="topbar-city-name"
+        data-testid="topbar-city-name"
+        title={cityName}>{cityName}</span
       >
-        <span class="readout-label">{readout.label}</span>
-        <span class="readout-value">{shell[readout.key]}</span>
-      </div>
-    {/each}
+    </div>
+    <span
+      class="chip topbar-save-status"
+      data-testid="topbar-save-status"
+      data-busy={busy}
+      data-dirty={dirty}>{saveLabel}</span
+    >
   </div>
 
-  <div class="controls">
+  <div
+    class="card topbar-cluster topbar-cluster--clock"
+    data-testid="topbar-clock"
+  >
     <button
       type="button"
       class="btn ctrl-pause"
@@ -56,6 +70,11 @@
     >
       <span data-button-label>{paused ? "Resume" : "Pause"}</span>
     </button>
+
+    <div class="readout readout--clock">
+      <span class="readout-label">Time</span>
+      <span class="readout-value">{shell.time}</span>
+    </div>
 
     <div
       class:speed-group--paused={paused}
@@ -75,5 +94,21 @@
         </button>
       {/each}
     </div>
+  </div>
+
+  <div class="card topbar-cluster topbar-cluster--stats">
+    {#each stats as stat (stat.key)}
+      <div class="readout">
+        <span class="readout-label">{stat.label}</span>
+        <span class="readout-value">{shell[stat.key]}</span>
+      </div>
+    {/each}
+    {#if shell.tripIssues !== null}
+      <span
+        class="chip topbar-trip-issues"
+        data-testid="topbar-trip-issues"
+        title={shell.tripIssues}>{shell.tripIssues}</span
+      >
+    {/if}
   </div>
 </section>

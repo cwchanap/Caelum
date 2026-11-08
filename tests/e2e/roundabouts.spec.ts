@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
 import type { Route, RouteLegPath } from "../../src/domain/types";
+import { HUD_INSET } from "../../src/render/boardTransform";
 import { MAP_SIZES } from "../../src/scenario/sandbox";
 import {
   selectBuildLeaf,
@@ -379,10 +380,8 @@ test("settles the roundabout badge after rejected and applied clicks without mov
 
   const toastBox = await feedback.boundingBox();
   const badgeBox = await badge.boundingBox();
-  const canvasBox = await canvas.boundingBox();
   expect(toastBox).not.toBeNull();
   expect(badgeBox).not.toBeNull();
-  expect(canvasBox).not.toBeNull();
   const overlaps = (
     a: { x: number; y: number; width: number; height: number },
     b: { x: number; y: number; width: number; height: number },
@@ -391,8 +390,13 @@ test("settles the roundabout badge after rejected and applied clicks without mov
     b.x < a.x + a.width &&
     a.y < b.y + b.height &&
     b.y < a.y + a.height;
+  // The toast floats over the full-bleed canvas under the clock cluster; it
+  // must stay inside the top region and clear of the cursor badge.
+  expect(toastBox!.y).toBeGreaterThanOrEqual(0);
+  expect(toastBox!.y + toastBox!.height).toBeLessThanOrEqual(
+    HUD_INSET.top + 96,
+  );
   expect(overlaps(toastBox!, badgeBox!)).toBe(false);
-  expect(overlaps(toastBox!, canvasBox!)).toBe(false);
 
   await feedback.locator(".action-feedback-message").click();
   await drainGameplayQueue(page);

@@ -123,4 +123,29 @@ describe("CommandShelf", () => {
       ).toHaveAccessibleName(expect.stringContaining(label));
     }
   });
+
+  it("orders the dock Build, Lines, Data, City, then Select and Demolish", () => {
+    render(CommandShelf, {
+      props: {
+        command,
+        onSetDestination: vi.fn(),
+        onSetTool: vi.fn(),
+      },
+    });
+
+    const ordered = [
+      "command-destination-build",
+      "command-destination-lines",
+      "command-destination-data",
+      "command-destination-city",
+      "command-tool-select",
+      "command-tool-demolish",
+    ].map((id) => screen.getByTestId(id));
+    for (let index = 0; index < ordered.length - 1; index += 1) {
+      expect(
+        ordered[index]!.compareDocumentPosition(ordered[index + 1]!) &
+          Node.DOCUMENT_POSITION_FOLLOWING,
+      ).not.toBe(0);
+    }
+  });
 });

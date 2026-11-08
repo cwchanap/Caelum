@@ -498,7 +498,9 @@ test("undoes and redoes a roadside route draft while preview is pending", async 
   await expect(save).toBeEnabled();
 
   // The canvas context-menu handler is the browser-facing undo affordance.
-  await canvas.click({ button: "right", position: { x: 20, y: 20 } });
+  // The full-bleed canvas sits under the floating HUD, so right-click at a
+  // point inside the safe viewport, clear of the topbar, dock, and panels.
+  await canvas.click({ button: "right", position: { x: 640, y: 400 } });
   await expect(save).toBeDisabled();
   const undonePreviewGeneration = await waitForRoutePreview(page, 1);
   expect(undonePreviewGeneration).toBeGreaterThan(firstPreviewGeneration);

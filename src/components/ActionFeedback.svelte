@@ -13,9 +13,9 @@
   A dedicated polite live region stays mounted permanently so screen readers
   observe a stable announcement container before any rejection text changes.
   Only `announce: true` feedback updates its text; the road preview host
-  error (`announce: false`) renders in the visible strip below without
+  error (`announce: false`) renders in the visible toast below without
   live-region semantics. Continuous road-hover feedback lives at the cursor
-  badge in the map text overlay, not in this strip.
+  badge in the map text overlay, not in this toast.
 -->
 <aside class="action-feedback-slot" data-testid="action-feedback-slot">
   <div
@@ -35,10 +35,11 @@
       data-source={feedback.source}
       data-tone={feedback.tone}
     >
-      <!-- The 72px band makes this the only scrollable region; keyboard users
-           need tabindex to scroll overflowed details (axe
-           scrollable-region-focusable). Svelte can't detect the overflow, so
-           the a11y warning is a false positive here. -->
+      <!-- The floating toast caps its height, making this body the only
+           scrollable region; keyboard users need tabindex to scroll
+           overflowed details (axe scrollable-region-focusable). Svelte can't
+           detect the overflow, so the a11y warning is a false positive
+           here. -->
       <!-- eslint-disable-next-line svelte/no-unused-svelte-ignore -->
       <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
       <div

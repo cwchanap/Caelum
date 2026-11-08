@@ -21,6 +21,7 @@ import { pointsOnRow, withRoads, withTracks } from "../helpers/mapFixtures";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createUiState } from "../../src/ui/uiState";
 import { selectShellState } from "../../src/runtime/runtimeSelectors";
+import { HUD_INSET } from "../../src/render/boardTransform";
 import type { GameplayRejection } from "../../src/domain/types";
 import type {
   RuntimeController,
@@ -1092,7 +1093,7 @@ describe("App command shell", () => {
     expect(screen.getByTestId("command-destination-lines")).not.toHaveFocus();
   });
 
-  it("renders the compact Signal Console topbar contract", () => {
+  it("renders the floating topbar clusters with city, clock, stats and a warning chip", () => {
     let state = createTestGameState();
     state = withRoads(state, [{ x: 7, y: 7 }]);
     state = addTestBusStop(state, { x: 7, y: 7 });
@@ -1132,20 +1133,78 @@ describe("App command shell", () => {
     const { runtime } = createRuntimeHarness({ state });
     render(App, { props: { runtime } });
 
-    expect(screen.getByText("Money")).toBeVisible();
-    expect(screen.getByText("Daily cost")).toBeVisible();
-    expect(screen.getByText("$2,900")).toBeVisible();
-    expect(screen.getByText("Time")).toBeVisible();
-    expect(screen.getByText("Network")).toBeVisible();
-    expect(screen.getByText("Population")).toBeVisible();
-    expect(screen.getByText("Avg Wait")).toBeVisible();
-    expect(screen.getByText("4 late · 2 unserved")).toBeVisible();
+    const topbar = screen.getByTestId("topbar");
+    const clusters = topbar.querySelectorAll(".topbar-cluster");
+    expect(clusters).toHaveLength(3);
+
+    // Left cluster: real city name plus the save status chip.
+    const cityName = screen.getByTestId("topbar-city-name");
+    expect(cityName).toHaveTextContent("Harbour City");
+    expect(cityName).toHaveAttribute("title", "Harbour City");
+    expect(screen.getByTestId("topbar-save-status")).toHaveTextContent("Saved");
+
+    // Centre cluster: pause/resume, the day/time readout and speed actions.
     expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+    expect(screen.getByText("Time")).toBeVisible();
     expect(screen.getByRole("button", { name: "1x" })).toBeVisible();
     expect(screen.getByRole("button", { name: "2x" })).toBeVisible();
     expect(screen.getByRole("button", { name: "4x" })).toBeVisible();
+
+    // Right cluster: money, daily cost, residents, average wait and the
+    // compact warning chip. The old Network readout stays out of the topbar.
+    expect(screen.getByText("Money")).toBeVisible();
+    expect(screen.getByText("Daily cost")).toBeVisible();
+    expect(screen.getByText("$2,900")).toBeVisible();
+    expect(screen.getByText("Population")).toBeVisible();
+    expect(screen.getByText("Avg Wait")).toBeVisible();
+    expect(screen.getByTestId("topbar-trip-issues")).toHaveTextContent(
+      "4 late · 2 unserved",
+    );
+    expect(
+      topbar.querySelector(".readout-label") !== null &&
+        [...topbar.querySelectorAll(".readout-label")].some(
+          (label) => label.textContent === "Network",
+        ),
+    ).toBe(false);
     expect(screen.queryByText("Live")).toBeNull();
     expect(screen.queryByText("Hold")).toBeNull();
+  });
+
+  it("shows the CityPanel save wording in the topbar as persistence changes", () => {
+    const { runtime, setPersistence } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const status = () => screen.getByTestId("topbar-save-status");
+    expect(status()).toHaveTextContent("Saved");
+
+    setPersistence({ dirty: true });
+    expect(status()).toHaveTextContent("Unsaved changes");
+
+    setPersistence({ busy: true });
+    expect(status()).toHaveTextContent("Working…");
+
+    setPersistence({ busy: false, dirty: false });
+    expect(status()).toHaveTextContent("Saved");
+  });
+
+  it("hides the trip warning chip when no trips are late or unserved", () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    expect(screen.queryByTestId("topbar-trip-issues")).toBeNull();
+  });
+
+  it("pins the HUD band constants on the shell for CSS and camera to share", () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const shell = screen.getByTestId("game-shell");
+    expect(shell.style.getPropertyValue("--hud-top")).toBe(
+      `${HUD_INSET.top}px`,
+    );
+    expect(shell.style.getPropertyValue("--hud-bottom")).toBe(
+      `${HUD_INSET.bottom}px`,
+    );
   });
 
   it("invokes contextual Inspect reassignment controls", async () => {
@@ -1661,7 +1720,9 @@ describe("App command shell", () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
-    expect(screen.getByText("Harbour City")).toBeVisible();
+    expect(
+      within(screen.getByTestId("command-panel")).getByText("Harbour City"),
+    ).toBeVisible();
     await fireEvent.click(screen.getByTestId("command-destination-lines"));
     await fireEvent.click(screen.getByRole("button", { name: "New Bus" }));
     expect(runtime.setTool).toHaveBeenCalledWith("busRoute");

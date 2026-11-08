@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { HUD_INSET } from "../../src/render/boardTransform";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
   clickMapTile,
@@ -100,8 +101,13 @@ for (const viewport of desktopViewports) {
     const shelfBox = await shelf.boundingBox();
     expect(canvasBox).not.toBeNull();
     expect(shelfBox).not.toBeNull();
-    expect(canvasBox!.y + canvasBox!.height).toBeLessThanOrEqual(
-      shelfBox!.y + 1,
+    // The map is full-bleed; the dock floats inside the bottom HUD band.
+    expect(canvasBox!.height).toBeGreaterThanOrEqual(viewport.height - 1);
+    expect(shelfBox!.y).toBeGreaterThanOrEqual(
+      viewport.height - HUD_INSET.bottom - 1,
+    );
+    expect(shelfBox!.y + shelfBox!.height).toBeLessThanOrEqual(
+      viewport.height + 1,
     );
 
     await openCommandDestination(page, "build");
@@ -156,13 +162,8 @@ for (const viewport of desktopViewports) {
     const avgWait = page.getByTestId("topbar").locator(".readout", {
       hasText: "Avg Wait",
     });
-    if (viewport.width === 1024) {
-      await expect(population).toBeHidden();
-      await expect(avgWait).toBeHidden();
-    } else {
-      await expect(population).toBeVisible();
-      await expect(avgWait).toBeVisible();
-    }
+    await expect(population).toBeVisible();
+    await expect(avgWait).toBeVisible();
   });
 }
 

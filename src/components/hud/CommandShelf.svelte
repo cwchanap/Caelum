@@ -178,12 +178,13 @@
     --shelf-muted: var(--ink-mid, #5d6d72);
     --shelf-signal: var(--accent, #0f8a70);
     --shelf-danger: var(--danger, #bd4a3f);
-    display: grid;
-    grid-template-columns: 1fr auto 1fr;
+    display: flex;
     align-items: center;
+    justify-content: center;
     gap: 16px;
-    min-height: var(--command-shelf-height, 92px);
-    padding: 10px 16px;
+    min-height: 60px;
+    padding: 8px 14px;
+    border-radius: 16px;
     color: var(--shelf-ink);
     background: linear-gradient(
       180deg,
@@ -191,6 +192,7 @@
       var(--surface, #faf6ea)
     );
     border: 1px solid var(--shelf-line);
+    box-shadow: 0 10px 28px rgba(62, 54, 38, 0.18);
     font-family: var(--font-body, system-ui, sans-serif);
   }
 
@@ -202,12 +204,10 @@
   }
 
   .command-shelf__destinations {
-    grid-column: 2;
     justify-content: center;
   }
 
   .command-shelf__tools {
-    grid-column: 3;
     justify-content: flex-end;
     min-width: 0;
     padding-left: 16px;

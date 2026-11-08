@@ -24,7 +24,11 @@ import {
   type WebGpuRenderFrame,
   type WebGpuRenderer,
 } from "../../src/render/webgpu/renderer";
-import { tileSize, type Camera } from "../../src/render/boardTransform";
+import {
+  HUD_INSET,
+  tileSize,
+  type Camera,
+} from "../../src/render/boardTransform";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
 import { createFakeDevice } from "../helpers/fakeWebGpu";
@@ -185,10 +189,11 @@ interface Fixture {
   setSceneRevision: (revision: number) => void;
 }
 
-/** Mount a WebGPU host against a board whose client rect maps 1:1 onto tiles
- *  (clientX = tileX * tileSize + half), so canvasToTile returns predictable
- *  tile coordinates. DPR is pinned to 1, so the board transform is identity
- *  and world pixels map to canvas pixels directly. */
+/** Mount a WebGPU host against a board whose safe viewport maps 1:1 onto
+ *  tiles (clientX = tileX * tileSize + half, clientY = tileY * tileSize +
+ *  half + HUD_INSET.top), so canvasToTile returns predictable tile
+ *  coordinates. DPR is pinned to 1, so the board transform is the identity
+ *  plus the top HUD band and world pixels map to canvas pixels directly. */
 function createFixture(options?: {
   state?: GameState;
   ui?: Partial<UiState>;
@@ -231,7 +236,8 @@ function createFixture(options?: {
   );
 
   const boardWidth = state.map.width * tileSize;
-  const boardHeight = state.map.height * tileSize;
+  const boardHeight =
+    state.map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom;
   Element.prototype.getBoundingClientRect = vi.fn(
     () =>
       ({
@@ -282,7 +288,8 @@ function createFixture(options?: {
   };
 }
 
-/** Client coordinates for the center of `tile`. */
+/** Client coordinates for the center of `tile` (the fitted map sits below
+ *  the top HUD band, so the client y is offset by HUD_INSET.top). */
 const center = (tile: {
   x: number;
   y: number;
@@ -291,7 +298,7 @@ const center = (tile: {
   clientY: number;
 } => ({
   clientX: tile.x * tileSize + tileSize / 2,
-  clientY: tile.y * tileSize + tileSize / 2,
+  clientY: tile.y * tileSize + tileSize / 2 + HUD_INSET.top,
 });
 
 function dispatchPointer(
@@ -342,7 +349,9 @@ describe("createWebGpuHost lifecycle", () => {
     fireFrame(0);
     expect(renderer.resize).toHaveBeenCalledWith(
       createTestGameState().map.width * tileSize,
-      createTestGameState().map.height * tileSize,
+      createTestGameState().map.height * tileSize +
+        HUD_INSET.top +
+        HUD_INSET.bottom,
     );
     expect(renderer.render).toHaveBeenCalled();
 
@@ -426,13 +435,29 @@ describe("createWebGpuHost lifecycle", () => {
       camera: zoomed,
     });
 
-    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
-    dispatchPointer(canvas, "pointermove", { clientX: 302, clientY: 300 });
+    dispatchPointer(canvas, "pointerdown", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
+    dispatchPointer(canvas, "pointermove", {
+      clientX: 302,
+      clientY: 300 + HUD_INSET.top,
+    });
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
-    dispatchPointer(canvas, "pointermove", { clientX: 364, clientY: 300 });
-    dispatchPointer(canvas, "pointerup", { clientX: 364, clientY: 300 });
+    dispatchPointer(canvas, "pointermove", {
+      clientX: 364,
+      clientY: 300 + HUD_INSET.top,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      clientX: 364,
+      clientY: 300 + HUD_INSET.top,
+    });
     canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 364, clientY: 300, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 364,
+        clientY: 300 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
 
     // 64px of travel at 64px tiles moves the view one tile west.
@@ -445,16 +470,32 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 11, y: 9 });
 
     // A press that does not travel is still an ordinary click.
-    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
-    dispatchPointer(canvas, "pointerup", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointerdown", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
     canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 300, clientY: 300, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 300,
+        clientY: 300 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(callbacks.onTileClick).toHaveBeenCalledTimes(1);
 
     // A press that leaves the board drops the hover preview.
-    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
-    dispatchPointer(canvas, "pointerleave", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointerdown", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
+    dispatchPointer(canvas, "pointerleave", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith(null);
   });
 
@@ -482,13 +523,16 @@ describe("createWebGpuHost lifecycle", () => {
     dispatchPointer(canvas, "pointerdown", {
       button: 1,
       clientX: 300,
-      clientY: 300,
+      clientY: 300 + HUD_INSET.top,
     });
-    dispatchPointer(canvas, "pointermove", { clientX: 300, clientY: 236 });
+    dispatchPointer(canvas, "pointermove", {
+      clientX: 300,
+      clientY: 236 + HUD_INSET.top,
+    });
     dispatchPointer(canvas, "pointerup", {
       button: 1,
       clientX: 300,
-      clientY: 236,
+      clientY: 236 + HUD_INSET.top,
     });
 
     expect(callbacks.onCameraChange).toHaveBeenLastCalledWith({
@@ -527,14 +571,20 @@ describe("createWebGpuHost lifecycle", () => {
     });
 
     // At 64px tiles, (288, 320) is over tile (11, 9).
-    dispatchPointer(canvas, "pointermove", { clientX: 288, clientY: 320 });
+    dispatchPointer(canvas, "pointermove", {
+      clientX: 288,
+      clientY: 320 + HUD_INSET.top,
+    });
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 11, y: 9 });
     // The view moves 2.8 tiles east beneath the pointer.
     host.adjustCamera({ kind: "pan", x: 1, y: 0 });
     expect(callbacks.onHoverTile).toHaveBeenLastCalledWith({ x: 14, y: 9 });
 
     // Once the pointer leaves the board there is nothing to re-aim.
-    dispatchPointer(canvas, "pointerleave", { clientX: 288, clientY: 320 });
+    dispatchPointer(canvas, "pointerleave", {
+      clientX: 288,
+      clientY: 320 + HUD_INSET.top,
+    });
     callbacks.onHoverTile.mockClear();
     host.adjustCamera({ kind: "pan", x: -1, y: 0 });
     expect(callbacks.onHoverTile).not.toHaveBeenCalled();
@@ -556,9 +606,18 @@ describe("createWebGpuHost lifecycle", () => {
     };
 
     expect(space(document.body, "keydown").defaultPrevented).toBe(true);
-    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
-    dispatchPointer(canvas, "pointermove", { clientX: 236, clientY: 300 });
-    dispatchPointer(canvas, "pointerup", { clientX: 236, clientY: 300 });
+    dispatchPointer(canvas, "pointerdown", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
+    dispatchPointer(canvas, "pointermove", {
+      clientX: 236,
+      clientY: 300 + HUD_INSET.top,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      clientX: 236,
+      clientY: 300 + HUD_INSET.top,
+    });
     space(document.body, "keyup");
 
     expect(callbacks.onCameraChange).toHaveBeenLastCalledWith({
@@ -570,7 +629,10 @@ describe("createWebGpuHost lifecycle", () => {
     const field = document.createElement("input");
     document.body.appendChild(field);
     expect(space(field, "keydown").defaultPrevented).toBe(false);
-    dispatchPointer(canvas, "pointerdown", { clientX: 300, clientY: 300 });
+    dispatchPointer(canvas, "pointerdown", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+    });
     expect(callbacks.onDragStart).toHaveBeenCalledTimes(1);
   });
 
@@ -791,7 +853,7 @@ describe("createWebGpuHost lifecycle", () => {
     expect(canvas.width).toBe(state.map.width * tileSize);
     expect(renderer.resize).toHaveBeenCalledWith(
       state.map.width * tileSize,
-      state.map.height * tileSize,
+      state.map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom,
     );
 
     // An empty entry list is ignored without scheduling a repaint.
@@ -1378,7 +1440,11 @@ describe("createWebGpuHost map target picking", () => {
     fx.fireFrame(0);
 
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 160, clientY: 160, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 160,
+        clientY: 160 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
       { x: 2, y: 2 },
@@ -1386,7 +1452,11 @@ describe("createWebGpuHost map target picking", () => {
     );
 
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 700, clientY: 400, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 700,
+        clientY: 400 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 10, y: 6 },
@@ -1395,18 +1465,35 @@ describe("createWebGpuHost map target picking", () => {
 
     fx.host.adjustCamera({ kind: "pan", x: 1, y: 0 });
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 160, clientY: 160, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 160,
+        clientY: 160 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 2, y: 2 },
       { vehicleId: "vehicle-001", lineId: "route-001" },
     );
 
-    dispatchPointer(fx.canvas, "pointerdown", { clientX: 160, clientY: 160 });
-    dispatchPointer(fx.canvas, "pointermove", { clientX: 200, clientY: 160 });
-    dispatchPointer(fx.canvas, "pointerup", { clientX: 200, clientY: 160 });
+    dispatchPointer(fx.canvas, "pointerdown", {
+      clientX: 160,
+      clientY: 160 + HUD_INSET.top,
+    });
+    dispatchPointer(fx.canvas, "pointermove", {
+      clientX: 200,
+      clientY: 160 + HUD_INSET.top,
+    });
+    dispatchPointer(fx.canvas, "pointerup", {
+      clientX: 200,
+      clientY: 160 + HUD_INSET.top,
+    });
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 200, clientY: 160, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 200,
+        clientY: 160 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledTimes(3);
   });
@@ -1419,7 +1506,11 @@ describe("createWebGpuHost map target picking", () => {
     fx.fireFrame(0);
 
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 170, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 170,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 5, y: 2 },
@@ -1427,7 +1518,11 @@ describe("createWebGpuHost map target picking", () => {
     );
 
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 116, clientY: 96, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 116,
+        clientY: 96 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 3, y: 3 },
@@ -1457,7 +1552,11 @@ describe("createWebGpuHost map target picking", () => {
         }) as DOMRect,
     );
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
       { x: 2, y: 2 },
@@ -1476,7 +1575,11 @@ describe("createWebGpuHost map target picking", () => {
     await fx.host.captureFrame();
 
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
       { x: 2, y: 2 },
@@ -1497,7 +1600,11 @@ describe("createWebGpuHost map target picking", () => {
     const canvas = secondHost.querySelector("canvas") as HTMLCanvasElement;
 
     canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 2, y: 2 },
@@ -1519,7 +1626,11 @@ describe("createWebGpuHost map target picking", () => {
     fx.setState(createTestGameState());
     fx.setSceneRevision(2);
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 2, y: 2 },
@@ -1529,7 +1640,11 @@ describe("createWebGpuHost map target picking", () => {
     // Once the new scene has drawn a frame, clicks actuate that frame again.
     fx.fireFrame(16);
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 2, y: 2 },
@@ -1547,7 +1662,11 @@ describe("createWebGpuHost map target picking", () => {
     // An armed placement is a build click, not a Select click: the drawn
     // vehicle under it must not reach handleTileClick as a candidate.
     fx.canvas.dispatchEvent(
-      new MouseEvent("click", { clientX: 80, clientY: 80, bubbles: true }),
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
     );
     expect(fx.callbacks.onTileClick).toHaveBeenLastCalledWith(
       { x: 2, y: 2 },
@@ -1617,8 +1736,9 @@ describe("createWebGpuHost frame contents", () => {
   it("keeps raw world angle and extents and appends clip factors to instances", () => {
     // Southbound bus: world tangent (0, 1) -> world angle +π/2, passed
     // through raw (the y-flip lives in the clip factors). Body extents stay
-    // world px. The trailing clip factors come from the identity board at
-    // DPR 1 (28x18 tiles -> 896x576 px): sx = 2/896, sy = -2/576.
+    // world px. The trailing clip factors come from a board at DPR 1 that is
+    // 896x736 px (28x18 tiles plus the HUD insets), where the 896x576 safe
+    // rect fits the map exactly at scale 1: sx = 2/896, sy = -2/736.
     const fx = createFixture({
       state: unpaused(stateWithVehicleForFrame({ x: 2, y: 5 })),
     });
@@ -1630,7 +1750,7 @@ describe("createWebGpuHost frame contents", () => {
     expect(instances[3]).toBeCloseTo(7, 5);
     expect(instances[4]).toBeCloseTo(4, 5);
     expect(instances[5]).toBeCloseTo(2 / 896, 9);
-    expect(instances[6]).toBeCloseTo(-2 / 576, 9);
+    expect(instances[6]).toBeCloseTo(-2 / 736, 9);
 
     fx.host.stop();
   });

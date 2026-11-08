@@ -2,7 +2,11 @@ import { render, screen } from "@testing-library/svelte";
 import { tick } from "svelte";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import MapTextOverlay from "../../src/components/MapTextOverlay.svelte";
-import { tileSize, type Camera } from "../../src/render/boardTransform";
+import {
+  HUD_INSET,
+  tileSize,
+  type Camera,
+} from "../../src/render/boardTransform";
 import {
   addTestBusRoute,
   addTestBusStop,
@@ -17,14 +21,15 @@ afterEach(() => {
   document.body.innerHTML = "";
 });
 
-// Pin the overlay's measured CSS box so the board transform is identity:
-// CSS position = world pixels (DPR 1, map fills the box exactly).
+// Pin the overlay's measured CSS box so the board transform is 1:1 inside the
+// safe viewport: CSS position = world pixels shifted down by the top HUD band
+// (DPR 1, map fills the safe box exactly).
 function pinOverlayBox(): void {
   vi.spyOn(Element.prototype, "clientWidth", "get").mockReturnValue(
     28 * tileSize,
   );
   vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(
-    18 * tileSize,
+    18 * tileSize + HUD_INSET.top + HUD_INSET.bottom,
   );
 }
 
@@ -63,7 +68,7 @@ describe("MapTextOverlay", () => {
     expect(badge.textContent).toContain("Road");
     // Tile center horizontally, tile top vertically (translate lifts it up).
     expect(badge.style.left).toBe(`${2 * tileSize + tileSize / 2}px`);
-    expect(badge.style.top).toBe(`${3 * tileSize}px`);
+    expect(badge.style.top).toBe(`${3 * tileSize + HUD_INSET.top}px`);
     expect(badge.classList.contains("map-text-below")).toBe(false);
     // The short badge fits centered around its anchor, so neither edge
     // side-class applies; max-width is the room a centered label may take
@@ -83,7 +88,7 @@ describe("MapTextOverlay", () => {
       '.map-text-item[data-kind="cursorBadge"]',
     ) as HTMLElement;
     // Below-placement anchors at the flipped-to tile bottom (row 0).
-    expect(badge.style.top).toBe(`${tileSize}px`);
+    expect(badge.style.top).toBe(`${tileSize + HUD_INSET.top}px`);
     expect(badge.classList.contains("map-text-below")).toBe(true);
     expect(badge.classList.contains("map-text-side-left")).toBe(false);
     expect(badge.classList.contains("map-text-side-right")).toBe(false);
@@ -95,7 +100,7 @@ describe("MapTextOverlay", () => {
       14 * tileSize,
     );
     vi.spyOn(Element.prototype, "clientHeight", "get").mockReturnValue(
-      9 * tileSize,
+      9 * tileSize + HUD_INSET.top + HUD_INSET.bottom,
     );
     render(MapTextOverlay, {
       props: {
@@ -114,11 +119,11 @@ describe("MapTextOverlay", () => {
       '.map-text-item[data-kind="cursorBadge"]',
     ) as HTMLElement;
     expect(badge.classList.contains("map-text-below")).toBe(true);
-    expect(badge.style.top).toBe(`${tileSize}px`);
+    expect(badge.style.top).toBe(`${tileSize + HUD_INSET.top}px`);
   });
 
   it("follows the camera and flips on the top visible row", async () => {
-    // Zoom 2 on the pinned 28x18 box: 64px tiles, view origin at tile (0, 2).
+    // Zoom 2 on the pinned 28x18 box: 64px tiles, view top at world row 2.
     await renderOverlay(
       createTestGameState(),
       { activeTool: "road", hoverTile: { x: 2, y: 3 } },
@@ -129,13 +134,13 @@ describe("MapTextOverlay", () => {
       '.map-text-item[data-kind="cursorBadge"]',
     ) as HTMLElement;
     expect(badge.style.left).toBe(`${2.5 * 2 * tileSize}px`);
-    expect(badge.style.top).toBe(`${(3 - 2) * 2 * tileSize}px`);
+    expect(badge.style.top).toBe(`${(3 - 2) * 2 * tileSize + HUD_INSET.top}px`);
     expect(badge.classList.contains("map-text-below")).toBe(false);
 
     document.body.innerHTML = "";
     await renderOverlay(
       createTestGameState(),
-      { activeTool: "road", hoverTile: { x: 2, y: 2 } },
+      { activeTool: "road", hoverTile: { x: 2, y: 1 } },
       { zoom: 2, center: { x: 7, y: 6.5 } },
     );
     const topRow = document.querySelector(
@@ -321,7 +326,9 @@ describe("MapTextOverlay", () => {
     ] as HTMLElement[];
     expect(numbers.map((node) => node.textContent)).toEqual(["1", "2"]);
     expect(numbers[0]!.style.left).toBe(`${1 * tileSize + tileSize / 2}px`);
-    expect(numbers[0]!.style.top).toBe(`${1 * tileSize + tileSize / 2}px`);
+    expect(numbers[0]!.style.top).toBe(
+      `${1 * tileSize + tileSize / 2 + HUD_INSET.top}px`,
+    );
   });
 
   it("measures the shared board box reactively on resize", async () => {

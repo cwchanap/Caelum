@@ -27,8 +27,9 @@ type MapSize = Pick<GameMap, "width" | "height">;
 
 /**
  * Local map view: never persisted and never sent to Rust. `zoom` multiplies
- * the fit-to-board scale (1 shows the whole map); `center` is the world point,
- * in tiles, drawn at the middle of the board. `null` everywhere means "fit".
+ * the fit-to-safe-viewport scale (1 shows the whole map); `center` is the
+ * world point, in tiles, drawn at the middle of the safe viewport. `null`
+ * everywhere means "fit".
  */
 export interface Camera {
   zoom: number;
@@ -36,7 +37,7 @@ export interface Camera {
 }
 
 /** A camera change requested from outside the board (buttons, keys). `pan`
- *  moves by `x`/`y` steps of `PAN_STEP_FRACTION` of the board. */
+ *  moves by `x`/`y` steps of `PAN_STEP_FRACTION` of the safe viewport. */
 export type CameraAction =
   | { kind: "zoomIn" }
   | { kind: "zoomOut" }
@@ -50,6 +51,31 @@ const MAX_TILE_CSS_PX = 96;
 export const ZOOM_STEP = 1.25;
 const PAN_STEP_FRACTION = 0.2;
 
+/** Fixed board-top and board-bottom bands the floating HUD owns. The camera
+ *  fits and clamps inside the rectangle they leave — the safe viewport —
+ *  while rendering, culling, and picking still use the full board. App.svelte
+ *  pins the same values as --hud-top/--hud-bottom so the DOM HUD and the
+ *  camera always agree. */
+export const HUD_INSET = { top: 72, bottom: 88 } as const;
+
+interface SafeRect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+/** The camera's viewport: the full board width minus the HUD bands, with a
+ *  nonnegative height so tiny boards degenerate instead of inverting. */
+function safeRect(board: BoardSize): SafeRect {
+  return {
+    x: 0,
+    y: HUD_INSET.top,
+    width: board.width,
+    height: Math.max(0, board.height - HUD_INSET.top - HUD_INSET.bottom),
+  };
+}
+
 interface CanvasSizeTarget {
   width: number;
   height: number;
@@ -59,9 +85,10 @@ interface CanvasSizeTarget {
 
 /**
  * World px → board CSS px. With no camera the whole map is fitted and
- * centered; a camera zooms and pans that fit (clamped so the view stays on the
- * map). Every consumer — GPU host, pointer mapping, DOM text overlay — uses
- * this one function so they agree on where a tile is.
+ * centered inside the safe viewport; a camera zooms and pans that fit
+ * (clamped so the view stays on the map and reachable tiles never sit under
+ * the HUD). Every consumer — GPU host, pointer mapping, DOM text overlay —
+ * uses this one function so they agree on where a tile is.
  */
 export function getBoardTransform(
   board: BoardSize,
@@ -72,11 +99,12 @@ export function getBoardTransform(
   const scale = fitScale(board, map) * view.zoom;
   const width = map.width * tileSize * scale;
   const height = map.height * tileSize * scale;
+  const safe = safeRect(board);
 
   return {
     scale,
-    offsetX: board.width / 2 - view.center.x * tileSize * scale,
-    offsetY: board.height / 2 - view.center.y * tileSize * scale,
+    offsetX: safe.x + safe.width / 2 - view.center.x * tileSize * scale,
+    offsetY: safe.y + safe.height / 2 - view.center.y * tileSize * scale,
     width,
     height,
   };
@@ -112,34 +140,45 @@ export function visibleWorldRect(
 }
 
 export function fitScale(board: BoardSize, map: MapSize): number {
+  const safe = safeRect(board);
+  if (!(safe.width > 0 && safe.height > 0)) {
+    return 0;
+  }
   return Math.min(
-    board.width / (map.width * tileSize),
-    board.height / (map.height * tileSize),
+    safe.width / (map.width * tileSize),
+    safe.height / (map.height * tileSize),
   );
 }
 
 export function maxZoom(board: BoardSize, map: MapSize): number {
   const fit = fitScale(board, map);
+  if (!(fit > 0)) {
+    return 1;
+  }
   return Math.max(1, MAX_TILE_CSS_PX / (tileSize * fit));
 }
 
 /**
- * Clamp zoom to [1, maxZoom] and keep the viewport inside the map. On an axis
- * where the whole map already fits, the map stays centered, so a zoom of 1 is
- * exactly the fit view.
+ * Clamp zoom to [1, maxZoom] and keep the safe viewport inside the map. On an
+ * axis where the whole map already fits inside the safe viewport, the map
+ * stays centered there, so a zoom of 1 is exactly the fit view.
  */
 export function clampCamera(
   board: BoardSize,
   map: MapSize,
   camera: Camera,
 ): Camera {
-  if (!(board.width > 0 && board.height > 0)) {
+  const safe = safeRect(board);
+  if (!(safe.width > 0 && safe.height > 0)) {
     return camera;
   }
   const zoom = Math.min(Math.max(camera.zoom, 1), maxZoom(board, map));
   const tilePx = fitScale(board, map) * zoom * tileSize;
-  const clampAxis = (center: number, boardPx: number, mapTiles: number) => {
-    const half = boardPx / (2 * tilePx);
+  if (!(tilePx > 0)) {
+    return camera;
+  }
+  const clampAxis = (center: number, safePx: number, mapTiles: number) => {
+    const half = safePx / (2 * tilePx);
     if (2 * half >= mapTiles) {
       return mapTiles / 2;
     }
@@ -148,8 +187,8 @@ export function clampCamera(
   return {
     zoom,
     center: {
-      x: clampAxis(camera.center.x, board.width, map.width),
-      y: clampAxis(camera.center.y, board.height, map.height),
+      x: clampAxis(camera.center.x, safe.width, map.width),
+      y: clampAxis(camera.center.y, safe.height, map.height),
     },
   };
 }
@@ -173,7 +212,8 @@ function fittedAsNull(camera: Camera): Camera | null {
 }
 
 /** Zoom by `factor`, keeping the world point under `anchor` (board CSS px)
- *  fixed on screen. */
+ *  fixed on screen. Zoom controls pass the safe-viewport centre; the wheel
+ *  passes the actual pointer position. */
 export function zoomCameraAt(
   board: BoardSize,
   map: MapSize,
@@ -184,8 +224,14 @@ export function zoomCameraAt(
   const current = resolvedCamera(board, map, camera);
   const fit = fitScale(board, map);
   const before = fit * current.zoom * tileSize;
-  const worldX = current.center.x + (anchor.x - board.width / 2) / before;
-  const worldY = current.center.y + (anchor.y - board.height / 2) / before;
+  if (!(before > 0)) {
+    return camera;
+  }
+  const safe = safeRect(board);
+  const middleX = safe.x + safe.width / 2;
+  const middleY = safe.y + safe.height / 2;
+  const worldX = current.center.x + (anchor.x - middleX) / before;
+  const worldY = current.center.y + (anchor.y - middleY) / before;
   const zoom = Math.min(
     Math.max(current.zoom * factor, 1),
     maxZoom(board, map),
@@ -195,8 +241,8 @@ export function zoomCameraAt(
     clampCamera(board, map, {
       zoom,
       center: {
-        x: worldX - (anchor.x - board.width / 2) / after,
-        y: worldY - (anchor.y - board.height / 2) / after,
+        x: worldX - (anchor.x - middleX) / after,
+        y: worldY - (anchor.y - middleY) / after,
       },
     }),
   );
@@ -212,6 +258,9 @@ export function panCamera(
 ): Camera | null {
   const current = resolvedCamera(board, map, camera);
   const tilePx = fitScale(board, map) * current.zoom * tileSize;
+  if (!(tilePx > 0)) {
+    return camera;
+  }
   return fittedAsNull(
     clampCamera(board, map, {
       zoom: current.zoom,
@@ -229,7 +278,11 @@ export function applyCameraAction(
   camera: Camera | null,
   action: CameraAction,
 ): Camera | null {
-  const middle = { x: board.width / 2, y: board.height / 2 };
+  const safe = safeRect(board);
+  const middle = {
+    x: safe.x + safe.width / 2,
+    y: safe.y + safe.height / 2,
+  };
   switch (action.kind) {
     case "fit":
       return null;
@@ -243,8 +296,8 @@ export function applyCameraAction(
         board,
         map,
         camera,
-        -action.x * board.width * PAN_STEP_FRACTION,
-        -action.y * board.height * PAN_STEP_FRACTION,
+        -action.x * safe.width * PAN_STEP_FRACTION,
+        -action.y * safe.height * PAN_STEP_FRACTION,
       );
     case "centerOn": {
       const current = resolvedCamera(board, map, camera);

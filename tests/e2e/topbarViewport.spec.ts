@@ -7,15 +7,56 @@ const viewports = [
   { width: 1440, height: 900 },
 ] as const;
 
-async function topbarGeometry(page: import("@playwright/test").Page) {
+const LONG_CITY_NAME =
+  "Harbour-on-the-Long-Estuary Metropolitan Transport Authority";
+
+interface ClusterBox {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+}
+
+interface TopbarGeometry {
+  city: ClusterBox;
+  clock: ClusterBox;
+  stats: ClusterBox;
+  readouts: Array<{
+    label?: string;
+    value?: string;
+    left: number;
+    right: number;
+    textRight: number;
+  }>;
+  cityNameRight: number;
+  cityNameTitle: string | null;
+}
+
+async function topbarGeometry(
+  page: import("@playwright/test").Page,
+): Promise<TopbarGeometry> {
   return page.evaluate(() => {
     const topbar = document.querySelector<HTMLElement>(
       '[data-testid="topbar"]',
     );
     if (topbar === null) throw new Error("Topbar is missing");
 
+    const clusterBox = (selector: string): ClusterBox => {
+      const cluster = topbar.querySelector<HTMLElement>(selector);
+      if (cluster === null) {
+        throw new Error(`Topbar cluster ${selector} is missing`);
+      }
+      const box = cluster.getBoundingClientRect();
+      return {
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+      };
+    };
+
     const readouts = Array.from(
-      topbar.querySelectorAll<HTMLElement>(".readout"),
+      topbar.querySelectorAll<HTMLElement>(".topbar-cluster--stats .readout"),
     )
       .filter((readout) => getComputedStyle(readout).display !== "none")
       .map((readout) => {
@@ -45,12 +86,20 @@ async function topbarGeometry(page: import("@playwright/test").Page) {
           textRight: textBox.right,
         };
       });
-    const controls = topbar.querySelector<HTMLElement>(".controls");
-    if (controls === null) throw new Error("Topbar controls are missing");
-    const controlsBox = controls.getBoundingClientRect();
+
+    const cityName = topbar.querySelector<HTMLElement>(
+      '[data-testid="topbar-city-name"]',
+    );
+    if (cityName === null) throw new Error("City name readout is missing");
+    const cityNameBox = cityName.getBoundingClientRect();
+
     return {
+      city: clusterBox(".topbar-cluster--city"),
+      clock: clusterBox(".topbar-cluster--clock"),
+      stats: clusterBox(".topbar-cluster--stats"),
       readouts,
-      controlsLeft: controlsBox.left,
+      cityNameRight: cityNameBox.right,
+      cityNameTitle: cityName.getAttribute("title"),
     };
   });
 }
@@ -77,11 +126,29 @@ async function applyLongValueFixture(
   await expect(page.getByTestId("topbar").getByText("$20,000")).toBeVisible();
 }
 
+/** The three clusters must tile left-to-right without overlapping, every
+ *  stats readout must stay inside its card, and an ellipsized city name must
+ *  stay inside the city card. */
 function collectOverlapFailures(
   viewport: (typeof viewports)[number],
-  geometry: Awaited<ReturnType<typeof topbarGeometry>>,
+  geometry: TopbarGeometry,
 ): string[] {
   const failures: string[] = [];
+  if (geometry.city.right > geometry.clock.left + 1) {
+    failures.push(
+      `${viewport.width}px city cluster overlaps clock cluster: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (geometry.clock.right > geometry.stats.left + 1) {
+    failures.push(
+      `${viewport.width}px clock cluster overlaps stats cluster: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (geometry.cityNameRight > geometry.city.right + 1) {
+    failures.push(
+      `${viewport.width}px city name overflows the city cluster: ${JSON.stringify(geometry)}`,
+    );
+  }
   for (let index = 0; index < geometry.readouts.length - 1; index += 1) {
     const current = geometry.readouts[index];
     const next = geometry.readouts[index + 1];
@@ -94,26 +161,28 @@ function collectOverlapFailures(
 
   const lastReadout = geometry.readouts.at(-1);
   if (lastReadout === undefined) throw new Error("No visible topbar readouts");
-  if (lastReadout.textRight > geometry.controlsLeft) {
+  if (lastReadout.textRight > geometry.stats.right + 1) {
     failures.push(
-      `${viewport.width}px last readout overlaps controls: ${JSON.stringify(geometry)}`,
+      `${viewport.width}px last readout overflows the stats cluster: ${JSON.stringify(geometry)}`,
     );
   }
   return failures;
 }
 
-test("topbar readouts and controls do not overlap at supported desktop widths", async ({
+test("topbar clusters and readouts stay readable at supported desktop widths", async ({
   page,
 }) => {
   const failures: string[] = [];
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await createDefaultCity(page);
+    await createDefaultCity(page, LONG_CITY_NAME);
     await expect(page.getByTestId("topbar")).toBeVisible();
-    failures.push(
-      ...collectOverlapFailures(viewport, await topbarGeometry(page)),
-    );
+
+    const geometry = await topbarGeometry(page);
+    failures.push(...collectOverlapFailures(viewport, geometry));
+    // An ellipsized long city name still exposes the full name via title.
+    expect(geometry.cityNameTitle).toBe(LONG_CITY_NAME);
 
     await applyLongValueFixture(page);
     const longGeometry = await topbarGeometry(page);
