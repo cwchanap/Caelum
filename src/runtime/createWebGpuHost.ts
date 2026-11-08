@@ -7,6 +7,7 @@ import {
   getBoardTransform,
   panCamera,
   syncCanvasSize,
+  tileSize,
   visibleWorldRect,
   zoomCameraAt,
   type BoardTransform,
@@ -14,7 +15,11 @@ import {
   type CameraAction,
 } from "../render/boardTransform";
 import { SOLID_VERTEX_FLOATS } from "../render/webgpu/primitives";
-import { buildMapBatch } from "../render/webgpu/mapBatch";
+import {
+  type GridMode,
+  buildMapBatch,
+  gridModeForTool,
+} from "../render/webgpu/mapBatch";
 import {
   buildTransitBatch,
   routeStyleKeyFor,
@@ -103,7 +108,8 @@ export interface GameHost {
 
 export type CreateGameHost = (context: WebGpuHostContext) => Promise<GameHost>;
 
-/** World-space batch caches keyed by scene revision / route emphasis. */
+/** World-space batch caches keyed by scene revision + grid mode / route
+ *  emphasis. */
 interface BatchCache {
   key: string;
   map: GameMap | null;
@@ -232,16 +238,18 @@ export function createWebGpuHostWithRenderer(
   const sceneVertices = (
     state: GameState,
     revision: number,
+    gridMode: GridMode,
   ): Float32Array<ArrayBuffer> => {
+    const key = `scene:${revision}:${gridMode}`;
     if (
       sceneCache === null ||
-      sceneCache.key !== `scene:${revision}` ||
+      sceneCache.key !== key ||
       sceneCache.map !== state.map
     ) {
       sceneCache = {
-        key: `scene:${revision}`,
+        key,
         map: state.map,
-        vertices: buildMapBatch(state),
+        vertices: buildMapBatch(state, gridMode),
       };
     }
     return sceneCache.vertices;
@@ -344,9 +352,11 @@ export function createWebGpuHostWithRenderer(
   };
 
   /** Assembles the frame's batches from the observed state — the exact input
-   *  both drawFrame and captureFrame hand to the renderer. */
+   *  both drawFrame and captureFrame hand to the renderer. `tileCssPx` is the
+   *  drawn frame's on-screen tile size, feeding the grid's discrete band. */
   const buildFrame = (
     nowMs: number,
+    tileCssPx: number,
   ): {
     frame: WebGpuRenderFrame;
     vehicleIds: string[];
@@ -357,6 +367,7 @@ export function createWebGpuHostWithRenderer(
     const { latest, previous, alpha } = observeState(nowMs);
     const ui = ctx.getUi();
     const revision = ctx.getSceneRevision();
+    const gridMode = gridModeForTool(ui.activeTool, tileCssPx);
     const overlays = buildOverlayRanges(latest, ui);
     const map = latest.map;
     const { instances, vehicleIds } = encodeVehicleInstances({
@@ -377,7 +388,9 @@ export function createWebGpuHostWithRenderer(
         solids: [
           {
             role: "structural",
-            vertices: transformVertices(sceneVertices(latest, revision)),
+            vertices: transformVertices(
+              sceneVertices(latest, revision, gridMode),
+            ),
           },
           {
             role: "dynamic",
@@ -412,7 +425,7 @@ export function createWebGpuHostWithRenderer(
       return;
     }
     const board = syncSize(canvas);
-    const built = buildFrame(nowMs);
+    const built = buildFrame(nowMs, board.scale * tileSize);
     renderer.render(built.frame);
     const previousTransform = drawnTargets?.transform;
     drawnTargets = {
@@ -441,8 +454,10 @@ export function createWebGpuHostWithRenderer(
     }
     // Same sizing/transform prep as drawFrame so the capture is in the same
     // device-pixel space as the presented canvas.
-    syncSize(canvas);
-    return renderer.captureFrame(buildFrame(performance.now()).frame);
+    const board = syncSize(canvas);
+    return renderer.captureFrame(
+      buildFrame(performance.now(), board.scale * tileSize).frame,
+    );
   };
 
   const cancelPendingFrame = (): void => {

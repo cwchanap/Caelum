@@ -1,14 +1,24 @@
 import { describe, expect, it } from "vitest";
-import type { GameState, RoadStructure } from "../../src/domain/types";
-import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
+import type { GameState, Point, RoadStructure } from "../../src/domain/types";
+import {
+  GRID_FAINT_ALPHA,
+  GRID_FAINT_TILE_PX,
+  LOT_FILL_ALPHA,
+  buildMapBatch,
+  gridModeForTool,
+} from "../../src/render/webgpu/mapBatch";
 import {
   SOLID_VERTEX_FLOATS,
   parseColor,
+  withAlpha,
+  type Rgba,
 } from "../../src/render/webgpu/primitives";
 import { colors } from "../../src/render/colors";
+import { tileSize } from "../../src/render/boardTransform";
 import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
 import {
   pointsOnRow,
+  withAreas,
   withOneWayRoads,
   withRoads,
   withTracks,
@@ -24,15 +34,30 @@ function rowsOf(data: Float32Array): number[][] {
   return rows;
 }
 
-function sameColor(row: number[], css: string): boolean {
-  const expected = Array.from(parseColor(css));
+function sameColorRgba(row: number[], rgba: Rgba): boolean {
   return row
     .slice(2, 6)
-    .every((value, index) => Math.abs(value - expected[index]) < EPSILON);
+    .every((value, index) => Math.abs(value - rgba[index]) < EPSILON);
+}
+
+function verticesOfRgba(data: Float32Array, rgba: Rgba): number[][] {
+  return rowsOf(data).filter((row) => sameColorRgba(row, rgba));
 }
 
 function verticesOfColor(data: Float32Array, css: string): number[][] {
-  return rowsOf(data).filter((row) => sameColor(row, css));
+  return verticesOfRgba(data, parseColor(css));
+}
+
+function hasVertexNearRgba(
+  data: Float32Array,
+  rgba: Rgba,
+  x: number,
+  y: number,
+  tolerance = 0.01,
+): boolean {
+  return verticesOfRgba(data, rgba).some(
+    ([vx, vy]) => Math.abs(vx - x) < tolerance && Math.abs(vy - y) < tolerance,
+  );
 }
 
 function hasVertexNear(
@@ -42,9 +67,34 @@ function hasVertexNear(
   y: number,
   tolerance = 0.01,
 ): boolean {
-  return verticesOfColor(data, css).some(
-    ([vx, vy]) => Math.abs(vx - x) < tolerance && Math.abs(vy - y) < tolerance,
+  return hasVertexNearRgba(data, parseColor(css), x, y, tolerance);
+}
+
+function rectOf(
+  x0: number,
+  y0: number,
+  width: number,
+  height: number,
+): Point[] {
+  const points: Point[] = [];
+  for (let y = y0; y < y0 + height; y += 1) {
+    for (let x = x0; x < x0 + width; x += 1) {
+      points.push({ x, y });
+    }
+  }
+  return points;
+}
+
+function tilesOfColor(data: Float32Array, css: string): Point[] {
+  const keys = new Set(
+    verticesOfColor(data, css).map(
+      ([vx, vy]) => `${Math.floor(vx / tileSize)},${Math.floor(vy / tileSize)}`,
+    ),
   );
+  return [...keys].map((key) => {
+    const [x, y] = key.split(",").map(Number);
+    return { x, y };
+  });
 }
 
 function withAreaTile(state: GameState, x: number, y: number): GameState {
@@ -76,19 +126,228 @@ function withJunction(state: GameState, structure: RoadStructure): GameState {
 }
 
 describe("buildMapBatch tile layer", () => {
-  it("fills tiles with area/road colors and strokes the grid", () => {
+  it("tints zoned lots, fills roads, and strokes the grid", () => {
     let state = createTestGameState();
     state = withAreaTile(state, 2, 3);
     state = withRoads(state, [{ x: 5, y: 5 }]);
     const batch = buildMapBatch(state);
 
-    // Tile (2,3) is empty with an office zone: filled with the area color.
-    expect(hasVertexNear(batch, colors.areaOffice, 64, 96)).toBe(true);
+    // Tile (2,3) is a vacant office lot: a tinted fill plus a dashed
+    // perimeter in the full zone colour.
+    const lotFill = withAlpha(parseColor(colors.areaOffice), LOT_FILL_ALPHA);
+    expect(hasVertexNearRgba(batch, lotFill, 64, 96)).toBe(true);
+    expect(hasVertexNear(batch, colors.areaOffice, 64, 95)).toBe(true);
     // Tile (5,5) is a road: filled with the road color.
     expect(hasVertexNear(batch, colors.road, 5 * 32, 5 * 32)).toBe(true);
-    // Grid strokes run along the tile boundary (lineWidth 1, centered).
-    expect(hasVertexNear(batch, colors.grid, 64, 95.5)).toBe(true);
-    expect(hasVertexNear(batch, colors.grid, 96, 128 + 0.5)).toBe(true);
+    // Grid lines run along the tile boundary (lineWidth 1, centered) and
+    // span the board, so their vertices land on the board edge.
+    expect(hasVertexNear(batch, colors.grid, 64.5, 0)).toBe(true);
+    expect(hasVertexNear(batch, colors.grid, 0, 96.5)).toBe(true);
+  });
+});
+
+describe("buildMapBatch grass variation", () => {
+  it("varies empty-tile fills into more than one subtle grass shade", () => {
+    const batch = buildMapBatch(createTestGameState(), "hidden");
+    const base = parseColor(colors.empty);
+    const shades = new Set(
+      rowsOf(batch)
+        .filter(
+          (row) =>
+            Math.abs(row[2] - base[0]) < 0.08 &&
+            Math.abs(row[3] - base[1]) < 0.08 &&
+            Math.abs(row[4] - base[2]) < 0.08 &&
+            row[5] === 1,
+        )
+        .map((row) =>
+          row
+            .slice(2, 6)
+            .map((v) => v.toFixed(3))
+            .join(","),
+        ),
+    );
+    expect(shades.size).toBeGreaterThan(1);
+  });
+});
+
+describe("buildMapBatch grid modes", () => {
+  it("emits no grid geometry in hidden mode", () => {
+    const batch = buildMapBatch(createTestGameState(), "hidden");
+    expect(verticesOfColor(batch, colors.grid)).toHaveLength(0);
+    const faint = withAlpha(parseColor(colors.grid), GRID_FAINT_ALPHA);
+    expect(verticesOfRgba(batch, faint)).toHaveLength(0);
+  });
+
+  it("fades the same grid lines in faint mode", () => {
+    const batch = buildMapBatch(createTestGameState(), "faint");
+    const faint = withAlpha(parseColor(colors.grid), GRID_FAINT_ALPHA);
+    expect(hasVertexNearRgba(batch, faint, 64.5, 0)).toBe(true);
+    expect(hasVertexNearRgba(batch, faint, 0, 96.5)).toBe(true);
+    expect(verticesOfColor(batch, colors.grid)).toHaveLength(0);
+  });
+
+  it("derives the mode from the armed tool and a discrete tile-size band", () => {
+    expect(gridModeForTool("inspect", 32)).toBe("hidden");
+    expect(gridModeForTool("inspect", 4)).toBe("hidden");
+    for (const tool of [
+      "busStop",
+      "busRoute",
+      "metroStation",
+      "metroLine",
+      "area",
+      "road",
+      "roundabout",
+      "track",
+      "remove",
+    ] as const) {
+      expect(gridModeForTool(tool, 32)).toBe("normal");
+      expect(gridModeForTool(tool, GRID_FAINT_TILE_PX - 0.5)).toBe("faint");
+    }
+    expect(gridModeForTool("road", GRID_FAINT_TILE_PX)).toBe("normal");
+    expect(gridModeForTool("road", GRID_FAINT_TILE_PX + 4)).toBe("normal");
+  });
+});
+
+describe("buildMapBatch vacant-lot layer", () => {
+  it("outlines a 6x6 zone as one lot with no interior dashes", () => {
+    const state = withAreas(
+      createTestGameState(),
+      "residential",
+      rectOf(2, 2, 6, 6),
+    );
+    const batch = buildMapBatch(state, "hidden");
+
+    const dashes = verticesOfColor(batch, colors.areaResidential);
+    expect(dashes.length).toBeGreaterThan(0);
+    const onPerimeter = ([vx, vy]: number[]) =>
+      Math.abs(vx - 64) <= 1.1 ||
+      Math.abs(vx - 256) <= 1.1 ||
+      Math.abs(vy - 64) <= 1.1 ||
+      Math.abs(vy - 256) <= 1.1;
+    expect(dashes.every(onPerimeter)).toBe(true);
+    expect(
+      dashes.some(
+        ([vx, vy]) => Math.abs(vx - 96) <= 1.1 && vy > 66 && vy < 254,
+      ),
+    ).toBe(false);
+    expect(dashes).toHaveLength(24 * 4 * 6);
+  });
+
+  it("drops the lot fill and grows dashes where a building occupies tiles", () => {
+    let state = withAreas(
+      createTestGameState(),
+      "residential",
+      rectOf(2, 2, 6, 6),
+    );
+    state = placeTestBuilding(state, "smallHouse", { x: 3, y: 3 }, 0);
+    const batch = buildMapBatch(state, "hidden");
+
+    const lotFill = withAlpha(
+      parseColor(colors.areaResidential),
+      LOT_FILL_ALPHA,
+    );
+    expect(verticesOfRgba(batch, lotFill)).toHaveLength(34 * 6);
+    expect(
+      verticesOfColor(batch, colors.areaResidential).some(
+        ([vx, vy]) => Math.abs(vy - 96) <= 1.1 && vx >= 96 && vx <= 128,
+      ),
+    ).toBe(true);
+  });
+});
+
+describe("buildMapBatch decorative trees", () => {
+  it("scatters canopy circles deterministically on empty unzoned tiles", () => {
+    const state = createTestGameState();
+    const first = buildMapBatch(state, "hidden");
+    const second = buildMapBatch(state, "hidden");
+    expect(second).toEqual(first);
+
+    const canopies = verticesOfColor(first, colors.treeCanopy);
+    expect(canopies.length).toBeGreaterThan(0);
+    expect(canopies.length / 30).toBeLessThan(state.map.tiles.length * 0.25);
+    const tileByKey = new Map(
+      state.map.tiles.map((tile) => [`${tile.x},${tile.y}`, tile]),
+    );
+    for (const [vx, vy] of canopies) {
+      const tile = tileByKey.get(
+        `${Math.floor(vx / tileSize)},${Math.floor(vy / tileSize)}`,
+      )!;
+      expect(tile.kind).toBe("empty");
+      expect(tile.area).toBeUndefined();
+      expect(tile.hasTrack).not.toBe(true);
+    }
+  });
+
+  it("removes a tree when its tile is zoned or built on", () => {
+    const state = createTestGameState();
+    const spots = tilesOfColor(
+      buildMapBatch(state, "hidden"),
+      colors.treeCanopy,
+    );
+    expect(spots.length).toBeGreaterThan(0);
+    const target = spots[0];
+    const inTile = ([vx, vy]: number[]) =>
+      Math.floor(vx / tileSize) === target.x &&
+      Math.floor(vy / tileSize) === target.y;
+
+    const zoned = buildMapBatch(withAreas(state, "park", [target]), "hidden");
+    expect(verticesOfColor(zoned, colors.treeCanopy).some(inTile)).toBe(false);
+
+    const built = buildMapBatch(
+      placeTestBuilding(state, "busStop", target, 0),
+      "hidden",
+    );
+    expect(verticesOfColor(built, colors.treeCanopy).some(inTile)).toBe(false);
+  });
+});
+
+describe("buildMapBatch road furniture", () => {
+  it("draws curbs where a road tile meets non-road ground", () => {
+    const state = withRoads(createTestGameState(), [{ x: 8, y: 8 }]);
+    const batch = buildMapBatch(state, "hidden");
+
+    expect(hasVertexNear(batch, colors.roadCurb, 259, 257)).toBe(true);
+    expect(hasVertexNear(batch, colors.roadCurb, 287, 259)).toBe(true);
+    expect(hasVertexNear(batch, colors.roadCurb, 285, 287)).toBe(true);
+    expect(hasVertexNear(batch, colors.roadCurb, 257, 285)).toBe(true);
+  });
+
+  it("leaves connected road edges curb-free", () => {
+    const state = withRoads(createTestGameState(), [
+      { x: 8, y: 8 },
+      { x: 9, y: 8 },
+    ]);
+    const batch = buildMapBatch(state, "hidden");
+
+    const curbs = verticesOfColor(batch, colors.roadCurb);
+    expect(curbs.length).toBeGreaterThan(0);
+    expect(
+      curbs.some(
+        ([vx, vy]) => Math.abs(vx - 288) <= 1.1 && vy >= 256 && vy <= 288,
+      ),
+    ).toBe(false);
+  });
+
+  it("adds sleeper ticks across connected track but not isolated dots", () => {
+    const state = withTracks(createTestGameState(), [
+      { x: 8, y: 8 },
+      { x: 9, y: 8 },
+    ]);
+    const batch = buildMapBatch(state, "hidden");
+
+    const sleepers = verticesOfColor(batch, colors.trackSleeper);
+    expect(sleepers.length).toBeGreaterThan(0);
+    expect(
+      sleepers.some(
+        ([vx, vy]) => Math.abs(vx - 278.4) < 1.6 && Math.abs(vy - 267) <= 5.5,
+      ),
+    ).toBe(true);
+
+    const isolated = buildMapBatch(
+      withTracks(createTestGameState(), [{ x: 10, y: 10 }]),
+      "hidden",
+    );
+    expect(verticesOfColor(isolated, colors.trackSleeper)).toHaveLength(0);
   });
 });
 
@@ -314,7 +573,7 @@ describe("buildMapBatch one-way layer", () => {
 });
 
 describe("buildMapBatch building layer", () => {
-  it("fills building footprints with the type color and outline", () => {
+  it("fills building footprints, shadows them, and outlines the perimeter only", () => {
     const state = placeTestBuilding(
       createTestGameState(),
       "smallHouse",
@@ -329,15 +588,25 @@ describe("buildMapBatch building layer", () => {
       expect(
         hasVertexNear(batch, colors.buildingHouse, tile.x * 32, tile.y * 32),
       ).toBe(true);
-      // Outline stroke (lineWidth 2, centered on the tile boundary).
       expect(
         hasVertexNear(
           batch,
-          "rgba(17, 24, 32, 0.45)",
-          tile.x * 32 - 1,
-          tile.y * 32,
+          "rgba(74, 56, 34, 0.25)",
+          tile.x * 32 + 3,
+          tile.y * 32 + 3,
         ),
       ).toBe(true);
     }
+    // Outline stroke (lineWidth 2, centered on the tile boundary) hugs the
+    // footprint perimeter only: six edges, one quad each.
+    expect(
+      hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 4 * 32 - 1, 5 * 32),
+    ).toBe(true);
+    expect(
+      hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 6 * 32 + 1, 5 * 32),
+    ).toBe(true);
+    expect(verticesOfColor(batch, "rgba(17, 24, 32, 0.45)")).toHaveLength(
+      6 * 6,
+    );
   });
 });
