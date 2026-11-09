@@ -254,6 +254,16 @@ function occupiedTileKeys(state: GameState): Set<string> {
   );
 }
 
+function occupiedTileOwners(state: GameState): Map<string, number> {
+  const owners = new Map<string, number>();
+  state.buildings.forEach((building, index) => {
+    for (const tile of building.occupiedTiles) {
+      owners.set(keyOf(tile), index);
+    }
+  });
+  return owners;
+}
+
 function grassFill(map: GameMap, tile: Tile): Rgba {
   const shade =
     GRASS_SHADES[
@@ -621,6 +631,7 @@ export function buildMapBatch(
   const g = new SolidGeometry();
   const islandKeys = protectedIslandKeys(state);
   const occupiedKeys = occupiedTileKeys(state);
+  const tileOwners = occupiedTileOwners(state);
   const tileByKey = new Map(state.map.tiles.map((tile) => [keyOf(tile), tile]));
 
   for (const tile of state.map.tiles) {
@@ -696,7 +707,6 @@ export function buildMapBatch(
   }
 
   for (const building of state.buildings) {
-    const fill = buildingColors[building.type];
     for (const tile of building.occupiedTiles) {
       g.rect(
         tile.x * tileSize + ROOF_SHADOW_OFFSET,
@@ -706,10 +716,20 @@ export function buildMapBatch(
         BUILDING_SHADOW,
       );
     }
+  }
+  for (const building of state.buildings) {
+    const fill = buildingColors[building.type];
     for (const tile of building.occupiedTiles) {
       fillTileRect(g, tile, fill);
+    }
+  }
+  state.buildings.forEach((building, buildingIndex) => {
+    for (const tile of building.occupiedTiles) {
       for (const { offset } of CARDINAL_OFFSETS) {
-        if (occupiedKeys.has(`${tile.x + offset.x},${tile.y + offset.y}`)) {
+        const owner = tileOwners.get(
+          `${tile.x + offset.x},${tile.y + offset.y}`,
+        );
+        if (owner !== undefined && owner <= buildingIndex) {
           continue;
         }
         strokeTileEdge(
@@ -721,7 +741,7 @@ export function buildMapBatch(
         );
       }
     }
-  }
+  });
 
   return g.toFloat32Array();
 }

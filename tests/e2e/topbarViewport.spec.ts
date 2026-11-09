@@ -1,4 +1,5 @@
 import { expect, test } from "@playwright/test";
+import { HUD_INSET } from "../../src/render/boardTransform";
 import {
   createDefaultCity,
   debugSetBudget,
@@ -194,6 +195,18 @@ function collectOverlapFailures(
     failures.push(
       `${viewport.width}px last readout overflows the stats cluster: ${JSON.stringify(geometry)}`,
     );
+  }
+
+  for (const [name, box] of [
+    ["city", geometry.city],
+    ["clock", geometry.clock],
+    ["stats", geometry.stats],
+  ] as const) {
+    if (box.top < -1 || box.bottom > HUD_INSET.top + 1) {
+      failures.push(
+        `${viewport.width}px ${name} cluster leaves the top HUD band: ${JSON.stringify(geometry)}`,
+      );
+    }
   }
   return failures;
 }

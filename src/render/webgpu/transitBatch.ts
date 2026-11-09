@@ -41,6 +41,10 @@ const ACCESS_INDICATOR_COLOR = parseColor(colors.hover);
 const STOP_MARKER_RADIUS = 7;
 const STATION_MARKER_HALF = 7;
 const STATION_MARKER_CORNER = 3;
+const NODE_CUE_RADIUS = 3;
+const STATION_MARKER_BOUND =
+  (STATION_MARKER_HALF - STATION_MARKER_CORNER) * Math.SQRT2 +
+  STATION_MARKER_CORNER;
 const MARKER_RIM_WIDTH = 2;
 const MARKER_FILL_COLOR = parseColor("#ffffff");
 
@@ -446,16 +450,31 @@ function roundedSquare(
   color: Rgba,
 ): void {
   const inner = half - cornerRadius;
-  g.rect(center.x - inner, center.y - half, inner * 2, half * 2, color);
-  g.rect(center.x - half, center.y - inner, half * 2, inner * 2, color);
+  g.rect(center.x - inner, center.y - inner, inner * 2, inner * 2, color);
+  g.rect(center.x - inner, center.y - half, inner * 2, cornerRadius, color);
+  g.rect(center.x - inner, center.y + inner, inner * 2, cornerRadius, color);
+  g.rect(center.x - half, center.y - inner, cornerRadius, inner * 2, color);
+  g.rect(center.x + inner, center.y - inner, cornerRadius, inner * 2, color);
   for (const dx of [-1, 1]) {
     for (const dy of [-1, 1]) {
-      g.circle(
-        { x: center.x + dx * inner, y: center.y + dy * inner },
-        cornerRadius,
-        color,
-        8,
-      );
+      const corner = { x: center.x + dx * inner, y: center.y + dy * inner };
+      const start = Math.atan2(dy, dx) - Math.PI / 4;
+      for (let segment = 0; segment < 2; segment += 1) {
+        const a0 = start + (segment * Math.PI) / 4;
+        const a1 = start + ((segment + 1) * Math.PI) / 4;
+        g.triangle(
+          corner,
+          {
+            x: corner.x + Math.cos(a0) * cornerRadius,
+            y: corner.y + Math.sin(a0) * cornerRadius,
+          },
+          {
+            x: corner.x + Math.cos(a1) * cornerRadius,
+            y: corner.y + Math.sin(a1) * cornerRadius,
+          },
+          color,
+        );
+      }
     }
   }
 }
@@ -525,9 +544,21 @@ function drawRouteNodeCues(
       const geometry = waypointGeometry(line, waypointId);
       if (node === undefined || geometry === null) continue;
       const presentation = presentationForRoute(geometry, line.id, corridors);
+      const nodeCenter = tileCenter(node.position);
+      const cueCenter = tileCenter(presentation.translatePoint(node.position));
+      const dx = cueCenter.x - nodeCenter.x;
+      const dy = cueCenter.y - nodeCenter.y;
+      const dist = Math.hypot(dx, dy);
+      const bound =
+        line.mode === "metro" ? STATION_MARKER_BOUND : STOP_MARKER_RADIUS;
       g.circle(
-        tileCenter(presentation.translatePoint(node.position)),
-        3,
+        dist < 1e-6
+          ? cueCenter
+          : {
+              x: nodeCenter.x + (dx / dist) * (bound + dist),
+              y: nodeCenter.y + (dy / dist) * (bound + dist),
+            },
+        NODE_CUE_RADIUS,
         cueColor,
       );
     }

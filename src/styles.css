@@ -137,7 +137,7 @@ body {
   border-right: 0;
 }
 
-.segmented button:hover:not(:disabled) {
+.segmented button:hover:not(:disabled, .active) {
   color: var(--ink);
   background: var(--surface);
 }
@@ -171,7 +171,7 @@ body {
 
 .topbar {
   position: absolute;
-  top: 10px;
+  top: 6px;
   left: 0;
   right: 0;
   z-index: 32;
@@ -384,6 +384,10 @@ body {
   pointer-events: none;
   z-index: 2;
   font-family: var(--font-body);
+}
+
+.map-text-overlay:has([data-kind="cursorBadge"]) {
+  z-index: 32;
 }
 
 .map-text-item {
