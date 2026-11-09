@@ -960,6 +960,95 @@ describe("buildTransitBatch nodes and cues", () => {
     // Cue circle at stop a's center (48,48), radius 3, route color.
     expect(hasVertexNear(vertices, "#e04f39", 48, 48)).toBe(true);
   });
+
+  it("pushes corridor-displaced node cues out to the marker perimeter", () => {
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const route = { ...base.transit.routes[0] };
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: [
+          { ...route, id: "route-0002", color: "#222222" },
+          { ...route, id: "route-0001", color: "#111111" },
+        ],
+      },
+    };
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    // The shared corridor gives each route a ±2px offset that would sink
+    // inside the radius-5 white fill; cues land just outside the radius-7
+    // silhouette on their corridor side instead.
+    expect(hasVertexNear(vertices, "#111111", 48, 39)).toBe(true);
+    expect(hasVertexNear(vertices, "#222222", 48, 57)).toBe(true);
+    expect(hasVertexNear(vertices, "#111111", 48, 46)).toBe(false);
+    // The marker's rim and white centre stay intact.
+    expect(hasVertexNear(vertices, "#111111", 55, 48)).toBe(true);
+    expect(hasVertexNear(vertices, "#ffffff", 48, 48)).toBe(true);
+  });
+
+  it("tessellates the dimmed station rim without overlapping parts", () => {
+    const base = createTestGameState();
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stations: [
+          {
+            id: "station-1",
+            status: "present" as const,
+            position: { x: 4, y: 4 },
+            platforms: [],
+          },
+        ],
+        metroLines: [
+          {
+            id: "metro-001",
+            name: "Metro 1",
+            color: "#3366cc",
+            stationIds: ["station-1"],
+            vehicleIds: [],
+            active: true,
+            pattern: "loop" as const,
+            revision: 1,
+            legs: [],
+            pathBroken: false,
+            targetHeadwaySeconds: null,
+            serviceMetrics: null,
+          },
+        ],
+      },
+    };
+    const { vertices } = buildTransitBatch(
+      state,
+      { ...createUiState(), selectedRouteId: "route-unrelated" },
+      1,
+    );
+
+    const rgb = colorOf("#3366cc").slice(0, 3);
+    const rimRows = rowsOf(vertices).filter(
+      (row) =>
+        row
+          .slice(2, 5)
+          .every((value, index) => Math.abs(value - rgb[index]) < EPSILON) &&
+        Math.abs(row[5] - UNRELATED_ROUTE_OPACITY) < EPSILON,
+    );
+    let covered = 0;
+    for (let index = 0; index + 2 < rimRows.length; index += 3) {
+      const a = rimRows[index];
+      const b = rimRows[index + 1];
+      const c = rimRows[index + 2];
+      covered +=
+        Math.abs(
+          (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]),
+        ) / 2;
+    }
+    // The rim silhouette (half 7, corner 3) covers 14²-4·3²+π·3² ≈ 188.3;
+    // overlapping primitives would overstate that area.
+    const silhouette = 14 * 14 - 4 * 3 * 3 + Math.PI * 3 * 3;
+    expect(covered).toBeGreaterThan(silhouette * 0.95);
+    expect(covered).toBeLessThanOrEqual(silhouette + 0.5);
+  });
 });
 
 describe("buildTransitBatch draft stroke", () => {

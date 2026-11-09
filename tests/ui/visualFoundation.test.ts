@@ -233,4 +233,28 @@ describe("sunny diorama visual foundation", () => {
       }
     }
   });
+
+  it("lifts the transient cursor badge above the legend layer only", () => {
+    const raised = styles.match(
+      /\.map-text-overlay:has\(\[data-kind="cursorBadge"\]\)\s*{([^}]*)}/,
+    );
+    const legendZ = Number(
+      blockFor(".overlay-legend").match(/z-index:\s*(\d+)/)?.[1],
+    );
+    const zoomZ = Number(
+      blockFor(".board-zoom").match(/z-index:\s*(\d+)/)?.[1],
+    );
+    const badgeZ = Number(raised?.[1]?.match(/z-index:\s*(\d+)/)?.[1]);
+    expect(badgeZ).toBeGreaterThan(legendZ);
+    expect(badgeZ).toBeLessThan(zoomZ);
+  });
+
+  it("keeps the selected segmented option styled while hovered", () => {
+    const hover = styles.match(
+      /\.segmented button:hover:not\(:disabled, \.active\)\s*{([^}]*)}/,
+    );
+    const active = blockFor(".segmented button.active");
+    expect(hover?.[1]).toContain("--surface");
+    expect(active).toContain("--accent-warm");
+  });
 });

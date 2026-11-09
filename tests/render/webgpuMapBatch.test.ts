@@ -634,4 +634,51 @@ describe("buildMapBatch building layer", () => {
       6 * 6,
     );
   });
+
+  it("keeps the shared boundary between two adjacent buildings outlined", () => {
+    let state = placeTestBuilding(
+      createTestGameState(),
+      "smallHouse",
+      { x: 4, y: 4 },
+      0,
+    );
+    state = placeTestBuilding(state, "smallHouse", { x: 4, y: 5 }, 0);
+    const batch = buildMapBatch(state);
+
+    // The y=160 seams between (4,4)|(4,5) and (5,4)|(5,5) belong to
+    // different buildings, so they keep a 2px stroke instead of merging.
+    expect(hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 128, 159)).toBe(true);
+    expect(hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 192, 161)).toBe(true);
+    // The 2x2 block's 8 perimeter edges plus the 2 internal seams: 10 quads.
+    expect(verticesOfColor(batch, "rgba(17, 24, 32, 0.45)")).toHaveLength(60);
+  });
+
+  it("emits every shadow before roof fills regardless of building order", () => {
+    const shadow = parseColor("rgba(74, 56, 34, 0.25)");
+    const roof = parseColor(colors.buildingHouse);
+    for (const southernFirst of [true, false]) {
+      let state = createTestGameState();
+      for (const origin of southernFirst
+        ? [
+            { x: 4, y: 4 },
+            { x: 4, y: 3 },
+          ]
+        : [
+            { x: 4, y: 3 },
+            { x: 4, y: 4 },
+          ]) {
+        state = placeTestBuilding(state, "smallHouse", origin, 0);
+      }
+      const rows = rowsOf(buildMapBatch(state, "hidden"));
+
+      const lastShadow = rows.reduce(
+        (last, row, index) => (sameColorRgba(row, shadow) ? index : last),
+        -1,
+      );
+      const firstFill = rows.findIndex((row) => sameColorRgba(row, roof));
+      expect(lastShadow).toBeGreaterThanOrEqual(0);
+      // A later building's shadow must not overpaint an earlier roof.
+      expect(firstFill).toBeGreaterThan(lastShadow);
+    }
+  });
 });
