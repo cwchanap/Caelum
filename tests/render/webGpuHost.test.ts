@@ -227,8 +227,12 @@ function createFixture(options?: {
     onRouteDraftContextMenu: vi.fn(() => false),
     onDragStart: vi.fn(() => options?.onDragStartResult ?? true),
     onDragCurrent: vi.fn(),
-    onDragCommit: vi.fn(),
-    onDragCancel: vi.fn(),
+    onDragCommit: vi.fn(() => {
+      ui.drag = null;
+    }),
+    onDragCancel: vi.fn(() => {
+      ui.drag = null;
+    }),
     onFatalError: vi.fn(),
     onCameraChange: vi.fn((next: Camera | null) => {
       camera = next;
@@ -712,11 +716,54 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
   });
 
-  it("a held gesture ignores zero-button moves, wheels, and leaves", () => {
+  it("a held gesture ignores moves from foreign pointers", () => {
     // A press/drag is driven by a pointer with a button down, so events that
-    // report buttons === 0 while a gesture is armed belong to another pointer
-    // source (a second device or the engine's hit-test-refresh event at the
-    // OS cursor). They must not steer, preview, or commit the gesture.
+    // report a different pointerId belong to another pointer source.
+    // They must not steer, preview, or commit the gesture.
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 2, y: 0 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+
+    // A foreign pointer moving at another tile does not steer the drag.
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 20, y: 12 }),
+      pointerId: 2,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+
+    // The real gesture resumes and commits on release.
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      button: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("wheel zoom and hover continue to work after context menu cancels drag", () => {
     const { canvas, callbacks, setUi } = createFixture({
       ui: { activeTool: "road" },
     });
@@ -729,51 +776,28 @@ describe("createWebGpuHost lifecycle", () => {
     setUi({
       drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
     });
-    dispatchPointer(canvas, "pointermove", {
-      ...center({ x: 2, y: 0 }),
-      buttons: 1,
-    });
-    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
 
-    // Zero-button pointermove at another tile: the stroke keeps its last
-    // tracked tile and the tracked position is not rewritten.
-    dispatchPointer(canvas, "pointermove", {
-      ...center({ x: 20, y: 12 }),
-      buttons: 0,
-    });
-    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
-    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+    // Native context menu fires (e.g. macOS Ctrl+click)
+    canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
+    expect(callbacks.onDragCommit).toHaveBeenCalled();
 
-    // A zero-button wheel cannot zoom or re-track mid-gesture.
+    // Wheel zoom works immediately without locking up
     canvas.dispatchEvent(
       new WheelEvent("wheel", {
-        ...center({ x: 20, y: 12 }),
+        ...center({ x: 5, y: 5 }),
         deltaY: -200,
         bubbles: true,
         cancelable: true,
       }),
     );
-    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
-    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+    expect(callbacks.onCameraChange).toHaveBeenCalled();
 
-    // A zero-button pointerleave cannot commit the stroke early.
-    dispatchPointer(canvas, "pointerleave", {
-      ...center({ x: 20, y: 12 }),
+    // Hover works immediately without locking up
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 4, y: 4 }),
       buttons: 0,
     });
-    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
-
-    // The real gesture resumes and commits on release.
-    dispatchPointer(canvas, "pointermove", {
-      ...center({ x: 3, y: 0 }),
-      buttons: 1,
-    });
-    dispatchPointer(canvas, "pointerup", {
-      ...center({ x: 3, y: 0 }),
-      button: 0,
-    });
-    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
-    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(callbacks.onHoverTile).toHaveBeenCalledWith({ x: 4, y: 4 });
   });
 
   it("an armed press ignores zero-button moves before it becomes a pan", () => {

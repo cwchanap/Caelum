@@ -11,7 +11,7 @@ import type {
 } from "../../domain/types";
 import { ROAD_DIRECTION_OFFSET } from "../../domain/types";
 import { tileSize } from "../boardTransform";
-import { colors } from "../colors";
+import { areaColors, colors } from "../colors";
 import {
   type Rgba,
   SolidGeometry,
@@ -84,12 +84,12 @@ const buildingColors: Record<BuildingType, ReturnType<typeof parseColor>> = {
 };
 
 const areaFills: Record<AreaKind, Rgba> = {
-  residential: parseColor(colors.areaResidential),
-  commercial: parseColor(colors.areaCommercial),
-  industrial: parseColor(colors.areaIndustrial),
-  office: parseColor(colors.areaOffice),
-  civic: parseColor(colors.areaCivic),
-  park: parseColor(colors.areaPark),
+  residential: parseColor(areaColors.residential),
+  commercial: parseColor(areaColors.commercial),
+  industrial: parseColor(areaColors.industrial),
+  office: parseColor(areaColors.office),
+  civic: parseColor(areaColors.civic),
+  park: parseColor(areaColors.park),
 };
 
 const CARDINAL_OFFSETS: Array<{ heading: Heading; offset: Point }> = [
@@ -103,19 +103,17 @@ function keyOf(point: Point): string {
   return `${point.x},${point.y}`;
 }
 
-export function gridModeForTool(tool: Tool, tileCssPx: number): GridMode {
-  if (tool === "inspect") return "hidden";
+export function gridModeForUi(
+  ui: { activeTool: Tool; selectedBuilding?: BuildingType | null },
+  tileCssPx: number,
+): GridMode {
+  const armed = ui.activeTool !== "inspect" || Boolean(ui.selectedBuilding);
+  if (!armed) return "hidden";
   return tileCssPx < GRID_FAINT_TILE_PX ? "faint" : "normal";
 }
 
-export function gridModeForUi(
-  ui: { activeTool: Tool; selectedBuilding: BuildingType | null },
-  tileCssPx: number,
-): GridMode {
-  if (ui.activeTool === "inspect" && ui.selectedBuilding !== null) {
-    return tileCssPx < GRID_FAINT_TILE_PX ? "faint" : "normal";
-  }
-  return gridModeForTool(ui.activeTool, tileCssPx);
+export function gridModeForTool(tool: Tool, tileCssPx: number): GridMode {
+  return gridModeForUi({ activeTool: tool }, tileCssPx);
 }
 
 function tileHash(x: number, y: number, salt: number): number {
@@ -160,46 +158,49 @@ function fillTileRect(
   g.rect(tile.x * tileSize, tile.y * tileSize, tileSize, tileSize, color);
 }
 
+function tileEdgeEndpoints(
+  tile: Point,
+  heading: Heading,
+  inset = 0,
+  endInset = 0,
+): { from: Point; to: Point } {
+  const x0 = tile.x * tileSize;
+  const y0 = tile.y * tileSize;
+  switch (heading) {
+    case "north":
+      return {
+        from: { x: x0 + endInset, y: y0 + inset },
+        to: { x: x0 + tileSize - endInset, y: y0 + inset },
+      };
+    case "east":
+      return {
+        from: { x: x0 + tileSize - inset, y: y0 + endInset },
+        to: { x: x0 + tileSize - inset, y: y0 + tileSize - endInset },
+      };
+    case "south":
+      return {
+        from: { x: x0 + tileSize - endInset, y: y0 + tileSize - inset },
+        to: { x: x0 + endInset, y: y0 + tileSize - inset },
+      };
+    case "west":
+      return {
+        from: { x: x0 + inset, y: y0 + tileSize - endInset },
+        to: { x: x0 + inset, y: y0 + endInset },
+      };
+  }
+}
+
 /** Tessellates one canvas-style strokeRect edge (lineWidth centered on the
  *  path). */
 function strokeTileEdge(
   g: SolidGeometry,
   tile: Point,
-  offset: Point,
+  heading: Heading,
   thickness: number,
   color: ReturnType<typeof parseColor>,
 ): void {
-  const x0 = tile.x * tileSize;
-  const y0 = tile.y * tileSize;
-  if (offset.y === -1) {
-    g.thickLine(
-      { x: x0, y: y0 },
-      { x: x0 + tileSize, y: y0 },
-      thickness,
-      color,
-    );
-  } else if (offset.x === 1) {
-    g.thickLine(
-      { x: x0 + tileSize, y: y0 },
-      { x: x0 + tileSize, y: y0 + tileSize },
-      thickness,
-      color,
-    );
-  } else if (offset.y === 1) {
-    g.thickLine(
-      { x: x0 + tileSize, y: y0 + tileSize },
-      { x: x0, y: y0 + tileSize },
-      thickness,
-      color,
-    );
-  } else {
-    g.thickLine(
-      { x: x0, y: y0 + tileSize },
-      { x: x0, y: y0 },
-      thickness,
-      color,
-    );
-  }
+  const { from, to } = tileEdgeEndpoints(tile, heading);
+  g.thickLine(from, to, thickness, color);
 }
 
 /** Shaft + chevron head, matching the canvas drawDirectionArrow glyph. */
@@ -248,12 +249,6 @@ function protectedIslandKeys(state: GameState): Set<string> {
   );
 }
 
-function occupiedTileKeys(state: GameState): Set<string> {
-  return new Set(
-    state.buildings.flatMap((building) => building.occupiedTiles.map(keyOf)),
-  );
-}
-
 function occupiedTileOwners(state: GameState): Map<string, number> {
   const owners = new Map<string, number>();
   state.buildings.forEach((building, index) => {
@@ -288,11 +283,11 @@ function tileFillColor(
   map: GameMap,
   tile: Tile,
   islandKeys: ReadonlySet<string>,
-  occupiedKeys: ReadonlySet<string>,
+  tileOwners: ReadonlyMap<string, number>,
 ): Rgba {
   if (islandKeys.has(keyOf(tile))) return EMPTY_FILL;
   if (tile.kind === "road") return ROAD_FILL;
-  if (tile.area !== undefined && !occupiedKeys.has(keyOf(tile))) {
+  if (tile.area !== undefined && !tileOwners.has(keyOf(tile))) {
     return withAlpha(areaFills[tile.area], LOT_FILL_ALPHA);
   }
   return grassFill(map, tile);
@@ -325,45 +320,22 @@ function drawCurbs(
   tile: Tile,
   tileByKey: ReadonlyMap<string, Tile>,
 ): void {
-  const x0 = tile.x * tileSize;
-  const y0 = tile.y * tileSize;
   for (const { heading, offset } of CARDINAL_OFFSETS) {
+    if (tile.roadConnections.includes(heading)) continue;
     const neighbor = tileByKey.get(`${tile.x + offset.x},${tile.y + offset.y}`);
-    if (neighbor?.kind === "road") continue;
-    switch (heading) {
-      case "north":
-        g.thickLine(
-          { x: x0 + CURB_END_INSET, y: y0 + CURB_INSET },
-          { x: x0 + tileSize - CURB_END_INSET, y: y0 + CURB_INSET },
-          CURB_WIDTH,
-          CURB,
-        );
-        break;
-      case "east":
-        g.thickLine(
-          { x: x0 + tileSize - CURB_INSET, y: y0 + CURB_END_INSET },
-          { x: x0 + tileSize - CURB_INSET, y: y0 + tileSize - CURB_END_INSET },
-          CURB_WIDTH,
-          CURB,
-        );
-        break;
-      case "south":
-        g.thickLine(
-          { x: x0 + tileSize - CURB_END_INSET, y: y0 + tileSize - CURB_INSET },
-          { x: x0 + CURB_END_INSET, y: y0 + tileSize - CURB_INSET },
-          CURB_WIDTH,
-          CURB,
-        );
-        break;
-      case "west":
-        g.thickLine(
-          { x: x0 + CURB_INSET, y: y0 + tileSize - CURB_END_INSET },
-          { x: x0 + CURB_INSET, y: y0 + CURB_END_INSET },
-          CURB_WIDTH,
-          CURB,
-        );
-        break;
+    if (
+      tile.roadStructureId !== undefined &&
+      neighbor?.roadStructureId === tile.roadStructureId
+    ) {
+      continue;
     }
+    const { from, to } = tileEdgeEndpoints(
+      tile,
+      heading,
+      CURB_INSET,
+      CURB_END_INSET,
+    );
+    g.thickLine(from, to, CURB_WIDTH, CURB);
   }
 }
 
@@ -465,67 +437,32 @@ function drawLotPerimeters(
   g: SolidGeometry,
   map: GameMap,
   tileByKey: ReadonlyMap<string, Tile>,
-  occupiedKeys: ReadonlySet<string>,
+  tileOwners: ReadonlyMap<string, number>,
 ): void {
   const isVacant = (tile: Tile | undefined, area: AreaKind): boolean =>
     tile !== undefined &&
     tile.kind === "empty" &&
     tile.area === area &&
     tile.roadStructureId === undefined &&
-    !occupiedKeys.has(keyOf(tile));
+    !tileOwners.has(keyOf(tile));
   for (const tile of map.tiles) {
     if (tile.area === undefined || !isVacant(tile, tile.area)) continue;
     const area = tile.area;
-    const x0 = tile.x * tileSize;
-    const y0 = tile.y * tileSize;
     const edge = areaFills[area];
     for (const { heading, offset } of CARDINAL_OFFSETS) {
       const neighbor = tileByKey.get(
         `${tile.x + offset.x},${tile.y + offset.y}`,
       );
       if (isVacant(neighbor, area)) continue;
-      switch (heading) {
-        case "north":
-          g.dashedLine(
-            { x: x0, y: y0 },
-            { x: x0 + tileSize, y: y0 },
-            LOT_DASH_WIDTH,
-            LOT_DASH_LENGTH,
-            LOT_GAP_LENGTH,
-            edge,
-          );
-          break;
-        case "east":
-          g.dashedLine(
-            { x: x0 + tileSize, y: y0 },
-            { x: x0 + tileSize, y: y0 + tileSize },
-            LOT_DASH_WIDTH,
-            LOT_DASH_LENGTH,
-            LOT_GAP_LENGTH,
-            edge,
-          );
-          break;
-        case "south":
-          g.dashedLine(
-            { x: x0 + tileSize, y: y0 + tileSize },
-            { x: x0, y: y0 + tileSize },
-            LOT_DASH_WIDTH,
-            LOT_DASH_LENGTH,
-            LOT_GAP_LENGTH,
-            edge,
-          );
-          break;
-        case "west":
-          g.dashedLine(
-            { x: x0, y: y0 + tileSize },
-            { x: x0, y: y0 },
-            LOT_DASH_WIDTH,
-            LOT_DASH_LENGTH,
-            LOT_GAP_LENGTH,
-            edge,
-          );
-          break;
-      }
+      const { from, to } = tileEdgeEndpoints(tile, heading);
+      g.dashedLine(
+        from,
+        to,
+        LOT_DASH_WIDTH,
+        LOT_DASH_LENGTH,
+        LOT_GAP_LENGTH,
+        edge,
+      );
     }
   }
 }
@@ -542,12 +479,7 @@ function drawTracks(g: SolidGeometry, state: GameState): void {
     if (tile.hasTrack !== true) continue;
     const tileCenter = center(tile);
     let connected = false;
-    for (const offset of [
-      { x: 0, y: -1 },
-      { x: 1, y: 0 },
-      { x: 0, y: 1 },
-      { x: -1, y: 0 },
-    ]) {
+    for (const { offset } of CARDINAL_OFFSETS) {
       if (!trackKeys.has(`${tile.x + offset.x},${tile.y + offset.y}`)) {
         continue;
       }
@@ -585,7 +517,7 @@ function drawTrees(
   g: SolidGeometry,
   map: GameMap,
   islandKeys: ReadonlySet<string>,
-  occupiedKeys: ReadonlySet<string>,
+  tileOwners: ReadonlyMap<string, number>,
 ): void {
   for (const tile of map.tiles) {
     if (
@@ -594,7 +526,7 @@ function drawTrees(
       tile.hasTrack === true ||
       tile.roadStructureId !== undefined ||
       islandKeys.has(keyOf(tile)) ||
-      occupiedKeys.has(keyOf(tile))
+      tileOwners.has(keyOf(tile))
     ) {
       continue;
     }
@@ -631,7 +563,6 @@ export function buildMapBatch(
 ): Float32Array<ArrayBuffer> {
   const g = new SolidGeometry();
   const islandKeys = protectedIslandKeys(state);
-  const occupiedKeys = occupiedTileKeys(state);
   const tileOwners = occupiedTileOwners(state);
   const tileByKey = new Map(state.map.tiles.map((tile) => [keyOf(tile), tile]));
 
@@ -639,7 +570,7 @@ export function buildMapBatch(
     fillTileRect(
       g,
       tile,
-      tileFillColor(state.map, tile, islandKeys, occupiedKeys),
+      tileFillColor(state.map, tile, islandKeys, tileOwners),
     );
   }
 
@@ -665,8 +596,8 @@ export function buildMapBatch(
     }
   }
 
-  drawLotPerimeters(g, state.map, tileByKey, occupiedKeys);
-  drawTrees(g, state.map, islandKeys, occupiedKeys);
+  drawLotPerimeters(g, state.map, tileByKey, tileOwners);
+  drawTrees(g, state.map, islandKeys, tileOwners);
 
   const structureKinds = new Map(
     state.map.roadStructures.map((structure) => [structure.id, structure.kind]),
@@ -726,7 +657,7 @@ export function buildMapBatch(
   }
   state.buildings.forEach((building, buildingIndex) => {
     for (const tile of building.occupiedTiles) {
-      for (const { offset } of CARDINAL_OFFSETS) {
+      for (const { heading, offset } of CARDINAL_OFFSETS) {
         const owner = tileOwners.get(
           `${tile.x + offset.x},${tile.y + offset.y}`,
         );
@@ -736,7 +667,7 @@ export function buildMapBatch(
         strokeTileEdge(
           g,
           tile,
-          offset,
+          heading,
           BUILDING_OUTLINE_WIDTH,
           BUILDING_OUTLINE,
         );

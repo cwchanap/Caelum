@@ -658,6 +658,7 @@ export function createWebGpuHostWithRenderer(
       lastY: number;
       moved: boolean;
     } | null = null;
+    let dragPointerId: number | null = null;
     let suppressClick = false;
     let spaceHeld = false;
     let lastPointer: { clientX: number; clientY: number } | null = null;
@@ -738,17 +739,9 @@ export function createWebGpuHostWithRenderer(
       }
     };
 
-    // A pan or drag is held by a pointer whose button is down. Events that
-    // report zero buttons during an armed gesture belong to another pointer
-    // source — a second device, remote input, or an engine hit-test-refresh
-    // event fired at the OS cursor position — and must not steer the gesture
-    // or rewrite the position retracks replay.
-    const foreignDuringGesture = (event: MouseEvent): boolean =>
-      event.buttons === 0 && (pan !== null || ctx.getUi().drag !== null);
-
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault();
-      if (event.deltaY === 0 || foreignDuringGesture(event)) {
+      if (event.deltaY === 0) {
         return;
       }
       const rect = boardRect();
@@ -807,6 +800,16 @@ export function createWebGpuHostWithRenderer(
 
     const handleWindowBlur = (): void => {
       spaceHeld = false;
+      if (pan !== null) {
+        endPan(pan.pointerId);
+      }
+      if (ctx.getUi().drag !== null) {
+        ctx.onDragCommit();
+        if (dragPointerId !== null) {
+          releasePointer(dragPointerId);
+          dragPointerId = null;
+        }
+      }
       if (pan === null) nextCanvas.style.cursor = "";
     };
 
@@ -844,14 +847,27 @@ export function createWebGpuHostWithRenderer(
     const handleContextMenu = (event: MouseEvent): void => {
       if (ctx.onRouteDraftContextMenu()) {
         event.preventDefault();
+        return;
+      }
+      if (pan !== null) {
+        endPan(pan.pointerId);
+      }
+      if (ctx.getUi().drag !== null) {
+        ctx.onDragCommit();
+        if (dragPointerId !== null) {
+          releasePointer(dragPointerId);
+          dragPointerId = null;
+        }
       }
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
-      if (foreignDuringGesture(event)) {
-        return;
-      }
       if (pan !== null && event.pointerId === pan.pointerId) {
+        if (event.buttons === 0) {
+          endPan(pan.pointerId);
+          trackPointer(event.clientX, event.clientY);
+          return;
+        }
         if (!pan.moved) {
           const travel = Math.hypot(
             event.clientX - pan.startX,
@@ -874,6 +890,20 @@ export function createWebGpuHostWithRenderer(
         // A clamped camera stops the map while the cursor keeps moving.
         trackPointer(event.clientX, event.clientY);
         return;
+      }
+      if (dragPointerId !== null) {
+        if (event.pointerId !== dragPointerId) {
+          return;
+        }
+        if (event.buttons === 0) {
+          const point =
+            pointerTarget(event.clientX, event.clientY)?.tile ?? null;
+          ctx.onDragCurrent(point);
+          ctx.onDragCommit();
+          releasePointer(dragPointerId);
+          dragPointerId = null;
+          return;
+        }
       }
       trackPointer(event.clientX, event.clientY);
     };
@@ -927,6 +957,7 @@ export function createWebGpuHostWithRenderer(
       }
       const dragStarted = ctx.onDragStart(point);
       if (dragStarted) {
+        dragPointerId = event.pointerId;
         capturePointer(event.pointerId);
       }
     };
@@ -944,21 +975,19 @@ export function createWebGpuHostWithRenderer(
       if (ctx.getUi().drag === null || event.button !== 0) {
         return;
       }
+      if (dragPointerId !== null && event.pointerId !== dragPointerId) {
+        return;
+      }
       const point = pointerTarget(event.clientX, event.clientY)?.tile ?? null;
       // Snap the gesture to the release tile before committing, so a release on
       // a different tile than the last move builds to where the user let go.
       ctx.onDragCurrent(point);
       ctx.onDragCommit();
       releasePointer(event.pointerId);
+      dragPointerId = null;
     };
 
     const handlePointerLeave = (event: PointerEvent): void => {
-      // A zero-button leave while a gesture is held is a boundary event for
-      // another pointer's stream, not the pressing pointer leaving: it must
-      // neither commit the stroke early nor drop the tracked position.
-      if (foreignDuringGesture(event)) {
-        return;
-      }
       lastPointer = null;
       if (pan !== null) {
         // A captured pan keeps tracking past the edge; an uncaptured press
@@ -972,7 +1001,13 @@ export function createWebGpuHostWithRenderer(
       // stroke was already previewed, so commit it at its last tracked tile
       // rather than discarding the gesture.
       if (ctx.getUi().drag !== null) {
-        ctx.onDragCommit();
+        if (dragPointerId === null || event.pointerId === dragPointerId) {
+          ctx.onDragCommit();
+          if (dragPointerId !== null) {
+            releasePointer(dragPointerId);
+            dragPointerId = null;
+          }
+        }
       }
       ctx.onHoverTile(null);
     };
@@ -989,10 +1024,16 @@ export function createWebGpuHostWithRenderer(
       // it; touch/pen cancels can be a genuine UA gesture takeover, so those
       // still abort the drag.
       if (ctx.getUi().drag !== null) {
-        if (event.pointerType === "mouse") {
-          ctx.onDragCommit();
-        } else {
-          ctx.onDragCancel();
+        if (dragPointerId === null || event.pointerId === dragPointerId) {
+          if (event.pointerType === "mouse") {
+            ctx.onDragCommit();
+          } else {
+            ctx.onDragCancel();
+          }
+          if (dragPointerId !== null) {
+            releasePointer(dragPointerId);
+            dragPointerId = null;
+          }
         }
       }
       ctx.onHoverTile(null);

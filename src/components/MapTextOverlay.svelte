@@ -3,6 +3,7 @@
   import type { UiState } from "../ui/uiState";
   import {
     getBoardTransform,
+    HUD_INSET,
     tileSize,
     type Camera,
   } from "../render/boardTransform";
@@ -96,7 +97,7 @@
         transform.offsetY + item.anchor.y * tileSize * transform.scale;
       const below =
         tileTop <
-        Math.max(transform.offsetY, 0) +
+        Math.max(transform.offsetY, HUD_INSET.top) +
           Math.max(tileSize * transform.scale, LABEL_RISE_PX);
       // The nowrap label cannot wrap and the overlay clips overflow, so the
       // flip is by *estimated fit*, not board thirds: center when the whole

@@ -331,7 +331,10 @@ describe("runtime canvas pointer wiring", () => {
       ...center({ x: 1, y: 0 }),
       pointerId: 5,
     });
-    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 5,
+    });
     // A mouse pointercancel is a browser-side interruption (window focus
     // loss, OS steal), not a user abort — the previewed stroke commits.
     dispatch(canvas, "pointercancel", {
@@ -357,6 +360,7 @@ describe("runtime canvas pointer wiring", () => {
     });
     dispatch(canvas, "pointermove", {
       ...center({ x: 3, y: 0 }),
+      pointerId: 6,
       pointerType: "touch",
     });
     dispatch(canvas, "pointercancel", {

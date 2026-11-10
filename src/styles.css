@@ -17,10 +17,14 @@
   --line-strong: rgba(62, 54, 38, 0.28);
 
   /* Type */
+  --ink-strong: #172023;
   --ink: #2f3a3f;
   --ink-mid: #5d6d72;
   --ink-dim: #88979b;
   --ink-faint: #b7bfb9;
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
 
   /* Signal palette */
   --accent: #0f8a70;

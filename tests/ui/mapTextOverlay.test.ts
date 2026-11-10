@@ -147,6 +147,24 @@ describe("MapTextOverlay", () => {
       '.map-text-item[data-kind="cursorBadge"]',
     ) as HTMLElement;
     expect(topRow.classList.contains("map-text-below")).toBe(true);
+
+    // When the top of a tile is just below HUD_INSET.top, the label must still
+    // flip below so it never rises into the topbar.
+    document.body.innerHTML = "";
+    await renderOverlay(
+      createTestGameState(),
+      { activeTool: "road", hoverTile: { x: 2, y: 2 } },
+      { zoom: 2, center: { x: 7, y: 6.5 } },
+    );
+    const nearTopbar = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    // Tile row 2 at zoom 2: tileTop = (2 - 2) * 64 + HUD_INSET.top = 72px.
+    // 72px is just below the 72px topbar; rising would put it at 72 - 28 = 44px (under HUD).
+    expect(nearTopbar.classList.contains("map-text-below")).toBe(true);
+    expect(Number.parseFloat(nearTopbar.style.top)).toBeGreaterThanOrEqual(
+      HUD_INSET.top + tileSize,
+    );
   });
 
   it("renders Rust preview feedback in the cursor badge", async () => {
