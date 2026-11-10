@@ -144,12 +144,18 @@ jobs:
       - name: Install Vulkan drivers and Xvfb
         run: |
           sudo apt-get update
-          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth
+          sudo apt-get install -y libvulkan1 mesa-vulkan-drivers xvfb xauth xdotool
 
+      # Headed Chromium keeps a real OS cursor alongside Playwright's
+      # synthetic one, and both share the mouse pointerId: the real cursor
+      # rests mid-screen under Xvfb, so its motion and hit-test-refresh
+      # events land on the canvas and can rewrite hover/drag state mid-test.
+      # Parking it at the screen corner — over the window frame, never the
+      # page — keeps the suite's pointer stream single-source.
       - name: Run Playwright tests
         id: playwright
         continue-on-error: true
-        run: xvfb-run -a -s "-screen 0 1600x1200x24" bun run test:e2e
+        run: xvfb-run -a -s "-screen 0 1600x1200x24" bash -c "xdotool mousemove 0 0; bun run test:e2e"
 
       - name: Upload Playwright report
         if: ${{ !cancelled() }}

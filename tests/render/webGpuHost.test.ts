@@ -51,6 +51,7 @@ vi.mock("../../src/render/webgpu/mapBatch", async (importOriginal) => {
 
 class FakePointerEvent extends Event {
   button: number;
+  buttons: number;
   clientX: number;
   clientY: number;
   pointerId: number;
@@ -59,6 +60,7 @@ class FakePointerEvent extends Event {
     type: string,
     init: {
       button?: number;
+      buttons?: number;
       clientX?: number;
       clientY?: number;
       pointerId?: number;
@@ -68,6 +70,7 @@ class FakePointerEvent extends Event {
   ) {
     super(type, { bubbles: init.bubbles ?? true });
     this.button = init.button ?? 0;
+    this.buttons = init.buttons ?? 0;
     this.clientX = init.clientX ?? 0;
     this.clientY = init.clientY ?? 0;
     this.pointerId = init.pointerId ?? 1;
@@ -317,6 +320,7 @@ function dispatchPointer(
   type: string,
   init: {
     button?: number;
+    buttons?: number;
     clientX?: number;
     clientY?: number;
     pointerId?: number;
@@ -451,11 +455,13 @@ describe("createWebGpuHost lifecycle", () => {
       clientY: 300 + HUD_INSET.top,
     });
     dispatchPointer(canvas, "pointermove", {
+      buttons: 1,
       clientX: 302,
       clientY: 300 + HUD_INSET.top,
     });
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
     dispatchPointer(canvas, "pointermove", {
+      buttons: 1,
       clientX: 364,
       clientY: 300 + HUD_INSET.top,
     });
@@ -504,6 +510,7 @@ describe("createWebGpuHost lifecycle", () => {
       clientY: 300 + HUD_INSET.top,
     });
     dispatchPointer(canvas, "pointerleave", {
+      buttons: 1,
       clientX: 300,
       clientY: 300 + HUD_INSET.top,
     });
@@ -518,7 +525,10 @@ describe("createWebGpuHost lifecycle", () => {
 
     dispatchPointer(canvas, "pointermove", center({ x: 3, y: 3 }));
     dispatchPointer(canvas, "pointerdown", center({ x: 3, y: 3 }));
-    dispatchPointer(canvas, "pointermove", center({ x: 8, y: 3 }));
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 8, y: 3 }),
+      buttons: 1,
+    });
     dispatchPointer(canvas, "pointerup", center({ x: 8, y: 3 }));
 
     expect(callbacks.onCameraChange).toHaveBeenLastCalledWith(null);
@@ -537,6 +547,7 @@ describe("createWebGpuHost lifecycle", () => {
       clientY: 300 + HUD_INSET.top,
     });
     dispatchPointer(canvas, "pointermove", {
+      buttons: 4,
       clientX: 300,
       clientY: 236 + HUD_INSET.top,
     });
@@ -622,6 +633,7 @@ describe("createWebGpuHost lifecycle", () => {
       clientY: 300 + HUD_INSET.top,
     });
     dispatchPointer(canvas, "pointermove", {
+      buttons: 1,
       clientX: 236,
       clientY: 300 + HUD_INSET.top,
     });
@@ -684,14 +696,119 @@ describe("createWebGpuHost lifecycle", () => {
       },
     });
 
-    dispatchPointer(canvas, "pointermove", center({ x: 3, y: 0 }));
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      buttons: 1,
+    });
 
     expect(callbacks.onDragCurrent).toHaveBeenCalledWith({ x: 3, y: 0 });
     expect(callbacks.onHoverTile).not.toHaveBeenCalled();
 
-    dispatchPointer(canvas, "pointerleave", center({ x: 5, y: 0 }));
+    dispatchPointer(canvas, "pointerleave", {
+      ...center({ x: 5, y: 0 }),
+      buttons: 1,
+    });
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
     expect(callbacks.onHoverTile).toHaveBeenCalledWith(null);
+  });
+
+  it("a held gesture ignores zero-button moves, wheels, and leaves", () => {
+    // A press/drag is driven by a pointer with a button down, so events that
+    // report buttons === 0 while a gesture is armed belong to another pointer
+    // source (a second device or the engine's hit-test-refresh event at the
+    // OS cursor). They must not steer, preview, or commit the gesture.
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 2, y: 0 }),
+      buttons: 1,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+
+    // Zero-button pointermove at another tile: the stroke keeps its last
+    // tracked tile and the tracked position is not rewritten.
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 20, y: 12 }),
+      buttons: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+    expect(callbacks.onHoverTile).not.toHaveBeenCalled();
+
+    // A zero-button wheel cannot zoom or re-track mid-gesture.
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...center({ x: 20, y: 12 }),
+        deltaY: -200,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+
+    // A zero-button pointerleave cannot commit the stroke early.
+    dispatchPointer(canvas, "pointerleave", {
+      ...center({ x: 20, y: 12 }),
+      buttons: 0,
+    });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+
+    // The real gesture resumes and commits on release.
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      button: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("an armed press ignores zero-button moves before it becomes a pan", () => {
+    const { canvas, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+      camera: { zoom: 2, center: { x: 14, y: 9 } },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+      button: 0,
+      buttons: 1,
+    });
+    // A zero-button move far past the pan threshold must not start a pan or
+    // rewrite the hover tile — it is not the pressing pointer.
+    dispatchPointer(canvas, "pointermove", {
+      clientX: 500,
+      clientY: 500 + HUD_INSET.top,
+      buttons: 0,
+    });
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+    dispatchPointer(canvas, "pointerup", {
+      clientX: 300,
+      clientY: 300 + HUD_INSET.top,
+      button: 0,
+    });
+    canvas.dispatchEvent(
+      new MouseEvent("click", {
+        clientX: 300,
+        clientY: 300 + HUD_INSET.top,
+        bubbles: true,
+      }),
+    );
+    expect(callbacks.onTileClick).toHaveBeenCalledTimes(1);
   });
 
   it("pointercancel mid-drag commits a mouse stroke and aborts other pointers", () => {
@@ -1492,6 +1609,7 @@ describe("createWebGpuHost map target picking", () => {
       clientY: 160 + HUD_INSET.top,
     });
     dispatchPointer(fx.canvas, "pointermove", {
+      buttons: 1,
       clientX: 200,
       clientY: 160 + HUD_INSET.top,
     });
