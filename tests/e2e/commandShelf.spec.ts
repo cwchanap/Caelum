@@ -84,6 +84,17 @@ for (const viewport of desktopViewports) {
     }
     await expect(page.getByTestId("command-panel")).toHaveCount(0);
 
+    // The topbar slide-in can still be unwinding a sub-pixel transform when
+    // the boxes below are read; wait for it so heights report the settled
+    // 44px rather than a mid-flight compositor quad.
+    await page.getByTestId("topbar").evaluate(async (topbar) => {
+      await Promise.all(
+        topbar
+          .getAnimations({ subtree: true })
+          .map((animation) => animation.finished.catch(() => undefined)),
+      );
+    });
+
     const shelf = page.getByTestId("command-shelf");
     for (const id of [
       "command-destination-build",
