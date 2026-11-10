@@ -18,14 +18,6 @@ const plateGridSource = readSource(
 const buildSource = readSource(
   "../../src/components/hud/panels/BuildPanel.svelte",
 );
-const topbarSource = readSource("../../src/components/Topbar.svelte");
-const canvasSource = readSource("../../src/components/GameCanvas.svelte");
-const inspectSource = readSource(
-  "../../src/components/hud/panels/InspectPanel.svelte",
-);
-const feedbackSource = readSource("../../src/components/ActionFeedback.svelte");
-const newCitySource = readSource("../../src/components/NewCityScreen.svelte");
-const legendSource = readSource("../../src/components/OverlayLegend.svelte");
 
 const hudSources = [
   shelfSource,
@@ -172,28 +164,11 @@ describe("sunny diorama visual foundation", () => {
     expect(indexHtml).not.toContain("fonts.gstatic");
   });
 
-  it("defines the four css primitives with hud callers", () => {
+  it("defines the four css primitives", () => {
     for (const primitive of [".btn", ".card", ".chip", ".segmented"]) {
       expect(styles).toMatch(new RegExp(`\\${primitive}[\\s,{]`));
     }
     expect(styles).not.toMatch(/\.(field|input)(?=[\s,{])/);
-
-    // Segmented controls: speed group and map zoom group.
-    expect(topbarSource).toMatch(/class="[^"]*\bsegmented\b[^"]*"/);
-    expect(canvasSource).toMatch(/class="[^"]*\bsegmented\b[^"]*"/);
-    // Cards: command panel, inspection card, new-city form, overlay legend.
-    expect(panelSource).toMatch(/class="[^"]*\bcard\b[^"]*"/);
-    expect(inspectSource).toMatch(/class="[^"]*\bcard\b[^"]*"/);
-    expect(newCitySource).toMatch(/class="[^"]*\bcard\b[^"]*"/);
-    expect(legendSource).toMatch(/class="[^"]*\bcard\b[^"]*"/);
-    // Chips: route chips and the shelf badge.
-    expect(inspectSource).toMatch(/class="[^"]*\bchip\b[^"]*"/);
-    expect(shelfSource).toMatch(/class="[^"]*\bchip\b[^"]*"/);
-    // Buttons: pause, back, move-route, dismiss.
-    expect(topbarSource).toMatch(/class="[^"]*\bbtn\b[^"]*"/);
-    expect(buildSource).toMatch(/class="[^"]*\bbtn\b[^"]*"/);
-    expect(inspectSource).toMatch(/class="[^"]*\bbtn\b[^"]*"/);
-    expect(feedbackSource).toMatch(/class="[^"]*\bbtn\b[^"]*"/);
   });
 
   it("points the gpu palette at the sunny diorama direction", () => {

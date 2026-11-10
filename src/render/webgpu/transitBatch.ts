@@ -549,15 +549,14 @@ function drawRouteNodeCues(
       const dx = cueCenter.x - nodeCenter.x;
       const dy = cueCenter.y - nodeCenter.y;
       const dist = Math.hypot(dx, dy);
+      if (dist < 1e-6) continue;
       const bound =
         line.mode === "metro" ? STATION_MARKER_BOUND : STOP_MARKER_RADIUS;
       g.circle(
-        dist < 1e-6
-          ? cueCenter
-          : {
-              x: nodeCenter.x + (dx / dist) * (bound + dist),
-              y: nodeCenter.y + (dy / dist) * (bound + dist),
-            },
+        {
+          x: nodeCenter.x + (dx / dist) * (bound + dist),
+          y: nodeCenter.y + (dy / dist) * (bound + dist),
+        },
         NODE_CUE_RADIUS,
         cueColor,
       );
@@ -635,17 +634,25 @@ export function buildTransitBatch(
   drawRouteNodeCues(g, state, lines, corridors, emphasizedIds);
 
   const markerColorsByWaypoint = markerColors(lines, emphasizedIds);
+  const defaultStopRim =
+    emphasizedIds.size === 0
+      ? STOP_MARKER_COLOR
+      : withAlpha(STOP_MARKER_COLOR, UNRELATED_ROUTE_OPACITY);
+  const defaultStationRim =
+    emphasizedIds.size === 0
+      ? STATION_MARKER_COLOR
+      : withAlpha(STATION_MARKER_COLOR, UNRELATED_ROUTE_OPACITY);
   for (const stop of state.transit.stops) {
     if (stop.status !== "present") continue;
     const point = tileCenter(stop.position);
-    const rim = markerColorsByWaypoint.get(stop.id) ?? STOP_MARKER_COLOR;
+    const rim = markerColorsByWaypoint.get(stop.id) ?? defaultStopRim;
     g.circle(point, STOP_MARKER_RADIUS, rim);
     g.circle(point, STOP_MARKER_RADIUS - MARKER_RIM_WIDTH, MARKER_FILL_COLOR);
   }
   for (const station of state.transit.stations) {
     if (station.status !== "present") continue;
     const point = tileCenter(station.position);
-    const rim = markerColorsByWaypoint.get(station.id) ?? STATION_MARKER_COLOR;
+    const rim = markerColorsByWaypoint.get(station.id) ?? defaultStationRim;
     roundedSquare(g, point, STATION_MARKER_HALF, STATION_MARKER_CORNER, rim);
     roundedSquare(
       g,

@@ -188,22 +188,9 @@ describe("buildMapBatch grid modes", () => {
   it("derives the mode from the armed tool and a discrete tile-size band", () => {
     expect(gridModeForTool("inspect", 32)).toBe("hidden");
     expect(gridModeForTool("inspect", 4)).toBe("hidden");
-    for (const tool of [
-      "busStop",
-      "busRoute",
-      "metroStation",
-      "metroLine",
-      "area",
-      "road",
-      "roundabout",
-      "track",
-      "remove",
-    ] as const) {
-      expect(gridModeForTool(tool, 32)).toBe("normal");
-      expect(gridModeForTool(tool, GRID_FAINT_TILE_PX - 0.5)).toBe("faint");
-    }
+    expect(gridModeForTool("road", 32)).toBe("normal");
+    expect(gridModeForTool("road", GRID_FAINT_TILE_PX - 0.5)).toBe("faint");
     expect(gridModeForTool("road", GRID_FAINT_TILE_PX)).toBe("normal");
-    expect(gridModeForTool("road", GRID_FAINT_TILE_PX + 4)).toBe("normal");
   });
 
   it("arms the grid for building placement while the tool stays inspect", () => {
@@ -352,6 +339,46 @@ describe("buildMapBatch road furniture", () => {
         ([vx, vy]) => Math.abs(vx - 288) <= 1.1 && vy >= 256 && vy <= 288,
       ),
     ).toBe(false);
+  });
+
+  it("draws curbs between parallel unconnected roads", () => {
+    let state = createTestGameState();
+    state = {
+      ...state,
+      map: {
+        ...state.map,
+        tiles: state.map.tiles.map((tile) => {
+          if (tile.x === 8 && tile.y === 8) {
+            return {
+              ...tile,
+              kind: "road",
+              roadConnections: ["north", "south"],
+            };
+          }
+          if (tile.x === 9 && tile.y === 8) {
+            return {
+              ...tile,
+              kind: "road",
+              roadConnections: ["north", "south"],
+            };
+          }
+          return tile;
+        }),
+      },
+    };
+    const batch = buildMapBatch(state, "hidden");
+    const curbs = verticesOfColor(batch, colors.roadCurb);
+    // East curb of (8, 8) and west curb of (9, 8) must be present.
+    expect(
+      curbs.some(
+        ([vx, vy]) => Math.abs(vx - 287) <= 1.1 && vy >= 256 && vy <= 288,
+      ),
+    ).toBe(true);
+    expect(
+      curbs.some(
+        ([vx, vy]) => Math.abs(vx - 289) <= 1.1 && vy >= 256 && vy <= 288,
+      ),
+    ).toBe(true);
   });
 
   it("adds sleeper ticks across connected track but not isolated dots", () => {

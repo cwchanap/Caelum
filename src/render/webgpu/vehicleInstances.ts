@@ -47,7 +47,11 @@ export const VEHICLE_HALF_WIDTH = 5;
 const BUS_COLOR: Rgba = parseColor(colors.bus);
 const METRO_COLOR: Rgba = parseColor(colors.metro);
 
+const lineColorsCache = new WeakMap<GameState["transit"], Map<string, Rgba>>();
+
 function lineColors(state: GameState): Map<string, Rgba> {
+  const cached = lineColorsCache.get(state.transit);
+  if (cached !== undefined) return cached;
   const colorsById = new Map<string, Rgba>();
   for (const route of state.transit.routes) {
     colorsById.set(route.id, parseColor(route.color));
@@ -55,6 +59,7 @@ function lineColors(state: GameState): Map<string, Rgba> {
   for (const line of state.transit.metroLines) {
     colorsById.set(line.id, parseColor(line.color));
   }
+  lineColorsCache.set(state.transit, colorsById);
   return colorsById;
 }
 

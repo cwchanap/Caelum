@@ -1,4 +1,5 @@
-import { SOLID_VERTEX_FLOATS } from "./primitives";
+import { colors } from "../colors";
+import { SOLID_VERTEX_FLOATS, parseColor } from "./primitives";
 
 export interface WebGpuDeviceLoss {
   reason?: string;
@@ -67,7 +68,8 @@ export const VEHICLE_INSTANCE_FLOATS = 11;
 
 export const VEHICLE_LANE_OFFSET_PX = 8;
 
-const CLEAR_COLOR: GPUColor = { r: 0.7647, g: 0.851, b: 0.6039, a: 1 };
+const [emptyR, emptyG, emptyB] = parseColor(colors.empty);
+const CLEAR_COLOR: GPUColor = { r: emptyR, g: emptyG, b: emptyB, a: 1 };
 
 // GPUBufferUsage.VERTEX | GPUBufferUsage.COPY_DST. @webgpu/types is ambient
 // types only, so the numeric flags are used directly (no runtime globals in

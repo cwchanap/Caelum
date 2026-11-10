@@ -814,22 +814,42 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(hasVertexNear(vertices, "#ffffff", 140, 140)).toBe(true);
   });
 
-  it("draws coincident node cues beneath the marker's white fill", () => {
-    const state = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
-    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+  it("dims unserved stops when a route is emphasized", () => {
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const state: GameState = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stops: [
+          ...base.transit.stops,
+          {
+            id: "stop-unserved",
+            kind: "busStop",
+            position: { x: 9, y: 9 },
+            status: "present",
+            platforms: [],
+          },
+        ],
+      },
+    };
+    const { vertices } = buildTransitBatch(
+      state,
+      { ...createUiState(), selectedRouteId: "route-001" },
+      1,
+    );
 
-    const rows = rowsOf(vertices);
-    let cueIndex = -1;
-    let fillIndex = -1;
-    rows.forEach((row, index) => {
-      if (Math.abs(row[0] - 48) > 0.01 || Math.abs(row[1] - 48) > 0.01) {
-        return;
-      }
-      if (sameColor(row, "#e04f39")) cueIndex = index;
-      if (sameColor(row, "#ffffff")) fillIndex = index;
-    });
-    expect(cueIndex).toBeGreaterThanOrEqual(0);
-    expect(fillIndex).toBeGreaterThan(cueIndex);
+    // Unserved stop at (9*32 + 16, 9*32 + 16) = (304, 304).
+    // Its rim should be dimmed with UNRELATED_ROUTE_OPACITY.
+    const busRgb = colorOf(colors.bus).slice(0, 3);
+    const unservedRimRows = rowsOf(vertices).filter(
+      (row) =>
+        Math.hypot(row[0] - 304, row[1] - 304) <= 8 &&
+        row
+          .slice(2, 5)
+          .every((val, idx) => Math.abs(val - busRgb[idx]) < EPSILON),
+    );
+    expect(unservedRimRows.length).toBeGreaterThan(0);
+    expect(unservedRimRows[0][5]).toBeCloseTo(UNRELATED_ROUTE_OPACITY, 4);
   });
 
   it("rims a shared marker with the emphasized serving line's color", () => {
