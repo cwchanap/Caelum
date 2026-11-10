@@ -738,9 +738,17 @@ export function createWebGpuHostWithRenderer(
       }
     };
 
+    // A pan or drag is held by a pointer whose button is down. Events that
+    // report zero buttons during an armed gesture belong to another pointer
+    // source — a second device, remote input, or an engine hit-test-refresh
+    // event fired at the OS cursor position — and must not steer the gesture
+    // or rewrite the position retracks replay.
+    const foreignDuringGesture = (event: MouseEvent): boolean =>
+      event.buttons === 0 && (pan !== null || ctx.getUi().drag !== null);
+
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault();
-      if (event.deltaY === 0) {
+      if (event.deltaY === 0 || foreignDuringGesture(event)) {
         return;
       }
       const rect = boardRect();
@@ -840,6 +848,9 @@ export function createWebGpuHostWithRenderer(
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
+      if (foreignDuringGesture(event)) {
+        return;
+      }
       if (pan !== null && event.pointerId === pan.pointerId) {
         if (!pan.moved) {
           const travel = Math.hypot(
@@ -941,7 +952,13 @@ export function createWebGpuHostWithRenderer(
       releasePointer(event.pointerId);
     };
 
-    const handlePointerLeave = (): void => {
+    const handlePointerLeave = (event: PointerEvent): void => {
+      // A zero-button leave while a gesture is held is a boundary event for
+      // another pointer's stream, not the pressing pointer leaving: it must
+      // neither commit the stroke early nor drop the tracked position.
+      if (foreignDuringGesture(event)) {
+        return;
+      }
       lastPointer = null;
       if (pan !== null) {
         // A captured pan keeps tracking past the edge; an uncaptured press
