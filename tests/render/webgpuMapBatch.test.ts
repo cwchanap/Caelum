@@ -513,6 +513,44 @@ describe("buildMapBatch roundabout layer", () => {
     ).toBe(true);
   });
 
+  it("does not outline the protected island as a vacant lot", () => {
+    const footprint = rectOf(3, 3, 3, 3);
+    const ring = footprint.filter((p) => p.x !== 4 || p.y !== 4);
+    const structure: RoadStructure = {
+      kind: "roundabout",
+      id: "roundabout-1",
+      origin: { x: 3, y: 3 },
+      size: "standard3x3",
+      footprint,
+      ports: [],
+    };
+    // Zone a 5x5 residential block, then install the roundabout across its
+    // center: ring tiles turn to road, the island keeps kind "empty" and its
+    // area (mirroring install_roundabout in the core).
+    let state = withAreas(
+      createTestGameState(),
+      "residential",
+      rectOf(2, 2, 5, 5),
+    );
+    state = withRoads(state, ring);
+    state = withJunction(state, structure);
+    const batch = buildMapBatch(state, "hidden");
+
+    const dashes = verticesOfColor(batch, colors.areaResidential);
+    // Island tile (4,4) spans [128,160]^2; dashes only emit on tile edges
+    // (LOT_DASH_WIDTH 2 -> +-1 around the edge), so these bands catch any
+    // perimeter drawn around or through the island.
+    const near = (v: number, edge: number) => Math.abs(v - edge) <= 1.1;
+    const onIslandEdge = ([vx, vy]: number[]) =>
+      ((near(vx, 128) || near(vx, 160)) && vy > 126 && vy < 162) ||
+      ((near(vy, 128) || near(vy, 160)) && vx > 126 && vx < 162);
+    expect(dashes.some(onIslandEdge)).toBe(false);
+    // The surrounding zone still draws its outer perimeter.
+    expect(
+      dashes.some(([vx, vy]) => near(vy, 64) && vx >= 64 && vx <= 224),
+    ).toBe(true);
+  });
+
   it("draws a compact roundabout with ports on all four edges and no island", () => {
     const structure: RoadStructure = {
       kind: "roundabout",

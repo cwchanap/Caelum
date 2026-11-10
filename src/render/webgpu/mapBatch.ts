@@ -471,6 +471,7 @@ function drawLotPerimeters(
     tile !== undefined &&
     tile.kind === "empty" &&
     tile.area === area &&
+    tile.roadStructureId === undefined &&
     !occupiedKeys.has(keyOf(tile));
   for (const tile of map.tiles) {
     if (tile.area === undefined || !isVacant(tile, tile.area)) continue;
