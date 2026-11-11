@@ -763,6 +763,58 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
+  it("a second pointer down mid-drag cannot restart or steal the gesture", () => {
+    // Two-finger contact: the first pointer owns the drag. A foreign
+    // pointerdown must not re-open it, capture, steer, or commit — the
+    // owning pointer still finishes the stroke it started.
+    const setCapture = Element.prototype.setPointerCapture as unknown as {
+      mock: { calls: number[][] };
+    };
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 1,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 9, y: 9 }),
+      pointerId: 2,
+    });
+    expect(callbacks.onDragStart).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDragStart).toHaveBeenLastCalledWith({ x: 1, y: 0 });
+    expect(setCapture.mock.calls).not.toContainEqual([2]);
+
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 9, y: 9 }),
+      pointerId: 2,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 9, y: 9 }),
+      pointerId: 2,
+    });
+    expect(callbacks.onDragCurrent).not.toHaveBeenCalledWith({ x: 9, y: 9 });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("wheel zoom and hover continue to work after context menu cancels drag", () => {
     const { canvas, callbacks, setUi } = createFixture({
       ui: { activeTool: "road" },
@@ -777,9 +829,11 @@ describe("createWebGpuHost lifecycle", () => {
       drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
     });
 
-    // Native context menu fires (e.g. macOS Ctrl+click)
+    // Native context menu fires (e.g. macOS Ctrl+click): an involuntary
+    // takeover, so the unfinished stroke is cancelled, never applied.
     canvas.dispatchEvent(new MouseEvent("contextmenu", { bubbles: true }));
-    expect(callbacks.onDragCommit).toHaveBeenCalled();
+    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
 
     // Wheel zoom works immediately without locking up
     canvas.dispatchEvent(
@@ -798,6 +852,37 @@ describe("createWebGpuHost lifecycle", () => {
       buttons: 0,
     });
     expect(callbacks.onHoverTile).toHaveBeenCalledWith({ x: 4, y: 4 });
+  });
+
+  it("window blur cancels an unfinished drag instead of committing it", () => {
+    const releaseCapture = Element.prototype
+      .releasePointerCapture as unknown as { mock: { calls: number[][] } };
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 4,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
+    });
+
+    // Alt-Tab / app switch mid-gesture is an interruption, not a deliberate
+    // release: the previewed stroke (e.g. a demolish box) must not apply.
+    window.dispatchEvent(new Event("blur"));
+
+    expect(callbacks.onDragCancel).toHaveBeenCalledTimes(1);
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+    expect(releaseCapture.mock.calls).toContainEqual([4]);
+
+    // The owning pointer's late release cannot resurrect the commit.
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 4,
+    });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
   });
 
   it("an armed press ignores zero-button moves before it becomes a pan", () => {
@@ -874,11 +959,8 @@ describe("createWebGpuHost lifecycle", () => {
     };
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
-    const { canvas, callbacks } = createFixture({
-      ui: {
-        activeTool: "road",
-        drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 2, y: 0 } },
-      },
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
     });
 
     dispatchPointer(canvas, "pointerdown", {
@@ -887,6 +969,9 @@ describe("createWebGpuHost lifecycle", () => {
     });
     expect(callbacks.onDragStart).toHaveBeenCalledWith({ x: 1, y: 0 });
     expect(setCapture.mock.calls).toContainEqual([7]);
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 2, y: 0 } },
+    });
 
     dispatchPointer(canvas, "pointerup", {
       ...center({ x: 3, y: 0 }),
