@@ -803,12 +803,16 @@ export function createWebGpuHostWithRenderer(
       if (pan !== null) {
         endPan(pan.pointerId);
       }
+      // Focus loss interrupts the gesture; it is not a deliberate release, so
+      // the previewed stroke must not apply (a half-drawn demolish box would
+      // remove everything under it on Alt-Tab). Cancel the drag and still
+      // drop capture so nothing stays armed while the window is unfocused.
       if (ctx.getUi().drag !== null) {
-        ctx.onDragCommit();
-        if (dragPointerId !== null) {
-          releasePointer(dragPointerId);
-          dragPointerId = null;
-        }
+        ctx.onDragCancel();
+      }
+      if (dragPointerId !== null) {
+        releasePointer(dragPointerId);
+        dragPointerId = null;
       }
       if (pan === null) nextCanvas.style.cursor = "";
     };
@@ -852,12 +856,14 @@ export function createWebGpuHostWithRenderer(
       if (pan !== null) {
         endPan(pan.pointerId);
       }
+      // The OS menu stealing the pointer mid-gesture is involuntary too:
+      // cancel the stroke instead of committing whatever it happens to cover.
       if (ctx.getUi().drag !== null) {
-        ctx.onDragCommit();
-        if (dragPointerId !== null) {
-          releasePointer(dragPointerId);
-          dragPointerId = null;
-        }
+        ctx.onDragCancel();
+      }
+      if (dragPointerId !== null) {
+        releasePointer(dragPointerId);
+        dragPointerId = null;
       }
     };
 
@@ -946,9 +952,10 @@ export function createWebGpuHostWithRenderer(
         beginPan(event, false);
         return;
       }
-      // Only the primary (left) button initiates a drag. Right/middle clicks
-      // would otherwise start a stale drag gesture.
-      if (event.button !== 0 || !dragTool) {
+      // Only the primary (left) button initiates a drag, and only while no
+      // gesture is live: a second pointer down must not restart or steal the
+      // stroke the first pointer still owns (two-finger contact).
+      if (event.button !== 0 || !dragTool || ctx.getUi().drag !== null) {
         return;
       }
       const point = pointerTarget(event.clientX, event.clientY)?.tile ?? null;
