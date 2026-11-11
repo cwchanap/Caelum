@@ -83,7 +83,7 @@ No generation framework or app code was added. These are one-off offline generat
 ### Opencode image tool
 
 - Tool: `experimental_image_generate`.
-- Provider/model reported by the tool: **`openrouter/minimax/minimax-h3-image-highspeed`**.
+- The tool's job response named the route **`openrouter/minimax/minimax-h3-image-highspeed`**. This is transcribed from the invocation response, not independently verifiable from the saved JPEG; no seed or sampler was exposed.
 - Selected output: `smallHouse-test-03.jpg` (5152×3232), used for the small-house sprite and the 0°/180° proof.
 - Discarded: `smallHouse-test-01` and `smallHouse-test-02` (not committed; kept outside the repo).
 - References: a crop of the HPA-676 direction-A mockup, and a crop of the HPA-676 “Game screen in Sunny Diorama” mockup.
@@ -145,7 +145,7 @@ Tree 3:
 The generators were not used raw. The selected images were cleaned **offline with Pillow**, outside the repo:
 
 1. Chroma-matte the magenta studio background to alpha, despill the edge; the office variant had a white background and was flood-filled from the border instead.
-2. Flat-field the broad roof-plane shading to one even tone; terracotta roof pixels were additionally normalized to one terracotta hue/value while keeping tile-line texture.
+2. For the representative house, replace every roof-fill pixel with one flat `#ab5a45` terracotta tone and retain only the darker tile/ridge line work. This makes the upper and lower plane fills identical. The first committed sheet used hue/value normalization alone and still had a visible upper/lower brightness split (round-1 review measured roughly `(210, 115, 86)` above vs `(168, 87, 66)` below); that approach was replaced.
 3. Flatten the supermarket deck and factory slate deck to one flat material colour, removing generator-baked shadows from the deck; re-add only a neutral office glass grid.
 4. Crop to content and fit inside the exact unrotated 192 px/tile footprint with a 3.5% clear inset (non-uniform stretch to the footprint). Trees are scaled to fill a 192×192 square edge-to-edge.
 
@@ -159,7 +159,7 @@ The style sheet's map examples are **actual current-main screenshots with propos
 - Runtime: `bun install --frozen-lockfile`, `bun run wasm:build`, then `bunx vite --host 127.0.0.1 --port 5281 --strictPort`.
 - Browser: Orca built-in browser, 1440×900 CSS viewport, screenshots captured with `orca screenshot` (PNG).
 - City setup: the dev-only `window.__caelumRuntime` seam already present in `src/main.ts` on main. Cities were created with `persistence.createCity`, roads/lots painted with the real gameplay intents (`setTool`, `startDrag`, `setDragCurrent`, `commitDrag`), and the camera set with `adjustCamera`. No game code, renderer, shader or UI was changed.
-- Composites: Pillow pastes at the game's own tile transform. For Fit, `fit = min(1440 / (mapW*32), 740 / (mapH*32))`, `tile = 32*fit`, board centred in the 900 px viewport with the renderer's 72 top / 88 bottom HUD insets. Maximum zoom is 96 CSS px/tile. The renderer-owned `+3/+3` shadow is simulated at `rgba(74, 56, 34, 0.25)`. Every pixel outside a pasted sprite is unmodified screenshot output.
+- Composites: Pillow pastes at the game's own tile transform, including the full camera offsets for the 51.4 CSS px/tile street-block panel (the first committed street panel omitted the `-20.5px` vertical offset and was corrected in round 1). For Fit, `fit = min(1440 / (mapW*32), 740 / (mapH*32))`, `tile = 32*fit`, board centred in the 900 px viewport with the renderer's 72 top / 88 bottom HUD insets. Maximum zoom is 96 CSS px/tile. The renderer-owned `+3/+3` shadow is simulated at `rgba(74, 56, 34, 0.25)`. Every pixel outside a pasted sprite and its simulated +3/+3 shadow is unmodified screenshot output.
 
 Raw captures (outside Git, hashes for audit):
 
@@ -173,6 +173,11 @@ Raw captures (outside Git, hashes for audit):
 | `small-maxzoom.png`          | Small Town Small at maximum zoom (96 CSS px/tile), with the vacant residential lot and existing flat roofs | `72a5538aa991043d8ed58b7267f9c48a39e8293b3faba8d95349465d6049f6ae` |
 
 The board's raw “actual current-main · no proposed art” inset is `small-fit-smalltown.png`, cropped to the board rectangle.
+
+## Review round 1 corrections
+
+- **House roof illumination:** the upper plane was visibly lighter than the lower plane in the first committed board. The roof fill is now one exact `#ab5a45` tone in both planes; matched patch medians on the committed board are identical. The README normalization claim above was corrected.
+- **Street-block placement:** the first street panel omitted the screenshot camera offsets, so the houses and supermarket overlapped the road by about 20.5 px. The compositor now applies `off_x`/`off_y`; the house and supermarket bottoms sit exactly on the road's top edge, with no building body pixels in the road; only the renderer-style +3/+3 shadow falls onto the road, as intended.
 
 ## Approval gate
 
