@@ -1,17 +1,17 @@
-# Sunny Diorama — proposed style sheet (HPA-676)
+# Sunny Diorama art (HPA-676)
 
-**Status: PROPOSED — awaiting owner approval. No bulk asset generation has been run.**
-Tasks 2–5 of the HPA-676 plan are gated on the owner accepting this sheet. Iterate here, in this PR, before generating the remaining exports.
+**Status: style sheet approved by the owner in conversation on 2026-11-11; the complete asset inventory is ready for review.**
+The reference board retains its original proposed-status labels as a historical record of the approval checkpoint. The full asset set has not yet received owner approval.
 
 This folder contains the single reference board for the selected **direction A — Sunny Diorama** visual language:
 
-- `style-sheet.webp` — 2560×4380 reference board (live-map palette, material samples, three tree silhouettes, representative building types, a street block, Small/Medium/Large Fit composites, max-zoom 0°/180° proof and a 1:1 texture check).
+- `style-sheet.webp` — 2560×4440 reference board (live-map palette, material samples, three tree silhouettes, representative building types, a street block, Small/Medium/Large Fit composites, max-zoom 0°/180° proof and a 1:1 texture check).
 
 The board is reference art only, not a runtime asset. The game continues to use the merged HPA-678 renderer and the existing `src/assets/command-plates/` images until HPA-677 / HPA-696 integrate approved art.
 
-## Proposed palette, material and lighting rules
+## Palette, material and lighting rules
 
-These are the rules the remaining assets must follow **once approved**. They are not yet owner-approved.
+These are the approved rules the remaining assets must follow.
 
 ### Live map palette (read from `src/render/colors.ts` on current main `c383db4`)
 
@@ -24,7 +24,7 @@ These are the rules the remaining assets must follow **once approved**. They are
 
 The branch this document was drafted on predates HPA-678; the values above were read from the `c383db4` archive used for the screenshots, not from the older branch checkout.
 
-### Proposed material palette
+### Material palette
 
 | Material              | Sample    | Use                                                                                          |
 | --------------------- | --------- | -------------------------------------------------------------------------------------------- |
@@ -178,13 +178,89 @@ The board's raw “actual current-main · no proposed art” inset is `small-fit
 
 - **House roof illumination:** the upper plane was visibly lighter than the lower plane in the first committed board. The roof fill is now one exact `#ab5a45` tone in both planes; matched patch medians on the committed board are identical. The README normalization claim above was corrected.
 - **Street-block placement:** the first street panel omitted the screenshot camera offsets, so the houses and supermarket overlapped the road by about 20.5 px. The compositor now applies `off_x`/`off_y`; the house and supermarket bottoms sit exactly on the road's top edge, with no building body pixels in the road; only the renderer-style +3/+3 shadow falls onto the road, as intended.
+- **Footer:** the board was extended by 60 pixels after style approval to reveal the previously clipped final line; all pixels within the previous 2560×4380 bounds remain unchanged.
 
-## Approval gate
+## Approval checkpoint
 
-**Stop here.** Tasks 2–5 (12 building sprites, 3 trees, Build illustrations, templates, key art, app icon) must not start until the owner approves this sheet, including:
+The owner approved proceeding with this sheet in conversation on 2026-11-11, including:
 
 1. the direction-A read against the actual current-main screenshot;
 2. the 0°/180° pair on the real vacant residential lot at maximum zoom;
 3. the 1:1 texture check at 192 output px/tile.
 
-If the owner requests changes, revise the sheet in this same PR. After approval, this folder and the prompt prefix become the reference for the remaining art.
+This folder and the prompt prefix are the reference for the remaining art. The sheet's original status text remains unchanged as a record of the checkpoint.
+
+## Production and review
+
+The four representative buildings and three trees on the approved sheet are exported from the selected, prepared Task 1 images above. Their four Build thumbnails are mechanically letterboxed copies of the map sprites.
+
+### Large house
+
+- Tool: built-in image generation tool, transparent output; no seed or model settings were exposed.
+- Prompt: "Use case: stylized-concept. Asset type: transparent top-down city game map sprite. Match the attached approved Sunny Diorama sheet's representative small house and palette. Generate exactly one LARGE HOUSE, a broad 3:2 rectangular footprint with a warm terracotta tiled hip roof, modest cream rim, two skylights and two chimneys, slightly more elaborate than the reference small house. Strict straight-down orthographic roof-plan view, flat even identical illumination on all roof planes; no directional face shading, no cast shadows, no facade, no terrain, no text or watermark. Clean warm dark outline, restrained texture and legible large shapes. Object centered and fully visible with a small clear transparent margin. Actual transparent background."
+- Export: removed stray alpha below 32, cropped to the remaining alpha bounds, non-uniformly resized to 576×384 with an inset, and saved as lossless WebP.
+
+### Additional map sprites
+
+The built-in image generation tool was used with the style sheet as a reference and transparent output. No model, seed, or sampler settings were exposed. This shared prompt was used with the subject substituted from the table:
+
+> Use case: stylized-concept. Asset type: transparent top-down city game map sprite. Match the attached approved Sunny Diorama style sheet and representative buildings. Create ONE [subject]. Strict 90-degree overhead orthographic roof plan; flat even illumination, no directional roof shading, no cast shadows or glows. Simple large shapes, thin warm dark outline, restrained material texture. The entire object is centered and fully visible within its image, clear transparent margin all around. No perspective, no facade, no grass, no roads, no labels, no letters, no watermark. Background must be genuinely transparent with no background lighting effects.
+
+| ID             | Subject                                                                                                                                              |
+| -------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `cinema`       | cinema roof, broad rectangular 3:2 footprint, deep muted plum roof with cream parapet and a few large skylights                                      |
+| `businessPark` | business park, broad rectangular 3:2 footprint, two connected pale blue-grey roof sections and a central square glass atrium                         |
+| `warehouse`    | warehouse, broad rectangular 3:2 footprint, muted warm grey roof, three large parallel roof ribs and two broad skylights                             |
+| `clinic`       | neighborhood clinic, square footprint, pale cream roof with one large teal cross-shaped rooftop marking and two skylights                            |
+| `school`       | school, broad rectangular 3:2 footprint, warm ochre roof around a simple open central courtyard                                                      |
+| `parkPlaza`    | park plaza, square footprint, cream paved geometric square with a central round fountain and four clipped green planting beds, no surrounding ground |
+| `busTerminal`  | bus terminal, broad rectangular 3:2 footprint, cream and slate roofed central concourse with four parallel bus-bay canopies                          |
+
+For these sprites, faint alpha below 32 was removed, then the remaining artwork was cropped and non-uniformly resized into its exact footprint with a 3.5% inset. The twelve corresponding thumbnails are letterboxed derivatives of those map exports.
+
+### City Library and app icon
+
+- City Library prompt: "Use case: stylized-concept. Create a 16:9 wide City Library background for the Sunny Diorama city-building game, referencing the approved attached style sheet. Strict top-down orthographic city rooftops, terracotta, blue-grey glass and slate, warm green trees, cream and slate streets. Place the detailed neighborhood primarily on the right half; leave the left half calm, low contrast and low detail for a foreground menu card. Warm, cheerful, polished, consistent flat illustrative material detail. No text, letters, labels, logos, watermark, UI, or people." The built-in tool produced 1672×941 pixels; the 2560×1440 WebP is an upscaled export, not a native 2560-pixel generation.
+- App icon prompt: "Use case: stylized-concept. Create a square 1024px source for a desktop app icon for the Sunny Diorama city-and-transit building game, matching the palette of the attached style sheet. A single simple bold top-down mark: a cream road junction crossing a rich green round-corner square, with one small terracotta roof and one simple blue transit vehicle. Flat solid shapes with very few details, crisp edges and a strong silhouette legible at 32 pixels. Fully filled opaque background. No text, letters, wordmark, watermark or fake UI." The 1254×1254 generation was resized to 1024×1024 and passed to `bunx tauri icon`; only the 16 already-tracked derivatives were copied into `src-tauri/icons/`.
+
+### Build illustrations
+
+The built-in image generation tool used the approved sheet as a reference, with transparent output and this shared prompt (substitute the subject below):
+
+> Use case: stylized-concept. Asset type: transparent Build menu icon for Sunny Diorama 2D city game. Match the clean warm outlines, cream, terracotta, slate, blue-grey and muted green colors in the attached approved reference sheet. Draw [subject], directly overhead, clear simple silhouette and large readable details. Isolated objects only on actual transparent alpha. Absolutely NO grass, no terrain, no landscape tile, no square or rectangular backing, no ground surface, no scenery outside the depicted objects, no cast shadow. No text, letters, numbers, labels, UI border or watermark. Center the entire icon with breathing room; readable at 64px.
+
+| ID                   | Subject                                                                                          |
+| -------------------- | ------------------------------------------------------------------------------------------------ |
+| Category `roads`     | a simple four-way intersection with white lane markings                                          |
+| Category `transit`   | one blue bus and one short railway track arranged together                                       |
+| Category `zones`     | three colored empty outline plot shapes with a small house symbol                                |
+| Category `buildings` | three isolated terracotta, cream, and blue-grey rooftops arranged together                       |
+| `road-twoWay`        | one narrow straight grey bidirectional road segment with a fine dashed centre line               |
+| `road-oneWay`        | one narrow straight grey road segment with a single large white direction arrow                  |
+| `compactRoundabout`  | one small grey roundabout, a small cream circular central island, and four short approaches      |
+| `standardRoundabout` | one large wide grey roundabout, a broad cream circular central island, and four short approaches |
+| `track`              | one short straight metro rail track with two parallel steel rails and sleepers                   |
+| `busStop`            | a small roofed bus stop shelter beside a small blue bus                                          |
+| `metroStation`       | one compact metro station entrance symbol with a visible downward stair opening                  |
+| `residential`        | one isolated small terracotta-roofed house                                                       |
+| `commercial`         | one isolated warm sand-roofed shop with a simple awning                                          |
+| `office`             | one isolated pale blue-grey glass roof office building                                           |
+| `industrial`         | one isolated slate-roofed factory with two roof vents                                            |
+| `civic`              | one isolated cream civic building with a circular roof                                           |
+| `park`               | three individual rounded green canopy trees and a small cream park bench                         |
+
+For `road-dual`, the selected regeneration used: "Use case: stylized-concept. Asset type: transparent 256px Build menu thumbnail for Sunny Diorama 2D city game. Match attached style and colors. Draw an overhead diagram of a DUAL CARRIAGEWAY, two separate adjacent parallel grey road strips with a cream divider between them: upper strip has one big white arrow pointing RIGHT, lower strip has one big white arrow pointing LEFT. Exactly two separate strips, opposing directions, road occupies most of image. Straight-down flat orthographic view, clean dark outlines and simple cream details, clear transparent margin, readable at 64px. No words, letters, digits, background, watermark or cast shadow."
+
+For these independent illustrations, alpha below 32 was removed and each result was cropped and proportionally fitted inside a transparent 256×256 WebP canvas. Some subjects retain a small illustrative perspective in the menu icons; map sprites use the strict roof-plan contract.
+
+### Template cards
+
+The 512×512 cards use full Small-map captures from the current-main archive described above, with cream letterboxing. The Small Town composite replaces the old flat building fills with the corresponding underlying grass tile colours, then overlays the six sprite exports at the origins in `crates/caelum-core/src/sandbox.rs`. The `Crossroads` and `Blank Grid` cards contain no generated infrastructure; all roads and trees are from the game render. Captures were made with Playwright against the current-main archive at `c383db4` with a 1440×900 viewport.
+
+### Local visual and export checks
+
+- All 50 required source files are present at the specified paths. The 12 map sprites have their exact catalog footprint, the three trees are 192×192 with alpha touching each canvas edge, and the four category and 26 item illustrations are 256×256 with nonempty transparent backgrounds.
+- Each building thumbnail was compared to a fresh centered, proportional resize of its map sprite. The decoded pixels match.
+- Sprite contact sheets were inspected at 0° and 180° over actual captured game backgrounds at approximately 41.1, 20.6, 13.7 and 96 CSS pixels per tile, plus a native 192-output-pixels-per-tile view. The tree variants were inspected at the existing 12–18 world-pixel canopy diameters. These are offline composites, not integrated renderer tests.
+- The Build illustrations were inspected at 64 pixels on cream and dark backgrounds. The City Library image was checked beneath a rough left-side card, and the Tauri PNG icon at 32 and 128 pixels.
+- The three template cards retain the full rectangular Small-map layout; the 16 tracked Tauri icon filenames were regenerated without changing the Tauri configuration.
