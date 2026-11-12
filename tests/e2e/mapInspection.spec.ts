@@ -150,7 +150,9 @@ test("selects a displayed vehicle and opens Lines from its path", async ({
   const selectRoute = linesList.getByRole("button", {
     name: `Select ${route.name}`,
   });
-  await expect(selectRoute).toHaveAttribute("aria-pressed", "false");
+  // An accepted create selects its new route; the saved service card is the
+  // post-save summary, so the map path click below reopens the same selection.
+  await expect(selectRoute).toHaveAttribute("aria-pressed", "true");
 
   await page.getByRole("button", { name: "Close Lines" }).click();
   await expect(page.getByTestId("command-panel")).toHaveCount(0);

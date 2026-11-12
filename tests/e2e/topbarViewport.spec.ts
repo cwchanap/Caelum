@@ -4,7 +4,9 @@ import {
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
+  openCommandDestination,
   selectBuildLeaf,
+  settleLayout,
 } from "./helpers";
 
 const viewports = [
@@ -210,6 +212,157 @@ function collectOverlapFailures(
   }
   return failures;
 }
+
+interface ShelfBox {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+}
+
+interface ShelfGeometry {
+  topbar: ShelfBox;
+  stage: ShelfBox;
+  shelf: ShelfBox;
+  dock: ShelfBox;
+  buttons: Array<{ id: string; box: ShelfBox; clipped: boolean }>;
+  shelfClipped: boolean;
+}
+
+function boxesOverlap(a: ShelfBox, b: ShelfBox): boolean {
+  return (
+    a.left < b.right && a.right > b.left && a.top < b.bottom && a.bottom > b.top
+  );
+}
+
+async function shelfGeometry(
+  page: import("@playwright/test").Page,
+): Promise<ShelfGeometry> {
+  return page.evaluate(() => {
+    const boxOf = (element: Element): ShelfBox => {
+      const box = element.getBoundingClientRect();
+      return {
+        left: box.left,
+        right: box.right,
+        top: box.top,
+        bottom: box.bottom,
+        width: box.width,
+        height: box.height,
+      };
+    };
+    const required = (selector: string): HTMLElement => {
+      const element = document.querySelector<HTMLElement>(selector);
+      if (element === null) throw new Error(`${selector} is missing`);
+      return element;
+    };
+
+    const shelf = required('[data-testid="command-shelf"]');
+    return {
+      topbar: boxOf(required('[data-testid="topbar"]')),
+      stage: boxOf(required('canvas[data-runtime-canvas="true"]')),
+      shelf: boxOf(shelf),
+      dock: boxOf(required('[data-testid="workspace-dock"]')),
+      buttons: Array.from(shelf.querySelectorAll("button")).map((button) => ({
+        id:
+          button.dataset.testid ?? button.textContent?.trim() ?? "shelf button",
+        box: boxOf(button),
+        clipped:
+          button.scrollWidth > button.clientWidth + 1 ||
+          button.scrollHeight > button.clientHeight + 1,
+      })),
+      shelfClipped:
+        shelf.scrollWidth > shelf.clientWidth + 1 ||
+        shelf.scrollHeight > shelf.clientHeight + 1,
+    };
+  });
+}
+
+test("shelf buttons stay unclipped inside the map column and clear of the open dock", async ({
+  page,
+}) => {
+  const failures: string[] = [];
+
+  for (const viewport of viewports.filter(
+    (candidate) => candidate.width === 1024 || candidate.width === 1440,
+  )) {
+    await page.setViewportSize(viewport);
+    await createDefaultCity(page);
+    await openCommandDestination(page, "build");
+    await settleLayout(page);
+    await page.getByTestId("topbar").evaluate(async (topbar) => {
+      await Promise.all(
+        topbar
+          .getAnimations({ subtree: true })
+          .map((animation) => animation.finished.catch(() => undefined)),
+      );
+    });
+
+    const geometry = await shelfGeometry(page);
+    const { stage, shelf, dock, topbar } = geometry;
+    if (stage.right > dock.left + 1) {
+      failures.push(
+        `${viewport.width}px canvas overlaps the dock: ${JSON.stringify(geometry)}`,
+      );
+    }
+    if (boxesOverlap(shelf, dock)) {
+      failures.push(
+        `${viewport.width}px shelf overlaps the dock: ${JSON.stringify(geometry)}`,
+      );
+    }
+    if (boxesOverlap(shelf, topbar)) {
+      failures.push(
+        `${viewport.width}px shelf overlaps the topbar: ${JSON.stringify(geometry)}`,
+      );
+    }
+    if (geometry.shelfClipped) {
+      failures.push(
+        `${viewport.width}px shelf clips its content: ${JSON.stringify(geometry)}`,
+      );
+    }
+    if (geometry.buttons.length !== 6) {
+      failures.push(
+        `${viewport.width}px expected 6 shelf buttons, got ${geometry.buttons.length}`,
+      );
+    }
+    for (const button of geometry.buttons) {
+      const { box } = button;
+      if (button.clipped) {
+        failures.push(
+          `${viewport.width}px ${button.id} clips its content: ${JSON.stringify(geometry)}`,
+        );
+      }
+      if (box.width < 43.5 || box.height < 43.5) {
+        failures.push(
+          `${viewport.width}px ${button.id} is smaller than 44px: ${JSON.stringify(geometry)}`,
+        );
+      }
+      if (
+        box.left < stage.left - 1 ||
+        box.right > stage.right + 1 ||
+        box.top < stage.top - 1 ||
+        box.bottom > stage.bottom + 1
+      ) {
+        failures.push(
+          `${viewport.width}px ${button.id} leaves the map column: ${JSON.stringify(geometry)}`,
+        );
+      }
+      if (
+        box.left < -1 ||
+        box.right > viewport.width + 1 ||
+        box.top < -1 ||
+        box.bottom > viewport.height + 1
+      ) {
+        failures.push(
+          `${viewport.width}px ${button.id} leaves the viewport: ${JSON.stringify(geometry)}`,
+        );
+      }
+    }
+  }
+
+  expect(failures).toEqual([]);
+});
 
 test("topbar clusters and readouts stay readable at supported desktop widths", async ({
   page,
