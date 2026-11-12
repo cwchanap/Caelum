@@ -426,6 +426,7 @@
     .command-shelf__destination,
     .command-shelf__tool {
       gap: 0;
+      min-width: 44px;
     }
   }
 
