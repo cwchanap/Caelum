@@ -87,6 +87,16 @@
   let headwayMinuteDrafts = $state<Record<string, string>>({});
   let listRegion: HTMLElement | null = $state(null);
   let previousDraftActive = $state<boolean | null>(null);
+  let previousSelectedRouteId: string | null = null;
+
+  // An edit draft is opened from the selected row, so the rail takes the
+  // saved line's colour; a new draft has no saved colour and falls back to
+  // the neutral accent in CSS.
+  const editorColor = $derived(
+    routeDraft?.source === "edit"
+      ? (routes.find((route) => route.selected)?.color ?? null)
+      : null,
+  );
 
   // Rust stores target_headway_seconds as u32; minutes * 60 must not overflow it.
   const MAX_HEADWAY_MINUTES = Math.floor(0xffff_ffff / 60);
@@ -177,6 +187,19 @@
     }
     previousDraftActive = draftActive;
   });
+
+  // Scroll the selected service card into view once per selection change.
+  // The list is rebuilt on every tick, so compare the selected ID instead of
+  // scrolling on each snapshot.
+  $effect(() => {
+    const selectedId = routes.find((route) => route.selected)?.id ?? null;
+    if (selectedId === previousSelectedRouteId) return;
+    previousSelectedRouteId = selectedId;
+    if (selectedId === null) return;
+    listRegion
+      ?.querySelector<HTMLElement>(`[data-route-id="${selectedId}"]`)
+      ?.scrollIntoView({ block: "nearest" });
+  });
 </script>
 
 <div class="hud-panel" data-testid="panel-lines">
@@ -192,6 +215,7 @@
       </p>
       <RouteEditor
         editor={routeDraft}
+        color={editorColor}
         {onSelectWaypoint}
         {onRemove}
         {onUndo}
@@ -245,6 +269,10 @@
               <li
                 class="route-item"
                 class:route-item--inactive={route.status.primary === "paused"}
+                class:route-item--selected={route.selected}
+                data-route-id={route.id}
+                data-testid={`route-item-${route.id}`}
+                style:--route-color={route.color}
               >
                 <div class="route-item-head">
                   <button
@@ -253,7 +281,6 @@
                     class:active={route.selected}
                     aria-label={`Select ${route.name}`}
                     aria-pressed={route.selected}
-                    style={`--route-color: ${route.color}`}
                     onclick={() => {
                       pendingDeleteId = null;
                       onSelectRoute(route.id);

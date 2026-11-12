@@ -7,3 +7,7 @@
 // Routing through a local file lets vite's own resolver handle the import,
 // which correctly prefers this worktree's node_modules in every environment.
 import "@testing-library/jest-dom/vitest";
+
+// jsdom has no layout engine, so it does not implement scrollIntoView. Stub it
+// globally; tests that assert scrolling spy on this prototype method.
+Element.prototype.scrollIntoView = () => {};

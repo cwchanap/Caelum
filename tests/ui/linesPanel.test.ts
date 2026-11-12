@@ -194,6 +194,111 @@ describe("LinesPanel line workspace", () => {
     expect(props.onSelectRoute).not.toHaveBeenCalled();
   });
 
+  it("feeds the selected saved line's colour into the route rail", () => {
+    const routes = routeFixtures();
+    routes[0].selected = true;
+    render(LinesPanel, {
+      props: panelProps({
+        routeDraft: createDraftView({
+          source: "edit",
+          title: "Editing Harbour Bus",
+          initialFleetCost: null,
+        }),
+        routes,
+      }),
+    });
+
+    const rail = screen
+      .getByTestId("route-draft")
+      .querySelector(".route-waypoints");
+    expect(rail).not.toBeNull();
+    expect(rail!.getAttribute("style")).toContain(
+      `--route-color: ${routes[0].color}`,
+    );
+  });
+
+  it("highlights the selected service card's real fleet, target and daily cost and scrolls to it once per selection change", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const routes = routeFixtures();
+    routes[0] = {
+      ...routes[0],
+      selected: true,
+      service: {
+        targetHeadwaySeconds: 360,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          assignedFleet: 2,
+          requiredFleet: 3,
+          dailyOperatingCost: 800,
+          nominalHeadwaySeconds: 348,
+        }),
+      },
+    };
+    const { rerender } = render(LinesPanel, { props: panelProps({ routes }) });
+
+    const card = screen.getByTestId("route-item-route-bus-001");
+    expect(card).toHaveClass("route-item--selected");
+    expect(
+      within(card).getByRole("button", { name: "Select Harbour Bus" }),
+    ).toHaveAttribute("aria-pressed", "true");
+    const service = within(card).getByTestId("route-service-route-bus-001");
+    expect(serviceValue(service, "Target")).toBe("6.0 min");
+    expect(serviceValue(service, "Fleet")).toBe("2");
+    expect(serviceValue(service, "Daily cost")).toBe("$800");
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(scrollIntoView.mock.instances[0]).toBe(card);
+
+    // A tick republishes the list; an unchanged selection must not scroll again.
+    await rerender(
+      panelProps({
+        routes: routes.map((route) => ({
+          ...route,
+          service: {
+            ...route.service,
+            dailyOperatingCost: route.service.dailyOperatingCost + 100,
+          },
+        })),
+      }),
+    );
+    expect(scrollIntoView).toHaveBeenCalledTimes(1);
+
+    // A real selection change scrolls the newly selected card into view.
+    await rerender(
+      panelProps({
+        routes: routes.map((route) => ({
+          ...route,
+          selected: route.id === "line-metro-001",
+        })),
+      }),
+    );
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2));
+    expect(scrollIntoView.mock.instances[1]).toBe(
+      screen.getByTestId("route-item-line-metro-001"),
+    );
+
+    scrollIntoView.mockRestore();
+  });
+
+  it("scrolls the newly selected card when the route draft closes", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const { rerender } = render(LinesPanel, {
+      props: panelProps({ routeDraft: createDraftView() }),
+    });
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    const routes = routeFixtures();
+    routes[0].selected = true;
+    await rerender(panelProps({ routes }));
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(scrollIntoView.mock.instances[0]).toBe(
+      screen.getByTestId("route-item-route-bus-001"),
+    );
+
+    scrollIntoView.mockRestore();
+  });
+
   it("commits a route rename once when Enter is followed by blur", async () => {
     const props = panelProps();
     render(LinesPanel, { props });

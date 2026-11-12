@@ -1,7 +1,8 @@
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, within } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import RouteEditor from "../../src/components/hud/panels/RouteEditor.svelte";
 import type { RouteEditorView } from "../../src/runtime/types";
+import { ROUTE_COLOR_PALETTE } from "../../src/ui/routePalette";
 import { createDraftView } from "../helpers/routeEditor";
 
 function editDraftView(
@@ -204,5 +205,36 @@ describe("RouteEditor", () => {
       "Missing Bus Stop",
     );
     expect(screen.getByTestId("route-waypoint-1")).toHaveClass("missing");
+  });
+
+  it("paints the waypoint rail in the edited route colour and stays neutral for a new draft", async () => {
+    const onSelectWaypoint = vi.fn();
+    const color = ROUTE_COLOR_PALETTE[0];
+    const { rerender } = render(RouteEditor, {
+      props: {
+        ...editorProps(editDraftView()),
+        color,
+        onSelectWaypoint,
+      },
+    });
+
+    const rail = screen
+      .getByTestId("route-draft")
+      .querySelector(".route-waypoints");
+    expect(rail).not.toBeNull();
+    expect(rail!.getAttribute("style")).toContain(`--route-color: ${color}`);
+    expect(within(rail as HTMLElement).getAllByRole("button")).toHaveLength(2);
+    expect(screen.getByTestId("route-waypoint-0")).toHaveTextContent("1");
+
+    await fireEvent.click(screen.getByTestId("route-waypoint-1"));
+    expect(onSelectWaypoint).toHaveBeenCalledWith(1, "replace");
+
+    await rerender({ ...editorProps(createDraftView()), color: null });
+    const neutralRail = screen
+      .getByTestId("route-draft")
+      .querySelector(".route-waypoints");
+    expect(neutralRail!.getAttribute("style") ?? "").not.toContain(
+      "--route-color",
+    );
   });
 });

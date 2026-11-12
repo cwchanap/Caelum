@@ -8,6 +8,7 @@
 
   let {
     editor,
+    color = null,
     onSelectWaypoint,
     onRemove,
     onUndo,
@@ -20,6 +21,8 @@
     onReload,
   }: {
     editor: RouteEditorView;
+    /** Saved route colour while editing; `null` for an unsaved new draft. */
+    color?: string | null;
     onSelectWaypoint: (
       index: number | null,
       interaction: RouteDraft["interaction"],
@@ -80,7 +83,7 @@
   {#if editor.waypoints.length === 0}
     <p class="route-editor-empty">Select stops or stations on the map.</p>
   {:else}
-    <ol class="route-waypoints">
+    <ol class="route-waypoints" style:--route-color={color}>
       {#each editor.waypoints as waypoint (waypoint.index)}
         <li>
           <button
@@ -99,52 +102,57 @@
     </ol>
   {/if}
 
-  <div class="route-edit-modes" role="group" aria-label="Map click action">
-    <button
-      type="button"
-      class:active={editor.interaction === "append"}
-      aria-pressed={editor.interaction === "append"}
-      onclick={() => onSelectWaypoint(null, "append")}>Append</button
-    >
-    <button
-      type="button"
-      class:active={editor.interaction === "replace"}
-      aria-pressed={editor.interaction === "replace"}
-      disabled={!hasSelection}
-      onclick={() => onSelectWaypoint(editor.selectedIndex, "replace")}
-      >Replace</button
-    >
-    <button
-      type="button"
-      class:active={editor.interaction === "insertAfter"}
-      aria-pressed={editor.interaction === "insertAfter"}
-      disabled={!hasSelection}
-      onclick={() => onSelectWaypoint(editor.selectedIndex, "insertAfter")}
-      >Insert after</button
-    >
-  </div>
+  <div class="route-draft-toolbar">
+    <div class="route-toolbar-group" role="group" aria-label="Map click action">
+      <button
+        type="button"
+        class:active={editor.interaction === "append"}
+        aria-pressed={editor.interaction === "append"}
+        onclick={() => onSelectWaypoint(null, "append")}>Append</button
+      >
+      <button
+        type="button"
+        class:active={editor.interaction === "replace"}
+        aria-pressed={editor.interaction === "replace"}
+        disabled={!hasSelection}
+        onclick={() => onSelectWaypoint(editor.selectedIndex, "replace")}
+        >Replace</button
+      >
+      <button
+        type="button"
+        class:active={editor.interaction === "insertAfter"}
+        aria-pressed={editor.interaction === "insertAfter"}
+        disabled={!hasSelection}
+        onclick={() => onSelectWaypoint(editor.selectedIndex, "insertAfter")}
+        >Insert after</button
+      >
+    </div>
 
-  <div class="route-waypoint-actions">
-    <button type="button" disabled={!canMoveUp} onclick={() => onMove(-1)}
-      >Move up</button
-    >
-    <button type="button" disabled={!canMoveDown} onclick={() => onMove(1)}
-      >Move down</button
-    >
-    <button
-      type="button"
-      disabled={editor.waypoints.length < 2}
-      onclick={onReverse}>Reverse</button
-    >
-    <button type="button" disabled={!hasSelection} onclick={onRemove}
-      >Remove</button
-    >
-    <button type="button" disabled={!editor.canUndo} onclick={onUndo}
-      >Undo</button
-    >
-    <button type="button" disabled={!editor.canRedo} onclick={onRedo}
-      >Redo</button
-    >
+    <div class="route-toolbar-group" role="group" aria-label="Waypoint order">
+      <button type="button" disabled={!canMoveUp} onclick={() => onMove(-1)}
+        >Move up</button
+      >
+      <button type="button" disabled={!canMoveDown} onclick={() => onMove(1)}
+        >Move down</button
+      >
+      <button
+        type="button"
+        disabled={editor.waypoints.length < 2}
+        onclick={onReverse}>Reverse</button
+      >
+      <button type="button" disabled={!hasSelection} onclick={onRemove}
+        >Remove</button
+      >
+    </div>
+
+    <div class="route-toolbar-group" role="group" aria-label="Draft history">
+      <button type="button" disabled={!editor.canUndo} onclick={onUndo}
+        >Undo</button
+      >
+      <button type="button" disabled={!editor.canRedo} onclick={onRedo}
+        >Redo</button
+      >
+    </div>
   </div>
 
   <p
