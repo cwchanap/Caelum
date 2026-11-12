@@ -29,6 +29,18 @@ import type {
 } from "../../src/runtime/types";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
 
+// jsdom ships no ResizeObserver; Svelte's clientWidth/Height bindings only
+// need a mountable one. Sizes stay 0, so the Inspector keeps its fallback
+// corner while the pure placement helper covers anchored geometry.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  },
+);
+
 function createRuntimeHarness(
   options: {
     state?: ReturnType<typeof createTestGameState>;
