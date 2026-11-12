@@ -71,7 +71,7 @@
         aria-keyshortcuts={destination.id === "build" ? BUILD_KEY : undefined}
         title={destination.id === "build"
           ? `Build (${BUILD_KEY.toUpperCase()})`
-          : undefined}
+          : destination.label}
         aria-disabled={command.routeDraftActive && destination.id !== "lines"
           ? "true"
           : undefined}
@@ -128,7 +128,7 @@
       onclick={() => activateTool("inspect")}
     >
       <span class="command-shelf__tool-mark" aria-hidden="true">⌖</span>
-      <span>Select</span>
+      <span class="command-shelf__tool-label">Select</span>
       <kbd class="command-shelf__shortcut" aria-hidden="true"
         >{SELECT_KEY.toUpperCase()}</kbd
       >
@@ -148,7 +148,7 @@
       onclick={() => activateTool("remove")}
     >
       <span class="command-shelf__tool-mark" aria-hidden="true">⌫</span>
-      <span>Demolish</span>
+      <span class="command-shelf__tool-label">Demolish</span>
       <kbd class="command-shelf__shortcut" aria-hidden="true"
         >{DEMOLISH_KEY.toUpperCase()}</kbd
       >
@@ -403,22 +403,29 @@
   }
 
   @container (max-width: 960px) {
-    .command-shelf {
-      flex-direction: column;
-      align-items: stretch;
-      gap: 6px;
+    /* Icon-only single row: a text row pair would rise above the 88px bottom
+     * HUD safe band, and shrinking the row to leave the zoom controls would
+     * clip labels. The label text stays in the accessibility tree; mode is
+     * conveyed by the active button state. */
+    .command-shelf__label,
+    .command-shelf__tool-label {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      padding: 0;
+      margin: -1px;
+      overflow: hidden;
+      clip-path: inset(50%);
+      white-space: nowrap;
     }
 
-    .command-shelf__destinations,
-    .command-shelf__tools {
-      justify-content: center;
+    .command-shelf__mode {
+      display: none;
     }
 
-    .command-shelf__tools {
-      padding-top: 6px;
-      padding-left: 0;
-      border-top: 1px solid var(--shelf-line);
-      border-left: 0;
+    .command-shelf__destination,
+    .command-shelf__tool {
+      gap: 0;
     }
   }
 

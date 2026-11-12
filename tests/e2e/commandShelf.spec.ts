@@ -149,6 +149,17 @@ for (const viewport of desktopViewports) {
     await expect
       .poll(async () => (await runtimeSnapshot(page)).ui.hoverTile)
       .toEqual(rightMostColumn);
+    const overlay = page.getByTestId("map-text-overlay");
+    const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
+    await expect(badge).toHaveCount(1);
+    const overlayBox = await overlay.boundingBox();
+    const badgePoint = await mapTileViewportPoint(canvas, rightMostColumn);
+    expect(overlayBox).not.toBeNull();
+    expect(
+      await badge.evaluate((element) =>
+        Number.parseFloat((element as HTMLElement).style.left),
+      ),
+    ).toBeCloseTo(badgePoint.x - overlayBox!.x, 0);
     await clickMapTile(canvas, rightMostColumn);
     await expect
       .poll(async () => {
@@ -168,6 +179,136 @@ for (const viewport of desktopViewports) {
       )
       .toBeLessThanOrEqual(1);
     await expectMapFitsCanvas("dock closed again");
+  });
+}
+
+const shelfBandViewports = [
+  { width: 1024, height: 768 },
+  { width: 1360, height: 768 },
+] as const;
+
+for (const viewport of shelfBandViewports) {
+  test(`keeps the open dock shelf inside the bottom HUD band at ${viewport.width}px`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await createDefaultCity(page, "Shelf Band", "blankGrid");
+    const canvas = page.locator("canvas[data-runtime-canvas='true']");
+    const shelf = page.getByTestId("command-shelf");
+    const dock = page.getByTestId("workspace-dock");
+    await expect(canvas).toBeVisible();
+
+    await openCommandDestination(page, "build");
+    await expect(dock).toBeVisible();
+    const dockLeft = (await dock.boundingBox())!.x;
+    await expect
+      .poll(async () => {
+        const box = await canvas.boundingBox();
+        return box === null ? Number.POSITIVE_INFINITY : box.x + box.width;
+      })
+      .toBeLessThanOrEqual(dockLeft + 1);
+
+    const shelfButtonIds = [
+      "command-destination-build",
+      "command-destination-lines",
+      "command-destination-data",
+      "command-destination-city",
+      "command-tool-select",
+      "command-tool-demolish",
+    ] as const;
+
+    const expectShelfInSafeBand = async (label: string) => {
+      const canvasBox = await canvas.boundingBox();
+      const shelfBox = await shelf.boundingBox();
+      const zoomBox = await page.locator(".board-zoom").boundingBox();
+      expect(canvasBox, `${label}: canvas has a bounding box`).not.toBeNull();
+      expect(shelfBox, `${label}: shelf has a bounding box`).not.toBeNull();
+      expect(
+        zoomBox,
+        `${label}: zoom controls have a bounding box`,
+      ).not.toBeNull();
+      const canvasBottom = canvasBox!.y + canvasBox!.height;
+      expect(
+        boxesIntersect(shelfBox!, zoomBox!),
+        `${label}: shelf stays clear of the zoom controls`,
+      ).toBe(false);
+      expect(
+        shelfBox!.y,
+        `${label}: shelf top stays inside the bottom HUD band`,
+      ).toBeGreaterThanOrEqual(canvasBottom - HUD_INSET.bottom - 1);
+      expect(
+        shelfBox!.y + shelfBox!.height,
+        `${label}: shelf bottom stays above the stage floor`,
+      ).toBeLessThanOrEqual(canvasBottom - 12 + 1);
+      for (const id of shelfButtonIds) {
+        const buttonBox = await page.getByTestId(id).boundingBox();
+        expect(buttonBox, `${label}: ${id} is visible`).not.toBeNull();
+        expect(
+          buttonBox!.height,
+          `${label}: ${id} keeps its 44px target`,
+        ).toBeGreaterThanOrEqual(43.5);
+        expect(
+          buttonBox!.y + buttonBox!.height,
+          `${label}: ${id} stays inside the shelf band`,
+        ).toBeLessThanOrEqual(shelfBox!.y + shelfBox!.height + 1);
+      }
+    };
+
+    const expectTileClearOfShelf = async (
+      tile: { x: number; y: number },
+      label: string,
+    ) => {
+      const point = await mapTileViewportPoint(canvas, tile);
+      const top = await page.evaluate(({ x, y }) => {
+        const element = document.elementFromPoint(x, y);
+        return {
+          shelf: element?.closest('[data-testid="command-shelf"]') !== null,
+          canvas: element?.tagName === "CANVAS",
+        };
+      }, point);
+      expect(
+        top.shelf,
+        `${label}: tile ${tile.x},${tile.y} is not covered by the shelf`,
+      ).toBe(false);
+      expect(
+        top.canvas,
+        `${label}: tile ${tile.x},${tile.y} hit-tests to the canvas`,
+      ).toBe(true);
+    };
+
+    await expectShelfInSafeBand("fit");
+    await expectTileClearOfShelf({ x: 14, y: 17 }, "fit");
+
+    await page.getByTestId("map-zoom-in").click();
+    await page.getByTestId("map-zoom-in").click();
+    const zoomedCamera = (await runtimeSnapshot(page)).camera;
+    expect(zoomedCamera?.zoom ?? 1).toBeGreaterThan(1);
+    await page.keyboard.press("ArrowDown");
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera?.center.y ?? 0)
+      .toBeGreaterThan(zoomedCamera!.center.y);
+
+    await expectShelfInSafeBand("zoomed and panned");
+    // At 1360 the zoomed/panned map legitimately draws under the bottom HUD
+    // band; the reproduced regression is the 1024px case where the old
+    // two-row shelf extended above that band and covered this tile.
+    if (viewport.width === 1024) {
+      await expectTileClearOfShelf({ x: 14, y: 17 }, "zoomed and panned");
+    }
+
+    const preservedCamera = (await runtimeSnapshot(page)).camera;
+    await page.getByRole("button", { name: "Close Build" }).click();
+    await expect(dock).toHaveCount(0);
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera)
+      .toEqual(preservedCamera);
+
+    await openCommandDestination(page, "build");
+    await expect(dock).toBeVisible();
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera)
+      .toEqual(preservedCamera);
+    await expectShelfInSafeBand("reopened");
   });
 }
 
