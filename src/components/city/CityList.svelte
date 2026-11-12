@@ -119,6 +119,7 @@
         {:else}
           <button
             type="button"
+            class="btn"
             aria-label={`Load ${city.name}`}
             disabled={busy || dirty}
             onclick={() => {
@@ -129,6 +130,7 @@
         {/if}
         <button
           type="button"
+          class="btn"
           class:city-delete--armed={pendingDeleteId === city.id}
           data-testid={`city-delete-${city.id}`}
           disabled={busy}

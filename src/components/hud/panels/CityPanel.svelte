@@ -49,11 +49,14 @@
     </div>
 
     <div class="city-actions">
-      <button type="button" disabled={busy} onclick={onSave}>
+      <button type="button" class="btn" disabled={busy} onclick={onSave}>
         {busy ? "Working…" : "Save Now"}
       </button>
-      <button type="button" disabled={busy || dirty} onclick={onNewCity}
-        >New City</button
+      <button
+        type="button"
+        class="btn"
+        disabled={busy || dirty}
+        onclick={onNewCity}>New City</button
       >
     </div>
 
@@ -67,7 +70,7 @@
       <p class="city-action-error" role="alert">{error}</p>
     {/if}
     {#if onRetryList !== undefined}
-      <button type="button" disabled={busy} onclick={onRetryList}>
+      <button type="button" class="btn" disabled={busy} onclick={onRetryList}>
         Retry city list
       </button>
     {/if}

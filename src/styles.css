@@ -513,13 +513,8 @@ body {
 .panel-section {
   min-width: 0;
   padding: 14px 16px;
-  border-right: 1px solid var(--line);
   position: relative;
   overflow: visible;
-}
-
-.panel-section:last-child {
-  border-right: 0;
 }
 
 .section-head {
@@ -1945,6 +1940,33 @@ body {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+}
+
+.city-section > .city-actions {
+  margin-top: 8px;
+}
+
+.city-actions button,
+.city-list-actions button {
+  min-height: 32px;
+  padding: 4px 10px;
+}
+
+.city-name {
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  background: var(--surface);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.city-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
 }
 
 .city-list {
