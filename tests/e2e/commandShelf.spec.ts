@@ -248,6 +248,10 @@ for (const viewport of shelfBandViewports) {
           `${label}: ${id} keeps its 44px target`,
         ).toBeGreaterThanOrEqual(43.5);
         expect(
+          buttonBox!.width,
+          `${label}: ${id} keeps a 44px-wide target`,
+        ).toBeGreaterThanOrEqual(43.5);
+        expect(
           buttonBox!.y + buttonBox!.height,
           `${label}: ${id} stays inside the shelf band`,
         ).toBeLessThanOrEqual(shelfBox!.y + shelfBox!.height + 1);
