@@ -299,6 +299,71 @@ describe("LinesPanel line workspace", () => {
     scrollIntoView.mockRestore();
   });
 
+  it("scrolls a route selected during editing when its card returns after save", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const draft = createDraftView({
+      source: "edit",
+      title: "Editing Harbour Bus",
+      initialFleetCost: null,
+    });
+    const { rerender } = render(LinesPanel, {
+      props: panelProps({ routeDraft: draft }),
+    });
+
+    // startRouteEdit selects the edited line while the editor replaces the
+    // list, so there is no card to scroll to yet.
+    const routes = routeFixtures();
+    routes[0].selected = true;
+    await rerender(panelProps({ routeDraft: draft, routes }));
+    expect(scrollIntoView).not.toHaveBeenCalled();
+
+    // Saving the edit restores the list with the same selected ID; the
+    // pending selection must still scroll now that the card exists.
+    await rerender(panelProps({ routeDraft: null, routes }));
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(scrollIntoView.mock.instances[0]).toBe(
+      screen.getByTestId("route-item-route-bus-001"),
+    );
+
+    scrollIntoView.mockRestore();
+  });
+
+  it("shows actual fleet and daily cost on a selected zero-fleet card", () => {
+    const routes = routeFixtures();
+    routes[0] = {
+      ...routes[0],
+      selected: true,
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      service: {
+        targetHeadwaySeconds: 360,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          requiredFleet: 3,
+          estimatedDeploymentCost: 150_000,
+          dailyOperatingCost: 400,
+          estimatedDailyOperatingCost: 1_200,
+        }),
+      },
+    };
+    render(LinesPanel, { props: panelProps({ routes }) });
+
+    const card = screen.getByTestId("route-item-route-bus-001");
+    expect(card).toHaveClass("route-item--selected");
+    const service = within(card).getByTestId("route-service-route-bus-001");
+    expect(serviceValue(service, "Fleet")).toBe("0");
+    expect(serviceValue(service, "Daily cost")).toBe("$400");
+    expect(serviceValue(service, "Target")).toBe("6.0 min");
+    // Deployment estimates and actions stay in the zero-fleet setup block.
+    expect(serviceValue(service, "Recommended")).toBe("3 buses");
+    expect(serviceValue(service, "Est. deploy cost")).toBe("$150,000");
+    expect(serviceValue(service, "Est. daily cost")).toBe("$1,200");
+    expect(
+      within(service).getByRole("button", {
+        name: "Deploy fleet · est. $150,000",
+      }),
+    ).toBeVisible();
+  });
+
   it("commits a route rename once when Enter is followed by blur", async () => {
     const props = panelProps();
     render(LinesPanel, { props });
@@ -397,7 +462,9 @@ describe("LinesPanel line workspace", () => {
     expect(service).toHaveTextContent("3 buses");
     expect(service).toHaveTextContent("Est. daily cost");
     expect(service).toHaveTextContent("$1,200");
-    expect(service).not.toHaveTextContent("Daily cost $0");
+    // Zero-fleet setup still reports the actual fleet and daily cost.
+    expect(serviceValue(service, "Fleet")).toBe("0");
+    expect(serviceValue(service, "Daily cost")).toBe("$0");
     const input = screen.getByTestId("route-headway-route-bus-001");
     expect(input).toHaveValue(6); // no draft: initialized from 360 / 60
     expect(input).toHaveAttribute("type", "number");

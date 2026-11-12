@@ -188,17 +188,26 @@
     previousDraftActive = draftActive;
   });
 
-  // Scroll the selected service card into view once per selection change.
-  // The list is rebuilt on every tick, so compare the selected ID instead of
-  // scrolling on each snapshot.
+  // Scroll the selected service card into view once per selection change. The
+  // list is rebuilt on every tick, so compare the selected ID instead of
+  // scrolling on each snapshot. A selection made while the editor replaces the
+  // list has no card yet, so leave it pending until the card returns.
   $effect(() => {
     const selectedId = routes.find((route) => route.selected)?.id ?? null;
+    if (selectedId === null) {
+      previousSelectedRouteId = null;
+      return;
+    }
     if (selectedId === previousSelectedRouteId) return;
+    // Reading listRegion before deciding keeps this effect dependent on the
+    // list mounting, so a pending selection scrolls when the cards return.
+    const card =
+      listRegion?.querySelector<HTMLElement>(
+        `[data-route-id="${selectedId}"]`,
+      ) ?? null;
+    if (card === null) return;
     previousSelectedRouteId = selectedId;
-    if (selectedId === null) return;
-    listRegion
-      ?.querySelector<HTMLElement>(`[data-route-id="${selectedId}"]`)
-      ?.scrollIntoView({ block: "nearest" });
+    card.scrollIntoView({ block: "nearest" });
   });
 </script>
 
@@ -402,16 +411,27 @@
                       Set
                     </button>
                   </div>
+                  <div class="route-service-row">
+                    <span class="route-service-label">Fleet</span>
+                    <span class="route-service-value"
+                      >{route.service.assignedFleet}</span
+                    >
+                  </div>
+                  <div class="route-service-row">
+                    <span class="route-service-label">Daily cost</span>
+                    <span class="route-service-value">
+                      {formatBudget(route.service.dailyOperatingCost)}
+                    </span>
+                  </div>
                   {#if route.service.assignedFleet === 0}
                     {#if route.service.requiredFleet !== null}
                       <div class="route-service-row">
                         <span class="route-service-label">Recommended</span>
                         <span class="route-service-value"
-                          >{route.service.requiredFleet}
-                          {fleetNoun(
+                          >{`${route.service.requiredFleet} ${fleetNoun(
                             route.mode,
                             route.service.requiredFleet,
-                          )}</span
+                          )}`}</span
                         >
                       </div>
                     {/if}
@@ -458,12 +478,6 @@
                       >
                     </div>
                     <div class="route-service-row">
-                      <span class="route-service-label">Fleet</span>
-                      <span class="route-service-value"
-                        >{route.service.assignedFleet}</span
-                      >
-                    </div>
-                    <div class="route-service-row">
                       <span class="route-service-label">Recommended</span>
                       <span class="route-service-value"
                         >{route.service.requiredFleet === null
@@ -473,12 +487,6 @@
                               route.service.requiredFleet,
                             )}`}</span
                       >
-                    </div>
-                    <div class="route-service-row">
-                      <span class="route-service-label">Daily cost</span>
-                      <span class="route-service-value">
-                        {formatBudget(route.service.dailyOperatingCost)}
-                      </span>
                     </div>
                     {#if route.service.longestWaitSeconds !== null}
                       <div class="route-service-row">
