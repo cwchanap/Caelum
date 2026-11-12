@@ -6,19 +6,11 @@
     destination: CommandDestination;
     title: string;
     canClose: boolean;
-    pinned?: boolean;
     onClose: () => void;
     children?: Snippet;
   }
 
-  let {
-    destination,
-    title,
-    canClose,
-    pinned = false,
-    onClose,
-    children,
-  }: Props = $props();
+  let { destination, title, canClose, onClose, children }: Props = $props();
   let region: HTMLElement | null = $state(null);
 
   $effect(() => {
@@ -29,41 +21,31 @@
   });
 </script>
 
-<div class="command-panel-overlay">
-  <section
-    bind:this={region}
-    id={`command-panel-${destination}`}
-    class="card command-panel"
-    class:command-panel--pinned={pinned}
-    data-testid="command-panel"
-    data-command-panel={destination}
-    aria-labelledby={`command-panel-title-${destination}`}
-    tabindex="-1"
-  >
-    <header class="command-panel__header">
-      <h2 id={`command-panel-title-${destination}`}>{title}</h2>
-      <button
-        type="button"
-        class="btn"
-        disabled={!canClose}
-        onclick={onClose}
-        aria-label={`Close ${title}`}>×</button
-      >
-    </header>
-    <div class="command-panel__body">
-      {#if children}{@render children()}{/if}
-    </div>
-  </section>
-</div>
+<section
+  bind:this={region}
+  id={`command-panel-${destination}`}
+  class="card command-panel"
+  data-testid="command-panel"
+  data-command-panel={destination}
+  aria-labelledby={`command-panel-title-${destination}`}
+  tabindex="-1"
+>
+  <header class="command-panel__header">
+    <h2 id={`command-panel-title-${destination}`}>{title}</h2>
+    <button
+      type="button"
+      class="btn"
+      disabled={!canClose}
+      onclick={onClose}
+      aria-label={`Close ${title}`}>×</button
+    >
+  </header>
+  <div class="command-panel__body">
+    {#if children}{@render children()}{/if}
+  </div>
+</section>
 
 <style>
-  .command-panel-overlay {
-    position: absolute;
-    inset: 0;
-    z-index: 20;
-    pointer-events: none;
-  }
-
   .command-panel {
     --panel-surface: var(--surface, #faf6ea);
     --panel-line: var(--line-strong, rgba(62, 54, 38, 0.28));
@@ -71,7 +53,6 @@
     --panel-muted: var(--ink-mid, #5d6d72);
     --panel-signal: var(--accent, #0f8a70);
     overflow: hidden;
-    pointer-events: auto;
   }
 
   .command-panel:focus-visible {

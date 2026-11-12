@@ -353,7 +353,7 @@
     white-space: nowrap;
   }
 
-  @media (max-width: 1199px) {
+  @container (max-width: 1199px) {
     .command-shelf {
       gap: 10px;
       padding: 8px 10px;
@@ -399,6 +399,26 @@
 
     .command-shelf__shortcut {
       display: none;
+    }
+  }
+
+  @container (max-width: 960px) {
+    .command-shelf {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+    }
+
+    .command-shelf__destinations,
+    .command-shelf__tools {
+      justify-content: center;
+    }
+
+    .command-shelf__tools {
+      padding-top: 6px;
+      padding-left: 0;
+      border-top: 1px solid var(--shelf-line);
+      border-left: 0;
     }
   }
 

@@ -449,15 +449,6 @@ body {
   pointer-events: none;
 }
 
-/* Keep the legend clear of the centred Data panel near the 1024px minimum:
- * the panel's left edge sits at (100vw - 520px) / 2, which reaches the
- * legend's right edge below ~1144px viewport width. */
-@media (max-width: 1143px) {
-  .overlay-legend {
-    width: min(220px, calc(100% - 48px));
-  }
-}
-
 .overlay-legend__title {
   margin: 0;
   color: var(--accent);
@@ -1489,9 +1480,41 @@ body {
   position: relative;
   grid-column: 1;
   grid-row: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   min-height: 0;
   overflow: hidden;
+}
+
+/* The dock reserves its own grid column; the stage measures whatever is left,
+ * which is what the canvas ResizeObserver and board transform already use. */
+.game-workspace:has(> .workspace-dock) {
+  --workspace-dock-width: clamp(360px, 30vw, 400px);
+  grid-template-columns: minmax(0, 1fr) var(--workspace-dock-width);
+}
+
+.game-stage {
+  position: relative;
+  grid-column: 1;
+  grid-row: 1;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+  container-type: inline-size;
+}
+
+.workspace-dock {
+  position: absolute;
+  z-index: 35;
+  top: calc(var(--hud-top) + 12px);
+  bottom: 12px;
+  right: 12px;
+  display: flex;
+  flex-direction: column;
+  width: calc(var(--workspace-dock-width, 400px) - 24px);
+  min-height: 0;
 }
 
 .ctrl-pause,
@@ -1547,43 +1570,19 @@ body {
 }
 
 .command-panel {
-  position: absolute;
-  z-index: 35;
-  left: 0;
-  right: 0;
-  bottom: calc(var(--hud-bottom) + 12px);
-  width: calc(100vw - 32px);
-  max-width: 920px;
-  max-height: calc(100vh - var(--hud-top) - var(--hud-bottom) - 36px);
-  margin-inline: auto;
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100%;
+  min-height: 0;
+  max-height: 100%;
   overflow: hidden;
 }
 
-.command-panel[data-command-panel="build"] {
-  max-width: 760px;
-}
-
-.command-panel[data-command-panel="lines"] {
-  max-width: 760px;
-}
-
-.command-panel[data-command-panel="data"],
-.command-panel[data-command-panel="city"] {
-  max-width: 520px;
-}
-
-@media (min-width: 1200px) and (max-width: 1399px) {
-  .command-panel[data-command-panel="lines"].command-panel--pinned {
-    left: auto;
-    right: 16px;
-    width: min(390px, calc(100vw - 32px));
-    max-width: 390px;
-    margin-inline: 0;
-  }
-}
-
 .command-panel__body {
-  max-height: calc(100vh - var(--hud-top) - var(--hud-bottom) - 92px);
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
 }
@@ -1592,8 +1591,8 @@ body {
   position: absolute;
   z-index: 34;
   top: calc(var(--hud-top) + 6px);
-  left: 50%;
-  transform: translateX(-50%);
+  left: 16px;
+  right: 16px;
   display: flex;
   justify-content: center;
   pointer-events: none;
@@ -1605,7 +1604,7 @@ body {
   gap: 8px;
   min-height: 44px;
   max-height: 120px;
-  max-width: min(640px, calc(100vw - 32px));
+  max-width: min(640px, 100%);
   padding: 12px;
   border-color: var(--accent);
   pointer-events: auto;
@@ -1698,7 +1697,7 @@ body {
   left: 50%;
   bottom: 12px;
   transform: translateX(-50%);
-  max-width: calc(100vw - 32px);
+  max-width: calc(100% - 32px);
 }
 
 .command-shelf__destinations {
