@@ -58,6 +58,8 @@
   let cityListError = $state<string | null>(null);
   let showNewCity = $state(false);
   let newCityError = $state<string | null>(null);
+  let stageWidth = $state(0);
+  let stageHeight = $state(0);
   let cityListRequestId = 0;
 
   const cityError = $derived(
@@ -759,7 +761,12 @@
           onSetSpeed={handleSetSpeed}
         />
 
-        <div class="game-stage" data-testid="game-stage">
+        <div
+          class="game-stage"
+          data-testid="game-stage"
+          bind:clientWidth={stageWidth}
+          bind:clientHeight={stageHeight}
+        >
           <GameCanvas
             bind:this={gameCanvas}
             {runtime}
@@ -770,6 +777,11 @@
           {#if snapshot.shell.inspector !== null && snapshot.ui.activeCommandDestination === null}
             <InspectPanel
               inspector={snapshot.shell.inspector}
+              selectedId={snapshot.ui.selectedId}
+              map={snapshot.state.map}
+              camera={snapshot.camera}
+              {stageWidth}
+              {stageHeight}
               onAssignRouteToPlatform={handleAssignRouteToPlatform}
               onOpenServiceControls={handleOpenServiceControls}
             />

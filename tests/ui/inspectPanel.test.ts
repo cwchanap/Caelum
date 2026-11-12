@@ -9,6 +9,17 @@ import type {
   ShellVehicleInspectorState,
 } from "../../src/runtime/types";
 
+// jsdom ships no ResizeObserver; Svelte's clientWidth/Height bindings only
+// need a mountable one. Sizes stay 0, so the card keeps its fallback corner.
+vi.stubGlobal(
+  "ResizeObserver",
+  class {
+    observe(): void {}
+    unobserve(): void {}
+    disconnect(): void {}
+  },
+);
+
 const OFFICE_PATTERN = BUILDING_CATALOG.officeTower.workPattern ?? null;
 
 function buildingInspector(
@@ -41,6 +52,11 @@ function renderPanel(
   render(InspectPanel, {
     props: {
       inspector,
+      selectedId: "7,7",
+      map: { width: 28, height: 18 },
+      camera: null,
+      stageWidth: 0,
+      stageHeight: 0,
       onAssignRouteToPlatform: callbacks.onAssignRouteToPlatform ?? vi.fn(),
       onOpenServiceControls: callbacks.onOpenServiceControls ?? vi.fn(),
     },

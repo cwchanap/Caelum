@@ -1653,11 +1653,29 @@ body {
 .inspection-card {
   position: absolute;
   z-index: 33;
-  top: calc(var(--hud-top) + 12px);
-  right: 16px;
   width: min(360px, calc(100% - 32px));
   max-height: calc(100% - var(--hud-top) - var(--hud-bottom) - 24px);
   overflow-y: auto;
+
+  /* Informational surface: let bare-map clicks pass through to the tile under
+   * the card; its controls still capture pointers. */
+  pointer-events: none;
+}
+
+.inspection-card button {
+  pointer-events: auto;
+}
+
+/* Before the stage/card are measured (or outside a laid-out browser), keep
+ * the card in its original corner instead of guessing a tile position. */
+.inspection-card--floating {
+  top: calc(var(--hud-top) + 12px);
+  right: 16px;
+}
+
+/* The selected tile is outside the visible stage map area. */
+.inspection-card--hidden {
+  visibility: hidden;
 }
 
 .build-detail {

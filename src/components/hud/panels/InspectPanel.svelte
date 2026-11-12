@@ -1,9 +1,18 @@
 <script lang="ts">
   import { formatMinutes } from "../../../format";
+  import type { GameMap } from "../../../domain/types";
+  import type { Camera } from "../../../render/boardTransform";
+  import { placeInspectorPopover } from "../../../render/inspectorPlacement";
+  import { parseSelectedPoint } from "../../../runtime/runtimeSelectors";
   import type { ShellInspectorState } from "../../../runtime/types";
 
   interface Props {
     inspector: ShellInspectorState;
+    selectedId: string | null;
+    map: Pick<GameMap, "width" | "height">;
+    camera: Camera | null;
+    stageWidth: number;
+    stageHeight: number;
     onAssignRouteToPlatform: (
       nodeId: string,
       routeId: string,
@@ -12,12 +21,48 @@
     onOpenServiceControls: (routeId: string) => void;
   }
 
-  let { inspector, onAssignRouteToPlatform, onOpenServiceControls }: Props =
-    $props();
+  let {
+    inspector,
+    selectedId,
+    map,
+    camera,
+    stageWidth,
+    stageHeight,
+    onAssignRouteToPlatform,
+    onOpenServiceControls,
+  }: Props = $props();
+
+  let cardWidth = $state(0);
+  let cardHeight = $state(0);
+
+  // Svelte's bindings feed these; until a real layout exists (jsdom or the
+  // first frame) the card keeps its fixed corner placement.
+  const measured = $derived(
+    stageWidth > 0 && stageHeight > 0 && cardWidth > 0 && cardHeight > 0,
+  );
+
+  const placement = $derived.by(() => {
+    if (!measured) return null;
+    const point = parseSelectedPoint(selectedId);
+    if (point === null) return null;
+    return placeInspectorPopover({
+      stage: { width: stageWidth, height: stageHeight },
+      card: { width: cardWidth, height: cardHeight },
+      tile: point,
+      map,
+      camera,
+    });
+  });
 </script>
 
 <aside
   class="card inspection-card"
+  class:inspection-card--floating={placement === null}
+  class:inspection-card--hidden={measured && placement === null}
+  style:left={placement === null ? undefined : `${placement.left}px`}
+  style:top={placement === null ? undefined : `${placement.top}px`}
+  bind:clientWidth={cardWidth}
+  bind:clientHeight={cardHeight}
   data-testid="panel-inspect"
   aria-label="Inspector"
 >
