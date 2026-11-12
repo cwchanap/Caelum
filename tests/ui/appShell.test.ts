@@ -1073,6 +1073,95 @@ describe("App command shell", () => {
     expect(screen.getByTestId("game-canvas-host")).toHaveFocus();
   });
 
+  it("selects the open Build group's items with number shortcuts", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    await fireEvent.click(screen.getByTestId("command-plate-roads"));
+    await fireEvent.keyDown(window, { key: "4" });
+
+    expect(runtime.armRoundabout).toHaveBeenCalledWith("compact2x2");
+  });
+
+  it("lets an open Build group's shortcuts win over the road presets", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    await fireEvent.click(screen.getByTestId("command-plate-transit"));
+    await fireEvent.keyDown(window, { key: "1" });
+
+    expect(runtime.setTool).toHaveBeenCalledWith("track");
+    expect(runtime.armRoad).not.toHaveBeenCalled();
+    expect(runtime.setRoadPreset).not.toHaveBeenCalled();
+  });
+
+  it("keeps global road presets while the Build category grid is showing", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    await fireEvent.keyDown(window, { key: "2" });
+
+    expect(runtime.setRoadPreset).toHaveBeenCalledWith("oneWay");
+    expect(runtime.armRoad).not.toHaveBeenCalled();
+  });
+
+  it("ignores Build item shortcuts while a route draft is active", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: {
+        ...createUiState(),
+        activeTool: "busRoute",
+        activeCommandDestination: "build",
+        activeBuildGroup: "roads",
+        routeDraft: createDraft("bus", 1),
+      },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.keyDown(window, { key: "4" });
+
+    expect(runtime.armRoundabout).not.toHaveBeenCalled();
+    expect(runtime.armRoad).not.toHaveBeenCalled();
+  });
+
+  it("ignores modified number keys for Build items", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    await fireEvent.click(screen.getByTestId("command-plate-roads"));
+    await fireEvent.keyDown(window, { key: "4", metaKey: true });
+
+    expect(runtime.armRoundabout).not.toHaveBeenCalled();
+    expect(runtime.armRoad).not.toHaveBeenCalled();
+  });
+
+  it("returns focus to the Build trigger after Escape closes a leaf group", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const buildButton = screen.getByTestId("command-destination-build");
+    await fireEvent.click(buildButton);
+    await fireEvent.click(screen.getByTestId("command-plate-roads"));
+    expect(screen.getByTestId("build-back")).toBeInTheDocument();
+
+    await fireEvent.keyDown(window, { key: "Escape" });
+    await tick();
+
+    expect(screen.queryByTestId("command-panel")).toBeNull();
+    expect(buildButton).toHaveFocus();
+  });
+
   it("returns focus to the Data shelf button after Escape closes Data", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

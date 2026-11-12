@@ -1,11 +1,15 @@
 import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import BuildPanel from "../../src/components/hud/panels/BuildPanel.svelte";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
-import type {
-  BuildGroup,
-  BuildItemAction,
+import {
+  BUILD_GROUPS,
+  type BuildGroup,
+  type BuildItemAction,
+  type BuildMenuGroup,
 } from "../../src/domain/catalog/buildGroups";
+import { ROAD_PRESET_KEYS } from "../../src/ui/shortcuts";
 import type {
   AreaKind,
   BuildingRotation,
@@ -23,8 +27,8 @@ type Overrides = Partial<{
   buildingRotation: BuildingRotation;
 }>;
 
-function renderPanel(overrides: Overrides = {}) {
-  const props = {
+function panelProps(overrides: Overrides = {}) {
+  return {
     activeBuildGroup: null as BuildGroup | null,
     activeTool: "inspect" as Tool,
     selectedArea: null,
@@ -37,8 +41,19 @@ function renderPanel(overrides: Overrides = {}) {
     onRotateBuilding: vi.fn(),
     ...overrides,
   };
-  render(BuildPanel, { props });
-  return props;
+}
+
+function renderView(overrides: Overrides = {}) {
+  const props = panelProps(overrides);
+  return { props, ...render(BuildPanel, { props }) };
+}
+
+function renderPanel(overrides: Overrides = {}) {
+  return renderView(overrides).props;
+}
+
+function groupItems(group: BuildMenuGroup) {
+  return group.sections.flatMap((section) => section.items);
 }
 
 describe("BuildPanel root view", () => {
@@ -56,14 +71,12 @@ describe("BuildPanel root view", () => {
     for (const group of ["roads", "transit", "zones", "buildings"] as const) {
       const plate = screen.getByTestId(`command-plate-${group}`);
       expect(plate).toBeVisible();
-      expect(
-        within(plate).getByRole("presentation", { hidden: true }),
-      ).toHaveAttribute("src");
-      expect(
-        within(plate)
-          .getByRole("presentation", { hidden: true })
-          .getAttribute("src"),
-      ).toMatch(/\.webp$/);
+      const image = within(plate).getByRole("presentation", {
+        hidden: true,
+      });
+      expect(image.getAttribute("src")).toContain(
+        `/build-categories/${group}.webp`,
+      );
     }
   });
 
@@ -87,6 +100,185 @@ describe("BuildPanel root view", () => {
   });
 });
 
+describe("BuildPanel category focus", () => {
+  it("focuses Back when a group opens and returns to its plate on Back", async () => {
+    const view = renderView();
+    await fireEvent.click(screen.getByTestId("command-plate-roads"));
+    expect(view.props.onSetBuildGroup).toHaveBeenCalledWith("roads");
+
+    await view.rerender({ ...view.props, activeBuildGroup: "roads" });
+    await tick();
+    expect(screen.getByTestId("build-back")).toHaveFocus();
+
+    await fireEvent.click(screen.getByTestId("build-back"));
+    expect(view.props.onSetBuildGroup).toHaveBeenLastCalledWith(null);
+
+    await view.rerender({ ...view.props, activeBuildGroup: null });
+    await tick();
+    expect(screen.getByTestId("command-plate-roads")).toHaveFocus();
+  });
+});
+
+describe("BuildPanel item cards", () => {
+  it("renders a building card with art, description, footprint and price", () => {
+    renderPanel({ activeBuildGroup: "buildings" });
+    const card = screen.getByTestId("build-item-smallHouse");
+    expect(card).toHaveAccessibleName("Small House");
+    expect(
+      within(card)
+        .getByRole("presentation", { hidden: true })
+        .getAttribute("src"),
+    ).toContain("/build-items/smallHouse.webp");
+    expect(card).toHaveTextContent("Compact starter home.");
+    expect(card).toHaveTextContent("2 × 1 · $4,000 each");
+  });
+
+  it("shows the rotated footprint for an armed building", () => {
+    renderPanel({ activeBuildGroup: "buildings", buildingRotation: 90 });
+    expect(screen.getByTestId("build-item-smallHouse")).toHaveTextContent(
+      "1 × 2 · $4,000 each",
+    );
+  });
+
+  it("shows nominal road, track, roundabout, stop and zone hints", () => {
+    renderPanel({ activeBuildGroup: "roads" });
+    expect(screen.getByTestId("build-item-road-twoWay")).toHaveTextContent(
+      "1 × 1 · $100/tile",
+    );
+    expect(screen.getByTestId("build-item-road-dual")).toHaveTextContent(
+      "1 × 1 · $200/tile",
+    );
+    expect(
+      screen.getByTestId("build-item-compactRoundabout"),
+    ).toHaveTextContent("2 × 2 · $1,000 each");
+    expect(
+      screen.getByTestId("build-item-standardRoundabout"),
+    ).toHaveTextContent("3 × 3 · $2,000 each");
+
+    renderPanel({ activeBuildGroup: "transit" });
+    expect(screen.getByTestId("build-item-track")).toHaveTextContent(
+      "1 × 1 · $500/tile",
+    );
+    expect(screen.getByTestId("build-item-busStop")).toHaveTextContent(
+      "1 × 1 · $2,000 each",
+    );
+    expect(screen.getByTestId("build-item-metroStation")).toHaveTextContent(
+      "1 × 1 · $25,000 each",
+    );
+
+    renderPanel({ activeBuildGroup: "zones" });
+    expect(screen.getByTestId("build-item-residential")).toHaveTextContent(
+      "Paint · Free",
+    );
+  });
+
+  it("renders each item card with its catalogue thumbnail", () => {
+    for (const group of BUILD_GROUPS) {
+      const view = renderView({ activeBuildGroup: group.id });
+      for (const item of groupItems(group)) {
+        const card = screen.getByTestId(`build-item-${item.id}`);
+        expect(
+          within(card)
+            .getByRole("presentation", { hidden: true })
+            .getAttribute("src"),
+        ).toContain(`/build-items/${item.id}.webp`);
+      }
+      view.unmount();
+    }
+  });
+
+  it("has art for every catalogue item and no orphaned item art", () => {
+    const art = import.meta.glob<string>(
+      "../../src/assets/sunny-diorama/build-items/*.webp",
+      { eager: true, import: "default" },
+    );
+    const artIds = Object.keys(art)
+      .map((path) => path.slice(path.lastIndexOf("/") + 1, -".webp".length))
+      .sort();
+    const itemIds = BUILD_GROUPS.flatMap((group) => groupItems(group))
+      .map((item) => item.id)
+      .sort();
+    expect(artIds).toEqual(itemIds);
+  });
+});
+
+describe("BuildPanel shortcuts", () => {
+  it("badges the first nine visible items with 1–9", () => {
+    renderPanel({ activeBuildGroup: "transit" });
+    for (const [id, key] of [
+      ["track", "1"],
+      ["busStop", "2"],
+      ["busTerminal", "3"],
+      ["metroStation", "4"],
+    ]) {
+      const card = screen.getByTestId(`build-item-${id}`);
+      expect(card).toHaveAttribute("aria-keyshortcuts", key);
+      expect(card.querySelector(".build-item__key")).toHaveTextContent(key);
+    }
+
+    renderPanel({ activeBuildGroup: "zones" });
+    for (const [id, key] of [
+      ["residential", "1"],
+      ["commercial", "2"],
+      ["industrial", "3"],
+      ["office", "4"],
+      ["civic", "5"],
+      ["park", "6"],
+    ]) {
+      expect(screen.getByTestId(`build-item-${id}`)).toHaveAttribute(
+        "aria-keyshortcuts",
+        key,
+      );
+    }
+  });
+
+  it("leaves items past the ninth without a badge", () => {
+    renderPanel({ activeBuildGroup: "buildings" });
+    expect(screen.getByTestId("build-item-clinic")).toHaveAttribute(
+      "aria-keyshortcuts",
+      "9",
+    );
+    for (const id of ["school", "parkPlaza"]) {
+      const card = screen.getByTestId(`build-item-${id}`);
+      expect(card).not.toHaveAttribute("aria-keyshortcuts");
+      expect(card.querySelector(".build-item__key")).toBeNull();
+      expect(card).not.toHaveAttribute("title");
+    }
+  });
+
+  it("keeps Roads 1/2/3 in step with the global road presets", () => {
+    renderPanel({ activeBuildGroup: "roads" });
+    for (const preset of ["twoWay", "oneWay", "dualBidirectional"] as const) {
+      const item = groupItems(BUILD_GROUPS[0]).find(
+        (candidate) =>
+          candidate.action.kind === "road" &&
+          candidate.action.roadPreset === preset,
+      );
+      expect(item).toBeDefined();
+      expect(screen.getByTestId(`build-item-${item!.id}`)).toHaveAttribute(
+        "aria-keyshortcuts",
+        ROAD_PRESET_KEYS[preset],
+      );
+    }
+    expect(screen.getByTestId("build-item-compactRoundabout")).toHaveAttribute(
+      "aria-keyshortcuts",
+      "4",
+    );
+    expect(screen.getByTestId("build-item-standardRoundabout")).toHaveAttribute(
+      "aria-keyshortcuts",
+      "5",
+    );
+  });
+
+  it("labels a shortcut in the card title without changing its name", () => {
+    renderPanel({ activeBuildGroup: "transit" });
+    const track = screen.getByRole("button", { name: "Track" });
+    expect(track).toHaveAttribute("title", "Track (1)");
+    const busStop = screen.getByRole("button", { name: "Bus Stop" });
+    expect(busStop).toHaveAttribute("aria-keyshortcuts", "2");
+  });
+});
+
 describe("BuildPanel detail view", () => {
   it("selects a leaf action exactly once", async () => {
     const props = renderPanel({ activeBuildGroup: "roads" });
@@ -96,52 +288,6 @@ describe("BuildPanel detail view", () => {
       kind: "road",
       roadPreset: "dualBidirectional",
     });
-  });
-
-  it("shows the Track shortcut without changing its accessible name", () => {
-    renderPanel({ activeBuildGroup: "transit" });
-    const track = screen.getByRole("button", { name: "Track" });
-    expect(track).toHaveAccessibleName("Track");
-    expect(track).toHaveAttribute("aria-keyshortcuts", "t");
-    expect(track).toHaveAttribute("title", "Track (T)");
-    expect(track.querySelector(".shortcut-chip")).toHaveTextContent("T");
-    expect(track.querySelector(".shortcut-chip")).toHaveAttribute(
-      "aria-hidden",
-      "true",
-    );
-    expect(track).toHaveClass("has-shortcut");
-  });
-
-  it("claims road preset shortcuts only while the Road tool is armed", () => {
-    renderPanel({ activeBuildGroup: "roads" });
-    for (const id of ["road-twoWay", "road-oneWay", "road-dual"]) {
-      const button = screen.getByTestId(`build-item-${id}`);
-      expect(button).not.toHaveAttribute("aria-keyshortcuts");
-      expect(button).not.toHaveAttribute("title");
-      expect(button).not.toHaveClass("has-shortcut");
-      expect(button.querySelector(".tool-num")).toBeNull();
-    }
-  });
-
-  it("sets Road preset shortcut attributes without adding visible chips", () => {
-    renderPanel({ activeBuildGroup: "roads", activeTool: "road" });
-    for (const [id, key, title] of [
-      ["road-twoWay", "1", "1-Lane (1)"],
-      ["road-oneWay", "2", "1-Lane One-Way (2)"],
-      ["road-dual", "3", "2-Lane (3)"],
-    ]) {
-      const button = screen.getByTestId(`build-item-${id}`);
-      expect(button).toHaveAttribute("aria-keyshortcuts", key);
-      expect(button).toHaveAttribute("title", title);
-      expect(button).toHaveAccessibleName(
-        title.slice(0, title.lastIndexOf(" (")),
-      );
-      expect(button.querySelector(".shortcut-chip")).toBeNull();
-      // No chip renders for road presets, so the button must not claim the
-      // extra shortcut grid column — that reflowed the buttons when the
-      // Road tool armed.
-      expect(button).not.toHaveClass("has-shortcut");
-    }
   });
 
   it("includes all six area actions in Zones", () => {
@@ -159,13 +305,14 @@ describe("BuildPanel detail view", () => {
   });
 
   it("explains in Zones that served land builds up on its own", () => {
-    renderPanel({ activeBuildGroup: "zones" });
+    const zones = renderView({ activeBuildGroup: "zones" });
     expect(screen.getByTestId("build-hint")).toHaveTextContent(
       /near a stop or station on a running line builds up on its own/,
     );
+    zones.unmount();
 
     renderPanel({ activeBuildGroup: "roads" });
-    expect(screen.getAllByTestId("build-hint")).toHaveLength(1);
+    expect(screen.queryByTestId("build-hint")).toBeNull();
   });
 
   it("keeps buildings grouped under visible area headings", () => {
@@ -181,6 +328,35 @@ describe("BuildPanel detail view", () => {
       expect(screen.getByRole("heading", { name: label })).toBeVisible();
     }
     expect(screen.getByRole("button", { name: "Small House" })).toBeVisible();
+  });
+});
+
+describe("BuildPanel footer", () => {
+  it("moves Rotate and the active-item explanation into the footer", () => {
+    renderPanel({ activeBuildGroup: "roads", activeTool: "road" });
+    const footer = screen.getByTestId("build-footer");
+    expect(footer).toContainElement(
+      screen.getByRole("button", { name: /rotate building/i }),
+    );
+    expect(screen.getByTestId("active-item-description")).toHaveTextContent(
+      "Two-way street with one lane each way.",
+    );
+  });
+
+  it("explains the armed building and the group hint in the footer", () => {
+    const building = renderView({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "smallHouse",
+    });
+    expect(screen.getByTestId("active-item-description")).toHaveTextContent(
+      "Compact starter home.",
+    );
+    building.unmount();
+
+    renderPanel({ activeBuildGroup: "zones" });
+    expect(screen.getByTestId("build-footer")).toContainElement(
+      screen.getByTestId("build-hint"),
+    );
   });
 
   it("exposes Rotate R only when a building is armed", () => {
