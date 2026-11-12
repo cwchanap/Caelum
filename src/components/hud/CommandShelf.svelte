@@ -402,11 +402,14 @@
     }
   }
 
-  @container (max-width: 960px) {
+  @container (max-width: 1020px) {
     /* Icon-only single row: a text row pair would rise above the 88px bottom
      * HUD safe band, and shrinking the row to leave the zoom controls would
      * clip labels. The label text stays in the accessibility tree; mode is
-     * conveyed by the active button state. */
+     * conveyed by the active button state. From a 1021px stage the widest
+     * labelled shelf (Data's overlay badge plus a three-digit line count)
+     * still clears the bottom-left Fit column by at least 8px; below that the
+     * centred shelf covers Fit's right edge. */
     .command-shelf__label,
     .command-shelf__tool-label {
       position: absolute;
