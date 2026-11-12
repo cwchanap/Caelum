@@ -5812,6 +5812,97 @@ describe("route creation and management", () => {
     );
   });
 
+  it("selects the line an accepted create saves, with or without an initial fleet", async () => {
+    const noFleetBase = backendSpy(routeSnapshot());
+    const noFleetBackend: BackendSpy = {
+      ...noFleetBase,
+      async previewRoute(request) {
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          initialFleetCost: null,
+        };
+      },
+    };
+    const noFleet = await withTwoStops(noFleetBackend);
+    await flushPromises();
+
+    const savedWithoutFleet = await noFleet.runtime.saveRouteDraft();
+
+    expect(
+      noFleetBackend.intents.filter(
+        (intent) => intent.type === "deployInitialFleet",
+      ),
+    ).toHaveLength(0);
+    expect(savedWithoutFleet.ui.routeDraft).toBeNull();
+    expect(savedWithoutFleet.ui.selectedRouteId).toBe("route-001");
+    expect(
+      savedWithoutFleet.shell.routes.find((route) => route.id === "route-001")
+        ?.selected,
+    ).toBe(true);
+
+    const fleet = await withTwoStops(backendSpy(routeSnapshot()));
+    await flushPromises();
+
+    const savedWithFleet = await fleet.runtime.saveRouteDraft();
+
+    expect(savedWithFleet.ui.selectedRouteId).toBe("route-001");
+    expect(
+      savedWithFleet.shell.routes.find((route) => route.id === "route-001")
+        ?.service.assignedFleet,
+    ).toBe(2);
+  });
+
+  it("does not select a create whose save was rejected or superseded", async () => {
+    const rejectedBase = backendSpy(routeSnapshot());
+    const rejectedBackend: BackendSpy = {
+      ...rejectedBase,
+      async dispatch(intent) {
+        if (intent.type === "createRoute") {
+          return {
+            update: createPresentationUpdate(
+              rejectedBase.snapshotInternal(),
+              false,
+            ),
+            applied: false,
+            rejection: TEST_REJECTION,
+          };
+        }
+        return rejectedBase.dispatch(intent);
+      },
+    };
+    const { runtime: rejectedRuntime } = await withTwoStops(rejectedBackend);
+    await flushPromises();
+
+    const rejected = await rejectedRuntime.saveRouteDraft();
+    expect(rejected.ui.selectedRouteId).toBeNull();
+
+    const deferred = deferredDispatchBackend(routeSnapshot());
+    const supersededBackend: BackendSpy = {
+      ...deferred,
+      async previewRoute(request) {
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          initialFleetCost: null,
+        };
+      },
+    };
+    const { runtime: supersededRuntime } =
+      await withTwoStops(supersededBackend);
+    await flushPromises();
+
+    const save = supersededRuntime.saveRouteDraft();
+    await Promise.resolve();
+    supersededRuntime.cancelRouteDraft();
+    supersededRuntime.setTool("busRoute");
+    await deferred.resolveNext();
+    await save;
+
+    const superseded = supersededRuntime.getSnapshot();
+    expect(superseded.state.transit.routes).toHaveLength(1);
+    expect(superseded.ui.routeDraft).not.toBeNull();
+    expect(superseded.ui.selectedRouteId).toBeNull();
+  });
+
   it("matches independently computed real-core preview and committed route legs", async () => {
     const backend = await createWasmBackend();
     const roadPoints = Array.from({ length: 9 }, (_, index) => ({
@@ -7084,10 +7175,11 @@ describe("route creation and management", () => {
       (await runtime.toggleRouteActive("route-001")).state.transit.routes[0]
         .active,
     ).toBe(false);
+    expect(runtime.getSnapshot().ui.selectedRouteId).toBe("route-001");
+    expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(null);
     expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(
       "route-001",
     );
-    expect(runtime.selectRoute("route-001").ui.selectedRouteId).toBe(null);
     expect(
       (await runtime.deleteRoute("route-001")).state.transit.routes,
     ).toEqual([]);
@@ -7279,7 +7371,7 @@ describe("route creation and management", () => {
   it("clears the selected route when switching tools", async () => {
     const { runtime } = await withTwoStops();
     await runtime.saveRouteDraft();
-    runtime.selectRoute("route-001");
+    expect(runtime.getSnapshot().ui.selectedRouteId).toBe("route-001");
     expect(runtime.setTool("inspect").ui.selectedRouteId).toBe(null);
   });
 
@@ -7303,7 +7395,7 @@ describe("route creation and management", () => {
   it("clears the selected route when it is deleted", async () => {
     const { runtime } = await withTwoStops();
     await runtime.saveRouteDraft();
-    runtime.selectRoute("route-001");
+    expect(runtime.getSnapshot().ui.selectedRouteId).toBe("route-001");
     const snapshot = await runtime.deleteRoute("route-001");
     expect(snapshot.ui.selectedRouteId).toBe(null);
     expect(snapshot.state.transit.routes).toEqual([]);

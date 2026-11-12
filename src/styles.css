@@ -1059,56 +1059,64 @@ body {
   color: var(--ink-mid);
 }
 
+/* Waypoint rail: numbered dots share one vertical line. The dot takes the
+ * edited route's colour; a new draft inherits the neutral accent fallback. */
+.route-waypoints {
+  --route-color: var(--accent);
+}
+
 .route-waypoints {
   list-style: none;
   margin: 0;
   padding: 0;
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 2px;
 }
 
-.route-waypoints button {
-  width: 100%;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 6px 8px;
-  border: 1px solid var(--line);
-  background: var(--surface);
-  color: var(--ink-mid);
-  text-align: left;
-  font-family: var(--font-body);
-  font-size: 11px;
-  cursor: pointer;
+.route-waypoints li {
+  position: relative;
 }
 
-.route-waypoints button.active {
-  border-color: var(--accent);
-  color: var(--ink);
+.route-waypoints li::before {
+  content: "";
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 9px;
+  width: 1px;
+  background: var(--line-strong);
 }
 
-.route-waypoints button.missing {
-  border-style: dashed;
-  border-color: var(--danger);
+.route-waypoints li:first-child::before {
+  top: 50%;
 }
 
-.route-waypoint-number {
-  display: inline-grid;
-  width: 18px;
-  height: 18px;
-  place-items: center;
-  border: 1px solid currentColor;
-  border-radius: 50%;
+.route-waypoints li:last-child::before {
+  bottom: 50%;
 }
 
-.route-edit-modes,
-.route-waypoint-actions,
+.route-waypoints li:only-child::before {
+  display: none;
+}
+
+.route-draft-toolbar,
 .route-editor-actions {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   margin-top: 8px;
+}
+
+.route-draft-toolbar {
+  padding-top: 8px;
+  border-top: 1px solid var(--line);
+}
+
+.route-toolbar-group {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
 }
 
 .route-editor button,
@@ -1149,6 +1157,65 @@ body {
   color: var(--ink-mid);
 }
 
+/* Rail rows override the generic editor button chrome: the dot carries the
+ * state, the row is a transparent hit target on the shared connector line. */
+.route-waypoints button {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px 4px 0;
+  border: 0;
+  background: transparent;
+  color: var(--ink-mid);
+  text-align: left;
+  font-family: var(--font-body);
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.route-waypoints button:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--route-color) 6%, transparent);
+  color: var(--ink);
+}
+
+.route-waypoints button.active {
+  background: color-mix(in srgb, var(--route-color) 9%, transparent);
+  color: var(--ink);
+}
+
+.route-waypoints button.missing {
+  color: var(--danger);
+}
+
+.route-waypoint-number {
+  position: relative;
+  z-index: 1;
+  display: inline-grid;
+  flex: none;
+  width: 18px;
+  height: 18px;
+  place-items: center;
+  border: 1px solid var(--route-color);
+  border-radius: 50%;
+  background: var(--surface);
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+
+.route-waypoints button.active .route-waypoint-number {
+  border-width: 2px;
+  background: color-mix(in srgb, var(--route-color) 20%, var(--surface));
+  color: var(--ink);
+}
+
+.route-waypoints button.missing .route-waypoint-number {
+  border-style: dashed;
+  border-color: var(--danger);
+  background: var(--surface);
+  color: var(--danger);
+}
+
 .route-preview--connected {
   color: var(--accent);
 }
@@ -1177,9 +1244,11 @@ body {
 }
 
 .route-item {
+  --route-color: var(--accent);
   display: flex;
   flex-direction: column;
   gap: 6px;
+  min-width: 0;
   padding: 8px 10px;
   border: 1px solid var(--line);
   background: var(--surface-raised);
@@ -1187,6 +1256,13 @@ body {
 
 .route-item--inactive {
   opacity: 0.55;
+}
+
+/* The selected route's existing card is the post-save service summary. */
+.route-item--selected {
+  border-color: color-mix(in srgb, var(--route-color) 55%, var(--line));
+  box-shadow: inset 3px 0 0 var(--route-color);
+  opacity: 1;
 }
 
 .route-item-head {

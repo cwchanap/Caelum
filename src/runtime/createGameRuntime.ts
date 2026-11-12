@@ -1042,29 +1042,30 @@ export async function createGameRuntime(
             : [],
         );
         const result = await backend.dispatch(intent);
+        // A create is the only save that adds a line. Diff its scene against
+        // the pre-save IDs once; the accepted selection and the optional
+        // initial-fleet deployment both consume this same new ID.
+        const appliedScene = result.applied ? result.update.scene : null;
+        const sceneIds =
+          appliedScene === null
+            ? []
+            : mode === "bus"
+              ? appliedScene.routes.map((route) => route.id)
+              : appliedScene.metroLines.map((line) => line.id);
+        const newIds = isCreate
+          ? sceneIds.filter((id) => !existingIds.has(id))
+          : [];
+        const createdRouteId = newIds.length === 1 ? newIds[0] : null;
         const deployCreatedLine = async (
           saved: RuntimeSnapshot,
         ): Promise<RuntimeSnapshot> => {
-          if (
-            !deploy ||
-            !isCreate ||
-            !result.applied ||
-            result.update.scene === null
-          ) {
-            return saved;
-          }
-          const ids =
-            mode === "bus"
-              ? result.update.scene.routes.map((route) => route.id)
-              : result.update.scene.metroLines.map((line) => line.id);
-          const newIds = ids.filter((id) => !existingIds.has(id));
-          if (newIds.length !== 1) {
+          if (!deploy || !isCreate || createdRouteId === null) {
             return saved;
           }
           const previousRejection = rejection;
           const deployed = await dispatchNow({
             type: "deployInitialFleet",
-            lineId: newIds[0],
+            lineId: createdRouteId,
           });
           if (
             rejection !== previousRejection &&
@@ -1125,6 +1126,12 @@ export async function createGameRuntime(
               routeDraftNotice: null,
               routePreviewError: null,
               routePreviewHostError: null,
+              // An accepted current create selects its new line even when no
+              // initial fleet was quoted; edits already carry their selection.
+              selectedRouteId:
+                isCreate && createdRouteId !== null
+                  ? createdRouteId
+                  : ui.selectedRouteId,
             },
             intent,
           );

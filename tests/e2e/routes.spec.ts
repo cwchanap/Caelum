@@ -904,18 +904,11 @@ test("tunes a Save & run bus service from its line summary", async ({
   // Leave geometry edit mode so no later interaction can add waypoints.
   await selectTool(page, "select");
 
-  // The plain line summary selects and highlights the row without opening
-  // the geometry editor.
-  await page.getByRole("button", { name: "Select Bus 1" }).click();
+  // The accepted Save selects and highlights the new line's row without
+  // opening the geometry editor.
   await expect
-    .poll(async () => {
-      const snapshot = await runtimeSnapshot(page);
-      return {
-        selected: snapshot.ui.selectedRouteId === "route-001",
-        draftClosed: snapshot.ui.routeDraft === null,
-      };
-    })
-    .toEqual({ selected: true, draftClosed: true });
+    .poll(async () => (await runtimeSnapshot(page)).ui.selectedRouteId)
+    .toBe("route-001");
   await expect(page.getByTestId("route-draft")).toHaveCount(0);
   await expect(
     page.getByRole("button", { name: "Select Bus 1" }),
