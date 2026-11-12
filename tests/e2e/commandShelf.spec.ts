@@ -1,5 +1,6 @@
 import { expect, test } from "@playwright/test";
-import { HUD_INSET } from "../../src/render/boardTransform";
+import { HUD_INSET, tileSize } from "../../src/render/boardTransform";
+import { MAP_SIZES } from "../../src/scenario/sandbox";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import {
   clickMapTile,
@@ -9,9 +10,11 @@ import {
   drainGameplayQueue,
   hoverMapTile,
   mapTileViewportPoint,
+  mapWorldViewportPoint,
   openCommandDestination,
   runtimeSnapshot,
   selectBuildLeaf,
+  settleLayout,
 } from "./helpers";
 
 const desktopViewports = [
@@ -53,6 +56,119 @@ function expectInsideViewport(
   expect(box!.y + box!.height, `${label} bottom edge`).toBeLessThanOrEqual(
     viewport.height + 1,
   );
+}
+
+for (const viewport of desktopViewports) {
+  test(`docks the workspace beside the fitted map at ${viewport.width}px and restores full width on close`, async ({
+    page,
+  }) => {
+    await page.setViewportSize(viewport);
+    await createDefaultCity(page, "Dock Geometry", "blankGrid");
+    const canvas = page.locator("canvas[data-runtime-canvas='true']");
+    const dock = page.getByTestId("workspace-dock");
+    await expect(canvas).toBeVisible();
+    await expect(dock).toHaveCount(0);
+
+    const map = MAP_SIZES.small;
+    const expectMapFitsCanvas = async (label: string) => {
+      const canvasBox = await canvas.boundingBox();
+      expect(canvasBox, `${label}: canvas has a bounding box`).not.toBeNull();
+      const topLeft = await mapWorldViewportPoint(canvas, { x: 0, y: 0 });
+      const bottomRight = await mapWorldViewportPoint(canvas, {
+        x: map.width * tileSize,
+        y: map.height * tileSize,
+      });
+      expect(
+        topLeft.x,
+        `${label}: map left fits in canvas`,
+      ).toBeGreaterThanOrEqual(canvasBox!.x - 1);
+      expect(
+        topLeft.y,
+        `${label}: map top fits in canvas`,
+      ).toBeGreaterThanOrEqual(canvasBox!.y - 1);
+      expect(
+        bottomRight.x,
+        `${label}: map right fits in canvas`,
+      ).toBeLessThanOrEqual(canvasBox!.x + canvasBox!.width + 1);
+      expect(
+        bottomRight.y,
+        `${label}: map bottom fits in canvas`,
+      ).toBeLessThanOrEqual(canvasBox!.y + canvasBox!.height + 1);
+    };
+
+    const closedCanvas = await canvas.boundingBox();
+    expect(closedCanvas).not.toBeNull();
+    expect(Math.abs(closedCanvas!.x)).toBeLessThanOrEqual(1);
+    expect(
+      Math.abs(closedCanvas!.x + closedCanvas!.width - viewport.width),
+    ).toBeLessThanOrEqual(1);
+    await expectMapFitsCanvas("dock closed");
+
+    // A road tool stays armed when the Build workspace opens, so a map click
+    // beside the dock proves the clickable area reaches the right map column.
+    await selectBuildLeaf(page, "roads", "road-twoWay");
+    await openCommandDestination(page, "build");
+    await expect(dock).toBeVisible();
+    const dockLeft = (await dock.boundingBox())!.x;
+
+    // The canvas follows the stage's measured width on its next frame.
+    await expect
+      .poll(async () => {
+        const box = await canvas.boundingBox();
+        return box === null ? Number.POSITIVE_INFINITY : box.x + box.width;
+      })
+      .toBeLessThanOrEqual(dockLeft + 1);
+
+    const openCanvas = await canvas.boundingBox();
+    const dockBox = await dock.boundingBox();
+    expect(openCanvas).not.toBeNull();
+    expect(dockBox).not.toBeNull();
+    expect(
+      openCanvas!.x + openCanvas!.width,
+      "canvas ends at the dock",
+    ).toBeLessThanOrEqual(dockBox!.x + 1);
+    expect(
+      dockBox!.x + dockBox!.width,
+      "dock stays inside the viewport",
+    ).toBeLessThanOrEqual(viewport.width + 1);
+    expect(openCanvas!.width).toBeLessThan(closedCanvas!.width - 1);
+    await expectMapFitsCanvas("dock open");
+
+    await page.getByTestId("map-zoom-in").click();
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera?.zoom ?? 1)
+      .toBeGreaterThan(1);
+    await page.getByTestId("map-zoom-fit").click();
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera)
+      .toBeNull();
+    await expectMapFitsCanvas("fit with dock open");
+
+    const rightMostColumn = { x: map.width - 1, y: 9 };
+    await hoverMapTile(canvas, rightMostColumn);
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).ui.hoverTile)
+      .toEqual(rightMostColumn);
+    await clickMapTile(canvas, rightMostColumn);
+    await expect
+      .poll(async () => {
+        const tiles = (await runtimeSnapshot(page)).state.map.tiles;
+        return tiles.find(
+          (tile) =>
+            tile.x === rightMostColumn.x && tile.y === rightMostColumn.y,
+        )?.kind;
+      })
+      .toBe("road");
+
+    await page.getByRole("button", { name: "Close Build" }).click();
+    await expect(dock).toHaveCount(0);
+    await expect
+      .poll(async () =>
+        Math.abs(((await canvas.boundingBox())?.width ?? 0) - viewport.width),
+      )
+      .toBeLessThanOrEqual(1);
+    await expectMapFitsCanvas("dock closed again");
+  });
 }
 
 for (const viewport of desktopViewports) {
@@ -138,22 +254,29 @@ for (const viewport of desktopViewports) {
 
     await openCommandDestination(page, "build");
     const panel = page.getByTestId("command-panel");
+    const dock = page.getByTestId("workspace-dock");
     const panelBox = await panel.boundingBox();
+    const dockBox = await dock.boundingBox();
     const topbarBox = await page.getByTestId("topbar").boundingBox();
     const openShelfBox = await shelf.boundingBox();
     expect(panelBox).not.toBeNull();
+    expect(dockBox).not.toBeNull();
     expect(topbarBox).not.toBeNull();
     expect(openShelfBox).not.toBeNull();
     expect(panelBox!.y).toBeGreaterThanOrEqual(
       topbarBox!.y + topbarBox!.height - 1,
     );
     expect(panelBox!.y + panelBox!.height).toBeLessThanOrEqual(
-      openShelfBox!.y + 1,
+      viewport.height + 1,
     );
     expect(panelBox!.x).toBeGreaterThanOrEqual(-1);
     expect(panelBox!.x + panelBox!.width).toBeLessThanOrEqual(
       viewport.width + 1,
     );
+    expect(
+      boxesIntersect(openShelfBox!, dockBox!),
+      "the shelf stays in the map column, clear of the dock",
+    ).toBe(false);
 
     await expect(page.getByTestId("command-plate-grid")).toBeVisible();
     await expect
@@ -408,6 +531,7 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
 
   await page.keyboard.press("Escape");
   await expect(page.getByTestId("command-panel")).toHaveCount(0);
+  await settleLayout(page);
   await clickMapTile(canvas, stops[0]);
   await expect(page.getByTestId("panel-inspect")).toBeVisible();
   await clickMapTile(canvas, { x: 1, y: 1 });

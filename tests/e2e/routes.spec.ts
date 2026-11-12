@@ -7,13 +7,13 @@ import {
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
-  mapTileViewportPoint,
   openCommandDestination,
   rebuildRoadTile,
   removeMapTile,
   runtimeSnapshot,
   sampleTilePixels,
   selectTool,
+  settleLayout,
   type PixelProbe,
 } from "./helpers";
 
@@ -381,67 +381,19 @@ test("proves route drafting can reach a stop beneath the Lines panel", async ({
 
   await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: "New Bus" }).click();
-  const panel = page.getByTestId("command-panel");
-  await expect(panel).toBeVisible();
+  await expect(page.getByTestId("command-panel")).toBeVisible();
 
-  const candidates = await Promise.all(
-    stops.map(async (tile) => ({
-      tile,
-      point: await mapTileViewportPoint(canvas, tile),
-    })),
-  );
-  const panelBox = await panel.boundingBox();
-  if (panelBox === null) {
-    throw new Error("Lines command panel does not have a visible bounding box");
-  }
-  const insidePanel = (point: { x: number; y: number }) =>
-    point.x >= panelBox.x &&
-    point.x <= panelBox.x + panelBox.width &&
-    point.y >= panelBox.y &&
-    point.y <= panelBox.y + panelBox.height;
-  const covered = candidates.filter(({ point }) => insidePanel(point));
-  const exposed = candidates.filter(({ point }) => !insidePanel(point));
-  const measured = JSON.stringify({ panel: panelBox, candidates });
-  expect(
-    covered.length,
-    `Expected a covered stop; measured ${measured}`,
-  ).toBeGreaterThan(0);
-  expect(
-    exposed.length,
-    `Expected an exposed stop; measured ${measured}`,
-  ).toBeGreaterThan(0);
-  const coveredCandidate = covered[0];
-  const exposedCandidate = exposed[0];
-  if (coveredCandidate === undefined || exposedCandidate === undefined) {
-    throw new Error(`Missing measured occlusion candidates: ${measured}`);
-  }
+  const waypointCount = async () =>
+    (await runtimeSnapshot(page)).ui.routeDraft?.waypointIds.length ?? 0;
 
-  expect(
-    await page.evaluate(({ x, y }) => {
-      const top = document.elementFromPoint(x, y);
-      return top?.closest('[data-testid="command-panel"]') !== null;
-    }, coveredCandidate.point),
-  ).toBe(true);
+  await clickMapTile(canvas, OCCLUSION_ROUTE_STOPS[0]);
+  await expect.poll(waypointCount).toBe(1);
 
-  await clickMapTile(canvas, exposedCandidate.tile);
-  await expect
-    .poll(
-      async () =>
-        (await runtimeSnapshot(page)).ui.routeDraft?.waypointIds.length ?? 0,
-    )
-    .toBe(1);
+  // This stop sits where the old centred Lines panel covered the map. It must
+  // stay clickable with the Lines dock still open.
+  await clickMapTile(canvas, OCCLUSION_COVERED_STOP);
+  await expect.poll(waypointCount).toBe(2);
 
-  await page.getByRole("button", { name: "Close Lines" }).click();
-  await expect(page.getByTestId("command-panel")).toHaveCount(0);
-  await clickMapTile(canvas, coveredCandidate.tile);
-  await expect
-    .poll(
-      async () =>
-        (await runtimeSnapshot(page)).ui.routeDraft?.waypointIds.length ?? 0,
-    )
-    .toBe(2);
-
-  await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await expect(page.getByTestId("route-waypoint-0")).toBeVisible();
   await expect(page.getByTestId("route-waypoint-1")).toBeVisible();
@@ -1416,6 +1368,7 @@ test("navigates from a selected stop to its serving line and back", async ({
   // render, then select the served stop with the ordinary Inspect tool.
   await page.getByRole("button", { name: "Close Lines" }).click();
   await expect(page.getByTestId("command-panel")).toHaveCount(0);
+  await settleLayout(page);
   await selectTool(page, "select");
   await clickMapTile(canvas, SIMPLE_ROUTE_STOPS[0]);
   await expect(page.getByTestId("panel-inspect")).toBeVisible();

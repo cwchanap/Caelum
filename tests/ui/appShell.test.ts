@@ -1591,7 +1591,7 @@ describe("App command shell", () => {
         '[data-testid^="route-draft-"][data-testid$="gate"]',
       ),
     );
-    expect(gates.map((gate) => gate.id)).toEqual([
+    expect(gates.map((gate) => gate.id).sort()).toEqual([
       "route-draft-panel-gate",
       "route-draft-shelf-gate",
     ]);
@@ -1712,6 +1712,27 @@ describe("App command shell", () => {
     expect(screen.queryByTestId("overlay-legend")).toBeNull();
   });
 
+  it("keeps the game stage whole and docks the panel outside it", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const stage = screen.getByTestId("game-stage");
+    expect(stage).toContainElement(screen.getByTestId("game-canvas-host"));
+    expect(stage).toContainElement(screen.getByTestId("command-shelf"));
+    expect(stage).not.toContainElement(screen.getByTestId("topbar"));
+    expect(screen.queryByTestId("workspace-dock")).toBeNull();
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    const dock = screen.getByTestId("workspace-dock");
+    expect(dock).toContainElement(screen.getByTestId("command-panel"));
+    expect(stage).not.toContainElement(dock);
+
+    await fireEvent.click(screen.getByRole("button", { name: "Close Build" }));
+    await tick();
+    expect(screen.queryByTestId("workspace-dock")).toBeNull();
+    expect(screen.getByTestId("command-destination-build")).toHaveFocus();
+  });
+
   it("passes the active city name to City and lets Lines collapse during a draft", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
@@ -1726,8 +1747,8 @@ describe("App command shell", () => {
       "data-command-panel",
       "lines",
     );
-    expect(screen.getByTestId("command-panel")).toHaveClass(
-      "command-panel--pinned",
+    expect(screen.getByTestId("workspace-dock")).toContainElement(
+      screen.getByTestId("command-panel"),
     );
     expect(screen.getByRole("button", { name: "Close Lines" })).toBeEnabled();
 

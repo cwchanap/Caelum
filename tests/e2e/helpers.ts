@@ -70,6 +70,17 @@ export async function openCommandDestination(
     "data-command-panel",
     destination,
   );
+  await settleLayout(page);
+}
+
+/** Let the render host observe a stage resize before map geometry is measured. */
+export async function settleLayout(page: Page): Promise<void> {
+  await page.evaluate(
+    () =>
+      new Promise<void>((resolve) => {
+        requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+      }),
+  );
 }
 
 export async function selectBuildLeaf(
@@ -83,6 +94,7 @@ export async function selectBuildLeaf(
   await page.getByTestId(`build-group-${group}`).click();
   await page.getByTestId(`build-item-${item}`).click();
   await expect(page.getByTestId("command-panel")).toHaveCount(0);
+  await settleLayout(page);
 }
 
 export async function selectTool(
@@ -92,8 +104,9 @@ export async function selectTool(
   const trigger = page.getByTestId(`command-tool-${tool}`);
   if ((await trigger.getAttribute("aria-pressed")) !== "true") {
     await trigger.click();
+    await expect(trigger).toHaveAttribute("aria-pressed", "true");
+    await settleLayout(page);
   }
-  await expect(trigger).toHaveAttribute("aria-pressed", "true");
 }
 
 /** The live map size and camera, read from the runtime (not the whole
