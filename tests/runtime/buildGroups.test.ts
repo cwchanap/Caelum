@@ -32,6 +32,20 @@ const coreCost = (module: string, name: string): number => {
   return Number(match[1].replaceAll("_", ""));
 };
 
+/** Zone → building pairs from the core growth table. */
+const coreGrowth = (): Map<string, string> => {
+  const source = readFileSync(
+    new URL("../../crates/caelum-core/src/growth.rs", import.meta.url),
+    "utf8",
+  );
+  return new Map(
+    [...source.matchAll(/\("([a-z]+)", "([A-Za-z]+)"\)/g)].map((match) => [
+      match[1],
+      match[2],
+    ]),
+  );
+};
+
 describe("BUILD_GROUPS", () => {
   it("orders exactly the four approved root groups", () => {
     expect(BUILD_GROUPS.map((group) => group.id)).toEqual([
@@ -162,6 +176,28 @@ describe("BUILD_GROUPS", () => {
     for (const entry of groupItems(BUILD_GROUPS[2])) {
       expect(entry.cost).toBe("free");
     }
+  });
+
+  it("describes only the growth the core actually performs", () => {
+    const growth = coreGrowth();
+    expect(Object.fromEntries(growth)).toEqual({
+      residential: "smallHouse",
+      commercial: "supermarket",
+      office: "officeTower",
+      industrial: "factory",
+    });
+
+    const industrial = item("industrial").description;
+    expect(industrial).toMatch(/factories grow/i);
+    expect(industrial).toMatch(/warehouses can be placed by hand/i);
+
+    for (const manualZone of ["civic", "park"] as const) {
+      expect(growth.has(manualZone)).toBe(false);
+      expect(item(manualZone).description).not.toMatch(/grow/i);
+    }
+    expect(item("civic").description).toMatch(
+      /clinics and schools can be placed here by hand/i,
+    );
   });
 });
 
