@@ -22,6 +22,7 @@ import {
   openCommandDestination,
   runtimeSnapshot,
   selectBuildLeaf,
+  selectTool,
 } from "./helpers";
 
 const ROUTE_STOPS = [
@@ -331,4 +332,35 @@ test("keeps the fitted bottom-left edge tile clickable at the compact width", as
         )?.kind,
     )
     .toBe("road");
+});
+
+test("scrolls an overflowing anchored Inspector instead of zooming the map", async ({
+  page,
+}) => {
+  // A short stage makes the card exceed its CSS max-height. Transit cards grow
+  // with platform/route rows, so overflow is a real state, not a test-only one.
+  await page.setViewportSize({ width: 1024, height: 360 });
+  await createDefaultCity(page, "Inspector Scroll", "smallTown");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectTool(page, "select");
+  await clickMapTile(canvas, { x: 21, y: 6 });
+
+  const inspector = page.getByTestId("panel-inspect");
+  await expect(inspector.getByText("Office Tower")).toBeVisible();
+  const overflow = await inspector.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+    scrollTop: element.scrollTop,
+  }));
+  expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight);
+  expect(overflow.scrollTop).toBe(0);
+
+  const box = (await inspector.boundingBox())!;
+  await page.mouse.move(box.x + box.width / 2, box.y + 12);
+  await page.mouse.wheel(0, 160);
+  await expect
+    .poll(async () => inspector.evaluate((element) => element.scrollTop))
+    .toBeGreaterThan(0);
+  expect((await runtimeSnapshot(page)).camera).toBeNull();
+  await expect(inspector).toBeVisible();
 });

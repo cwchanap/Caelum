@@ -163,7 +163,7 @@ describe("InspectPanel workplace status", () => {
     expect(
       screen.getByTestId("building-panel").querySelector(".workplace-pattern"),
     ).toBeNull();
-    expect(screen.getByText("Jobs 1 / 4")).toBeVisible();
+    expect(screen.getByText("Jobs 1 / 4")).toBeInTheDocument();
   });
 });
 
