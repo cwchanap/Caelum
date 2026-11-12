@@ -133,6 +133,14 @@ describe("BuildPanel item cards", () => {
     expect(card).toHaveTextContent("2 × 1 · $4,000 each");
   });
 
+  it("exposes price, footprint and description as the card description", () => {
+    renderPanel({ activeBuildGroup: "buildings" });
+    const card = screen.getByTestId("build-item-smallHouse");
+    expect(card).toHaveAccessibleName("Small House");
+    expect(card).toHaveAccessibleDescription(/2 × 1 · \$4,000 each/);
+    expect(card).toHaveAccessibleDescription(/Compact starter home\./);
+  });
+
   it("shows the rotated footprint for an armed building", () => {
     renderPanel({ activeBuildGroup: "buildings", buildingRotation: 90 });
     expect(screen.getByTestId("build-item-smallHouse")).toHaveTextContent(

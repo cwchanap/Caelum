@@ -652,6 +652,10 @@
       return;
     }
 
+    // Shifted digits still report the digit on some layouts. Do not let them
+    // activate Build items or fall through to the road presets.
+    if (event.shiftKey) return;
+
     // An open Build leaf group owns 1–9 ahead of the global road presets; the
     // category grid and every other destination keep the existing 1/2/3.
     if (

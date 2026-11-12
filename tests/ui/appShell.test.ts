@@ -1146,6 +1146,22 @@ describe("App command shell", () => {
     expect(runtime.armRoad).not.toHaveBeenCalled();
   });
 
+  it("ignores shifted number keys in an open Build group", async () => {
+    const { runtime } = createRuntimeHarness({
+      ui: { ...createUiState(), activeTool: "road" },
+    });
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-build"));
+    await fireEvent.click(screen.getByTestId("command-plate-roads"));
+    await fireEvent.keyDown(window, { key: "4", shiftKey: true });
+    await fireEvent.keyDown(window, { key: "3", shiftKey: true });
+
+    expect(runtime.armRoundabout).not.toHaveBeenCalled();
+    expect(runtime.armRoad).not.toHaveBeenCalled();
+    expect(runtime.setRoadPreset).not.toHaveBeenCalled();
+  });
+
   it("returns focus to the Build trigger after Escape closes a leaf group", async () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });

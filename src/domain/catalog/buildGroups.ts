@@ -95,9 +95,10 @@ const areaSections: BuildMenuSection[] = AREA_KINDS.map((area) => ({
 const zoneDescriptions: Record<AreaKind, string> = {
   residential: "Homes grow here once a running line serves the land.",
   commercial: "Shops and supermarkets grow on served land.",
-  industrial: "Factories and warehouses grow on served land.",
+  industrial:
+    "Factories grow on served land; warehouses can be placed by hand.",
   office: "Offices grow on served land.",
-  civic: "Clinics and schools grow on served land.",
+  civic: "Clinics and schools can be placed here by hand.",
   park: "Park land; park plazas build here.",
 };
 

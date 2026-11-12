@@ -241,6 +241,7 @@
                   : undefined}
                 aria-pressed={isItemActive(item.action)}
                 aria-label={item.label}
+                aria-describedby={`build-item-meta-${item.id} build-item-description-${item.id}`}
                 aria-keyshortcuts={shortcut}
                 title={shortcut === undefined
                   ? undefined
@@ -261,10 +262,13 @@
                   {/if}
                 </span>
                 <span class="build-item__label">{item.label}</span>
-                <span class="build-item__meta"
+                <span id={`build-item-meta-${item.id}`} class="build-item__meta"
                   >{itemMeta(item.action, item.cost)}</span
                 >
-                <span class="build-item__description">{item.description}</span>
+                <span
+                  id={`build-item-description-${item.id}`}
+                  class="build-item__description">{item.description}</span
+                >
               </button>
             {/each}
           </div>
