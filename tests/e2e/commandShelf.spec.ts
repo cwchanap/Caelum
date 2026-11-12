@@ -23,6 +23,15 @@ const desktopViewports = [
   { name: "wide", width: 1440, height: 900 },
 ] as const;
 
+const shelfButtonIds = [
+  "command-destination-build",
+  "command-destination-lines",
+  "command-destination-data",
+  "command-destination-city",
+  "command-tool-select",
+  "command-tool-demolish",
+] as const;
+
 interface Box {
   x: number;
   y: number;
@@ -315,6 +324,88 @@ for (const viewport of shelfBandViewports) {
     await expectShelfInSafeBand("reopened");
   });
 }
+
+test("keeps Fit clickable at 1366px with the dock open and a Coverage badge", async ({
+  page,
+}) => {
+  await page.setViewportSize({ width: 1366, height: 768 });
+  await createDefaultCity(page, "Shelf Clearance", "blankGrid");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const shelf = page.getByTestId("command-shelf");
+  const fit = page.getByTestId("map-zoom-fit");
+  await expect(canvas).toBeVisible();
+
+  await openCommandDestination(page, "data");
+  await page.locator('[data-overlay="coverage"]').click();
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).ui.activeOverlay)
+    .toBe("coverage");
+  await settleLayout(page);
+
+  // The reported gesture: zoom in, then click Fit's right edge, which the
+  // centred shelf used to cover. The raw pointer click proves the hit test.
+  await page.getByTestId("map-zoom-in").click();
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).camera?.zoom ?? 1)
+    .toBeGreaterThan(1);
+  const fitBox = await fit.boundingBox();
+  expect(fitBox, "Fit has a bounding box").not.toBeNull();
+  const insideFit = {
+    x: fitBox!.x + fitBox!.width - 4,
+    y: fitBox!.y + fitBox!.height / 2,
+  };
+  expect(
+    await page.evaluate(
+      ({ x, y }) =>
+        document
+          .elementFromPoint(x, y)
+          ?.closest('[data-testid="map-zoom-fit"]') !== null,
+      insideFit,
+    ),
+    "Fit's right edge hit-tests to Fit, not the shelf",
+  ).toBe(true);
+  await page.mouse.click(insideFit.x, insideFit.y);
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).camera)
+    .toBeNull();
+
+  const canvasBox = await canvas.boundingBox();
+  const shelfBox = await shelf.boundingBox();
+  const zoomBox = await page.locator(".board-zoom").boundingBox();
+  expect(canvasBox).not.toBeNull();
+  expect(shelfBox).not.toBeNull();
+  expect(zoomBox).not.toBeNull();
+  expect(
+    boxesIntersect(shelfBox!, zoomBox!),
+    "shelf stays clear of the bottom-left zoom controls with the overlay badge active",
+  ).toBe(false);
+  expect(
+    shelfBox!.x,
+    "shelf keeps clear spacing from the zoom controls",
+  ).toBeGreaterThanOrEqual(zoomBox!.x + zoomBox!.width + 8);
+
+  const canvasBottom = canvasBox!.y + canvasBox!.height;
+  expect(
+    shelfBox!.y,
+    "shelf top stays inside the bottom HUD band",
+  ).toBeGreaterThanOrEqual(canvasBottom - HUD_INSET.bottom - 1);
+  expect(
+    shelfBox!.y + shelfBox!.height,
+    "shelf bottom stays above the stage floor",
+  ).toBeLessThanOrEqual(canvasBottom - 12 + 1);
+  for (const id of shelfButtonIds) {
+    const buttonBox = await page.getByTestId(id).boundingBox();
+    expect(buttonBox, `${id} is visible`).not.toBeNull();
+    expect(
+      buttonBox!.height,
+      `${id} keeps its 44px target`,
+    ).toBeGreaterThanOrEqual(43.5);
+    expect(
+      buttonBox!.width,
+      `${id} keeps a 44px-wide target`,
+    ).toBeGreaterThanOrEqual(43.5);
+  }
+});
 
 for (const viewport of desktopViewports) {
   test(`keeps the command shelf and panel inside the ${viewport.name} desktop width (${viewport.width}x${viewport.height})`, async ({
