@@ -126,6 +126,10 @@ test("creates Small Town through the real WASM New City flow", async ({
     "Standard · 07:00–09:00 starts, 17:00–19:00 returns",
   );
 
+  // The anchored Inspector can cover nearby tiles; dismiss it with an empty
+  // tile before selecting the next building, as a player would.
+  await clickMapTile(canvas, { x: 1, y: 1 });
+  await expect(inspector).toHaveCount(0);
   await clickMapTile(canvas, { x: 15, y: 11 });
   await expect(inspector.getByText("Factory")).toBeVisible();
   await expect(inspector.getByText("Jobs 0 / 6")).toBeVisible();

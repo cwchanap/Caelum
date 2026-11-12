@@ -35,14 +35,10 @@
   let cardWidth = $state(0);
   let cardHeight = $state(0);
 
-  // Svelte's bindings feed these; until a real layout exists (jsdom or the
-  // first frame) the card keeps its fixed corner placement.
-  const measured = $derived(
-    stageWidth > 0 && stageHeight > 0 && cardWidth > 0 && cardHeight > 0,
-  );
-
+  // Stage and card size stay 0 until Svelte's bindings measure them. The card
+  // remains mounted (and hidden) so those bindings can populate, then the
+  // helper either places it beside the selected tile or keeps it hidden.
   const placement = $derived.by(() => {
-    if (!measured) return null;
     const point = parseSelectedPoint(selectedId);
     if (point === null) return null;
     return placeInspectorPopover({
@@ -57,8 +53,7 @@
 
 <aside
   class="card inspection-card"
-  class:inspection-card--floating={placement === null}
-  class:inspection-card--hidden={measured && placement === null}
+  class:inspection-card--hidden={placement === null}
   style:left={placement === null ? undefined : `${placement.left}px`}
   style:top={placement === null ? undefined : `${placement.top}px`}
   bind:clientWidth={cardWidth}

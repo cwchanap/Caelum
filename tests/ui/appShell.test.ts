@@ -1041,7 +1041,12 @@ describe("App command shell", () => {
       ui: { ...createUiState(), selectedId: "7,7" },
     });
     render(App, { props: { runtime } });
-    expect(screen.getByTestId("panel-inspect")).toBeVisible();
+    // jsdom has no layout, so the anchored card is mounted (hidden) rather
+    // than visible; its presence and hidden state are what this shell test
+    // owns.
+    const inspector = screen.getByTestId("panel-inspect");
+    expect(inspector).toBeInTheDocument();
+    expect(inspector).toHaveClass("inspection-card--hidden");
     await fireEvent.click(screen.getByTestId("command-destination-build"));
     expect(screen.getByTestId("command-panel")).toHaveAttribute(
       "data-command-panel",
@@ -1477,7 +1482,7 @@ describe("App command shell", () => {
     expect(focused.selectedNodeKind).toBe("stop");
     expect(focused.selectedRouteId).toBe("route-001");
     expect(focused.routeDraft).toBeNull();
-    expect(screen.getByTestId("panel-inspect")).toBeVisible();
+    expect(screen.getByTestId("panel-inspect")).toBeInTheDocument();
     expect(runtime.focusWaitLocation).toHaveBeenCalledWith("route-001", stopId);
 
     // Activating the serving-line chip returns to Lines on the SAME route,
@@ -1497,7 +1502,7 @@ describe("App command shell", () => {
 
     // Closing Lines returns to the same stop inspector.
     await fireEvent.click(screen.getByRole("button", { name: "Close Lines" }));
-    expect(screen.getByTestId("panel-inspect")).toBeVisible();
+    expect(screen.getByTestId("panel-inspect")).toBeInTheDocument();
     expect(runtime.getSnapshot().ui.selectedId).toBe("7,7");
   });
 
