@@ -32,11 +32,13 @@
     ROTATE_KEY,
     SELECT_KEY,
     TRACK_KEY,
+    buildGroupShortcuts,
   } from "./ui/shortcuts";
   import { HUD_INSET } from "./render/boardTransform";
-  import type {
-    BuildGroup,
-    BuildItemAction,
+  import {
+    findBuildGroup,
+    type BuildGroup,
+    type BuildItemAction,
   } from "./domain/catalog/buildGroups";
   import { workingSaveErrorMessage } from "./runtime/rejectionMessages";
   import type { NewCityRequest } from "./runtime/workingSaveRuntime";
@@ -649,6 +651,27 @@
       setSnapshot(runtime.setTool("inspect"));
       return;
     }
+
+    // An open Build leaf group owns 1–9 ahead of the global road presets; the
+    // category grid and every other destination keep the existing 1/2/3.
+    if (
+      !routeDraftActive &&
+      snapshot?.ui.activeCommandDestination === "build" &&
+      snapshot.ui.activeBuildGroup !== null
+    ) {
+      const openGroup = findBuildGroup(snapshot.ui.activeBuildGroup);
+      const itemShortcuts =
+        openGroup === null ? {} : buildGroupShortcuts(openGroup);
+      const item = openGroup?.sections
+        .flatMap((section) => section.items)
+        .find((candidate) => itemShortcuts[candidate.id] === key);
+      if (item !== undefined) {
+        event.preventDefault();
+        handleSelectBuildItem(item.action);
+        return;
+      }
+    }
+
     if (snapshot?.ui.activeTool !== "road") return;
     const roadPreset = (Object.keys(ROAD_PRESET_KEYS) as RoadPreset[]).find(
       (preset) => ROAD_PRESET_KEYS[preset] === key,

@@ -1,12 +1,36 @@
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { AREA_KINDS } from "../../src/domain/catalog/areas";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
-import { BUILD_GROUPS } from "../../src/domain/catalog/buildGroups";
+import {
+  BUILD_GROUPS,
+  type BuildMenuGroup,
+} from "../../src/domain/catalog/buildGroups";
+import { ROAD_PRESET_KEYS, buildGroupShortcuts } from "../../src/ui/shortcuts";
 
 const items = () =>
   BUILD_GROUPS.flatMap((group) =>
     group.sections.flatMap((section) => section.items),
   );
+
+const item = (id: string) => {
+  const match = items().find((candidate) => candidate.id === id);
+  if (match === undefined) throw new Error(`missing build item ${id}`);
+  return match;
+};
+
+const groupItems = (group: BuildMenuGroup) =>
+  group.sections.flatMap((section) => section.items);
+
+const coreCost = (module: string, name: string): number => {
+  const source = readFileSync(
+    new URL(`../../crates/caelum-core/src/${module}`, import.meta.url),
+    "utf8",
+  );
+  const match = source.match(new RegExp(`pub const ${name}: i32 = ([\\d_]+);`));
+  if (match === null) throw new Error(`missing ${name} in ${module}`);
+  return Number(match[1].replaceAll("_", ""));
+};
 
 describe("BUILD_GROUPS", () => {
   it("orders exactly the four approved root groups", () => {
@@ -76,5 +100,97 @@ describe("BUILD_GROUPS", () => {
       .sort();
     const catalogEntries = Object.keys(BUILDING_CATALOG).sort();
     expect(placed).toEqual(catalogEntries);
+  });
+
+  it("gives every item a short description and a display cost", () => {
+    for (const entry of items()) {
+      expect(entry.description.trim()).not.toBe("");
+      if (entry.cost !== "free") {
+        expect(entry.cost.amount).toBeGreaterThan(0);
+        expect(["each", "perTile"]).toContain(entry.cost.unit);
+      }
+    }
+  });
+
+  it("derives building and stop prices from BUILDING_CATALOG", () => {
+    for (const entry of items()) {
+      const building =
+        entry.action.kind === "building"
+          ? entry.action.building
+          : entry.action.kind === "tool"
+            ? entry.action.tool
+            : null;
+      if (building === null) continue;
+      expect(entry.cost).toEqual({
+        amount: BUILDING_CATALOG[building].cost,
+        unit: "each",
+      });
+    }
+  });
+
+  it("pins the nominal non-building hints against the Rust cost constants", () => {
+    const road = coreCost("transit.rs", "ROAD_COST");
+    const track = coreCost("transit.rs", "TRACK_COST");
+    const compact = coreCost("roundabouts.rs", "COMPACT_ROUNDABOUT_COST");
+    const standard = coreCost("roundabouts.rs", "STANDARD_ROUNDABOUT_COST");
+
+    expect(item("road-twoWay").cost).toEqual({
+      amount: road,
+      unit: "perTile",
+    });
+    expect(item("road-oneWay").cost).toEqual({
+      amount: road,
+      unit: "perTile",
+    });
+    // A dual stroke tile can need both lanes, so its nominal hint is two tiles.
+    expect(item("road-dual").cost).toEqual({
+      amount: road * 2,
+      unit: "perTile",
+    });
+    expect(item("track").cost).toEqual({
+      amount: track,
+      unit: "perTile",
+    });
+    expect(item("compactRoundabout").cost).toEqual({
+      amount: compact,
+      unit: "each",
+    });
+    expect(item("standardRoundabout").cost).toEqual({
+      amount: standard,
+      unit: "each",
+    });
+    for (const entry of groupItems(BUILD_GROUPS[2])) {
+      expect(entry.cost).toBe("free");
+    }
+  });
+});
+
+describe("buildGroupShortcuts", () => {
+  it("maps the first nine visible items to 1–9 in order", () => {
+    for (const group of BUILD_GROUPS) {
+      const shortcuts = buildGroupShortcuts(group);
+      const visible = groupItems(group);
+      visible.slice(0, 9).forEach((entry, index) => {
+        expect(shortcuts[entry.id]).toBe(String(index + 1));
+      });
+      for (const entry of visible.slice(9)) {
+        expect(shortcuts[entry.id]).toBeUndefined();
+      }
+    }
+    expect(Object.keys(buildGroupShortcuts(BUILD_GROUPS[3]))).toHaveLength(9);
+    expect(Object.keys(buildGroupShortcuts(BUILD_GROUPS[1]))).toHaveLength(4);
+  });
+
+  it("keeps Roads 1/2/3 aligned with ROAD_PRESET_KEYS", () => {
+    const shortcuts = buildGroupShortcuts(BUILD_GROUPS[0]);
+    for (const preset of ["twoWay", "oneWay", "dualBidirectional"] as const) {
+      const entry = groupItems(BUILD_GROUPS[0]).find(
+        (candidate) =>
+          candidate.action.kind === "road" &&
+          candidate.action.roadPreset === preset,
+      );
+      expect(entry).toBeDefined();
+      expect(shortcuts[entry!.id]).toBe(ROAD_PRESET_KEYS[preset]);
+    }
   });
 });

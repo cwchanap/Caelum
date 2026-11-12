@@ -7,7 +7,7 @@ This folder contains the single reference board for the selected **direction A �
 
 - `style-sheet.webp` — 2560×4440 reference board (live-map palette, material samples, three tree silhouettes, representative building types, a street block, Small/Medium/Large Fit composites, max-zoom 0°/180° proof and a 1:1 texture check).
 
-The board is reference art only, not a runtime asset. The game continues to use the merged HPA-678 renderer and the existing `src/assets/command-plates/` images until HPA-677 / HPA-696 integrate approved art.
+The board is reference art only, not a runtime asset. The game uses the merged HPA-678 renderer together with `src/assets/sunny-diorama/build-categories/` for the Build category plates and `src/assets/sunny-diorama/build-items/` for the Build item thumbnails; HPA-677 integrates the map sprites.
 
 ## Palette, material and lighting rules
 

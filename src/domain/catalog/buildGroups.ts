@@ -21,8 +21,15 @@ export type BuildItemAction =
 export interface BuildMenuItem {
   id: string;
   label: string;
+  description: string;
+  /** Display-only nominal hint; Rust and the cursor preview stay authoritative. */
+  cost: BuildItemCost;
   action: BuildItemAction;
 }
+
+export type BuildItemCost =
+  | { amount: number; unit: "each" | "perTile" }
+  | "free";
 
 export interface BuildMenuSection {
   id: string;
@@ -37,10 +44,44 @@ export interface BuildMenuGroup {
   hint?: string;
 }
 
+const buildingDescriptions: Record<BuildingType, string> = {
+  busStop: "Buses pick up and drop off passengers here.",
+  busTerminal: "Bus interchange with room for several routes.",
+  metroStation: "Metro platform served by running track lines.",
+  smallHouse: "Compact starter home.",
+  largeHouse: "Family home with room to grow.",
+  supermarket: "Neighbourhood shop.",
+  cinema: "Entertainment venue.",
+  factory: "Industrial workplace with early and late shifts.",
+  warehouse: "Freight depot.",
+  officeTower: "Downtown office tower.",
+  businessPark: "Low-rise office park.",
+  clinic: "Civic health centre.",
+  school: "Civic school.",
+  parkPlaza: "Green public plaza.",
+};
+
+const buildingCost = (building: BuildingType): BuildItemCost => ({
+  amount: BUILDING_CATALOG[building].cost,
+  unit: "each",
+});
+
 const buildingItem = (building: BuildingType): BuildMenuItem => ({
   id: building,
   label: BUILDING_CATALOG[building].label,
+  description: buildingDescriptions[building],
+  cost: buildingCost(building),
   action: { kind: "building", building },
+});
+
+const transitBuildingItem = (
+  tool: Extract<Tool, "busStop" | "metroStation">,
+): BuildMenuItem => ({
+  id: tool,
+  label: BUILDING_CATALOG[tool].label,
+  description: buildingDescriptions[tool],
+  cost: buildingCost(tool),
+  action: { kind: "tool", tool },
 });
 
 const areaSections: BuildMenuSection[] = AREA_KINDS.map((area) => ({
@@ -50,6 +91,15 @@ const areaSections: BuildMenuSection[] = AREA_KINDS.map((area) => ({
     .filter((definition) => definition.allowedArea === area)
     .map((definition) => buildingItem(definition.type)),
 }));
+
+const zoneDescriptions: Record<AreaKind, string> = {
+  residential: "Homes grow here once a running line serves the land.",
+  commercial: "Shops and supermarkets grow on served land.",
+  industrial: "Factories and warehouses grow on served land.",
+  office: "Offices grow on served land.",
+  civic: "Clinics and schools grow on served land.",
+  park: "Park land; park plazas build here.",
+};
 
 export const BUILD_GROUPS: BuildMenuGroup[] = [
   {
@@ -63,26 +113,37 @@ export const BUILD_GROUPS: BuildMenuGroup[] = [
           {
             id: "road-twoWay",
             label: "1-Lane",
+            description: "Two-way street with one lane each way.",
+            cost: { amount: 100, unit: "perTile" },
             action: { kind: "road", roadPreset: "twoWay" },
           },
           {
             id: "road-oneWay",
             label: "1-Lane One-Way",
+            description: "One-way street; traffic follows the drag direction.",
+            cost: { amount: 100, unit: "perTile" },
             action: { kind: "road", roadPreset: "oneWay" },
           },
           {
             id: "road-dual",
             label: "2-Lane",
+            description:
+              "Divided road; up to $200 per stroke tile when both lanes need building.",
+            cost: { amount: 200, unit: "perTile" },
             action: { kind: "road", roadPreset: "dualBidirectional" },
           },
           {
             id: "compactRoundabout",
             label: "Compact Roundabout",
+            description: "Compact 2 × 2 roundabout for tight junctions.",
+            cost: { amount: 1_000, unit: "each" },
             action: { kind: "roundabout", size: "compact2x2" },
           },
           {
             id: "standardRoundabout",
             label: "Standard Roundabout",
+            description: "Standard 3 × 3 roundabout for busier crossings.",
+            cost: { amount: 2_000, unit: "each" },
             action: { kind: "roundabout", size: "standard3x3" },
           },
         ],
@@ -97,18 +158,16 @@ export const BUILD_GROUPS: BuildMenuGroup[] = [
         id: "transit",
         label: null,
         items: [
-          { id: "track", label: "Track", action: { kind: "track" } },
           {
-            id: "busStop",
-            label: "Bus Stop",
-            action: { kind: "tool", tool: "busStop" },
+            id: "track",
+            label: "Track",
+            description: "Metro track tile; trains follow the drawn path.",
+            cost: { amount: 500, unit: "perTile" },
+            action: { kind: "track" },
           },
+          transitBuildingItem("busStop"),
           buildingItem("busTerminal"),
-          {
-            id: "metroStation",
-            label: "Metro Station",
-            action: { kind: "tool", tool: "metroStation" },
-          },
+          transitBuildingItem("metroStation"),
         ],
       },
     ],
@@ -123,6 +182,8 @@ export const BUILD_GROUPS: BuildMenuGroup[] = [
         items: AREA_KINDS.map((area) => ({
           id: area,
           label: AREA_LABELS[area],
+          description: zoneDescriptions[area],
+          cost: "free" as const,
           action: { kind: "area" as const, area },
         })),
       },

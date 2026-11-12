@@ -39,6 +39,12 @@
     event.preventDefault();
     buttons[target]?.focus();
   }
+
+  /** Build drilldown focus return: focus the plate for a leaf group. */
+  export function focusPlate(group: BuildGroup): void {
+    const index = plates.findIndex((plate) => plate.id === group);
+    if (index >= 0) buttons[index]?.focus();
+  }
 </script>
 
 <div class="command-plate-grid" data-testid="command-plate-grid">
