@@ -191,10 +191,12 @@
   // Scroll the selected service card into view once per selection change. The
   // list is rebuilt on every tick, so compare the selected ID instead of
   // scrolling on each snapshot. A selection made while the editor replaces the
-  // list has no card yet, so leave it pending until the card returns.
+  // list has no card yet, so leave it pending until the card returns — and
+  // clear the tracking then too, so the card scrolls back if the panel
+  // scroller clamped while the shorter editor stood in for the list.
   $effect(() => {
     const selectedId = routes.find((route) => route.selected)?.id ?? null;
-    if (selectedId === null) {
+    if (selectedId === null || routeDraft !== null) {
       previousSelectedRouteId = null;
       return;
     }

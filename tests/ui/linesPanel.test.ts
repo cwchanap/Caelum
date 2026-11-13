@@ -328,6 +328,36 @@ describe("LinesPanel line workspace", () => {
     scrollIntoView.mockRestore();
   });
 
+  it("scrolls the selected card again when editing closes over the same selection", async () => {
+    const scrollIntoView = vi.spyOn(Element.prototype, "scrollIntoView");
+    const routes = routeFixtures();
+    routes[0].selected = true;
+    const { rerender } = render(LinesPanel, { props: panelProps({ routes }) });
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(1));
+    expect(scrollIntoView.mock.instances[0]).toBe(
+      screen.getByTestId("route-item-route-bus-001"),
+    );
+
+    // The editor replaces the list while the selection stays put. If the
+    // panel scroller clamps while the shorter editor is up, the card must
+    // scroll back into view once the list returns.
+    const draft = createDraftView({
+      source: "edit",
+      title: "Editing Harbour Bus",
+      initialFleetCost: null,
+    });
+    await rerender(panelProps({ routeDraft: draft, routes }));
+    await rerender(panelProps({ routes }));
+
+    await waitFor(() => expect(scrollIntoView).toHaveBeenCalledTimes(2));
+    expect(scrollIntoView.mock.instances[1]).toBe(
+      screen.getByTestId("route-item-route-bus-001"),
+    );
+
+    scrollIntoView.mockRestore();
+  });
+
   it("shows actual fleet and daily cost on a selected zero-fleet card", () => {
     const routes = routeFixtures();
     routes[0] = {
