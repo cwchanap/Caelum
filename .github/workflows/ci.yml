@@ -95,6 +95,8 @@ jobs:
           name: ts-unit
           fail_ci_if_error: true
           use_oidc: true
+          # shortcut: bypass the ingest activation mismatch; remove after Codecov repairs it.
+          use_legacy_upload_endpoint: true
 
   playwright-test:
     if: ${{ github.event_name != 'pull_request' || github.event.pull_request.draft == false }}
