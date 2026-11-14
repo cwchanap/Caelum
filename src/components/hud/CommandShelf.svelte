@@ -405,13 +405,14 @@
   @container (max-width: 1020px) {
     /* Icon-only single row: a text row pair would rise above the 88px bottom
      * HUD safe band, and shrinking the row to leave the zoom controls would
-     * clip labels. The label text stays in the accessibility tree; mode is
-     * conveyed by the active button state. From a 1021px stage the widest
-     * labelled shelf (Data's overlay badge plus a three-digit line count)
-     * still clears the bottom-left Fit column by at least 8px; below that the
-     * centred shelf covers Fit's right edge. */
+     * clip labels. Labels and the active-mode readout stay in the
+     * accessibility tree; active tool state is conveyed by the pressed button.
+     * From a 1021px stage the widest labelled shelf (Data's overlay badge plus
+     * a three-digit line count) still clears the bottom-left Fit column by at
+     * least 8px; below that the centred shelf covers Fit's right edge. */
     .command-shelf__label,
-    .command-shelf__tool-label {
+    .command-shelf__tool-label,
+    .command-shelf__mode {
       position: absolute;
       width: 1px;
       height: 1px;
@@ -420,10 +421,7 @@
       overflow: hidden;
       clip-path: inset(50%);
       white-space: nowrap;
-    }
-
-    .command-shelf__mode {
-      display: none;
+      border: 0;
     }
 
     .command-shelf__destination,

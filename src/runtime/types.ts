@@ -146,6 +146,7 @@ export interface RouteEditorWaypointView {
 export interface RouteEditorView {
   source: "create" | "edit";
   title: string;
+  color: string | null;
   mode: TransitMode;
   pattern: ServicePattern;
   waypoints: RouteEditorWaypointView[];

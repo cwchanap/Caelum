@@ -90,6 +90,11 @@ export function samePoint(left: Point | null, right: Point | null): boolean {
 
 export type RoundaboutSize = "compact2x2" | "standard3x3";
 
+export const ROUNDABOUT_DIMENSIONS: Record<RoundaboutSize, number> = {
+  compact2x2: 2,
+  standard3x3: 3,
+};
+
 export type PortDirection = "twoWay" | "inbound" | "outbound";
 
 export interface RoadPort {

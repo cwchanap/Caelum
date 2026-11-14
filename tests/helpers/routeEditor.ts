@@ -12,6 +12,7 @@ export function createDraftView(
   return {
     source: "create",
     title: "New Bus Route",
+    color: null,
     mode: "bus",
     pattern: "loop",
     waypoints: [

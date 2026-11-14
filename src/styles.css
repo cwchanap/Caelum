@@ -1175,6 +1175,7 @@ body {
 }
 
 .route-waypoints button.active {
+  border-left: 0;
   background: color-mix(in srgb, var(--route-color) 9%, transparent);
   color: var(--ink);
 }
@@ -1947,12 +1948,12 @@ body {
 }
 
 .city-actions button,
-.city-list-actions button {
+.city-section .city-list-actions button {
   min-height: 32px;
   padding: 4px 10px;
 }
 
-.city-name {
+.city-section .city-name {
   min-width: 0;
   padding: 4px 6px;
   border: 1px solid var(--line);
@@ -1964,7 +1965,7 @@ body {
   letter-spacing: 0.02em;
 }
 
-.city-name:focus-visible {
+.city-section .city-name:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

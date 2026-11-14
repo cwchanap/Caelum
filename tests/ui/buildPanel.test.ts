@@ -141,8 +141,21 @@ describe("BuildPanel item cards", () => {
     expect(card).toHaveAccessibleDescription(/Compact starter home\./);
   });
 
-  it("shows the rotated footprint for an armed building", () => {
-    renderPanel({ activeBuildGroup: "buildings", buildingRotation: 90 });
+  it("shows the rotated footprint only for the armed building", async () => {
+    const view = renderView({
+      activeBuildGroup: "buildings",
+      selectedBuilding: "officeTower",
+      buildingRotation: 90,
+    });
+    expect(screen.getByTestId("build-item-smallHouse")).toHaveTextContent(
+      "2 × 1 · $4,000 each",
+    );
+
+    await view.rerender({
+      ...view.props,
+      selectedBuilding: "smallHouse",
+      buildingRotation: 90,
+    });
     expect(screen.getByTestId("build-item-smallHouse")).toHaveTextContent(
       "1 × 2 · $4,000 each",
     );
@@ -213,15 +226,15 @@ describe("BuildPanel item cards", () => {
 describe("BuildPanel shortcuts", () => {
   it("badges the first nine visible items with 1–9", () => {
     renderPanel({ activeBuildGroup: "transit" });
-    for (const [id, key] of [
-      ["track", "1"],
-      ["busStop", "2"],
-      ["busTerminal", "3"],
-      ["metroStation", "4"],
+    for (const [id, keyShortcuts, chip] of [
+      ["track", "1 t", "1 / T"],
+      ["busStop", "2", "2"],
+      ["busTerminal", "3", "3"],
+      ["metroStation", "4", "4"],
     ]) {
       const card = screen.getByTestId(`build-item-${id}`);
-      expect(card).toHaveAttribute("aria-keyshortcuts", key);
-      expect(card.querySelector(".build-item__key")).toHaveTextContent(key);
+      expect(card).toHaveAttribute("aria-keyshortcuts", keyShortcuts);
+      expect(card.querySelector(".build-item__key")).toHaveTextContent(chip);
     }
 
     renderPanel({ activeBuildGroup: "zones" });
@@ -281,7 +294,7 @@ describe("BuildPanel shortcuts", () => {
   it("labels a shortcut in the card title without changing its name", () => {
     renderPanel({ activeBuildGroup: "transit" });
     const track = screen.getByRole("button", { name: "Track" });
-    expect(track).toHaveAttribute("title", "Track (1)");
+    expect(track).toHaveAttribute("title", "Track (1 / T)");
     const busStop = screen.getByRole("button", { name: "Bus Stop" });
     expect(busStop).toHaveAttribute("aria-keyshortcuts", "2");
   });

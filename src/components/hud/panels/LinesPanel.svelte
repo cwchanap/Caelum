@@ -89,15 +89,6 @@
   let previousDraftActive = $state<boolean | null>(null);
   let previousSelectedRouteId: string | null = null;
 
-  // An edit draft is opened from the selected row, so the rail takes the
-  // saved line's colour; a new draft has no saved colour and falls back to
-  // the neutral accent in CSS.
-  const editorColor = $derived(
-    routeDraft?.source === "edit"
-      ? (routes.find((route) => route.selected)?.color ?? null)
-      : null,
-  );
-
   // Rust stores target_headway_seconds as u32; minutes * 60 must not overflow it.
   const MAX_HEADWAY_MINUTES = Math.floor(0xffff_ffff / 60);
 
@@ -183,7 +174,7 @@
   $effect(() => {
     const draftActive = routeDraft !== null;
     if (previousDraftActive === true && !draftActive) {
-      void tick().then(() => listRegion?.focus());
+      void tick().then(() => listRegion?.focus({ preventScroll: true }));
     }
     previousDraftActive = draftActive;
   });
@@ -226,7 +217,7 @@
       </p>
       <RouteEditor
         editor={routeDraft}
-        color={editorColor}
+        color={routeDraft.color}
         {onSelectWaypoint}
         {onRemove}
         {onUndo}

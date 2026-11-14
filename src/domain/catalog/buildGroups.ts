@@ -199,3 +199,7 @@ export function findBuildGroup(id: BuildGroup | null): BuildMenuGroup | null {
     ? null
     : (BUILD_GROUPS.find((group) => group.id === id) ?? null);
 }
+
+export function buildGroupItems(group: BuildMenuGroup): BuildMenuItem[] {
+  return group.sections.flatMap((section) => section.items);
+}
