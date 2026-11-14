@@ -9,7 +9,10 @@ import type {
   Tile,
   Tool,
 } from "../../domain/types";
-import { ROAD_DIRECTION_OFFSET } from "../../domain/types";
+import {
+  ROAD_DIRECTION_OFFSET,
+  ROUNDABOUT_DIMENSIONS,
+} from "../../domain/types";
 import { tileSize } from "../boardTransform";
 import { areaColors, colors } from "../colors";
 import {
@@ -350,7 +353,7 @@ function roundaboutVisualTemplate(
   circulationCurves: PathGeometry[];
   protectedIslands: Point[];
 } {
-  const dimension = structure.size === "compact2x2" ? 2 : 3;
+  const dimension = ROUNDABOUT_DIMENSIONS[structure.size];
   const segmentCount = structure.size === "compact2x2" ? 4 : 8;
   const center = {
     x: structure.origin.x + (dimension - 1) / 2,

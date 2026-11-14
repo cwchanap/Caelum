@@ -477,15 +477,17 @@ export function selectRouteEditorView(
           status: "rejected" as const,
           message: rejectionMessage(staleRejection),
         };
+  const routeMeta = routeId === null ? null : routeNameAndColor(state, routeId);
   const title =
-    routeId === null
+    routeMeta === null
       ? draft.mode === "metro"
         ? "New Metro Line"
         : "New Bus Route"
-      : `Editing ${routeNameAndColor(state, routeId).name}`;
+      : `Editing ${routeMeta.name}`;
   return {
     source: draft.source.kind,
     title,
+    color: routeMeta?.color ?? null,
     mode: draft.mode,
     pattern: draft.pattern,
     waypoints: draft.waypointIds.map((id, index) => {

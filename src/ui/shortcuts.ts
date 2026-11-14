@@ -1,5 +1,9 @@
 import type { RoadPreset } from "../domain/types";
-import type { BuildMenuGroup } from "../domain/catalog/buildGroups";
+import {
+  buildGroupItems,
+  type BuildMenuGroup,
+  type BuildMenuItem,
+} from "../domain/catalog/buildGroups";
 
 export const BUILD_KEY = "b";
 export const ROTATE_KEY = "r";
@@ -23,9 +27,16 @@ export function buildGroupShortcuts(
   group: BuildMenuGroup,
 ): Record<string, string> {
   return Object.fromEntries(
-    group.sections
-      .flatMap((section) => section.items)
+    buildGroupItems(group)
       .slice(0, 9)
       .map((item, index) => [item.id, String(index + 1)]),
   );
+}
+
+export function findBuildGroupShortcutItem(
+  group: BuildMenuGroup,
+  key: string,
+): BuildMenuItem | undefined {
+  if (!/^[1-9]$/.test(key)) return undefined;
+  return buildGroupItems(group)[Number(key) - 1];
 }

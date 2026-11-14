@@ -9,8 +9,8 @@ import type {
   ShellVehicleInspectorState,
 } from "../../src/runtime/types";
 
-// jsdom ships no ResizeObserver; Svelte's clientWidth/Height bindings only
-// need a mountable one. Sizes stay 0, so the card keeps its fallback corner.
+// jsdom ships no ResizeObserver; Svelte's offsetWidth/Height bindings only
+// need a mountable one.
 vi.stubGlobal(
   "ResizeObserver",
   class {
@@ -301,5 +301,59 @@ describe("InspectPanel vehicle", () => {
 
     expect(onOpenServiceControls).toHaveBeenCalledTimes(1);
     expect(onOpenServiceControls).toHaveBeenCalledWith("route-001");
+  });
+});
+
+describe("InspectPanel visibility and placement", () => {
+  it("shows and positions the card once stage and card dimensions are measured", () => {
+    const offsetWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+      .mockReturnValue(240);
+    const offsetHeightSpy = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(160);
+    try {
+      render(InspectPanel, {
+        props: {
+          inspector: buildingInspector(),
+          selectedId: "7,7",
+          map: { width: 28, height: 18 },
+          camera: null,
+          stageWidth: 1000,
+          stageHeight: 800,
+          onAssignRouteToPlatform: vi.fn(),
+          onOpenServiceControls: vi.fn(),
+        },
+      });
+
+      const card = screen.getByTestId("panel-inspect");
+      expect(card).toBeVisible();
+      expect(card).not.toHaveClass("inspection-card--hidden");
+      expect(card.style.left).not.toBe("");
+      expect(card.style.top).not.toBe("");
+    } finally {
+      offsetWidthSpy.mockRestore();
+      offsetHeightSpy.mockRestore();
+    }
+  });
+
+  it("stays hidden when card dimensions are not measured yet", () => {
+    render(InspectPanel, {
+      props: {
+        inspector: buildingInspector(),
+        selectedId: "7,7",
+        map: { width: 28, height: 18 },
+        camera: null,
+        stageWidth: 1000,
+        stageHeight: 800,
+        onAssignRouteToPlatform: vi.fn(),
+        onOpenServiceControls: vi.fn(),
+      },
+    });
+
+    const card = screen.getByTestId("panel-inspect");
+    expect(card).toHaveClass("inspection-card--hidden");
+    expect(card.style.left).toBe("");
+    expect(card.style.top).toBe("");
   });
 });

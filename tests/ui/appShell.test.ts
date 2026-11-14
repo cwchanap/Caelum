@@ -29,9 +29,9 @@ import type {
 } from "../../src/runtime/types";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
 
-// jsdom ships no ResizeObserver; Svelte's clientWidth/Height bindings only
-// need a mountable one. Sizes stay 0, so the Inspector keeps its fallback
-// corner while the pure placement helper covers anchored geometry.
+// jsdom ships no ResizeObserver; Svelte's dimension bindings only need a
+// mountable one. Unmocked element sizes stay 0, so the Inspector stays hidden
+// until stage and card dimensions are measured.
 vi.stubGlobal(
   "ResizeObserver",
   class {
@@ -1033,32 +1033,57 @@ describe("App command shell", () => {
   });
 
   it("shows one command panel at a time and contextual Inspect only when no destination is open", async () => {
-    let state = createTestGameState();
-    state = withRoads(state, [{ x: 7, y: 7 }]);
-    state = addTestBusStop(state, { x: 7, y: 7 });
-    const { runtime } = createRuntimeHarness({
-      state,
-      ui: { ...createUiState(), selectedId: "7,7" },
-    });
-    render(App, { props: { runtime } });
-    // jsdom has no layout, so the anchored card is mounted (hidden) rather
-    // than visible; its presence and hidden state are what this shell test
-    // owns.
-    const inspector = screen.getByTestId("panel-inspect");
-    expect(inspector).toBeInTheDocument();
-    expect(inspector).toHaveClass("inspection-card--hidden");
-    await fireEvent.click(screen.getByTestId("command-destination-build"));
-    expect(screen.getByTestId("command-panel")).toHaveAttribute(
-      "data-command-panel",
-      "build",
-    );
-    expect(screen.queryByTestId("panel-inspect")).toBeNull();
-    await fireEvent.click(screen.getByTestId("command-destination-data"));
-    expect(screen.getByTestId("command-panel")).toHaveAttribute(
-      "data-command-panel",
-      "data",
-    );
-    expect(screen.queryByTestId("command-panel-build")).toBeNull();
+    const clientWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "clientWidth", "get")
+      .mockReturnValue(1000);
+    const clientHeightSpy = vi
+      .spyOn(HTMLElement.prototype, "clientHeight", "get")
+      .mockReturnValue(800);
+    const offsetWidthSpy = vi
+      .spyOn(HTMLElement.prototype, "offsetWidth", "get")
+      .mockReturnValue(240);
+    const offsetHeightSpy = vi
+      .spyOn(HTMLElement.prototype, "offsetHeight", "get")
+      .mockReturnValue(160);
+    try {
+      let state = createTestGameState();
+      state = withRoads(state, [{ x: 7, y: 7 }]);
+      state = addTestBusStop(state, { x: 7, y: 7 });
+      const { runtime } = createRuntimeHarness({
+        state,
+        ui: { ...createUiState(), selectedId: "7,7" },
+      });
+      render(App, { props: { runtime } });
+      const inspector = screen.getByTestId("panel-inspect");
+      expect(inspector).toBeVisible();
+      expect(inspector).not.toHaveClass("inspection-card--hidden");
+      expect(inspector.style.left).not.toBe("");
+      expect(inspector.style.top).not.toBe("");
+      await fireEvent.click(screen.getByTestId("command-destination-build"));
+      expect(screen.getByTestId("command-panel")).toHaveAttribute(
+        "data-command-panel",
+        "build",
+      );
+      expect(screen.queryByTestId("panel-inspect")).toBeNull();
+      await fireEvent.click(screen.getByTestId("command-destination-data"));
+      expect(screen.getByTestId("command-panel")).toHaveAttribute(
+        "data-command-panel",
+        "data",
+      );
+      expect(screen.queryByTestId("command-panel-build")).toBeNull();
+
+      await fireEvent.click(screen.getByRole("button", { name: "Close Data" }));
+      const reopenedInspector = screen.getByTestId("panel-inspect");
+      expect(reopenedInspector).toBeVisible();
+      expect(reopenedInspector).not.toHaveClass("inspection-card--hidden");
+      expect(reopenedInspector.style.left).not.toBe("");
+      expect(reopenedInspector.style.top).not.toBe("");
+    } finally {
+      clientWidthSpy.mockRestore();
+      clientHeightSpy.mockRestore();
+      offsetWidthSpy.mockRestore();
+      offsetHeightSpy.mockRestore();
+    }
   });
 
   it("returns focus to the canvas after selecting a Build leaf", async () => {
@@ -1146,7 +1171,7 @@ describe("App command shell", () => {
     expect(runtime.armRoad).not.toHaveBeenCalled();
   });
 
-  it("ignores shifted number keys in an open Build group", async () => {
+  it("accepts shifted number keys in an open Build group for layouts where digits require Shift", async () => {
     const { runtime } = createRuntimeHarness({
       ui: { ...createUiState(), activeTool: "road" },
     });
@@ -1155,10 +1180,8 @@ describe("App command shell", () => {
     await fireEvent.click(screen.getByTestId("command-destination-build"));
     await fireEvent.click(screen.getByTestId("command-plate-roads"));
     await fireEvent.keyDown(window, { key: "4", shiftKey: true });
-    await fireEvent.keyDown(window, { key: "3", shiftKey: true });
 
-    expect(runtime.armRoundabout).not.toHaveBeenCalled();
-    expect(runtime.armRoad).not.toHaveBeenCalled();
+    expect(runtime.armRoundabout).toHaveBeenCalledWith("compact2x2");
     expect(runtime.setRoadPreset).not.toHaveBeenCalled();
   });
 

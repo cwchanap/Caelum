@@ -1,17 +1,49 @@
-<script lang="ts">
-  import { tick } from "svelte";
-  import type {
-    AreaKind,
-    BuildingRotation,
-    BuildingType,
-    RoadPreset,
-    RoundaboutSize,
-    Tool,
-  } from "../../../domain/types";
+<script module lang="ts">
   import {
     BUILD_GROUPS,
-    findBuildGroup,
     type BuildGroup,
+  } from "../../../domain/catalog/buildGroups";
+  import roadsPlate from "../../../assets/sunny-diorama/build-categories/roads.webp";
+  import transitPlate from "../../../assets/sunny-diorama/build-categories/transit.webp";
+  import zonesPlate from "../../../assets/sunny-diorama/build-categories/zones.webp";
+  import buildingsPlate from "../../../assets/sunny-diorama/build-categories/buildings.webp";
+
+  const plates = (
+    [
+      { id: "roads", label: "Roads", image: roadsPlate },
+      { id: "transit", label: "Transit", image: transitPlate },
+      { id: "zones", label: "Zones", image: zonesPlate },
+      { id: "buildings", label: "Buildings", image: buildingsPlate },
+    ] satisfies Array<{ id: BuildGroup; label: string; image: string }>
+  ).filter((plate) => BUILD_GROUPS.some((group) => group.id === plate.id));
+
+  const itemThumbnails: Record<string, string> = Object.fromEntries(
+    Object.entries(
+      import.meta.glob<string>(
+        "../../../assets/sunny-diorama/build-items/*.webp",
+        { eager: true, import: "default" },
+      ),
+    ).map(([path, image]) => [
+      path.slice(path.lastIndexOf("/") + 1, -".webp".length),
+      image,
+    ]),
+  );
+</script>
+
+<script lang="ts">
+  import { tick } from "svelte";
+  import {
+    ROUNDABOUT_DIMENSIONS,
+    type AreaKind,
+    type BuildingRotation,
+    type BuildingType,
+    type RoadPreset,
+    type RoundaboutSize,
+    type Tool,
+  } from "../../../domain/types";
+  import {
+    buildGroupItems,
+    findBuildGroup,
     type BuildItemAction,
     type BuildItemCost,
     type BuildMenuItem,
@@ -20,12 +52,13 @@
     BUILDING_CATALOG,
     getRotatedFootprintSize,
   } from "../../../domain/catalog/buildings";
+  import { formatBudget } from "../../../runtime/runtimeSelectors";
   import CommandPlateGrid from "../CommandPlateGrid.svelte";
-  import roadsPlate from "../../../assets/sunny-diorama/build-categories/roads.webp";
-  import transitPlate from "../../../assets/sunny-diorama/build-categories/transit.webp";
-  import zonesPlate from "../../../assets/sunny-diorama/build-categories/zones.webp";
-  import buildingsPlate from "../../../assets/sunny-diorama/build-categories/buildings.webp";
-  import { ROTATE_KEY, buildGroupShortcuts } from "../../../ui/shortcuts";
+  import {
+    ROTATE_KEY,
+    TRACK_KEY,
+    buildGroupShortcuts,
+  } from "../../../ui/shortcuts";
 
   interface Props {
     activeBuildGroup: BuildGroup | null;
@@ -52,27 +85,6 @@
     onSelectItem,
     onRotateBuilding,
   }: Props = $props();
-
-  const plates = (
-    [
-      { id: "roads", label: "Roads", image: roadsPlate },
-      { id: "transit", label: "Transit", image: transitPlate },
-      { id: "zones", label: "Zones", image: zonesPlate },
-      { id: "buildings", label: "Buildings", image: buildingsPlate },
-    ] satisfies Array<{ id: BuildGroup; label: string; image: string }>
-  ).filter((plate) => BUILD_GROUPS.some((group) => group.id === plate.id));
-
-  const itemThumbnails: Record<string, string> = Object.fromEntries(
-    Object.entries(
-      import.meta.glob<string>(
-        "../../../assets/sunny-diorama/build-items/*.webp",
-        { eager: true, import: "default" },
-      ),
-    ).map(([path, image]) => [
-      path.slice(path.lastIndexOf("/") + 1, -".webp".length),
-      image,
-    ]),
-  );
 
   let plateGrid: {
     focusPlate: (group: BuildGroup) => void;
@@ -116,7 +128,7 @@
           : null;
     return [
       `${size.width} × ${size.height}`,
-      `$${armedDefinition.cost.toLocaleString("en-US")}`,
+      formatBudget(armedDefinition.cost),
       ...(capacity === null ? [] : [capacity]),
     ].join(" · ");
   });
@@ -154,12 +166,10 @@
 
   const activeItem = $derived.by((): BuildMenuItem | null => {
     if (activeGroup === null) return null;
-    for (const section of activeGroup.sections) {
-      for (const item of section.items) {
-        if (isItemActive(item.action)) return item;
-      }
-    }
-    return null;
+    return (
+      buildGroupItems(activeGroup).find((item) => isItemActive(item.action)) ??
+      null
+    );
   });
 
   function itemFootprint(
@@ -168,13 +178,12 @@
     if (action.kind === "building" || action.kind === "tool") {
       return getRotatedFootprintSize(
         action.kind === "building" ? action.building : action.tool,
-        buildingRotation,
+        isItemActive(action) ? buildingRotation : 0,
       );
     }
     if (action.kind === "roundabout") {
-      return action.size === "compact2x2"
-        ? { width: 2, height: 2 }
-        : { width: 3, height: 3 };
+      const dimension = ROUNDABOUT_DIMENSIONS[action.size];
+      return { width: dimension, height: dimension };
     }
     if (action.kind === "road" || action.kind === "track") {
       return { width: 1, height: 1 };
@@ -184,13 +193,24 @@
 
   function costLabel(cost: BuildItemCost): string {
     if (cost === "free") return "Free";
-    const amount = `$${cost.amount.toLocaleString("en-US")}`;
+    const amount = formatBudget(cost.amount);
     return cost.unit === "each" ? `${amount} each` : `${amount}/tile`;
   }
 
   function itemMeta(action: BuildItemAction, cost: BuildItemCost): string {
     const size = itemFootprint(action);
     return `${size === null ? "Paint" : `${size.width} × ${size.height}`} · ${costLabel(cost)}`;
+  }
+
+  function itemKeyShortcuts(
+    action: BuildItemAction,
+    shortcut: string | undefined,
+  ): string | undefined {
+    const keys = [
+      ...(shortcut === undefined ? [] : [shortcut]),
+      ...(action.kind === "track" ? [TRACK_KEY] : []),
+    ];
+    return keys.length === 0 ? undefined : keys.join(" ");
   }
 </script>
 
@@ -229,7 +249,14 @@
             aria-label={`${section.label ?? activeGroup.label} items`}
           >
             {#each section.items as item (item.id)}
-              {@const shortcut = shortcuts[item.id]}
+              {@const keyShortcuts = itemKeyShortcuts(
+                item.action,
+                shortcuts[item.id],
+              )}
+              {@const shortcutLabel = keyShortcuts
+                ?.toUpperCase()
+                .split(" ")
+                .join(" / ")}
               <button
                 type="button"
                 class="build-item"
@@ -242,10 +269,10 @@
                 aria-pressed={isItemActive(item.action)}
                 aria-label={item.label}
                 aria-describedby={`build-item-meta-${item.id} build-item-description-${item.id}`}
-                aria-keyshortcuts={shortcut}
-                title={shortcut === undefined
+                aria-keyshortcuts={keyShortcuts}
+                title={shortcutLabel === undefined
                   ? undefined
-                  : `${item.label} (${shortcut.toUpperCase()})`}
+                  : `${item.label} (${shortcutLabel})`}
                 onclick={() => onSelectItem(item.action)}
               >
                 <span class="build-item__media">
@@ -255,9 +282,9 @@
                     alt=""
                     aria-hidden="true"
                   />
-                  {#if shortcut !== undefined}
+                  {#if shortcutLabel !== undefined}
                     <kbd class="build-item__key" aria-hidden="true"
-                      >{shortcut}</kbd
+                      >{shortcutLabel}</kbd
                     >
                   {/if}
                 </span>

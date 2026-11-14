@@ -32,7 +32,7 @@
     ROTATE_KEY,
     SELECT_KEY,
     TRACK_KEY,
-    buildGroupShortcuts,
+    findBuildGroupShortcutItem,
   } from "./ui/shortcuts";
   import { HUD_INSET } from "./render/boardTransform";
   import {
@@ -60,6 +60,7 @@
   let cityListError = $state<string | null>(null);
   let showNewCity = $state(false);
   let newCityError = $state<string | null>(null);
+  let stageEl: HTMLDivElement | null = $state(null);
   let stageWidth = $state(0);
   let stageHeight = $state(0);
   let cityListRequestId = 0;
@@ -652,23 +653,20 @@
       return;
     }
 
-    // Shifted digits still report the digit on some layouts. Do not let them
-    // activate Build items or fall through to the road presets.
-    if (event.shiftKey) return;
-
     // An open Build leaf group owns 1–9 ahead of the global road presets; the
     // category grid and every other destination keep the existing 1/2/3.
+    // Do not filter on event.shiftKey: layouts like AZERTY, Czech and Slovak
+    // require Shift to type digits.
     if (
       !routeDraftActive &&
       snapshot?.ui.activeCommandDestination === "build" &&
       snapshot.ui.activeBuildGroup !== null
     ) {
       const openGroup = findBuildGroup(snapshot.ui.activeBuildGroup);
-      const itemShortcuts =
-        openGroup === null ? {} : buildGroupShortcuts(openGroup);
-      const item = openGroup?.sections
-        .flatMap((section) => section.items)
-        .find((candidate) => itemShortcuts[candidate.id] === key);
+      const item =
+        openGroup === null
+          ? undefined
+          : findBuildGroupShortcutItem(openGroup, key);
       if (item !== undefined) {
         event.preventDefault();
         handleSelectBuildItem(item.action);
@@ -699,6 +697,18 @@
     if (shellError !== null && runtime !== null) {
       runtime.stop();
     }
+  });
+
+  // Measure the stage synchronously when the workspace layout changes (such as
+  // opening or closing a dock) so the Inspector does not spend a frame at the
+  // previous stage width waiting for ResizeObserver.
+  $effect(() => {
+    void showNewCity;
+    void snapshot?.persistence.activeCity;
+    void snapshot?.ui.activeCommandDestination;
+    if (stageEl === null) return;
+    stageWidth = stageEl.clientWidth;
+    stageHeight = stageEl.clientHeight;
   });
 
   onMount(() => {
@@ -789,6 +799,7 @@
         />
 
         <div
+          bind:this={stageEl}
           class="game-stage"
           data-testid="game-stage"
           bind:clientWidth={stageWidth}

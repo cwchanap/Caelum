@@ -194,14 +194,15 @@ describe("LinesPanel line workspace", () => {
     expect(props.onSelectRoute).not.toHaveBeenCalled();
   });
 
-  it("feeds the selected saved line's colour into the route rail", () => {
+  it("feeds the draft's own route colour into the route rail regardless of list selection", () => {
     const routes = routeFixtures();
-    routes[0].selected = true;
+    routes[1].selected = true;
     render(LinesPanel, {
       props: panelProps({
         routeDraft: createDraftView({
           source: "edit",
           title: "Editing Harbour Bus",
+          color: routes[0].color,
           initialFleetCost: null,
         }),
         routes,
@@ -1209,7 +1210,8 @@ describe("LinesPanel line workspace", () => {
     expect(props.onAddServiceVehicle).not.toHaveBeenCalled();
   });
 
-  it("focuses the Lines list after a draft is canceled", async () => {
+  it("focuses the Lines list without scrolling after a draft is canceled", async () => {
+    const focusSpy = vi.spyOn(HTMLElement.prototype, "focus");
     const { rerender } = render(LinesPanel, {
       props: panelProps({ routeDraft: createDraftView() }),
     });
@@ -1220,9 +1222,11 @@ describe("LinesPanel line workspace", () => {
       expect(screen.getByTestId("lines-list")).toHaveFocus();
     });
     const list = screen.getByTestId("lines-list");
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true });
     expect(list).toHaveAttribute("aria-label", "Lines list");
     expect(list).toHaveAttribute("tabindex", "-1");
     expect(list.tagName).toBe("SECTION");
+    focusSpy.mockRestore();
   });
 });
 

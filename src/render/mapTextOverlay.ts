@@ -1,9 +1,10 @@
-import type {
-  GameState,
-  Point,
-  RouteLegPath,
-  TransitPath,
-  TripPosition,
+import {
+  ROUNDABOUT_DIMENSIONS,
+  type GameState,
+  type Point,
+  type RouteLegPath,
+  type TransitPath,
+  type TripPosition,
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
@@ -231,8 +232,8 @@ function cursorBadgeText(
       return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
     }
     case "roundabout": {
-      const sizeLabel = ui.roundaboutSize === "compact2x2" ? "2×2" : "3×3";
-      const label = `⦿ Roundabout ${sizeLabel}`;
+      const dimension = ROUNDABOUT_DIMENSIONS[ui.roundaboutSize];
+      const label = `⦿ Roundabout ${dimension}×${dimension}`;
       if (preview === null || staleHeldPreview) {
         return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
       }

@@ -32,12 +32,24 @@
     onOpenServiceControls,
   }: Props = $props();
 
+  let cardEl: HTMLElement | null = $state(null);
   let cardWidth = $state(0);
   let cardHeight = $state(0);
 
-  // Stage and card size stay 0 until Svelte's bindings measure them. The card
-  // remains mounted (and hidden) so those bindings can populate, then the
-  // helper either places it beside the selected tile or keeps it hidden.
+  // Measure synchronously after mount or content changes so remounting the
+  // card (for instance when a dock closes) does not leave it hidden for a
+  // frame waiting on ResizeObserver; bind:offset* keeps tracking later resizes.
+  $effect(() => {
+    void inspector;
+    void selectedId;
+    if (cardEl === null) return;
+    cardWidth = cardEl.offsetWidth;
+    cardHeight = cardEl.offsetHeight;
+  });
+
+  // Stage and card size stay 0 until measured. The card remains mounted (and
+  // hidden) so measurements can populate, then the helper either places it
+  // beside the selected tile or keeps it hidden.
   const placement = $derived.by(() => {
     const point = parseSelectedPoint(selectedId);
     if (point === null) return null;
@@ -52,12 +64,13 @@
 </script>
 
 <aside
+  bind:this={cardEl}
   class="card inspection-card"
   class:inspection-card--hidden={placement === null}
   style:left={placement === null ? undefined : `${placement.left}px`}
   style:top={placement === null ? undefined : `${placement.top}px`}
-  bind:clientWidth={cardWidth}
-  bind:clientHeight={cardHeight}
+  bind:offsetWidth={cardWidth}
+  bind:offsetHeight={cardHeight}
   data-testid="panel-inspect"
   aria-label="Inspector"
 >
