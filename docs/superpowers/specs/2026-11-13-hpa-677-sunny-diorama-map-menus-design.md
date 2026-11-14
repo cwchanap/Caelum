@@ -22,48 +22,46 @@ Reference visuals are the three attachments on HPA-677: **City Library redesign*
 
 ## 1. City Library
 
-Use menu/city-library.webp as a full-viewport, cover-cropped background, with its relatively quiet left side behind a warm, legible foreground card. Reuse the existing Sunny Diorama surface, accent, border, font and focus tokens from styles.css. Reuse the finished brand/app-icon-source.png as a small mark, with a live-text **Caelum** wordmark and a short one-line tagline; never bake text into the image.
+Use `menu/city-library.webp` as a full-viewport, cover-cropped background, with its quiet left area behind a warm, legible foreground card. Reuse the existing Sunny Diorama tokens and the finished brand icon with a live-text **Caelum** wordmark and one-line tagline.
 
-Within one foreground card:
+- Prominent **Continue [most recently saved city name]** and **New City** actions; Continue uses existing `cities[0]` and only appears when a saved city exists. Preserve loading, list errors and Retry.
+- Each `CitySummary` shows a colored initial avatar, editable name, existing saved timestamp, Load and two-click Delete. Choose the avatar color deterministically from `city.id` (not the renameable name); retain Enter/blur/Escape rename semantics and busy/disabled states. Do not add city metadata or thumbnail fields.
+- The saved-city list scrolls within the foreground card while primary actions remain legible at 1024×768 and 1440×900.
+- `CityList.svelte` is shared with the in-game CityPanel. Render the avatar in both contexts but keep the CityPanel compact by scoping larger cards, margins and scrolling to `.city-library-screen` in styles.css. **No variant prop or duplicate city-list implementation.**
 
-- Prominent **Continue [most recently saved city name]** and **New City** actions, driven by the existing callbacks. Only show Continue when at least one saved city exists. Keep loading/list-error/retry states usable.
-- For each CitySummary, display a colored initial avatar, editable city name, the existing saved timestamp, Load and two-click Delete. Retain current rename Enter/blur/Escape, delete confirmation and busy/disabled behavior. No derived per-city preview or metadata.
-- The list scrolls within the foreground card if many cities exist; the key art and primary actions remain legible at 1024×768 as well as 1440×900.
-- Preserve component test IDs and CityPanel's compact CityList use; apply library-specific variants/styles rather than globally enlarging every row.
-
-The app's current first-run redirect to New City stays unchanged. Empty/list-error behavior remains recoverable without inventing a city slot.
+The first-run redirect to New City, error handling and existing save/load transitions stay unchanged.
 
 ## 2. New City
 
-Replace the narrow vertical selectors with a single responsive two-column card matching the linked New City mockup:
+Use the shipped template art to make one responsive two-column card matching the attached New City mockup.
 
-**Left column:** city-name input; three illustrated **Blank Grid**, **Crossroads** and **Small Town** template buttons using templates/*.webp; three map-size option tiles (Small 28×18, Medium 56×36, Large 84×54); two economy tiles (Standard — “Money matters”, Creative — “Build for free”); validation/error; Create City and optional Cancel.
+**Left:** city-name input, three illustrated template choices (Blank Grid, Crossroads, Small Town), three sizes (Small 28×18, Medium 56×36, Large 84×54), two economies (Standard — “Money matters”; Creative — “Build for free”), Create City, optional Cancel and inline errors. **Right:** a large preview of the selected template image; changing a choice updates it immediately without invoking Rust.
 
-**Right column:** a large image of the currently chosen template, from the same three provided images; update immediately when the chosen template changes. No generated map preview and no Rust call for a preview.
-
-Keep the existing default Crossroads / Small / Standard and NewCityRequest shape. Svelte-local selection state is sufficient. Use native button type="button", aria-pressed, visible focus, text labels, and decorative alt="" imagery so selectors work with keyboard and screen readers. The form still submits exactly once with the trimmed nonempty name and unchanged busy gating. Reflow the two columns inside the supported desktop minimum width without clipping.
+Preserve the Svelte-local `name`, `templateId`, `mapSize` and `economyPreset` states, defaults Crossroads/Small/Standard, and the existing `NewCityRequest`. **Each set of mutually exclusive choices uses `<fieldset><legend>…</legend>` with native labeled `<input type="radio" bind:group={...}>` tiles**, not aria-pressed toggle buttons. This gives the correct radio semantics, checked state and arrow-key navigation for free. Keep visible focus, text labels and decorative images with empty alt text. Create remains disabled for a trimmed blank name and during busy work; keep Cancel/error behavior. The card fits at supported desktop widths.
 
 ## 3. Textured buildings and trees
 
-### Asset registry and atlas
+### Typed sprite table and one mipmapped texture array
 
-Create one small, explicit map-sprite module under src/render/webgpu/:
+Create one focused `src/render/webgpu/spriteAtlas.ts` module:
 
-- Map the twelve sprite-bearing BuildingType values to their existing WebP URLs. Exclude busStop and metroStation; retain their HPA-678 procedural markers. BusTerminal **does** have a 3×2 map sprite. Use BUILDING_CATALOG for native footprint dimensions, not another divergent catalogue.
-- Reuse the deterministic tree placement rules now in mapBatch.ts (same tile hash, rate, center jitter, occupied/zone/road exclusions). Choose one of the three tree variants from a deterministic hash; a city saved and loaded produces the same trees.
-- Pack the fifteen decoded images into a **single** atlas with deterministic shelf layout and a small transparent gutter. Construct it once at startup with a temporary 2D canvas solely as an image-packing/upload surface; this is not a Canvas2D gameplay renderer. Use one uploaded GPU texture, one sampler and one instanced textured pipeline. Do not introduce a new image-processing/build dependency or asset generation step.
-- Build UV rectangles from the same layout used to place source images. Verify actual decoded dimensions against 192 px/tile and 192×192 trees and fail startup visibly on an asset/decode/texture error. Await all images and atlas upload before the first gameplay frame. Do not draw flat-color placeholders or silently skip an unavailable image.
-- Keep atlas resource ownership in the renderer and destroy it with existing GPU buffers. The current device-loss and bootstrap-error flows remain authoritative.
+- Explicitly import the twelve sprite-bearing building WebPs into a typed `Record<Exclude<BuildingType, "busStop" | "metroStation">, string>`, plus the three tree variants. `busStop` and `metroStation` retain their procedural markers; **busTerminal** uses its 3×2 building sprite. Native footprint dimensions come only from `BUILDING_CATALOG`.
+- Decode all 15 local images once, validate their pixel dimensions against 192px per native footprint tile and 192×192 for trees, and fail startup on a missing/invalid asset or upload. No fallback texture or flat roofs when art is unavailable.
+- Use **one WebGPU `texture_2d_array` sized 576×384×15, format `rgba8unorm`, with five mip levels (0–4)**. Each image occupies the top-left of its own transparent layer; each sprite instance carries its layer index and `uvScale=(sourceWidth/576, sourceHeight/384)`. No shelf packer, gutters, mip bleed between neighbors or redundant size-limit check.
+- For each image, generate each downscaled mip using a temporary 2D canvas with `imageSmoothingQuality: "high"`, drawing at the source dimensions divided by `2^level`. Upload the levels via `queue.copyExternalImageToTexture` with destination `mipLevel`, `origin.z` (array layer), `colorSpace: "srgb"` and **`premultipliedAlpha: true`**. The texture uses `TEXTURE_BINDING | COPY_DST | RENDER_ATTACHMENT`, as the external-image copy path requires; the canvas is only for upload, not gameplay rendering.
+- Use linear min/mag filtering with `mipmapFilter: "linear"`. Preserve the existing solid pipeline's numeric color convention by sampling a **non-sRGB `rgba8unorm`** sprite texture, and apply a separate **premultiplied-alpha blend** (color src=`one`, dst=`one-minus-src-alpha`, corresponding alpha blend) in the sprite pipeline. Keep the existing solid/vehicle straight-alpha blend unchanged.
+- Await decode/upload in the existing async `createWebGpuHost` factory, pass ready GPU assets into synchronous `createWebGpuRenderer`, and keep the fake-renderer `createWebGpuHostWithRenderer` test seam unchanged. Destroy the texture and instance buffer with existing renderer resources, preserving fatal startup and device-loss behavior.
 
-### Placement and painter order
+### Placement, caching and explicit painter order
 
-- Use PlacedBuilding.origin, type and rotation plus BUILDING_CATALOG native width/height. Center the unrotated textured quad in the occupied, **rotated** footprint; rotate the quad by 0/90/180/270 degrees in world space, before the world-to-clip transform. A 90/270-degree rotation swaps occupied width/height without changing the artwork's UV orientation.
-- Render buildings at full occupied footprint (not one sprite per occupied tile); preserve all build/inspect picking, which is driven by the existing runtime state rather than new GPU IDs.
-- Draw the existing shared, warm soft shadow treatment as simple solid geometry under each building and tree; sprites themselves must not include a shadow. Trees use 12–18 world-pixel canopy size, not a full map tile.
-- Keep the painter order explicit: terrain/grid/roads/track and shadows → **one instanced sprite draw** (trees then buildings) → route/overlay/draft geometry → vehicles → existing over-vehicle UI. The one sprite draw is an additional pass within the existing render encoder, not a new WebGPU host or per-building draw calls.
-- Preserve scene-revision caching: reconstruct atlas-free instance data only on relevant scene changes, then apply the existing camera transform each draw. The same frame inputs serve normal rendering and captureFrame pixel readback. No extra Rust or wire fields.
+- Let **`buildMapBatch(state, gridMode)` return `{ vertices, sprites }`**. There is only one existing consumer of the deterministic tree predicate and hash, so emit tree sprite instances directly where `drawTrees` currently creates procedural canopies—do not extract a tree helper. Keep exclusions for roads, track, zones, roundabouts and occupied buildings, and the original 12–18 world-pixel canopy size. Choose a variant with **`Math.floor(tileHash(x, y, 5) * 3)`**: `tileHash` returns a fraction in [0,1), so `tileHash % 3` is invalid as an array index.
+- For each `PlacedBuilding`, emit **one** instance. Use the center of its **rotated occupied footprint** as origin, **unrotated** native `BUILDING_CATALOG` width/height × `tileSize/2` as half-extents, and angle `rotation * Math.PI / 180` in y-down world space. A 90° rotation already produces a 2×3 occupied quad from a native 3×2; don't swap extents twice. Build/inspect hit-testing stays on the existing game state.
+- Continue to draw one warm +3/+3 solid shadow under each tree/building; for a building, use **one footprint-sized shadow rect**, not overlapping per-tile rects visible through transparent art. Keep procedural roofs and tree canopies until the new sprite draw is verified; remove them **together with enabling the sprite pass**, not in an earlier task.
+- Reuse the existing `scene:<revision>:<gridMode>` cache for both the solid vertices and sprite instance rows. Keep per-frame camera projection in the host. Generalize the existing small instance-origin projection loop with stride/tail parameters for vehicles and sprites, instead of forking a near-identical transform.
+- Represent painter order explicitly in `WebGpuRenderFrame`: **`solids` (terrain/roads/track/shadows) → `sprites` (trees then buildings, one instanced draw) → `overSprites` (underRoutes, routes, draft overlays) → `vehicles` → `overVehicles`**. The host owns this split rather than inferring it from a batch role inside the renderer. Use the existing shared `encodeFrame` for render and offscreen capture and add `spriteInstances`/`spriteDraws` to `WebGpuRenderStats`.
+- Retain Fit/pan/zoom, picking, transit stop/station markers, vehicle/route presentation and GPU readback. No new Rust, wire, save contract or WebGPU host.
 
-Do not draw flat building roofs or procedural tree canopies behind/over the new sprites; retain the map features that are not being replaced.
+Remove flat building roofs/outlines and procedural tree canopies in Task 4, **only after** the textured pass is drawing, so each intermediate commit remains playable.
 
 ## Responsibilities and change boundaries
 
@@ -71,21 +69,23 @@ Do not draw flat building roofs or procedural tree canopies behind/over the new 
 | --- | --- | --- |
 | Library visuals/actions | src/components/city/CityLibraryScreen.svelte, CityList.svelte, src/styles.css | No save/store or CitySummary changes |
 | New City selections | src/components/NewCityScreen.svelte, src/styles.css | No new template generator; same NewCityRequest |
-| Sprite atlas and placement | Small focused src/render/webgpu sprite module(s), mapBatch.ts | No generated art; no new general asset framework |
+| Texture array and sprite placement | src/render/webgpu/spriteAtlas.ts, mapBatch.ts | No generated art or duplicate tree helper |
 | One textured GPU draw | src/render/webgpu/renderer.ts, src/runtime/createWebGpuHost.ts | Keep vehicle/route pipelines, WebGPU host, board/picking transforms |
 | Tests | Existing city E2Es/UI tests, map batch/renderer/host tests | No screenshot-golden suite or new testing infrastructure |
 
 ## Acceptance proof (automated, end to end)
 
-1. **New City (browser Playwright):** Pick each of the three illustrated templates, three sizes and both economies via visible tiles; confirm the right preview and pressed state follow selection, Create is disabled for a blank name, and submitted choices arrive in the actual Rust-generated city state. Existing Create/Cancel/error flows still work.
-2. **City Library (browser Playwright):** After creating/saving two cities and reloading, the key art/card/brand, Continue with the latest name, each colored initial/saved time, rename, Load and confirmed Delete are visible and functional. Continue loads the latest saved city, not an invented metadata field.
-3. **Map (real WebGPU Playwright + focused GPU/unit tests):** An authored or grown building draws the matching texture exactly once in its footprint at 0° and 90°; bus/metro markers and vehicle/route layers remain visible; tree variety and placement are deterministic across redraw/load; picking, Fit/pan/zoom and shared render/capture paths still agree. Assert a single textured instanced draw per nonempty frame.
-4. **Visual mockup checks:** At 1024×768 and 1440×900, automated layout assertions and Playwright screenshot artifacts check the three HPA-677 reference compositions: background behind readable library card, left controls/right large New City preview, and recognizable roof/tree art at Small/Medium/Large Fit plus zoom. Verify image load, visible content and lack of clipping; do not add brittle pixel-perfect styling goldens or human sign-off gates.
-5. **Supported desktop release paths:** Existing CI Tauri bundle builds on **macOS (.app)** and **Windows (NSIS)** must succeed with the bundled artwork and frontend; existing browser/WASM WebGPU E2E checks remain the functional end-to-end proof for the shared Svelte/game renderer. No Android/Linux acceptance matrix.
+1. **New City (browser Playwright):** Use `getByRole("radio", { name: ... }).check()` and `toBeChecked()` for illustrated template, size and economy tiles. Confirm the right preview, correct defaults, blank-name/busy gates, and actual Rust-backed city state; existing Create/Cancel/error flows remain usable.
+2. **City Library (browser Playwright):** After saving two cities and reloading, the key art/brand, **Continue [latest saved city]**, initial/avatar color, saved time, rename, Load and two-click Delete work. The shared in-game CityPanel remains compact and working.
+3. **GPU/unit:** Each building has one instance with correct footprint at all 4 rotations; one shadow rect per building; tree placements and variants are deterministic with all three variants in a representative Small Town map; all 15 layers/mip sizes are valid; a nonempty sprite frame has **one instanced sprite draw**. Transit markers, routes, vehicles, Fit and picking remain intact.
+4. **Real WebGPU pixel oracle:** Reuse the **existing** `tests/e2e/helpers.ts:sampleTilePixels` → `debugCaptureFrame()` pipeline already used by `tests/e2e/routes.spec.ts`. At close zoom, sample (a) a known transparent building inset, which should show underlying ground, and (b) the opaque bounds of a rotated native 3×2 building, which should fall within a 2×3 tile footprint. Use one focused test, not a screenshot parser.
+5. **Mockup visual check:** At 1024×768 and 1440×900, Playwright asserts unclipped library/new-city composition and saves screenshot artifacts for comparison to the corresponding HPA-677 mockups. For the map, capture **Large Fit** (maximum downscale) and **max zoom** (close detail), not a redundant Small/Medium Fit screenshot matrix. No brittle pixel-golden styling suite or human acceptance gate.
+6. **Supported desktop paths:** Existing macOS .app and Windows NSIS Tauri bundle CI jobs succeed with the shipped assets. Browser/WASM Playwright remains automated interactive end-to-end coverage for their shared frontend. Packaging CI alone does **not** verify WKWebView runtime visuals; record this limitation, without adding manual native-launch acceptance or a new framework. No Android/Linux acceptance matrix.
 
 ## Risks, decisions and out of scope
 
-- **Texture correctness:** atlas UV bleed, transparency and incorrect 90° placement are the main real risks. Use transparent gutters, a focused transform test and the existing real-WebGPU pixel/capture harness, rather than an abstraction layer.
-- **Atlas startup:** roughly fifteen finite local images are cheap to decode once. Fail clearly if a required image cannot load; do not build a fallback renderer or incremental asset loader.
-- **Menus share components:** isolate City Library styling to avoid regressing the in-game CityPanel; keep accessibility and busy/error behavior.
-- **Out of scope:** HPA-696 dock, Build thumbnails/categories (already integrated), new art/SFX, app-icon regeneration (already shipped), native/core simulation, wire/snapshot/persistence changes, per-city thumbnails, procedural vehicle replacement, new graphics backends, screenshot golden tests, and long-tail hardening.
+- **Mipmaps/alpha/color:** One fixed-size layered texture with five CPU-generated mips prevents cross-sprite bleed and Fit-scale aliasing. Use `rgba8unorm`, premultiplied-alpha uploads/blending and focused WebGPU readback instead of new rendering infrastructure.
+- **Startup:** Decode and upload all fifteen existing images once in the async host factory; errors follow the existing fatal/shell-error path. No fallback, per-asset manager or incremental loader.
+- **UI reuse:** Native radio groups, avatar colors derived from stable city IDs and parent-scoped CityList CSS avoid extra state/components and regressions in CityPanel.
+- **Out of scope:** HPA-696 dock and Build art, any new art/SFX, app-icon regeneration, native/core simulation, wire/snapshot/persistence changes, per-city thumbnail data, new renderer/backends, screenshot goldens and manual desktop acceptance.
+
