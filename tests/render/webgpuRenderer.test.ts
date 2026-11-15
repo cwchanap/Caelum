@@ -548,7 +548,7 @@ describe("WebGpuRenderer", () => {
     } {
       const route = buildTransitBatch(state, ui, sceneRevision);
       const overlay = buildOverlayRanges(state, ui);
-      const structural = buildMapBatch(state);
+      const structural = buildMapBatch(state).vertices;
       const instances = new Float32Array(Array.from(vehicleData));
       return {
         structural,

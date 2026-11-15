@@ -4,10 +4,21 @@ import {
   GRID_FAINT_ALPHA,
   GRID_FAINT_TILE_PX,
   LOT_FILL_ALPHA,
+  SPRITE_INSTANCE_FLOATS,
+  TREE_CANOPY_SEGMENTS,
+  TREE_MIN_RADIUS,
+  TREE_RADIUS_SPAN,
   buildMapBatch,
   gridModeForTool,
   gridModeForUi,
 } from "../../src/render/webgpu/mapBatch";
+import {
+  BUILDING_SPRITE_LAYERS,
+  SPRITE_ATLAS_HEIGHT,
+  SPRITE_ATLAS_WIDTH,
+  SPRITE_TEXELS_PER_TILE,
+} from "../../src/render/webgpu/spriteAtlas";
+import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import {
   SOLID_VERTEX_FLOATS,
   parseColor,
@@ -131,7 +142,7 @@ describe("buildMapBatch tile layer", () => {
     let state = createTestGameState();
     state = withAreaTile(state, 2, 3);
     state = withRoads(state, [{ x: 5, y: 5 }]);
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // Tile (2,3) is empty with an office zone: tinted fill, dashed perimeter.
     const lotFill = withAlpha(parseColor(colors.areaOffice), LOT_FILL_ALPHA);
@@ -147,7 +158,7 @@ describe("buildMapBatch tile layer", () => {
 
 describe("buildMapBatch grass variation", () => {
   it("varies empty-tile fills into more than one subtle grass shade", () => {
-    const batch = buildMapBatch(createTestGameState(), "hidden");
+    const batch = buildMapBatch(createTestGameState(), "hidden").vertices;
     const base = parseColor(colors.empty);
     const shades = new Set(
       rowsOf(batch)
@@ -171,14 +182,14 @@ describe("buildMapBatch grass variation", () => {
 
 describe("buildMapBatch grid modes", () => {
   it("emits no grid geometry in hidden mode", () => {
-    const batch = buildMapBatch(createTestGameState(), "hidden");
+    const batch = buildMapBatch(createTestGameState(), "hidden").vertices;
     expect(verticesOfColor(batch, colors.grid)).toHaveLength(0);
     const faint = withAlpha(parseColor(colors.grid), GRID_FAINT_ALPHA);
     expect(verticesOfRgba(batch, faint)).toHaveLength(0);
   });
 
   it("fades the same grid lines in faint mode", () => {
-    const batch = buildMapBatch(createTestGameState(), "faint");
+    const batch = buildMapBatch(createTestGameState(), "faint").vertices;
     const faint = withAlpha(parseColor(colors.grid), GRID_FAINT_ALPHA);
     expect(hasVertexNearRgba(batch, faint, 64.5, 0)).toBe(true);
     expect(hasVertexNearRgba(batch, faint, 0, 96.5)).toBe(true);
@@ -228,7 +239,7 @@ describe("buildMapBatch vacant-lot layer", () => {
       "residential",
       rectOf(2, 2, 6, 6),
     );
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
 
     const dashes = verticesOfColor(batch, colors.areaResidential);
     expect(dashes.length).toBeGreaterThan(0);
@@ -253,7 +264,7 @@ describe("buildMapBatch vacant-lot layer", () => {
       rectOf(2, 2, 6, 6),
     );
     state = placeTestBuilding(state, "smallHouse", { x: 3, y: 3 }, 0);
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
 
     const lotFill = withAlpha(
       parseColor(colors.areaResidential),
@@ -271,8 +282,8 @@ describe("buildMapBatch vacant-lot layer", () => {
 describe("buildMapBatch decorative trees", () => {
   it("scatters canopy circles deterministically on empty unzoned tiles", () => {
     const state = createTestGameState();
-    const first = buildMapBatch(state, "hidden");
-    const second = buildMapBatch(state, "hidden");
+    const first = buildMapBatch(state, "hidden").vertices;
+    const second = buildMapBatch(state, "hidden").vertices;
     expect(second).toEqual(first);
 
     const canopies = verticesOfColor(first, colors.treeCanopy);
@@ -294,7 +305,7 @@ describe("buildMapBatch decorative trees", () => {
   it("removes a tree when its tile is zoned or built on", () => {
     const state = createTestGameState();
     const spots = tilesOfColor(
-      buildMapBatch(state, "hidden"),
+      buildMapBatch(state, "hidden").vertices,
       colors.treeCanopy,
     );
     expect(spots.length).toBeGreaterThan(0);
@@ -303,13 +314,16 @@ describe("buildMapBatch decorative trees", () => {
       Math.floor(vx / tileSize) === target.x &&
       Math.floor(vy / tileSize) === target.y;
 
-    const zoned = buildMapBatch(withAreas(state, "park", [target]), "hidden");
+    const zoned = buildMapBatch(
+      withAreas(state, "park", [target]),
+      "hidden",
+    ).vertices;
     expect(verticesOfColor(zoned, colors.treeCanopy).some(inTile)).toBe(false);
 
     const built = buildMapBatch(
       placeTestBuilding(state, "busStop", target, 0),
       "hidden",
-    );
+    ).vertices;
     expect(verticesOfColor(built, colors.treeCanopy).some(inTile)).toBe(false);
   });
 });
@@ -317,7 +331,7 @@ describe("buildMapBatch decorative trees", () => {
 describe("buildMapBatch road furniture", () => {
   it("draws curbs where a road tile meets non-road ground", () => {
     const state = withRoads(createTestGameState(), [{ x: 8, y: 8 }]);
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
 
     expect(hasVertexNear(batch, colors.roadCurb, 259, 257)).toBe(true);
     expect(hasVertexNear(batch, colors.roadCurb, 287, 259)).toBe(true);
@@ -330,7 +344,7 @@ describe("buildMapBatch road furniture", () => {
       { x: 8, y: 8 },
       { x: 9, y: 8 },
     ]);
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
 
     const curbs = verticesOfColor(batch, colors.roadCurb);
     expect(curbs.length).toBeGreaterThan(0);
@@ -366,7 +380,7 @@ describe("buildMapBatch road furniture", () => {
         }),
       },
     };
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
     const curbs = verticesOfColor(batch, colors.roadCurb);
     // East curb of (8, 8) and west curb of (9, 8) must be present.
     expect(
@@ -386,7 +400,7 @@ describe("buildMapBatch road furniture", () => {
       { x: 8, y: 8 },
       { x: 9, y: 8 },
     ]);
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
 
     const sleepers = verticesOfColor(batch, colors.trackSleeper);
     expect(sleepers.length).toBeGreaterThan(0);
@@ -399,7 +413,7 @@ describe("buildMapBatch road furniture", () => {
     const isolated = buildMapBatch(
       withTracks(createTestGameState(), [{ x: 10, y: 10 }]),
       "hidden",
-    );
+    ).vertices;
     expect(verticesOfColor(isolated, colors.trackSleeper)).toHaveLength(0);
   });
 });
@@ -407,7 +421,7 @@ describe("buildMapBatch road furniture", () => {
 describe("buildMapBatch road layer", () => {
   it("draws straight road stubs from tile centers to connection edges", () => {
     const state = withRoads(createTestGameState(), pointsOnRow(8, 7, 15));
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // Tile (8,8) center = (272,272); stub quads span the west (256,272) and
     // east (288,272) edge midpoints with the centerline color (width 4:
@@ -430,7 +444,7 @@ describe("buildMapBatch road layer", () => {
         ),
       },
     };
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // The quadratic curve samples near the canvas midpoint of the north-edge
     // to east-edge curve with control at the tile center: t=0.5 lands at
@@ -476,7 +490,7 @@ describe("buildMapBatch road layer", () => {
         { id: "port-east", point: { x: 6, y: 5 }, edge: "east" },
       ],
     });
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // Port approaches from tile (6,5) center (208,176) to both edges.
     expect(hasVertexNear(batch, colors.roadCenterline, 192, 174)).toBe(true);
@@ -508,7 +522,7 @@ describe("buildMapBatch roundabout layer", () => {
       ports: [{ id: "port-west", point: { x: 3, y: 4 }, edge: "west" }],
     };
     const state = withJunction(createTestGameState(), structure);
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // Circulation curves orbit the structure center (4,4) -> (144,144) at
     // radius 1.08 tiles = 34.56px.
@@ -561,7 +575,7 @@ describe("buildMapBatch roundabout layer", () => {
     );
     state = withRoads(state, ring);
     state = withJunction(state, structure);
-    const batch = buildMapBatch(state, "hidden");
+    const batch = buildMapBatch(state, "hidden").vertices;
 
     const dashes = verticesOfColor(batch, colors.areaResidential);
     // Island tile (4,4) spans [128,160]^2; dashes only emit on tile edges
@@ -598,7 +612,7 @@ describe("buildMapBatch roundabout layer", () => {
       ],
     };
     const state = withJunction(createTestGameState(), structure);
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // Compact circulation orbits the 2x2 center (224,224) at radius
     // 0.58 tiles = 18.56px with four arcs.
@@ -630,7 +644,7 @@ describe("buildMapBatch track layer", () => {
       { x: 3, y: 2 },
       { x: 10, y: 10 },
     ]);
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // Spokes meet at the shared edge midpoint (96,80) with track color.
     expect(hasVertexNear(batch, colors.track, 96, 78)).toBe(true);
@@ -647,7 +661,7 @@ describe("buildMapBatch one-way layer", () => {
     const state = withOneWayRoads(createTestGameState(), [
       { x: 8, y: 8, oneWay: "east" },
     ]);
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     const head = 32 / 6;
     // Shaft quad from tail (264,272) to tip (280,272), corners ±1 off axis.
@@ -671,7 +685,7 @@ describe("buildMapBatch building layer", () => {
       { x: 4, y: 5 },
       0,
     );
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     const building = state.buildings[0];
     expect(building).toBeDefined();
@@ -708,7 +722,7 @@ describe("buildMapBatch building layer", () => {
       0,
     );
     state = placeTestBuilding(state, "smallHouse", { x: 4, y: 5 }, 0);
-    const batch = buildMapBatch(state);
+    const batch = buildMapBatch(state).vertices;
 
     // The y=160 seams between (4,4)|(4,5) and (5,4)|(5,5) belong to
     // different buildings, so they keep a 2px stroke instead of merging.
@@ -734,7 +748,7 @@ describe("buildMapBatch building layer", () => {
           ]) {
         state = placeTestBuilding(state, "smallHouse", origin, 0);
       }
-      const rows = rowsOf(buildMapBatch(state, "hidden"));
+      const rows = rowsOf(buildMapBatch(state, "hidden").vertices);
 
       const lastShadow = rows.reduce(
         (last, row, index) => (sameColorRgba(row, shadow) ? index : last),
@@ -745,5 +759,146 @@ describe("buildMapBatch building layer", () => {
       // A later building's shadow must not overpaint an earlier roof.
       expect(firstFill).toBeGreaterThan(lastShadow);
     }
+  });
+});
+
+function spriteRowsOf(sprites: Float32Array): number[][] {
+  const rows: number[][] = [];
+  for (
+    let offset = 0;
+    offset < sprites.length;
+    offset += SPRITE_INSTANCE_FLOATS
+  ) {
+    rows.push(
+      Array.from(sprites.slice(offset, offset + SPRITE_INSTANCE_FLOATS)),
+    );
+  }
+  return rows;
+}
+
+/** Canopy circles are TREE_CANOPY_SEGMENTS triangles: 30 vertex rows each. */
+function canopyCount(batch: {
+  vertices: Float32Array;
+  sprites: Float32Array;
+}): number {
+  return (
+    verticesOfColor(batch.vertices, colors.treeCanopy).length /
+    (TREE_CANOPY_SEGMENTS * 3)
+  );
+}
+
+describe("buildMapBatch sprite instances", () => {
+  it("returns solid vertices and sprite rows from one deterministic build", () => {
+    const state = createTestGameState();
+    const first = buildMapBatch(state, "hidden");
+    const second = buildMapBatch(state, "hidden");
+    expect(first.sprites.length % SPRITE_INSTANCE_FLOATS).toBe(0);
+    expect(second.vertices).toEqual(first.vertices);
+    expect(second.sprites).toEqual(first.sprites);
+  });
+
+  it("emits one tree sprite per canopy with all three variants and 12-18px extents", () => {
+    const state = createTestGameState();
+    const batch = buildMapBatch(state, "hidden");
+    const rows = spriteRowsOf(batch.sprites);
+    const treeRows = rows.slice(0, canopyCount(batch));
+    // The default state places no buildings: every sprite row is a tree.
+    expect(rows).toHaveLength(canopyCount(batch));
+    expect(treeRows.length).toBeGreaterThan(0);
+    expect(new Set(treeRows.map((row) => row[7]))).toEqual(new Set([0, 1, 2]));
+    for (const [x, y, angle, hx, hy, su, sv, , cx, cy] of treeRows) {
+      expect(angle).toBe(0);
+      expect(hx).toBeGreaterThanOrEqual(TREE_MIN_RADIUS);
+      expect(hx).toBeLessThanOrEqual(TREE_MIN_RADIUS + TREE_RADIUS_SPAN);
+      expect(hy).toBe(hx);
+      expect(su).toBeCloseTo(192 / SPRITE_ATLAS_WIDTH, 6);
+      expect(sv).toBeCloseTo(192 / SPRITE_ATLAS_HEIGHT, 6);
+      // Trailing clip-scale slots belong to the host projection.
+      expect(cx).toBe(0);
+      expect(cy).toBe(0);
+      const tile = state.map.tiles.find(
+        (candidate) =>
+          Math.abs(candidate.x * tileSize + tileSize / 2 - x) <= tileSize &&
+          Math.abs(candidate.y * tileSize + tileSize / 2 - y) <= tileSize,
+      );
+      expect(tile).toBeDefined();
+    }
+  });
+
+  it("drops the tree sprite (not a building sprite) where its tile is zoned or built on", () => {
+    const state = createTestGameState();
+    const before = buildMapBatch(state, "hidden");
+    const rows = spriteRowsOf(before.sprites);
+    const treeRows = rows.slice(0, canopyCount(before));
+    const target = treeRows[0]!;
+    const tileX = Math.floor(target[0]! / tileSize);
+    const tileY = Math.floor(target[1]! / tileSize);
+
+    const zoned = buildMapBatch(
+      withAreas(state, "park", [{ x: tileX, y: tileY }]),
+      "hidden",
+    );
+    expect(spriteRowsOf(zoned.sprites)).toHaveLength(rows.length - 1);
+    // busStop keeps no sprite instance: its procedural marker stays alone.
+    const built = buildMapBatch(
+      placeTestBuilding(state, "busStop", { x: tileX, y: tileY }, 0),
+      "hidden",
+    );
+    expect(spriteRowsOf(built.sprites)).toHaveLength(rows.length - 1);
+  });
+
+  it("emits one unrotated-extent instance per building at 0/90/180/270", () => {
+    // largeHouse: native 3x2 tiles. A 90/270 rotation occupies 2x3 tiles
+    // but the half-extents and uv stay the unrotated native footprint.
+    const expected = {
+      0: { center: [5.5, 4], angle: 0 },
+      90: { center: [5, 4.5], angle: Math.PI / 2 },
+      180: { center: [5.5, 4], angle: Math.PI },
+      270: { center: [5, 4.5], angle: (3 * Math.PI) / 2 },
+    } as const;
+    for (const rotation of [0, 90, 180, 270] as const) {
+      const state = placeTestBuilding(
+        createTestGameState(),
+        "largeHouse",
+        { x: 4, y: 3 },
+        rotation,
+      );
+      const batch = buildMapBatch(state, "hidden");
+      const rows = spriteRowsOf(batch.sprites);
+      expect(rows).toHaveLength(canopyCount(batch) + 1);
+      const [x, y, angle, hx, hy, su, sv, layer] = rows[rows.length - 1]!;
+      const want = expected[rotation];
+      expect(x).toBeCloseTo(want.center[0] * tileSize, 6);
+      expect(y).toBeCloseTo(want.center[1] * tileSize, 6);
+      expect(angle).toBeCloseTo(want.angle, 6);
+      expect(hx).toBe((BUILDING_CATALOG.largeHouse.width * tileSize) / 2);
+      expect(hy).toBe((BUILDING_CATALOG.largeHouse.height * tileSize) / 2);
+      expect(su).toBeCloseTo(
+        (BUILDING_CATALOG.largeHouse.width * SPRITE_TEXELS_PER_TILE) /
+          SPRITE_ATLAS_WIDTH,
+        6,
+      );
+      expect(sv).toBeCloseTo(
+        (BUILDING_CATALOG.largeHouse.height * SPRITE_TEXELS_PER_TILE) /
+          SPRITE_ATLAS_HEIGHT,
+        6,
+      );
+      expect(layer).toBe(BUILDING_SPRITE_LAYERS.largeHouse);
+    }
+  });
+
+  it("derives uv scale from each building's native catalog footprint", () => {
+    const state = placeTestBuilding(
+      createTestGameState(),
+      "smallHouse",
+      { x: 2, y: 2 },
+      0,
+    );
+    const batch = buildMapBatch(state, "hidden");
+    const rows = spriteRowsOf(batch.sprites);
+    const [su, sv, layer] = rows[rows.length - 1]!.slice(5, 8);
+    expect(su).toBeCloseTo(384 / SPRITE_ATLAS_WIDTH, 6);
+    expect(sv).toBeCloseTo(192 / SPRITE_ATLAS_HEIGHT, 6);
+    expect(layer).toBe(BUILDING_SPRITE_LAYERS.smallHouse);
   });
 });

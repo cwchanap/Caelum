@@ -10,6 +10,16 @@ import type {
   Tool,
 } from "../../domain/types";
 import {
+  BUILDING_CATALOG,
+  getRotatedFootprintSize,
+} from "../../domain/catalog/buildings";
+import {
+  SPRITE_ATLAS_HEIGHT,
+  SPRITE_ATLAS_WIDTH,
+  SPRITE_TEXELS_PER_TILE,
+  spriteLayerFor,
+} from "./spriteAtlas";
+import {
   ROAD_DIRECTION_OFFSET,
   ROUNDABOUT_DIMENSIONS,
 } from "../../domain/types";
@@ -49,9 +59,13 @@ const SLEEPER_POSITIONS = [0.4, 0.8] as const;
 const ROOF_SHADOW_OFFSET = 3;
 const TREE_RATE = 0.12;
 const TREE_JITTER_PX = 10;
-const TREE_MIN_RADIUS = 6;
-const TREE_RADIUS_SPAN = 3;
-const TREE_CANOPY_SEGMENTS = 10;
+export const TREE_MIN_RADIUS = 6;
+export const TREE_RADIUS_SPAN = 3;
+export const TREE_CANOPY_SEGMENTS = 10;
+/** Instanced sprite row layout: world origin (x, y), angle (radians), world
+ *  half-extents (x, y), uv scale (source/atlas, x, y), texture layer, then
+ *  two trailing clip-scale slots the host's per-frame projection fills. */
+export const SPRITE_INSTANCE_FLOATS = 10;
 const GRASS_SHADES = [0.96, 0.985, 1.01, 1.035] as const;
 const BOARD_EDGE_SHADE = 0.92;
 
@@ -518,6 +532,7 @@ function drawTracks(g: SolidGeometry, state: GameState): void {
 
 function drawTrees(
   g: SolidGeometry,
+  sprites: number[],
   map: GameMap,
   islandKeys: ReadonlySet<string>,
   tileOwners: ReadonlyMap<string, number>,
@@ -549,6 +564,21 @@ function drawTrees(
       TREE_CANOPY_SEGMENTS,
     );
     g.circle(canopy, radius, TREE_CANOPY, TREE_CANOPY_SEGMENTS);
+    // Variant index in [0, 3): tileHash is a fraction in [0,1), so the
+    // floor of its product with 3 picks one of the three tree layers.
+    const variant = Math.floor(tileHash(tile.x, tile.y, 5) * 3);
+    sprites.push(
+      canopy.x,
+      canopy.y,
+      0,
+      radius,
+      radius,
+      SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_WIDTH,
+      SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_HEIGHT,
+      variant,
+      0,
+      0,
+    );
   }
 }
 
@@ -556,15 +586,20 @@ function drawTrees(
  * Tessellates the structural map scene — tile fills/grid, vacant-lot
  * perimeters, decorative trees, curbs, roads, automatic junctions,
  * roundabouts, track with sleepers, one-way arrows and roofed buildings —
- * in the same painter order as renderMap + renderBuildings. Output is a
- * solid triangle vertex buffer in world pixels (tileSize grid), cached
- * under `scene:<rev>:<gridMode>`.
+ * in the same painter order as renderMap + renderBuildings. Returns the
+ * solid triangle vertex buffer in world pixels (tileSize grid) plus one
+ * sprite instance row per tree and sprite-bearing building (trees first,
+ * then buildings), both cached under `scene:<rev>:<gridMode>`.
  */
 export function buildMapBatch(
   state: GameState,
   gridMode: GridMode = "normal",
-): Float32Array<ArrayBuffer> {
+): {
+  vertices: Float32Array<ArrayBuffer>;
+  sprites: Float32Array<ArrayBuffer>;
+} {
   const g = new SolidGeometry();
+  const sprites: number[] = [];
   const islandKeys = protectedIslandKeys(state);
   const tileOwners = occupiedTileOwners(state);
   const tileByKey = new Map(state.map.tiles.map((tile) => [keyOf(tile), tile]));
@@ -600,7 +635,34 @@ export function buildMapBatch(
   }
 
   drawLotPerimeters(g, state.map, tileByKey, tileOwners);
-  drawTrees(g, state.map, islandKeys, tileOwners);
+  drawTrees(g, sprites, state.map, islandKeys, tileOwners);
+
+  // Sprite rows: trees first (pushed above), then one instance per
+  // sprite-bearing building. busStop/metroStation keep their procedural
+  // transit markers and emit no sprite.
+  for (const building of state.buildings) {
+    const layer = spriteLayerFor(building.type);
+    if (layer === undefined) continue;
+    const definition = BUILDING_CATALOG[building.type];
+    // Center of the rotated occupied footprint, but the half-extents and
+    // uv scale stay the unrotated native footprint: the shader's rotation
+    // handles orientation, so extents must not be swapped here too.
+    const rotated = getRotatedFootprintSize(building.type, building.rotation);
+    const sourceWidth = definition.width * SPRITE_TEXELS_PER_TILE;
+    const sourceHeight = definition.height * SPRITE_TEXELS_PER_TILE;
+    sprites.push(
+      (building.origin.x + rotated.width / 2) * tileSize,
+      (building.origin.y + rotated.height / 2) * tileSize,
+      (building.rotation * Math.PI) / 180,
+      (definition.width * tileSize) / 2,
+      (definition.height * tileSize) / 2,
+      sourceWidth / SPRITE_ATLAS_WIDTH,
+      sourceHeight / SPRITE_ATLAS_HEIGHT,
+      layer,
+      0,
+      0,
+    );
+  }
 
   const structureKinds = new Map(
     state.map.roadStructures.map((structure) => [structure.id, structure.kind]),
@@ -678,5 +740,8 @@ export function buildMapBatch(
     }
   });
 
-  return g.toFloat32Array();
+  return {
+    vertices: g.toFloat32Array(),
+    sprites: new Float32Array(sprites) as Float32Array<ArrayBuffer>,
+  };
 }
