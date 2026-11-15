@@ -398,8 +398,6 @@ export function createWebGpuRenderer(
   let quadBuffer: GPUBuffer | null = null;
 
   const buffers = new Map<BufferRole, BufferEntry>();
-  let lastSpriteBuffer: GPUBuffer | null = null;
-  let lastSpriteInstances: Float32Array<ArrayBuffer> | null = null;
   let context: GPUCanvasContext | null = null;
   // Pixel size of the configured canvas, owned via resize(); also the size of
   // the offscreen captureFrame target.
@@ -513,11 +511,7 @@ export function createWebGpuRenderer(
       }
       const instances = frame.sprites!.instances;
       const buffer = acquireBuffer("sprite", spriteFloats);
-      if (buffer !== lastSpriteBuffer || instances !== lastSpriteInstances) {
-        device.queue.writeBuffer(buffer, 0, instances, 0, instances.length);
-        lastSpriteBuffer = buffer;
-        lastSpriteInstances = instances;
-      }
+      device.queue.writeBuffer(buffer, 0, instances, 0, instances.length);
       spriteInstances = spriteFloats / SPRITE_INSTANCE_FLOATS;
       pass.setPipeline(spritePipeline);
       pass.setBindGroup(0, spriteBindGroup);
@@ -654,8 +648,6 @@ export function createWebGpuRenderer(
         entry.buffer.destroy();
       }
       buffers.clear();
-      lastSpriteBuffer = null;
-      lastSpriteInstances = null;
       quadBuffer?.destroy();
       quadBuffer = null;
       spriteAtlas?.destroy();

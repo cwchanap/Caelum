@@ -642,20 +642,23 @@ describe("WebGpuRenderer", () => {
     renderer.render({ solids: [], vehicles: [] });
     expect(writes).toHaveLength(writeCount);
 
-    // Same sprite array reference rendered again: skips redundant writeBuffer.
+    // Mutating a previously rendered array in place still reaches the GPU:
+    // every nonempty sprite frame uploads its instance rows.
     const sameInstances = spriteInstances(2);
     renderer.render({
       solids: [],
       sprites: { instances: sameInstances },
       vehicles: [],
     });
+    sameInstances[0] = 123;
     const writesAfterFirst = writes.length;
     renderer.render({
       solids: [],
       sprites: { instances: sameInstances },
       vehicles: [],
     });
-    expect(writes).toHaveLength(writesAfterFirst);
+    expect(writes.length).toBe(writesAfterFirst + 1);
+    expect(writes[writes.length - 1]!.data[0]).toBe(123);
 
     // Larger frame: grow-only replace.
     const bigger = renderer.render({
