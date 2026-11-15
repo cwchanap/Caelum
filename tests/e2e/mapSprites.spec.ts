@@ -324,29 +324,43 @@ test("rotated largeHouse sprite stays in its 2x3 footprint with transparent inse
     page,
     opaquePixels.map(probeFor),
   );
-  const candidates: { du: number; dv: number; error: number }[] = [];
+  const candidates: {
+    du: number;
+    dv: number;
+    error: number;
+    matched: number;
+  }[] = [];
   for (const du of [-2, 0, 2]) {
     for (const dv of [-2, 0, 2]) {
       let error = 0;
+      let matched = 0;
       opaquePixels.forEach((pixel, index) => {
         const sample = opaqueSamples[index]!;
         const mip = mipAt(pixel.texelU + du, pixel.texelV + dv);
         if (mip[3]! < 250) return;
+        matched += 1;
         for (let channel = 0; channel < 3; channel += 1) {
           error += Math.abs(sample![channel]! - mip[channel]!);
         }
       });
-      candidates.push({ du, dv, error });
+      candidates.push({ du, dv, error, matched });
     }
   }
-  candidates.sort((a, b) => a.error - b.error);
+  // Rank by per-matched-pixel residual: skipped texels (shifted sample lands
+  // on alpha < 250) must not count as zero-error matches or a wrong offset
+  // can win on uncounted zeros. Software Vulkan quantizes the filtered texel
+  // ~±1/channel above hardware — a correctly aligned winner reads ~3/pixel
+  // on CI vs ~1.5 on a real GPU — while a misaligned offset scores ~30+.
+  const residual = (candidate: (typeof candidates)[number]) =>
+    candidate.matched === 0 ? Infinity : candidate.error / candidate.matched;
+  candidates.sort((a, b) => residual(a) - residual(b));
   expect(
-    candidates[0]!.error / opaquePixels.length,
+    residual(candidates[0]!),
     "opaque calibration residual per pixel",
-  ).toBeLessThan(2);
+  ).toBeLessThan(8);
   // The best offset must win decisively, not by noise.
-  expect(candidates[1]!.error - candidates[0]!.error).toBeGreaterThan(
-    3 * opaquePixels.length,
+  expect(residual(candidates[1]!) - residual(candidates[0]!)).toBeGreaterThan(
+    3,
   );
   const { du, dv } = candidates[0]!;
 
