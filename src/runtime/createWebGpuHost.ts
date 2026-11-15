@@ -44,6 +44,30 @@ import {
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
 
+/** Per-frame guard for the shared instance projection: every vehicle row's
+ *  producer RGBA (slots 5-8) must have been relocated verbatim into the
+ *  shader's color slots (7-10). Copying the tail in place instead leaves
+ *  shader alpha at padding zero — every vehicle invisible, with no GPU
+ *  error to name the cause. Runs on each built frame; exact equality is
+ *  required because the relocation is a pure copy. */
+export const assertProjectedVehicleColors = (
+  source: Float32Array<ArrayBuffer>,
+  projected: Float32Array<ArrayBuffer>,
+): void => {
+  if (source.length !== projected.length) {
+    throw new Error("vehicle projection changed the instance row count");
+  }
+  for (let i = 0; i < source.length; i += VEHICLE_INSTANCE_FLOATS) {
+    for (let channel = 0; channel < 4; channel += 1) {
+      if (projected[i + 7 + channel] !== source[i + 5 + channel]) {
+        throw new Error(
+          "vehicle projection lost the RGBA color tail (shader slots 7-10)",
+        );
+      }
+    }
+  }
+};
+
 /** Wall time that must accumulate before one host tick is admitted (10 Hz). */
 const TICK_INTERVAL_MS = 100;
 /** Per-frame wall-delta clamp; also the upper bound on any single submitted
@@ -336,13 +360,19 @@ export function createWebGpuHostWithRenderer(
   };
 
   /** One projection loop for both instanced kinds: project the origin into
-   *  clip space and write the world→clip factors into the row's two trailing
+   *  clip space and write the world→clip factors into the row's two clip
    *  slots (offset 5 for 11-float vehicles, offset 8 for 10-float sprites);
-   *  angle and world-px extents pass through raw. */
+   *  angle and world-px extents pass through raw. `tailFloats` > 0 (vehicles)
+   *  relocates the producer's RGBA tail from the slots after the head into
+   *  the shader slots after the inserted clip factors (rgba 5-8 → 7-10);
+   *  copying it in place would leave shader alpha at padding zero and every
+   *  vehicle invisible. Sprites carry no tail (0): their clip slots are the
+   *  row's trailing two. */
   const projectInstances = (
     instances: Float32Array<ArrayBuffer>,
     stride: number,
     clipOffset: number,
+    tailFloats: number,
   ): Float32Array<ArrayBuffer> => {
     const t = transform;
     if (t === null || instances.length === 0) {
@@ -352,11 +382,14 @@ export function createWebGpuHostWithRenderer(
     for (let i = 0; i < instances.length; i += stride) {
       out[i] = instances[i]! * t.sx + t.ox;
       out[i + 1] = instances[i + 1]! * t.sy + t.oy;
-      for (let j = 2; j < stride; j += 1) {
+      for (let j = 2; j < clipOffset; j += 1) {
         out[i + j] = instances[i + j]!;
       }
       out[i + clipOffset] = t.sx;
       out[i + clipOffset + 1] = t.sy;
+      for (let k = 0; k < tailFloats; k += 1) {
+        out[i + clipOffset + 2 + k] = instances[i + clipOffset + k]!;
+      }
     }
     return out;
   };
@@ -364,12 +397,12 @@ export function createWebGpuHostWithRenderer(
   const transformInstances = (
     instances: Float32Array<ArrayBuffer>,
   ): Float32Array<ArrayBuffer> =>
-    projectInstances(instances, VEHICLE_INSTANCE_FLOATS, 5);
+    projectInstances(instances, VEHICLE_INSTANCE_FLOATS, 5, 4);
 
   const transformSpriteInstances = (
     instances: Float32Array<ArrayBuffer>,
   ): Float32Array<ArrayBuffer> =>
-    projectInstances(instances, SPRITE_INSTANCE_FLOATS, 8);
+    projectInstances(instances, SPRITE_INSTANCE_FLOATS, 8, 0);
 
   /** Assembles the frame's batches from the observed state — the exact input
    *  both drawFrame and captureFrame hand to the renderer. `tileCssPx` is the
@@ -404,6 +437,10 @@ export function createWebGpuHostWithRenderer(
         ctx.getCamera(),
       ),
     });
+    const projectedVehicles = transformInstances(instances);
+    // Every-frame guard: the shared projection loop must have relocated the
+    // producer's RGBA tail into the shader's color slots (see the function).
+    assertProjectedVehicleColors(instances, projectedVehicles);
     return {
       frame: {
         // Painter stages: structural solids, then the one textured sprite
@@ -431,7 +468,7 @@ export function createWebGpuHostWithRenderer(
             vertices: transformVertices(overlays.routeDraft),
           },
         ],
-        vehicles: [{ instances: transformInstances(instances) }],
+        vehicles: [{ instances: projectedVehicles }],
         overVehicles: [
           {
             role: "dynamic",

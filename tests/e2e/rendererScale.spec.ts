@@ -28,7 +28,8 @@ test("records WebGPU renderer scale rows at 200 and 5,000 vehicles", async ({
     console.log(
       `vehicles-${result.vehicleCount}: median ${result.medianCpuMs.toFixed(3)}ms p95 ${result.p95CpuMs.toFixed(3)}ms over ${result.frames} frames ` +
         `(presented ${result.presentedVehicles}, encoded ${result.encodedInstances}, upload ${result.vehicleUploadBytes}B, ` +
-        `solid draws ${result.solidDraws}, vehicle draws ${result.vehicleDraws}, queue completed ${result.queueCompleted})`,
+        `solid draws ${result.solidDraws}, sprite instances ${result.spriteInstances}, sprite draws ${result.spriteDraws}, ` +
+        `vehicle draws ${result.vehicleDraws}, queue completed ${result.queueCompleted})`,
     );
   }
 
@@ -39,6 +40,10 @@ test("records WebGPU renderer scale rows at 200 and 5,000 vehicles", async ({
     expect(result.encodedInstances).toBe(result.vehicleCount);
     expect(result.vehicleUploadBytes).toBe(result.encodedInstances * 11 * 4);
     expect(result.vehicleDraws).toBe(1);
+    // The real-host frames always carry scene sprites (the fixture places a
+    // bus terminal and houses), so the textured pass must have drawn once.
+    expect(result.spriteInstances).toBeGreaterThan(0);
+    expect(result.spriteDraws).toBe(1);
     expect(result.medianCpuMs).toBeGreaterThan(0);
     expect(result.p95CpuMs).toBeGreaterThanOrEqual(result.medianCpuMs);
     expect(result.queueCompleted).toBe(true);
