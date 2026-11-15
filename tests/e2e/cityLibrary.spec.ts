@@ -8,6 +8,35 @@ import {
   selectBuildLeaf,
 } from "./helpers";
 
+test("a very long unbroken city name ellipsizes inside the Continue button", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "A".repeat(80));
+  await page.reload();
+
+  const library = page.getByTestId("city-library-screen");
+  await expect(library).toBeVisible();
+  const card = library.locator(".city-library-card");
+  const continueButton = library.getByRole("button", { name: /Continue/ });
+  await expect(continueButton).toBeVisible();
+
+  // The button stays inside the card and clips the unbroken name instead of
+  // overflowing it.
+  const cardBox = await card.boundingBox();
+  const buttonBox = await continueButton.boundingBox();
+  expect(cardBox).not.toBeNull();
+  expect(buttonBox).not.toBeNull();
+  expect(buttonBox!.x).toBeGreaterThanOrEqual(cardBox!.x);
+  expect(buttonBox!.x + buttonBox!.width).toBeLessThanOrEqual(
+    cardBox!.x + cardBox!.width + 1,
+  );
+  expect(
+    await continueButton.evaluate(
+      (element) => element.scrollWidth <= element.clientWidth + 1,
+    ),
+  ).toBe(true);
+});
+
 test("Save Now persists changed gameplay through reload and Continue", async ({
   page,
 }) => {

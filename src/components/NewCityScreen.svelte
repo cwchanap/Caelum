@@ -93,7 +93,7 @@
                   bind:group={mapSize}
                 />
                 <span>{MAP_SIZES[id].label}</span>
-                <span class="choice-detail" aria-hidden="true">
+                <span class="choice-detail">
                   {MAP_SIZES[id].width}×{MAP_SIZES[id].height}
                 </span>
               </label>
@@ -113,9 +113,7 @@
                   bind:group={economyPreset}
                 />
                 <span>{choice.label}</span>
-                <span class="choice-detail" aria-hidden="true"
-                  >{choice.note}</span
-                >
+                <span class="choice-detail">{choice.note}</span>
               </label>
             {/each}
           </div>

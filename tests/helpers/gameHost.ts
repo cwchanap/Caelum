@@ -23,6 +23,7 @@ export interface FakeGameHost extends GameHost {
   cameraForAction: Mock;
   adjustCamera: Mock;
   captureFrame: Mock;
+  destroy: Mock;
 }
 
 const created: FakeGameHost[] = [];
@@ -44,6 +45,7 @@ export const createFakeGameHost: CreateGameHost = async (context) => {
     cameraForAction: vi.fn(() => undefined),
     adjustCamera: vi.fn(),
     captureFrame: vi.fn(async () => null),
+    destroy: vi.fn(),
   };
   created.push(host);
   return host;

@@ -328,23 +328,29 @@ describe("App command shell", () => {
     const sizeGroup = within(screen.getByRole("group", { name: "Map size" }));
     const economyGroup = within(screen.getByRole("group", { name: "Economy" }));
 
-    // Defaults: Crossroads, Small, Standard.
+    // Defaults: Crossroads, Small, Standard. The visible size/economy detail
+    // notes are part of the radio's accessible name (no aria-hidden), so
+    // screen readers hear the dimensions and preset descriptions too.
     expect(
       templateGroup.getByRole("radio", { name: "Crossroads" }),
     ).toBeChecked();
-    expect(sizeGroup.getByRole("radio", { name: "Small" })).toBeChecked();
-    expect(economyGroup.getByRole("radio", { name: "Standard" })).toBeChecked();
+    expect(sizeGroup.getByRole("radio", { name: "Small 28×18" })).toBeChecked();
+    expect(
+      economyGroup.getByRole("radio", { name: "Standard Money matters" }),
+    ).toBeChecked();
 
     await fireEvent.input(screen.getByLabelText("City name"), {
       target: { value: "  Maple Junction  " },
     });
     await fireEvent.click(
-      economyGroup.getByRole("radio", { name: "Creative" }),
+      economyGroup.getByRole("radio", { name: "Creative Build for free" }),
     );
     await fireEvent.click(
       templateGroup.getByRole("radio", { name: "Small Town" }),
     );
-    await fireEvent.click(sizeGroup.getByRole("radio", { name: "Large" }));
+    await fireEvent.click(
+      sizeGroup.getByRole("radio", { name: "Large 84×54" }),
+    );
     await fireEvent.click(create);
 
     expect(runtime.persistence.createCity).toHaveBeenCalledWith({

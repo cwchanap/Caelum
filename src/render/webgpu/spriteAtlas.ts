@@ -99,7 +99,16 @@ async function decodeSpriteImage(
 ): Promise<HTMLImageElement> {
   const image = new Image();
   image.src = source.url;
-  await image.decode();
+  try {
+    await image.decode();
+  } catch (error) {
+    // A raw decode rejection (DOMException) names no asset; wrap it so a bad
+    // shipped file is identifiable at startup.
+    throw new Error(
+      `sprite "${source.name}" failed to decode: ${String(error)}`,
+      { cause: error },
+    );
+  }
   const expectedWidth = source.width;
   const expectedHeight = source.height;
   if (

@@ -389,7 +389,7 @@ export function createWebGpuRenderer(
   }
   // Unit quad (two triangles) covering [-0.5, 0.5]^2; vehicles and sprites
   // transform it per instance. Recreated on configure() so a host remount
-  // reuses the renderer after a teardown destroy (role buffers re-acquire
+  // after a canvas unmount reuses the renderer (role buffers re-acquire
   // lazily in acquireBuffer).
   const quadCorners = [
     -0.5, -0.5, 0.5, -0.5, -0.5, 0.5, 0.5, -0.5, 0.5, 0.5, -0.5, 0.5,

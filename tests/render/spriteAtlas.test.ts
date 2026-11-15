@@ -57,7 +57,9 @@ class FakeImage {
       ([url]) => url.endsWith(this.url) || this.url.endsWith(url),
     )?.[1];
     if (dims === undefined) {
-      throw new Error(`sprite image failed to decode: ${this.url}`);
+      // Mirrors a real decode() rejection: the DOMException carries no asset
+      // identity, so only the loader can name the failing sprite.
+      throw new Error("The source image could not be decoded");
     }
     this.naturalWidth = dims.width;
     this.naturalHeight = dims.height;
@@ -279,12 +281,13 @@ describe("createSpriteAtlasTexture", () => {
     expect(contexts).toHaveLength(0);
   });
 
-  it("fails clearly when an image fails to decode", async () => {
-    imageDimensions.set(TREE_SPRITE_URLS[0]!, { width: 192, height: 192 });
+  it("fails clearly when an image fails to decode, naming the sprite", async () => {
+    registerShippedDimensions();
+    imageDimensions.delete(TREE_SPRITE_URLS[0]!);
     const { device } = createFakeDevice();
 
     await expect(createSpriteAtlasTexture(device)).rejects.toThrow(
-      /failed to decode/,
+      /sprite "tree-01" failed to decode.*could not be decoded/s,
     );
   });
 });
