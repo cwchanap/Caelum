@@ -78,13 +78,21 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
     page.getByRole("textbox", { name: "Rename Browser Smoke B" }),
   ).toBeVisible();
 
-  // Every row shows a colored initial avatar and its saved timestamp.
-  const rowA = page
-    .locator("[data-testid^='city-row-']")
-    .filter({ hasText: "Browser Smoke A" });
-  const rowB = page
-    .locator("[data-testid^='city-row-']")
-    .filter({ hasText: "Browser Smoke B" });
+  // Every row shows a colored initial avatar and its saved timestamp. City
+  // names live only in the rename textbox's accessible name, never as row
+  // text, so rows must be selected by that descendant textbox.
+  const rowA = page.locator("[data-testid^='city-row-']").filter({
+    has: page.getByRole("textbox", {
+      name: "Rename Browser Smoke A",
+      exact: true,
+    }),
+  });
+  const rowB = page.locator("[data-testid^='city-row-']").filter({
+    has: page.getByRole("textbox", {
+      name: "Rename Browser Smoke B",
+      exact: true,
+    }),
+  });
   const rowAId = await rowA.getAttribute("data-testid");
   expect(rowAId).toMatch(/^city-row-/);
   const avatarA = page.getByTestId(rowAId!).getByTestId("city-avatar");
@@ -170,9 +178,12 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
 
   // Confirmed two-click Delete removes the other saved city from the list.
   await openCommandDestination(page, "city");
-  const rowBPanel = page
-    .locator("[data-testid^='city-row-']")
-    .filter({ hasText: "Browser Smoke B" });
+  const rowBPanel = page.locator("[data-testid^='city-row-']").filter({
+    has: page.getByRole("textbox", {
+      name: "Rename Browser Smoke B",
+      exact: true,
+    }),
+  });
   const deleteB = rowBPanel.getByRole("button", { name: "Delete" });
   await deleteB.click();
   await expect(deleteB).toHaveText("Delete?");
