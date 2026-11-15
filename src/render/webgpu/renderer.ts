@@ -21,7 +21,7 @@ export interface WebGpuSolidBatch {
 }
 
 /** Instanced vehicle batch. Instance layout: clip origin (x, y), world angle,
- *  world half-extents (length, width), world→clip factors, RGBA color. */
+ *  world half-extents (length, width), RGBA color, trailing clip factors. */
 export interface WebGpuVehicleBatch {
   instances: Float32Array<ArrayBuffer>;
 }
@@ -66,6 +66,7 @@ export interface WebGpuCapturedFrame {
 export interface WebGpuRenderer {
   readonly lost: Promise<WebGpuDeviceLoss>;
   configure(canvas: HTMLCanvasElement): void;
+  unconfigure(): void;
   resize(width: number, height: number): void;
   render(frame: WebGpuRenderFrame): WebGpuRenderStats;
   /** Renders `frame` into an offscreen target at the resize() pixel size and
@@ -137,8 +138,8 @@ fn vsMain(
   @location(1) origin: vec2f,
   @location(2) angle: f32,
   @location(3) extents: vec2f,
-  @location(4) clipScale: vec2f,
-  @location(5) color: vec4f,
+  @location(4) color: vec4f,
+  @location(5) clipScale: vec2f,
 ) -> VertexOutput {
   // Rotate the body in y-down world space, then project with separate clip
   // factors (clipScale.y is negative for the y-flip). Rotating in clip space
@@ -322,8 +323,8 @@ export function createWebGpuRenderer(
             { shaderLocation: 1, offset: 0, format: "float32x2" },
             { shaderLocation: 2, offset: 8, format: "float32" },
             { shaderLocation: 3, offset: 12, format: "float32x2" },
-            { shaderLocation: 4, offset: 20, format: "float32x2" },
-            { shaderLocation: 5, offset: 28, format: "float32x4" },
+            { shaderLocation: 4, offset: 20, format: "float32x4" },
+            { shaderLocation: 5, offset: 36, format: "float32x2" },
           ],
         },
       ],
@@ -397,6 +398,8 @@ export function createWebGpuRenderer(
   let quadBuffer: GPUBuffer | null = null;
 
   const buffers = new Map<BufferRole, BufferEntry>();
+  let lastSpriteBuffer: GPUBuffer | null = null;
+  let lastSpriteInstances: Float32Array<ArrayBuffer> | null = null;
   let context: GPUCanvasContext | null = null;
   // Pixel size of the configured canvas, owned via resize(); also the size of
   // the offscreen captureFrame target.
@@ -510,7 +513,11 @@ export function createWebGpuRenderer(
       }
       const instances = frame.sprites!.instances;
       const buffer = acquireBuffer("sprite", spriteFloats);
-      device.queue.writeBuffer(buffer, 0, instances, 0, instances.length);
+      if (buffer !== lastSpriteBuffer || instances !== lastSpriteInstances) {
+        device.queue.writeBuffer(buffer, 0, instances, 0, instances.length);
+        lastSpriteBuffer = buffer;
+        lastSpriteInstances = instances;
+      }
       spriteInstances = spriteFloats / SPRITE_INSTANCE_FLOATS;
       pass.setPipeline(spritePipeline);
       pass.setBindGroup(0, spriteBindGroup);
@@ -571,6 +578,10 @@ export function createWebGpuRenderer(
       canvasContext.configure({ device, format, alphaMode: "opaque" });
       context = canvasContext;
       ensureQuadBuffer();
+    },
+    unconfigure(): void {
+      context?.unconfigure();
+      context = null;
     },
     resize(nextWidth: number, nextHeight: number): void {
       pixelWidth = nextWidth;
@@ -643,10 +654,13 @@ export function createWebGpuRenderer(
         entry.buffer.destroy();
       }
       buffers.clear();
+      lastSpriteBuffer = null;
+      lastSpriteInstances = null;
       quadBuffer?.destroy();
       quadBuffer = null;
       spriteAtlas?.destroy();
       spriteAtlas = null;
+      spriteBindGroup = null;
       context?.unconfigure();
       context = null;
     },

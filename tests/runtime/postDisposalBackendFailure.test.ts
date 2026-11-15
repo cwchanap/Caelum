@@ -187,8 +187,10 @@ describe("post-disposal backend failure publication", () => {
     );
     expect(errorCalls).toHaveLength(1);
 
-    // At least one render occurred (the terminal snapshot render).
-    expect(host.render.mock.calls.length).toBeGreaterThan(rendersBefore);
+    // Terminal failure stops the animation loop before failBackend destroys
+    // the host (it does not schedule a cancelled rAF render).
+    expect(host.stop).toHaveBeenCalled();
+    expect(host.render.mock.calls.length).toBe(rendersBefore);
 
     // The runtime is terminal.
     expect(runtime.getSnapshot().backendError).toBe("live backend failure");

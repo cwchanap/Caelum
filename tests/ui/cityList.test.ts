@@ -70,6 +70,20 @@ describe("CityList", () => {
     expect(avatarOld.style.backgroundColor).not.toBe("");
   });
 
+  it("preserves surrogate-pair initials in the city avatar", () => {
+    render(CityList, {
+      props: {
+        cities: [{ ...CITIES[0], name: " 𐐷 Town" }],
+        activeCityId: null,
+        busy: false,
+        onLoad: vi.fn(),
+        onRename: vi.fn(),
+        onDelete: vi.fn(),
+      },
+    });
+    expect(screen.getByTestId("city-avatar").textContent).toBe("𐐷");
+  });
+
   it("derives the avatar color from city.id, not the editable name", () => {
     const baseProps = {
       activeCityId: "city-new",

@@ -174,26 +174,16 @@ describe("sunny diorama visual foundation", () => {
   it("points the gpu palette at the sunny diorama direction", () => {
     const grass = hueOf(colors.empty);
     const residential = hueOf(areaColors.residential);
-    const houseRoof = hueOf(colors.buildingHouse);
     const park = hueOf(areaColors.park);
-    const canopy = hueOf(colors.treeCanopy);
 
     // Warm light grass keeps the map bright.
     expect(lightnessOf(colors.empty)).toBeGreaterThan(0.6);
 
-    // Residential lots and house roofs lean terracotta, never grass/tree hues.
+    // Residential lots lean terracotta, never grass hues.
     expect(hueDistance(residential, grass)).toBeGreaterThan(50);
-    expect(hueDistance(residential, canopy)).toBeGreaterThan(80);
-    expect(hueDistance(houseRoof, grass)).toBeGreaterThan(50);
-    expect(hueDistance(houseRoof, canopy)).toBeGreaterThan(80);
 
     // Park lots read as a distinct green beside the grass hue.
     expect(hueDistance(park, grass)).toBeGreaterThan(15);
-
-    // Tree canopies stay a darker green than park lots.
-    expect(lightnessOf(colors.treeCanopy)).toBeLessThan(
-      lightnessOf(areaColors.park),
-    );
 
     // Office, commercial, industrial and civic zones stay distinguishable.
     const zoneHues = [

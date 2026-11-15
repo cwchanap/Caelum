@@ -62,6 +62,7 @@ export function createNoopWebGpuRenderer(): WebGpuRenderer {
   return {
     lost: new Promise(() => {}),
     configure: () => {},
+    unconfigure: () => {},
     resize: () => {},
     render: () => ({
       solidBatches: 0,

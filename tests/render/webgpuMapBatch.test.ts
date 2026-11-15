@@ -17,6 +17,8 @@ import {
   SPRITE_ATLAS_HEIGHT,
   SPRITE_ATLAS_WIDTH,
   SPRITE_TEXELS_PER_TILE,
+  TREE_SPRITE_LAYER_BASE,
+  TREE_SPRITE_URLS,
 } from "../../src/render/webgpu/spriteAtlas";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import {
@@ -653,9 +655,7 @@ describe("buildMapBatch building layer", () => {
     const batch = buildMapBatch(state);
 
     // No flat roof fill and no outline stroke anywhere in the scene.
-    expect(verticesOfColor(batch.vertices, colors.buildingHouse)).toHaveLength(
-      0,
-    );
+    expect(verticesOfColor(batch.vertices, "#a96a52")).toHaveLength(0);
     expect(verticesOfRgba(batch.vertices, BUILDING_OUTLINE)).toHaveLength(0);
     // One solid shadow rectangle over the whole rotated footprint (2x1
     // native tiles), offset by the same +3/+3 as before.
@@ -727,15 +727,19 @@ describe("buildMapBatch building layer", () => {
       );
       expect(verticesOfRgba(batch.vertices, BUILDING_OUTLINE)).toHaveLength(0);
       expect(
-        verticesOfRgba(batch.vertices, parseColor(colors.buildingBus)),
+        verticesOfRgba(batch.vertices, parseColor("#e8734f")),
       ).toHaveLength(0);
       expect(
-        verticesOfRgba(batch.vertices, parseColor(colors.buildingMetro)),
+        verticesOfRgba(batch.vertices, parseColor("#3d7fd4")),
       ).toHaveLength(0);
       // And no sprite instance either — only tree rows remain.
-      expect(spriteRowsOf(batch.sprites).every((row) => row[7]! < 3)).toBe(
-        true,
-      );
+      expect(
+        spriteRowsOf(batch.sprites).every(
+          (row) =>
+            row[7]! >= TREE_SPRITE_LAYER_BASE &&
+            row[7]! < TREE_SPRITE_LAYER_BASE + TREE_SPRITE_URLS.length,
+        ),
+      ).toBe(true);
     }
   });
 });

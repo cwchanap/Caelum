@@ -174,15 +174,20 @@ export function createWebGpuHostWithRenderer(
   // for camera moves that have no pointer event of their own (keys, buttons).
   let retrackPointer: (() => void) | null = null;
 
-  /** Terminal GPU teardown, invoked by the runtime's `dispose()`. Canvas
-   *  unmount during screen switches only detaches: the runtime owns one host
-   *  for its whole life and remounts it (New City / City Library round
-   *  trips), so destroying per unmount would kill the device mid-session. */
+  /** Terminal GPU teardown, invoked by `runtime.dispose()`, `failBackend`, or
+   *  shell-error termination. Canvas unmount during screen switches only
+   *  detaches and unconfigures the context: the runtime owns one host for its
+   *  whole life and remounts it (New City / City Library round trips), so
+   *  destroying per unmount would kill the device mid-session. */
   const destroy = (): void => {
     if (destroyed) return;
     destroyed = true;
+    running = false;
+    lastFrameTime = null;
+    cancelPendingFrame();
     activeDetach?.();
     activeDetach = null;
+    projectedSpritesCache = null;
     // Destroy the renderer's GPU resources and, when the host owns the
     // device, the device too. The resulting deliberate "destroyed" loss is
     // ignored by the lost handler.
@@ -210,6 +215,14 @@ export function createWebGpuHostWithRenderer(
   // to clip space are applied per draw.
   let sceneCache: SceneBatch | null = null;
   let routeCache: BatchCache | null = null;
+  let projectedSpritesCache: {
+    source: Float32Array<ArrayBuffer>;
+    sx: number;
+    ox: number;
+    sy: number;
+    oy: number;
+    projected: Float32Array<ArrayBuffer>;
+  } | null = null;
 
   let transform: ClipTransform | null = null;
 
@@ -358,24 +371,18 @@ export function createWebGpuHostWithRenderer(
   };
 
   /** One projection loop for both instanced kinds: project the origin into
-   *  clip space and write the world→clip factors into the row's two clip
-   *  slots (offset 5 for 11-float vehicles, offset 8 for 10-float sprites);
-   *  angle and world-px extents pass through raw. `tailFloats` > 0 (vehicles)
-   *  relocates the producer's RGBA tail from the slots after the head into
-   *  the shader slots after the inserted clip factors (rgba 5-8 → 7-10);
-   *  copying it in place would leave shader alpha at padding zero and every
-   *  vehicle invisible. Sprites carry no tail (0): their clip slots are the
-   *  row's trailing two. */
+   *  clip space and write the world→clip factors into the row's two trailing
+   *  slots (offset 9 for 11-float vehicles, offset 8 for 10-float sprites);
+   *  angle, world-px extents, and color/uv/layer pass through in place. */
   const projectInstances = (
     instances: Float32Array<ArrayBuffer>,
     stride: number,
-    clipOffset: number,
-    tailFloats: number,
   ): Float32Array<ArrayBuffer> => {
     const t = transform;
     if (t === null || instances.length === 0) {
       return instances;
     }
+    const clipOffset = stride - 2;
     const out = new Float32Array(instances.length) as Float32Array<ArrayBuffer>;
     for (let i = 0; i < instances.length; i += stride) {
       out[i] = instances[i]! * t.sx + t.ox;
@@ -385,9 +392,6 @@ export function createWebGpuHostWithRenderer(
       }
       out[i + clipOffset] = t.sx;
       out[i + clipOffset + 1] = t.sy;
-      for (let k = 0; k < tailFloats; k += 1) {
-        out[i + clipOffset + 2 + k] = instances[i + clipOffset + k]!;
-      }
     }
     return out;
   };
@@ -395,12 +399,36 @@ export function createWebGpuHostWithRenderer(
   const transformInstances = (
     instances: Float32Array<ArrayBuffer>,
   ): Float32Array<ArrayBuffer> =>
-    projectInstances(instances, VEHICLE_INSTANCE_FLOATS, 5, 4);
+    projectInstances(instances, VEHICLE_INSTANCE_FLOATS);
 
   const transformSpriteInstances = (
     instances: Float32Array<ArrayBuffer>,
-  ): Float32Array<ArrayBuffer> =>
-    projectInstances(instances, SPRITE_INSTANCE_FLOATS, 8, 0);
+  ): Float32Array<ArrayBuffer> => {
+    const t = transform;
+    if (t === null || instances.length === 0) {
+      return instances;
+    }
+    if (
+      projectedSpritesCache !== null &&
+      projectedSpritesCache.source === instances &&
+      projectedSpritesCache.sx === t.sx &&
+      projectedSpritesCache.ox === t.ox &&
+      projectedSpritesCache.sy === t.sy &&
+      projectedSpritesCache.oy === t.oy
+    ) {
+      return projectedSpritesCache.projected;
+    }
+    const projected = projectInstances(instances, SPRITE_INSTANCE_FLOATS);
+    projectedSpritesCache = {
+      source: instances,
+      sx: t.sx,
+      ox: t.ox,
+      sy: t.sy,
+      oy: t.oy,
+      projected,
+    };
+    return projected;
+  };
 
   /** Assembles the frame's batches from the observed state — the exact input
    *  both drawFrame and captureFrame hand to the renderer. `tileCssPx` is the
@@ -507,7 +535,7 @@ export function createWebGpuHostWithRenderer(
   };
 
   const captureFrame = (): Promise<WebGpuCapturedFrame | null> => {
-    if (canvas === null) {
+    if (destroyed || canvas === null) {
       return Promise.resolve(null);
     }
     // Same sizing/transform prep as drawFrame so the capture is in the same
@@ -563,7 +591,7 @@ export function createWebGpuHostWithRenderer(
   };
 
   const syncAnimationLoop = (): void => {
-    if (canAnimate()) {
+    if (!destroyed && canAnimate()) {
       if (
         animationFrameId === null &&
         typeof requestAnimationFrame === "function"
@@ -578,7 +606,7 @@ export function createWebGpuHostWithRenderer(
   };
 
   const render = (): void => {
-    if (canvas === null) {
+    if (destroyed || canvas === null) {
       return;
     }
     // While an active rAF owns display it draws the latest state next frame;
@@ -634,7 +662,7 @@ export function createWebGpuHostWithRenderer(
   };
 
   const start = (): void => {
-    if (running) {
+    if (destroyed || running) {
       return;
     }
 
@@ -675,6 +703,9 @@ export function createWebGpuHostWithRenderer(
   };
 
   const mount = (host: HTMLElement): (() => void) => {
+    if (destroyed) {
+      return () => {};
+    }
     // Same host with an existing canvas: just refresh, reuse the live
     // detach. Returning this invocation's `detach` would hand back a cleanup
     // whose handler bindings were never initialized (the function returns
@@ -687,8 +718,8 @@ export function createWebGpuHostWithRenderer(
 
     // Different host (or first mount): detach any prior mount so its event
     // listeners, ResizeObserver, and window listener don't leak. GPU
-    // resources survive every unmount and re-mount; only destroy() (runtime
-    // dispose) destroys them.
+    // resources survive every unmount and re-mount; only terminal destroy()
+    // (runtime dispose or fatal failure) destroys them.
     activeDetach?.();
     activeDetach = null;
 
@@ -1178,6 +1209,7 @@ export function createWebGpuHostWithRenderer(
       // touches a detached canvas (contract: teardown is self-contained even
       // when the controller remains marked running until an explicit stop()).
       cancelPendingFrame();
+      renderer.unconfigure();
 
       // Clear interaction state so a remount does not inherit a live drag or
       // hover from the destroyed canvas.

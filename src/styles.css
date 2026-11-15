@@ -1913,7 +1913,7 @@ body {
   gap: 12px;
 }
 
-.new-city-card label {
+.new-city-card label:not(.choice-tile) {
   display: grid;
   gap: 8px;
 }
@@ -2005,6 +2005,7 @@ body {
 }
 
 .choice-detail {
+  grid-column: 2;
   font-size: 12px;
   color: var(--ink-mid);
 }
