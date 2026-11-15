@@ -322,30 +322,29 @@ describe("App command shell", () => {
     const create = await screen.findByRole("button", { name: "Create City" });
     expect(create).toBeDisabled();
 
-    const templateSelect = screen.getByLabelText("Template");
+    const templateGroup = within(
+      screen.getByRole("group", { name: "Template" }),
+    );
+    const sizeGroup = within(screen.getByRole("group", { name: "Map size" }));
+    const economyGroup = within(screen.getByRole("group", { name: "Economy" }));
+
+    // Defaults: Crossroads, Small, Standard.
     expect(
-      within(templateSelect)
-        .getAllByRole("option")
-        .map((option) => (option as HTMLOptionElement).value),
-    ).toEqual(["crossroads", "blankGrid", "smallTown"]);
+      templateGroup.getByRole("radio", { name: "Crossroads" }),
+    ).toBeChecked();
+    expect(sizeGroup.getByRole("radio", { name: "Small" })).toBeChecked();
+    expect(economyGroup.getByRole("radio", { name: "Standard" })).toBeChecked();
 
     await fireEvent.input(screen.getByLabelText("City name"), {
       target: { value: "  Maple Junction  " },
     });
-    await fireEvent.change(screen.getByLabelText("Economy"), {
-      target: { value: "creative" },
-    });
-    await fireEvent.change(templateSelect, {
-      target: { value: "smallTown" },
-    });
-    const sizeSelect = screen.getByLabelText("Map size");
-    expect((sizeSelect as HTMLSelectElement).value).toBe("small");
-    expect(
-      within(sizeSelect)
-        .getAllByRole("option")
-        .map((option) => option.textContent),
-    ).toEqual(["Small · 28×18", "Medium · 56×36", "Large · 84×54"]);
-    await fireEvent.change(sizeSelect, { target: { value: "large" } });
+    await fireEvent.click(
+      economyGroup.getByRole("radio", { name: "Creative" }),
+    );
+    await fireEvent.click(
+      templateGroup.getByRole("radio", { name: "Small Town" }),
+    );
+    await fireEvent.click(sizeGroup.getByRole("radio", { name: "Large" }));
     await fireEvent.click(create);
 
     expect(runtime.persistence.createCity).toHaveBeenCalledWith({
@@ -437,6 +436,14 @@ describe("App command shell", () => {
     expect(await screen.findByTestId("city-library-screen")).toBeVisible();
     expect(screen.getByTestId("city-row-city-new")).toBeVisible();
     expect(screen.getByTestId("city-row-city-old")).toBeVisible();
+    // Continue names the actual newest saved city.
+    expect(
+      screen.getByRole("button", { name: "Continue Maple Junction" }),
+    ).toBeVisible();
+    // The library embeds the shared CityList inside its card scope.
+    expect(
+      screen.getByTestId("city-list").closest(".city-library-screen"),
+    ).not.toBeNull();
   });
 
   it("Continues the first already-sorted city", async () => {
@@ -447,10 +454,24 @@ describe("App command shell", () => {
 
     render(App, { props: { runtime: harness.runtime } });
     await fireEvent.click(
-      await screen.findByRole("button", { name: "Continue" }),
+      await screen.findByRole("button", { name: "Continue Maple Junction" }),
     );
 
     expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-new");
+  });
+
+  it("reuses the shared CityList compactly inside the City panel", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const panelList = screen.getByTestId("city-list");
+    // The panel embeds the same CityList without the library card scope.
+    expect(panelList.closest('[data-testid="panel-city"]')).not.toBeNull();
+    expect(panelList.closest(".city-library-screen")).toBeNull();
   });
 
   it("shows dirty state and invokes Save Now", async () => {
