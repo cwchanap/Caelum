@@ -774,6 +774,11 @@ describe("buildMapBatch sprite instances", () => {
   });
 
   it("emits one tree sprite per canopy with all three variants and 12-18px extents", () => {
+    // Empty-state edge of the tree invariants: with no buildings, zones or
+    // roads every sprite row is a tree. The same deterministic checks are
+    // also exercised against an actual Small Town snapshot built by the
+    // real Rust sandbox (WASM) in tests/runtime/smallTownSpriteBatch.test.ts,
+    // which this jsdom project cannot load.
     const state = createTestGameState();
     const batch = buildMapBatch(state, "hidden");
     const rows = spriteRowsOf(batch.sprites);
