@@ -2053,6 +2053,7 @@ body {
   display: grid;
   place-items: center start;
   padding: clamp(24px, 5vw, 64px);
+
   /* Fallback grass tone from the key art while the image decodes. */
   background-color: #c3d99a;
   background-size: cover;
@@ -2064,6 +2065,7 @@ body {
   flex-direction: column;
   gap: 1rem;
   width: min(30rem, 100%);
+
   /* min-height: 0 lets max-height win over the content-based grid-item minimum. */
   min-height: 0;
   max-height: 100%;
