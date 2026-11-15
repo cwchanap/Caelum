@@ -28,6 +28,17 @@
     timeStyle: "short",
   });
 
+  // Sunny Diorama material hues; the initial must stay legible on all of them.
+  const AVATAR_COLORS = ["#ab5a45", "#3c6b35", "#a86f0e", "#5d6d72"];
+
+  function avatarColor(cityId: string): string {
+    let hash = 5381;
+    for (let index = 0; index < cityId.length; index += 1) {
+      hash = ((hash << 5) + hash + cityId.charCodeAt(index)) | 0;
+    }
+    return AVATAR_COLORS[(hash >>> 0) % AVATAR_COLORS.length];
+  }
+
   function cityNameFor(cityId: string, canonical: string): string {
     return cityNameDrafts[cityId] ?? canonical;
   }
@@ -77,6 +88,12 @@
   {#each cities as city (city.id)}
     <article class="city-list-row" data-testid={`city-row-${city.id}`}>
       <div class="city-list-meta">
+        <span
+          class="city-avatar"
+          data-testid="city-avatar"
+          style={`background-color: ${avatarColor(city.id)}`}
+          aria-hidden="true">{city.name.trim().charAt(0)}</span
+        >
         <input
           type="text"
           class="city-name"

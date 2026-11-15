@@ -1887,9 +1887,10 @@ body {
 
 .new-city-card {
   display: grid;
-  gap: 18px;
-  width: min(520px, 100%);
-  padding: 32px;
+  gap: 14px;
+  width: min(60rem, 100%);
+  max-height: 100%;
+  padding: 28px;
 }
 
 .new-city-card h1 {
@@ -1899,32 +1900,196 @@ body {
   color: var(--ink);
 }
 
+.new-city-columns {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+  min-height: 0;
+}
+
+.new-city-form {
+  display: grid;
+  gap: 12px;
+}
+
 .new-city-card label {
   display: grid;
   gap: 8px;
 }
 
 .new-city-card input,
-.new-city-card select,
 .new-city-card button {
   min-height: 44px;
 }
 
+.choice-group {
+  margin: 0;
+  padding: 10px 12px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.choice-group legend {
+  padding: 0 6px;
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--ink-mid);
+}
+
+.choice-tiles {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.choice-tile {
+  position: relative;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 4px 8px;
+  padding: 8px 12px;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.choice-tile:hover {
+  border-color: var(--accent);
+}
+
+.choice-tile input {
+  min-height: 0;
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.choice-tile input:focus-visible {
+  outline: 3px solid var(--accent);
+  outline-offset: 2px;
+}
+
+.choice-tile:has(input:checked) {
+  border-color: var(--accent);
+  background: var(--surface-raised);
+  box-shadow: 0 0 0 1px var(--accent);
+}
+
+.choice-tile--template {
+  grid-template-columns: 1fr;
+  align-items: stretch;
+  justify-items: center;
+  padding: 8px;
+}
+
+.choice-tile--template img {
+  width: 96px;
+  height: 64px;
+  object-fit: cover;
+  border-radius: 6px;
+  border: 1px solid var(--line-faint);
+  background: var(--surface-sunk);
+}
+
+.choice-tile--template span {
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.choice-detail {
+  font-size: 12px;
+  color: var(--ink-mid);
+}
+
+.new-city-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.new-city-actions .btn:first-child {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface-raised);
+}
+
+.new-city-actions .btn:first-child:hover:not(:disabled) {
+  border-color: var(--accent-warm);
+}
+
+.new-city-preview {
+  align-self: stretch;
+  display: grid;
+  align-content: center;
+  min-height: 0;
+}
+
+.new-city-preview img {
+  width: 100%;
+  max-height: 100%;
+  object-fit: contain;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface-sunk);
+}
+
 .new-city-error {
+  margin: 0;
   color: var(--danger);
 }
 
 .city-library-screen {
   min-height: 100vh;
   display: grid;
-  place-items: center;
-  padding: 2rem;
+  place-items: center start;
+  padding: clamp(24px, 5vw, 64px);
+  /* Fallback grass tone from the key art while the image decodes. */
+  background-color: #c3d99a;
+  background-size: cover;
+  background-position: center;
 }
 
 .city-library-card {
-  width: min(56rem, 100%);
-  display: grid;
+  display: flex;
+  flex-direction: column;
   gap: 1rem;
+  width: min(30rem, 100%);
+  max-height: 100%;
+  padding: 1.5rem;
+}
+
+.city-library-brand {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.city-library-brand-icon {
+  width: 44px;
+  height: 44px;
+  border-radius: 10px;
+}
+
+.city-library-wordmark {
+  margin: 0;
+  font-family: var(--font-display);
+  font-weight: 600;
+  font-size: 22px;
+  color: var(--ink);
+}
+
+.city-library-tagline {
+  margin: 0;
+  font-size: 13px;
+  color: var(--ink-mid);
 }
 
 .city-library-card h1 {
@@ -1941,6 +2106,21 @@ body {
   flex-wrap: wrap;
   gap: 0.5rem;
   align-items: center;
+}
+
+.city-library-actions button {
+  min-height: 40px;
+  padding: 6px 14px;
+}
+
+.city-library-continue {
+  background: var(--accent);
+  border-color: var(--accent);
+  color: var(--surface-raised);
+}
+
+.city-library-continue:hover:not(:disabled) {
+  border-color: var(--accent-warm);
 }
 
 .city-section > .city-actions {
@@ -1975,6 +2155,20 @@ body {
   gap: 0.75rem;
 }
 
+.city-avatar {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  width: 24px;
+  height: 24px;
+  border-radius: 8px;
+  font-family: var(--font-display);
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--surface-raised);
+}
+
 .city-list-row {
   display: grid;
   gap: 0.75rem;
@@ -1982,7 +2176,71 @@ body {
 
 .city-list-meta {
   display: grid;
-  gap: 0.25rem;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 0.25rem 0.5rem;
+  align-items: center;
+}
+
+.city-list-meta > .city-name,
+.city-list-meta > span:not(.city-avatar) {
+  grid-column: 2;
+}
+
+/* Enlarged library cards: scoped to the library screen so the shared
+   in-game CityPanel stays compact. */
+.city-library-screen .city-list {
+  min-height: 0;
+  flex: 1 1 auto;
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.city-library-screen .city-list-row {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0.875rem;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  background: var(--surface);
+}
+
+.city-library-screen .city-avatar {
+  width: 40px;
+  height: 40px;
+  border-radius: 12px;
+  font-size: 18px;
+}
+
+.city-library-screen .city-list-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.city-library-screen .city-list-meta > span:not(.city-avatar) {
+  font-size: 12px;
+  color: var(--ink-mid);
+}
+
+.city-library-screen .city-name {
+  min-width: 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-raised);
+  color: var(--ink);
+  font-family: var(--font-body);
+  font-size: 14px;
+}
+
+.city-library-screen .city-name:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.city-library-screen .city-list-actions button {
+  min-height: 36px;
+  padding: 5px 12px;
 }
 
 .city-save-status {

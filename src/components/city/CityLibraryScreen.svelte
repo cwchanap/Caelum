@@ -1,4 +1,6 @@
 <script lang="ts">
+  import keyArt from "../../assets/sunny-diorama/menu/city-library.webp";
+  import appIcon from "../../assets/sunny-diorama/brand/app-icon-source.png";
   import type { CitySummary } from "../../persistence/citySaveStore";
   import CityList from "./CityList.svelte";
 
@@ -29,9 +31,19 @@
   }: Props = $props();
 </script>
 
-<main class="city-library-screen" data-testid="city-library-screen">
-  <section class="city-library-card">
-    <p class="new-city-kicker">CAELUM // LOCAL CITIES</p>
+<main
+  class="city-library-screen"
+  data-testid="city-library-screen"
+  style={`background-image: url(${keyArt})`}
+>
+  <section class="card city-library-card">
+    <header class="city-library-brand">
+      <img class="city-library-brand-icon" src={appIcon} alt="" />
+      <div>
+        <p class="city-library-wordmark">Caelum</p>
+        <p class="city-library-tagline">Build a city. Run its transport.</p>
+      </div>
+    </header>
     <h1>City Library</h1>
 
     {#if error !== null && onRetry !== undefined}
@@ -54,9 +66,12 @@
         <div class="city-library-actions">
           <button
             type="button"
+            class="btn city-library-continue"
             disabled={busy}
-            onclick={() => onContinue(cities[0].id)}>Continue</button
+            onclick={() => onContinue(cities[0].id)}
           >
+            Continue {cities[0].name}
+          </button>
           <button type="button" disabled={busy} onclick={onNewCity}>
             New City
           </button>
