@@ -64,6 +64,8 @@ export function createNoopWebGpuRenderer(): WebGpuRenderer {
     render: () => ({
       solidBatches: 0,
       solidVertices: 0,
+      spriteInstances: 0,
+      spriteDraws: 0,
       vehicleInstances: 0,
       vehicleDraws: 0,
     }),

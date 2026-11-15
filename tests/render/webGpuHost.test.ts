@@ -21,6 +21,7 @@ import {
   type WebGpuHostContext,
 } from "../../src/runtime/createWebGpuHost";
 import {
+  SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
   type WebGpuRenderFrame,
   type WebGpuRenderer,
@@ -58,6 +59,7 @@ vi.mock("../../src/render/webgpu/spriteAtlas", async (importOriginal) => {
   return {
     ...mod,
     createSpriteAtlasTexture: vi.fn(async () => ({
+      createView: () => ({}),
       destroy: vi.fn(),
     })),
   };
@@ -181,6 +183,8 @@ function createFakeRenderer(): FakeRenderer {
       return {
         solidBatches: 0,
         solidVertices: 0,
+        spriteInstances: 0,
+        spriteDraws: 0,
         vehicleInstances: 0,
         vehicleDraws: 0,
       };
@@ -1972,10 +1976,13 @@ describe("createWebGpuHost frame contents", () => {
     fx.fireFrame(16);
 
     const frame = fx.renderer.frames.at(-1)!;
-    // Painter order: scene, overlays, routes, draft | vehicles | handles.
-    expect(frame.solids.length).toBe(4);
-    expect(frame.solids.map((batch) => batch.role)).toEqual([
-      "structural",
+    // Painter stages: scene solids, one sprite batch, route/draft overlays,
+    // vehicles, then handles.
+    expect(frame.solids.length).toBe(1);
+    expect(frame.solids[0]!.role).toBe("structural");
+    expect(frame.sprites).toBeDefined();
+    expect(frame.sprites!.instances.length % SPRITE_INSTANCE_FLOATS).toBe(0);
+    expect(frame.overSprites!.map((batch) => batch.role)).toEqual([
       "dynamic",
       "route",
       "dynamic",
@@ -2008,6 +2015,24 @@ describe("createWebGpuHost frame contents", () => {
     expect(instances[5]).toBeCloseTo(2 / 896, 9);
     expect(instances[6]).toBeCloseTo(-2 / 736, 9);
 
+    // Sprite rows share the same one projection loop: the trailing clip
+    // slots (offsets 8/9 of the 10-float stride) carry the same factors,
+    // while the world origin slot stays in projected clip units.
+    const sprites = fx.renderer.frames.at(-1)!.sprites!.instances;
+    expect(sprites.length).toBeGreaterThan(0);
+    for (
+      let offset = 0;
+      offset < sprites.length;
+      offset += SPRITE_INSTANCE_FLOATS
+    ) {
+      expect(sprites[offset + 8]).toBeCloseTo(2 / 896, 9);
+      expect(sprites[offset + 9]).toBeCloseTo(-2 / 736, 9);
+      // Angle and extents pass through raw, like vehicle rows.
+      expect(sprites[offset + 2]).toBeCloseTo(0, 9);
+      expect(sprites[offset + 3]).toBeGreaterThan(0);
+      expect(sprites[offset + 4]).toBeGreaterThan(0);
+    }
+
     fx.host.stop();
   });
 
@@ -2019,21 +2044,25 @@ describe("createWebGpuHost frame contents", () => {
     fx.fireFrame(16);
     fx.fireFrame(33);
 
-    // Frame-only tick: scene and route tessellation are cache hits — the
-    // host caches per revision/emphasis, so content (and uploaded bytes)
+    // Frame-only tick: scene, sprite and route tessellation are cache hits —
+    // the host caches per revision/emphasis, so content (and uploaded bytes)
     // stays identical while only vehicles move.
     const [first, second] = fx.renderer.frames.slice(-2);
     expect(second!.solids[0]!.vertices).toEqual(first!.solids[0]!.vertices);
-    expect(second!.solids[2]!.vertices).toEqual(first!.solids[2]!.vertices);
+    expect(second!.sprites!.instances).toEqual(first!.sprites!.instances);
+    expect(second!.overSprites![1]!.vertices).toEqual(
+      first!.overSprites![1]!.vertices,
+    );
 
     // Emphasis change re-tessellates the committed-route range only.
     fx.setUi({ selectedRouteId: "route-001" });
     fx.fireFrame(50);
     const emphasized = fx.renderer.frames.at(-1)!;
-    expect(emphasized.solids[2]!.vertices).not.toEqual(
-      second!.solids[2]!.vertices,
+    expect(emphasized.overSprites![1]!.vertices).not.toEqual(
+      second!.overSprites![1]!.vertices,
     );
     expect(emphasized.solids[0]!.vertices).toEqual(second!.solids[0]!.vertices);
+    expect(emphasized.sprites!.instances).toEqual(second!.sprites!.instances);
 
     // A structural update (map change + revision bump) re-tessellates the
     // scene range.

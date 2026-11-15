@@ -39,8 +39,6 @@ const ROAD_STROKE_WIDTH = 4;
 const ROUNDABOUT_STROKE_WIDTH = 5;
 const TRACK_WIDTH = 4;
 const ONE_WAY_ARROW_WIDTH = 2;
-const BUILDING_OUTLINE_WIDTH = 2;
-const BUILDING_OUTLINE_COLOR = "rgba(17, 24, 32, 0.45)";
 const BUILDING_SHADOW_COLOR = "rgba(74, 56, 34, 0.25)";
 
 export type GridMode = "hidden" | "faint" | "normal";
@@ -62,10 +60,6 @@ const TREE_JITTER_PX = 10;
 export const TREE_MIN_RADIUS = 6;
 export const TREE_RADIUS_SPAN = 3;
 export const TREE_CANOPY_SEGMENTS = 10;
-/** Instanced sprite row layout: world origin (x, y), angle (radians), world
- *  half-extents (x, y), uv scale (source/atlas, x, y), texture layer, then
- *  two trailing clip-scale slots the host's per-frame projection fills. */
-export const SPRITE_INSTANCE_FLOATS = 10;
 const GRASS_SHADES = [0.96, 0.985, 1.01, 1.035] as const;
 const BOARD_EDGE_SHADE = 0.92;
 
@@ -77,28 +71,9 @@ const CENTERLINE = parseColor(colors.roadCenterline);
 const TRACK = parseColor(colors.track);
 const ONE_WAY_ARROW = parseColor(colors.oneWayArrow);
 const ROUNDABOUT_ISLAND = parseColor(colors.roundaboutIsland);
-const BUILDING_OUTLINE = parseColor(BUILDING_OUTLINE_COLOR);
 const BUILDING_SHADOW = parseColor(BUILDING_SHADOW_COLOR);
 const CURB = parseColor(colors.roadCurb);
 const SLEEPER = parseColor(colors.trackSleeper);
-const TREE_CANOPY = parseColor(colors.treeCanopy);
-
-const buildingColors: Record<BuildingType, ReturnType<typeof parseColor>> = {
-  busStop: parseColor(colors.buildingBus),
-  busTerminal: parseColor(colors.buildingTerminal),
-  metroStation: parseColor(colors.buildingMetro),
-  smallHouse: parseColor(colors.buildingHouse),
-  largeHouse: parseColor(colors.buildingHouse),
-  supermarket: parseColor(colors.buildingCommercial),
-  cinema: parseColor(colors.buildingCommercial),
-  factory: parseColor(colors.buildingIndustrial),
-  warehouse: parseColor(colors.buildingIndustrial),
-  officeTower: parseColor(colors.buildingOffice),
-  businessPark: parseColor(colors.buildingOffice),
-  clinic: parseColor(colors.buildingCivic),
-  school: parseColor(colors.buildingCivic),
-  parkPlaza: parseColor(colors.buildingPark),
-};
 
 const areaFills: Record<AreaKind, Rgba> = {
   residential: parseColor(areaColors.residential),
@@ -205,19 +180,6 @@ function tileEdgeEndpoints(
         to: { x: x0 + inset, y: y0 + endInset },
       };
   }
-}
-
-/** Tessellates one canvas-style strokeRect edge (lineWidth centered on the
- *  path). */
-function strokeTileEdge(
-  g: SolidGeometry,
-  tile: Point,
-  heading: Heading,
-  thickness: number,
-  color: ReturnType<typeof parseColor>,
-): void {
-  const { from, to } = tileEdgeEndpoints(tile, heading);
-  g.thickLine(from, to, thickness, color);
 }
 
 /** Shaft + chevron head, matching the canvas drawDirectionArrow glyph. */
@@ -557,13 +519,14 @@ function drawTrees(
       x: tile.x * tileSize + tileSize / 2 + jx,
       y: tile.y * tileSize + tileSize / 2 + jy,
     };
+    // The flat canopy fill is gone; the tree sprite draws the tree. The
+    // small offset shadow stays.
     g.circle(
       { x: canopy.x + ROOF_SHADOW_OFFSET, y: canopy.y + ROOF_SHADOW_OFFSET },
       radius,
       BUILDING_SHADOW,
       TREE_CANOPY_SEGMENTS,
     );
-    g.circle(canopy, radius, TREE_CANOPY, TREE_CANOPY_SEGMENTS);
     // Variant index in [0, 3): tileHash is a fraction in [0,1), so the
     // floor of its product with 3 picks one of the three tree layers.
     const variant = Math.floor(tileHash(tile.x, tile.y, 5) * 3);
@@ -584,9 +547,12 @@ function drawTrees(
 
 /**
  * Tessellates the structural map scene — tile fills/grid, vacant-lot
- * perimeters, decorative trees, curbs, roads, automatic junctions,
- * roundabouts, track with sleepers, one-way arrows and roofed buildings —
- * in the same painter order as renderMap + renderBuildings. Returns the
+ * perimeters, tree shadows, curbs, roads, automatic junctions, roundabouts,
+ * track with sleepers, one-way arrows, and one footprint shadow per
+ * sprite-bearing building — in the same painter order as the former
+ * renderMap + renderBuildings. Buildings and trees draw as textured sprites:
+ * the flat roofs, outlines, and canopy fills are gone, and busStop and
+ * metroStation keep only their procedural transitBatch markers. Returns the
  * solid triangle vertex buffer in world pixels (tileSize grid) plus one
  * sprite instance row per tree and sprite-bearing building (trees first,
  * then buildings), both cached under `scene:<rev>:<gridMode>`.
@@ -703,42 +669,21 @@ export function buildMapBatch(
     }
   }
 
+  // One footprint shadow per sprite-bearing building (rotated size, same
+  // +3/+3 offset as before). Flat roofs and outlines are gone — the textured
+  // sprite pass draws the buildings — and busStop/metroStation are skipped
+  // entirely: their procedural transitBatch markers stay alone over terrain.
   for (const building of state.buildings) {
-    for (const tile of building.occupiedTiles) {
-      g.rect(
-        tile.x * tileSize + ROOF_SHADOW_OFFSET,
-        tile.y * tileSize + ROOF_SHADOW_OFFSET,
-        tileSize,
-        tileSize,
-        BUILDING_SHADOW,
-      );
-    }
+    if (spriteLayerFor(building.type) === undefined) continue;
+    const rotated = getRotatedFootprintSize(building.type, building.rotation);
+    g.rect(
+      building.origin.x * tileSize + ROOF_SHADOW_OFFSET,
+      building.origin.y * tileSize + ROOF_SHADOW_OFFSET,
+      rotated.width * tileSize,
+      rotated.height * tileSize,
+      BUILDING_SHADOW,
+    );
   }
-  for (const building of state.buildings) {
-    const fill = buildingColors[building.type];
-    for (const tile of building.occupiedTiles) {
-      fillTileRect(g, tile, fill);
-    }
-  }
-  state.buildings.forEach((building, buildingIndex) => {
-    for (const tile of building.occupiedTiles) {
-      for (const { heading, offset } of CARDINAL_OFFSETS) {
-        const owner = tileOwners.get(
-          `${tile.x + offset.x},${tile.y + offset.y}`,
-        );
-        if (owner !== undefined && owner <= buildingIndex) {
-          continue;
-        }
-        strokeTileEdge(
-          g,
-          tile,
-          heading,
-          BUILDING_OUTLINE_WIDTH,
-          BUILDING_OUTLINE,
-        );
-      }
-    }
-  });
 
   return {
     vertices: g.toFloat32Array(),
