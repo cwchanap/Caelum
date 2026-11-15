@@ -2,7 +2,9 @@ import { expect, test } from "@playwright/test";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import {
   clickMapTile,
+  createDefaultCity,
   mapTileViewportPoint,
+  openCommandDestination,
   runtimeSnapshot,
   selectTool,
 } from "./helpers";
@@ -82,7 +84,7 @@ test("creates Small Town through the real WASM New City flow", async ({
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
 
   await page.getByLabel("City name").fill("Small Town Smoke");
-  await page.getByLabel("Template").selectOption("smallTown");
+  await page.getByRole("radio", { name: "Small Town" }).check();
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 
@@ -143,8 +145,11 @@ test("creates a Large city and pans and zooms the map", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
   await page.getByLabel("City name").fill("Large Smoke");
-  await page.getByLabel("Template").selectOption("smallTown");
-  await page.getByLabel("Map size").selectOption("large");
+  await page.getByRole("radio", { name: "Small Town" }).check();
+  await page
+    .getByRole("group", { name: "Map size" })
+    .getByRole("radio", { name: "Large" })
+    .check();
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 
@@ -189,4 +194,88 @@ test("creates a Large city and pans and zooms the map", async ({ page }) => {
 
   await page.getByRole("button", { name: "Show whole map" }).click();
   expect((await runtimeSnapshot(page)).camera).toBeNull();
+});
+
+test("radio groups default, preview and arrow keys choose on the New City screen", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+
+  const templateGroup = page.getByRole("group", { name: "Template" });
+  const sizeGroup = page.getByRole("group", { name: "Map size" });
+  const economyGroup = page.getByRole("group", { name: "Economy" });
+
+  // Defaults: Crossroads, Small, Standard.
+  await expect(
+    templateGroup.getByRole("radio", { name: "Crossroads" }),
+  ).toBeChecked();
+  await expect(sizeGroup.getByRole("radio", { name: "Small" })).toBeChecked();
+  await expect(
+    economyGroup.getByRole("radio", { name: "Standard" }),
+  ).toBeChecked();
+
+  // The illustrated preview follows the selected template immediately,
+  // without invoking Rust.
+  const preview = page.getByTestId("new-city-preview");
+  await expect(preview).toHaveAttribute("src", /crossroads/);
+  await templateGroup.getByRole("radio", { name: "Blank Grid" }).check();
+  await expect(
+    templateGroup.getByRole("radio", { name: "Blank Grid" }),
+  ).toBeChecked();
+  await expect(
+    templateGroup.getByRole("radio", { name: "Crossroads" }),
+  ).not.toBeChecked();
+  await expect(preview).toHaveAttribute("src", /blankGrid/);
+
+  await sizeGroup.getByRole("radio", { name: "Medium" }).check();
+  await expect(sizeGroup.getByRole("radio", { name: "Medium" })).toBeChecked();
+  await economyGroup.getByRole("radio", { name: "Creative" }).check();
+  await expect(
+    economyGroup.getByRole("radio", { name: "Creative" }),
+  ).toBeChecked();
+
+  // Native radio arrow keys move the checked choice. Template tiles are
+  // ordered Blank Grid, Crossroads, Small Town.
+  await templateGroup.getByRole("radio", { name: "Crossroads" }).check();
+  await page.keyboard.press("ArrowDown");
+  await expect(
+    templateGroup.getByRole("radio", { name: "Small Town" }),
+  ).toBeChecked();
+  await expect(
+    templateGroup.getByRole("radio", { name: "Blank Grid" }),
+  ).not.toBeChecked();
+});
+
+test("gates Create on a trimmed name and trims it into the saved city", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+
+  const create = page.getByRole("button", { name: "Create City" });
+  await expect(create).toBeDisabled();
+  await page.getByLabel("City name").fill("   ");
+  await expect(create).toBeDisabled();
+
+  await page.getByLabel("City name").fill("  Trimmed Smoke  ");
+  await expect(create).toBeEnabled();
+  await create.click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+
+  const snapshot = await runtimeSnapshot(page);
+  expect(snapshot.persistence.activeCity?.name).toBe("Trimmed Smoke");
+});
+
+test("cancels New City opened from the City panel", async ({ page }) => {
+  await createDefaultCity(page, "Cancel Smoke");
+
+  await openCommandDestination(page, "city");
+  await page
+    .getByTestId("panel-city")
+    .getByRole("button", { name: "New City" })
+    .click();
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 });

@@ -24,6 +24,12 @@ export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
   });
 }
 
+const TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
+  crossroads: "Crossroads",
+  blankGrid: "Blank Grid",
+  smallTown: "Small Town",
+};
+
 export async function createDefaultCity(
   page: Page,
   name = "E2E City",
@@ -40,7 +46,7 @@ export async function createDefaultCity(
   }
   await expect(newCityScreen).toBeVisible();
   await page.getByLabel("City name").fill(name);
-  await page.getByLabel("Template").selectOption(templateId);
+  await page.getByRole("radio", { name: TEMPLATE_LABELS[templateId] }).check();
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 }

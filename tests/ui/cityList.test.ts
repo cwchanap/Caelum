@@ -54,6 +54,57 @@ describe("CityList", () => {
     expect(onLoad).toHaveBeenCalledWith("city-old");
   });
 
+  it("renders a colored initial avatar in every row", () => {
+    renderList();
+    const avatarNew = within(
+      screen.getByTestId("city-row-city-new"),
+    ).getByTestId("city-avatar");
+    const avatarOld = within(
+      screen.getByTestId("city-row-city-old"),
+    ).getByTestId("city-avatar");
+
+    expect(avatarNew).toHaveTextContent(/^M$/);
+    expect(avatarOld).toHaveTextContent(/^H$/);
+    // The color is derived from the stable city id as an inline style.
+    expect(avatarNew.style.backgroundColor).not.toBe("");
+    expect(avatarOld.style.backgroundColor).not.toBe("");
+  });
+
+  it("derives the avatar color from city.id, not the editable name", () => {
+    const baseProps = {
+      activeCityId: "city-new",
+      busy: false,
+      onLoad: vi.fn(),
+      onRename: vi.fn(),
+      onDelete: vi.fn(),
+    };
+    const first = render(CityList, { props: { cities: CITIES, ...baseProps } });
+    const avatarNew = within(
+      screen.getByTestId("city-row-city-new"),
+    ).getByTestId("city-avatar");
+    const avatarOld = within(
+      screen.getByTestId("city-row-city-old"),
+    ).getByTestId("city-avatar");
+    const colorNew = avatarNew.style.backgroundColor;
+    expect(colorNew).not.toBe("");
+    expect(avatarOld.style.backgroundColor).not.toBe(colorNew);
+    first.unmount();
+
+    // A different name on the same id keeps the id-derived color while the
+    // initial follows the new name.
+    render(CityList, {
+      props: {
+        cities: [{ ...CITIES[0], name: "Zephyr Junction" }, CITIES[1]],
+        ...baseProps,
+      },
+    });
+    const renamed = within(screen.getByTestId("city-row-city-new")).getByTestId(
+      "city-avatar",
+    );
+    expect(renamed.style.backgroundColor).toBe(colorNew);
+    expect(renamed).toHaveTextContent(/^Z$/);
+  });
+
   it("trims an inline rename and commits once on Enter followed by blur", async () => {
     const { onRename } = renderList();
     const input = screen.getByTestId("city-name-city-new");
@@ -128,7 +179,7 @@ describe("CityList", () => {
 
 describe("CityLibraryScreen", () => {
   it("retains loaded city controls for a non-list operation error", () => {
-    render(CityLibraryScreen, {
+    const { container } = render(CityLibraryScreen, {
       props: {
         cities: CITIES,
         activeCityId: "city-new",
@@ -145,7 +196,13 @@ describe("CityLibraryScreen", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(
       "Could not rename city.",
     );
-    expect(screen.getByRole("button", { name: "Continue" })).toBeVisible();
+    expect(
+      screen.getByRole("button", { name: "Continue Maple Junction" }),
+    ).toBeVisible();
+    // Live brand wordmark and the shipped brand icon on the key-art card.
+    expect(screen.getByText("Caelum", { exact: true })).toBeVisible();
+    expect(container.querySelector("img[src*='app-icon']")).not.toBeNull();
+    expect(screen.getAllByTestId("city-avatar")).toHaveLength(2);
     expect(
       screen.getByRole("button", { name: "Load Harbour City" }),
     ).toBeVisible();

@@ -63,7 +63,14 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
 
   await page.reload();
 
-  await expect(page.getByTestId("city-library-screen")).toBeVisible();
+  const library = page.getByTestId("city-library-screen");
+  await expect(library).toBeVisible();
+
+  // Illustrated key art and live brand on the library screen.
+  await expect(library).toHaveCSS("background-image", /city-library\.webp/);
+  await expect(library.getByText("Caelum", { exact: true })).toBeVisible();
+  await expect(library.locator("img[src*='app-icon']")).toBeVisible();
+
   await expect(
     page.getByRole("textbox", { name: "Rename Browser Smoke A" }),
   ).toBeVisible();
@@ -71,13 +78,44 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
     page.getByRole("textbox", { name: "Rename Browser Smoke B" }),
   ).toBeVisible();
 
-  await page.getByRole("button", { name: "Continue" }).click();
+  // Every row shows a colored initial avatar and its saved timestamp.
+  const rowA = page
+    .locator("[data-testid^='city-row-']")
+    .filter({ hasText: "Browser Smoke A" });
+  const rowB = page
+    .locator("[data-testid^='city-row-']")
+    .filter({ hasText: "Browser Smoke B" });
+  const rowAId = await rowA.getAttribute("data-testid");
+  expect(rowAId).toMatch(/^city-row-/);
+  const avatarA = page.getByTestId(rowAId!).getByTestId("city-avatar");
+  await expect(avatarA).toHaveText("B");
+  await expect(rowB.getByTestId("city-avatar")).toHaveText("B");
+  await expect(rowA.locator("time")).toBeVisible();
+  await expect(rowB.locator("time")).toBeVisible();
+
+  // Renaming updates the initial, but the avatar color stays derived from
+  // the stable city id, not the editable name.
+  const colorBeforeRename = await avatarA.evaluate(
+    (element) => element.style.backgroundColor,
+  );
+  expect(colorBeforeRename).not.toBe("");
+  const renameA = page.getByRole("textbox", { name: "Rename Browser Smoke A" });
+  await renameA.fill("Zephyr Smoke");
+  await renameA.press("Enter");
+  await expect(avatarA).toHaveText("Z");
+  expect(
+    await avatarA.evaluate((element) => element.style.backgroundColor),
+  ).toBe(colorBeforeRename);
+
+  // Continue names the actual newest saved city; the two saved cities keep
+  // distinct names so a hard-coded label cannot pass.
+  await page.getByRole("button", { name: "Continue Browser Smoke B" }).click();
   await openCommandDestination(page, "city");
   await expect(page.getByTestId("active-city-name")).toHaveText(
     "Browser Smoke B",
   );
 
-  await page.getByRole("button", { name: "Load Browser Smoke A" }).click();
+  await page.getByRole("button", { name: "Load Zephyr Smoke" }).click();
   await expect
     .poll(async () => {
       const current = await runtimeSnapshot(page);
@@ -88,14 +126,12 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
       };
     })
     .toEqual({
-      activeCity: "Browser Smoke A",
+      activeCity: "Zephyr Smoke",
       busy: false,
       activeCommandDestination: null,
     });
   await openCommandDestination(page, "city");
-  await expect(page.getByTestId("active-city-name")).toHaveText(
-    "Browser Smoke A",
-  );
+  await expect(page.getByTestId("active-city-name")).toHaveText("Zephyr Smoke");
 
   const restoredA = (await runtimeSnapshot(page)).state;
   const tileAt = (x: number, y: number) =>
@@ -131,4 +167,15 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
     continued.map.tiles.find((tile) => tile.x === x && tile.y === y);
   expect(continuedTileAt(1, 1)?.roadConnections).toContain("south");
   expect(continuedTileAt(1, 2)?.roadConnections).toContain("north");
+
+  // Confirmed two-click Delete removes the other saved city from the list.
+  await openCommandDestination(page, "city");
+  const rowBPanel = page
+    .locator("[data-testid^='city-row-']")
+    .filter({ hasText: "Browser Smoke B" });
+  const deleteB = rowBPanel.getByRole("button", { name: "Delete" });
+  await deleteB.click();
+  await expect(deleteB).toHaveText("Delete?");
+  await deleteB.click();
+  await expect(rowBPanel).toHaveCount(0);
 });
