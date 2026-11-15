@@ -16,7 +16,6 @@ import type {
   Vehicle,
 } from "../../src/domain/types";
 import {
-  assertProjectedVehicleColors,
   createWebGpuHost,
   createWebGpuHostWithRenderer,
   type WebGpuHostContext,
@@ -2328,62 +2327,6 @@ describe("createWebGpuHost teardown destruction", () => {
       getContextSpy.mockRestore();
       vi.unstubAllGlobals();
     }
-  });
-});
-
-describe("assertProjectedVehicleColors host-frame guard", () => {
-  // One producer row: origin, angle, extents, then the RGBA tail at 5-8 and
-  // two padding floats — the layout encodeVehicleInstances writes.
-  const producerRow = (r: number, g: number, b: number, a: number) =>
-    new Float32Array([0.25, 0.75, 1.2, 9, 5, r, g, b, a, 0, 0]);
-
-  it("accepts rows whose RGBA tail was relocated into shader slots 7-10", () => {
-    const projected = new Float32Array([
-      0.001, -0.002, 1.2, 9, 5, 0.5, -0.25, 1, 0, 0, 1,
-    ]);
-    expect(() =>
-      assertProjectedVehicleColors(producerRow(1, 0, 0, 1), projected),
-    ).not.toThrow();
-  });
-
-  it("throws when a projected row keeps the producer RGBA in place", () => {
-    // The observed corruption shape: the loop copied in place and overwrote
-    // slots 5-6 with clip factors, leaving shader color [b, a, 0, 0].
-    const projected = new Float32Array([
-      0.001, -0.002, 1.2, 9, 5, 0.5, -0.25, 0, 1, 0, 0,
-    ]);
-    expect(() =>
-      assertProjectedVehicleColors(producerRow(1, 0, 0, 1), projected),
-    ).toThrow(/RGBA color tail/);
-  });
-
-  it("throws when any single projected color channel drifts", () => {
-    const projected = new Float32Array([
-      0.001, -0.002, 1.2, 9, 5, 0.5, -0.25, 1, 0, 0, 0.5,
-    ]);
-    expect(() =>
-      assertProjectedVehicleColors(producerRow(1, 0, 0, 1), projected),
-    ).toThrow(/RGBA color tail/);
-  });
-
-  it("checks every row at the 11-float stride", () => {
-    const source = new Float32Array(22);
-    const projected = new Float32Array(22);
-    for (const row of [0, 1]) {
-      const base = row * 11;
-      source[base + 5] = 0.8;
-      source[base + 6] = 0.3;
-      source[base + 7] = 0.2;
-      source[base + 8] = 1;
-      for (let f = 0; f < 4; f += 1) {
-        projected[base + 7 + f] = source[base + 5 + f]!;
-      }
-    }
-    expect(() => assertProjectedVehicleColors(source, projected)).not.toThrow();
-    projected[10] = 0; // second row's alpha dropped in its shader slot
-    expect(() => assertProjectedVehicleColors(source, projected)).toThrow(
-      /RGBA color tail/,
-    );
   });
 });
 

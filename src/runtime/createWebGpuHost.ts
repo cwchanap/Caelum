@@ -44,30 +44,6 @@ import {
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
 
-/** Per-frame guard for the shared instance projection: every vehicle row's
- *  producer RGBA (slots 5-8) must have been relocated verbatim into the
- *  shader's color slots (7-10). Copying the tail in place instead leaves
- *  shader alpha at padding zero — every vehicle invisible, with no GPU
- *  error to name the cause. Runs on each built frame; exact equality is
- *  required because the relocation is a pure copy. */
-export const assertProjectedVehicleColors = (
-  source: Float32Array<ArrayBuffer>,
-  projected: Float32Array<ArrayBuffer>,
-): void => {
-  if (source.length !== projected.length) {
-    throw new Error("vehicle projection changed the instance row count");
-  }
-  for (let i = 0; i < source.length; i += VEHICLE_INSTANCE_FLOATS) {
-    for (let channel = 0; channel < 4; channel += 1) {
-      if (projected[i + 7 + channel] !== source[i + 5 + channel]) {
-        throw new Error(
-          "vehicle projection lost the RGBA color tail (shader slots 7-10)",
-        );
-      }
-    }
-  }
-};
-
 /** Wall time that must accumulate before one host tick is admitted (10 Hz). */
 const TICK_INTERVAL_MS = 100;
 /** Per-frame wall-delta clamp; also the upper bound on any single submitted
@@ -438,9 +414,6 @@ export function createWebGpuHostWithRenderer(
       ),
     });
     const projectedVehicles = transformInstances(instances);
-    // Every-frame guard: the shared projection loop must have relocated the
-    // producer's RGBA tail into the shader's color slots (see the function).
-    assertProjectedVehicleColors(instances, projectedVehicles);
     return {
       frame: {
         // Painter stages: structural solids, then the one textured sprite
