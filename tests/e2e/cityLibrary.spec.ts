@@ -37,6 +37,39 @@ test("a very long unbroken city name ellipsizes inside the Continue button", asy
   ).toBe(true);
 });
 
+test("Continue button keeps visible space between the label and the city name", async ({
+  page,
+}) => {
+  await createDefaultCity(page);
+  await page.reload();
+
+  const library = page.getByTestId("city-library-screen");
+  await expect(library).toBeVisible();
+  const continueButton = library.getByRole("button", { name: /Continue/ });
+  await expect(continueButton).toBeVisible();
+
+  // The flex container drops the whitespace-only text between "Continue"
+  // and the name span, so the visible separation must come from the gap.
+  const { computedGap, pixelGap } = await continueButton.evaluate((button) => {
+    const label = Array.from(button.childNodes).find(
+      (node) =>
+        node.nodeType === Node.TEXT_NODE &&
+        (node.textContent?.trim().length ?? 0) > 0,
+    ) as Text;
+    const name = button.querySelector(".city-library-continue-name")!;
+    const labelRange = document.createRange();
+    labelRange.selectNodeContents(label);
+    const labelRect = labelRange.getBoundingClientRect();
+    const nameRect = name.getBoundingClientRect();
+    return {
+      computedGap: parseFloat(getComputedStyle(button).columnGap),
+      pixelGap: nameRect.left - labelRect.right,
+    };
+  });
+  expect(computedGap).toBeGreaterThanOrEqual(4);
+  expect(pixelGap).toBeGreaterThanOrEqual(2);
+});
+
 test("Save Now persists changed gameplay through reload and Continue", async ({
   page,
 }) => {
