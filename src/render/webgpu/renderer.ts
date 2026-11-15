@@ -187,7 +187,7 @@ const SPRITE_SHADER = /* wgsl */ `
 struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
-  @location(1) @interpolation(flat) layer: f32,
+  @location(1) @interpolate(flat) layer: f32,
 };
 
 @group(0) @binding(0) var spriteSampler: sampler;
