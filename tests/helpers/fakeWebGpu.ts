@@ -29,6 +29,15 @@ export interface FakeTextureCopy {
 
 export interface FakePipeline {
   descriptor: GPURenderPipelineDescriptor;
+  getBindGroupLayout(index: number): { index: number };
+}
+
+export interface FakeSampler {
+  descriptor: GPUSamplerDescriptor;
+}
+
+export interface FakeBindGroup {
+  descriptor: GPUBindGroupDescriptor;
 }
 
 export type FakePassOp =
@@ -39,6 +48,7 @@ export type FakePassOp =
       buffer: FakeBuffer;
       offset: number;
     }
+  | { kind: "setBindGroup"; slot: number; bindGroup: FakeBindGroup }
   | { kind: "draw"; vertexCount: number; instanceCount: number };
 
 export interface FakePass {
@@ -72,6 +82,8 @@ export interface FakeHarness {
   passes: FakePass[];
   textures: FakeTexture[];
   copies: FakeTextureCopy[];
+  samplers: FakeSampler[];
+  bindGroups: FakeBindGroup[];
   /** queue.copyExternalImageToTexture calls, in submission order. */
   textureUploads: FakeExternalImageCopy[];
   /** Invoked inside mapAsync so a test can stage the buffer's mapped bytes
@@ -92,6 +104,8 @@ export function createFakeDevice(): FakeHarness {
     passes: [],
     textures: [],
     copies: [],
+    samplers: [],
+    bindGroups: [],
     textureUploads: [],
     device: null as unknown as GPUDevice,
     deviceDestroyed: false,
@@ -131,13 +145,26 @@ export function createFakeDevice(): FakeHarness {
       harness.deviceDestroyed = true;
     },
     createRenderPipeline(descriptor: GPURenderPipelineDescriptor) {
-      const pipeline: FakePipeline = { descriptor };
+      const pipeline: FakePipeline = {
+        descriptor,
+        getBindGroupLayout: (index: number) => ({ index }),
+      };
       harness.pipelines.push(pipeline);
       return pipeline;
     },
     createShaderModule(descriptor: { code: string }) {
       harness.shaders.push(descriptor.code);
       return {};
+    },
+    createSampler(descriptor: GPUSamplerDescriptor) {
+      const sampler: FakeSampler = { descriptor };
+      harness.samplers.push(sampler);
+      return sampler;
+    },
+    createBindGroup(descriptor: GPUBindGroupDescriptor) {
+      const bindGroup: FakeBindGroup = { descriptor };
+      harness.bindGroups.push(bindGroup);
+      return bindGroup;
     },
     createTexture(descriptor: GPUTextureDescriptor) {
       const texture: FakeTexture = {
@@ -163,6 +190,9 @@ export function createFakeDevice(): FakeHarness {
             },
             setVertexBuffer(slot: number, buffer: FakeBuffer, offset = 0) {
               pass.ops.push({ kind: "setVertexBuffer", slot, buffer, offset });
+            },
+            setBindGroup(slot: number, bindGroup: FakeBindGroup) {
+              pass.ops.push({ kind: "setBindGroup", slot, bindGroup });
             },
             draw(vertexCount: number, instanceCount = 1) {
               pass.ops.push({ kind: "draw", vertexCount, instanceCount });

@@ -4,7 +4,6 @@ import {
   GRID_FAINT_ALPHA,
   GRID_FAINT_TILE_PX,
   LOT_FILL_ALPHA,
-  SPRITE_INSTANCE_FLOATS,
   TREE_CANOPY_SEGMENTS,
   TREE_MIN_RADIUS,
   TREE_RADIUS_SPAN,
@@ -12,6 +11,7 @@ import {
   gridModeForTool,
   gridModeForUi,
 } from "../../src/render/webgpu/mapBatch";
+import { SPRITE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
 import {
   BUILDING_SPRITE_LAYERS,
   SPRITE_ATLAS_HEIGHT,
@@ -95,18 +95,6 @@ function rectOf(
     }
   }
   return points;
-}
-
-function tilesOfColor(data: Float32Array, css: string): Point[] {
-  const keys = new Set(
-    verticesOfColor(data, css).map(
-      ([vx, vy]) => `${Math.floor(vx / tileSize)},${Math.floor(vy / tileSize)}`,
-    ),
-  );
-  return [...keys].map((key) => {
-    const [x, y] = key.split(",").map(Number);
-    return { x, y };
-  });
 }
 
 function withAreaTile(state: GameState, x: number, y: number): GameState {
@@ -280,51 +268,28 @@ describe("buildMapBatch vacant-lot layer", () => {
 });
 
 describe("buildMapBatch decorative trees", () => {
-  it("scatters canopy circles deterministically on empty unzoned tiles", () => {
+  it("scatters tree shadow circles deterministically on empty unzoned tiles", () => {
     const state = createTestGameState();
-    const first = buildMapBatch(state, "hidden").vertices;
-    const second = buildMapBatch(state, "hidden").vertices;
-    expect(second).toEqual(first);
+    const first = buildMapBatch(state, "hidden");
+    const second = buildMapBatch(state, "hidden");
+    expect(second.vertices).toEqual(first.vertices);
 
-    const canopies = verticesOfColor(first, colors.treeCanopy);
-    expect(canopies.length).toBeGreaterThan(0);
-    expect(canopies.length / 30).toBeLessThan(state.map.tiles.length * 0.25);
+    // The flat canopy fill is gone; only the small offset shadow circles
+    // remain, one TREE_CANOPY_SEGMENTS circle per tree.
+    const shadows = verticesOfRgba(first.vertices, TREE_SHADOW);
+    expect(shadows.length).toBeGreaterThan(0);
+    expect(shadows.length % (TREE_CANOPY_SEGMENTS * 3)).toBe(0);
     const tileByKey = new Map(
       state.map.tiles.map((tile) => [`${tile.x},${tile.y}`, tile]),
     );
-    for (const [vx, vy] of canopies) {
+    for (const [vx, vy] of shadows) {
       const tile = tileByKey.get(
-        `${Math.floor(vx / tileSize)},${Math.floor(vy / tileSize)}`,
+        `${Math.floor((vx - 3) / tileSize)},${Math.floor((vy - 3) / tileSize)}`,
       )!;
       expect(tile.kind).toBe("empty");
       expect(tile.area).toBeUndefined();
       expect(tile.hasTrack).not.toBe(true);
     }
-  });
-
-  it("removes a tree when its tile is zoned or built on", () => {
-    const state = createTestGameState();
-    const spots = tilesOfColor(
-      buildMapBatch(state, "hidden").vertices,
-      colors.treeCanopy,
-    );
-    expect(spots.length).toBeGreaterThan(0);
-    const target = spots[0];
-    const inTile = ([vx, vy]: number[]) =>
-      Math.floor(vx / tileSize) === target.x &&
-      Math.floor(vy / tileSize) === target.y;
-
-    const zoned = buildMapBatch(
-      withAreas(state, "park", [target]),
-      "hidden",
-    ).vertices;
-    expect(verticesOfColor(zoned, colors.treeCanopy).some(inTile)).toBe(false);
-
-    const built = buildMapBatch(
-      placeTestBuilding(state, "busStop", target, 0),
-      "hidden",
-    ).vertices;
-    expect(verticesOfColor(built, colors.treeCanopy).some(inTile)).toBe(false);
   });
 });
 
@@ -678,86 +643,99 @@ describe("buildMapBatch one-way layer", () => {
 });
 
 describe("buildMapBatch building layer", () => {
-  it("fills building footprints, shadows them, and outlines the perimeter only", () => {
+  it("replaces flat roofs and outlines with one footprint shadow per sprite building", () => {
     const state = placeTestBuilding(
       createTestGameState(),
       "smallHouse",
       { x: 4, y: 5 },
       0,
     );
-    const batch = buildMapBatch(state).vertices;
+    const batch = buildMapBatch(state);
 
-    const building = state.buildings[0];
-    expect(building).toBeDefined();
-    for (const tile of building.occupiedTiles) {
-      expect(
-        hasVertexNear(batch, colors.buildingHouse, tile.x * 32, tile.y * 32),
-      ).toBe(true);
-      expect(
-        hasVertexNear(
-          batch,
-          "rgba(74, 56, 34, 0.25)",
-          tile.x * 32 + 3,
-          tile.y * 32 + 3,
-        ),
-      ).toBe(true);
-    }
-    // Outline stroke (lineWidth 2, centered on the tile boundary).
-    expect(
-      hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 4 * 32 - 1, 5 * 32),
-    ).toBe(true);
-    expect(
-      hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 6 * 32 + 1, 5 * 32),
-    ).toBe(true);
-    expect(verticesOfColor(batch, "rgba(17, 24, 32, 0.45)")).toHaveLength(
-      6 * 6,
-    );
-  });
-
-  it("keeps the shared boundary between two adjacent buildings outlined", () => {
-    let state = placeTestBuilding(
-      createTestGameState(),
-      "smallHouse",
-      { x: 4, y: 4 },
+    // No flat roof fill and no outline stroke anywhere in the scene.
+    expect(verticesOfColor(batch.vertices, colors.buildingHouse)).toHaveLength(
       0,
     );
-    state = placeTestBuilding(state, "smallHouse", { x: 4, y: 5 }, 0);
-    const batch = buildMapBatch(state).vertices;
-
-    // The y=160 seams between (4,4)|(4,5) and (5,4)|(5,5) belong to
-    // different buildings, so they keep a 2px stroke instead of merging.
-    expect(hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 128, 159)).toBe(true);
-    expect(hasVertexNear(batch, "rgba(17, 24, 32, 0.45)", 192, 161)).toBe(true);
-    // The 2x2 block's 8 perimeter edges plus the 2 internal seams: 10 quads.
-    expect(verticesOfColor(batch, "rgba(17, 24, 32, 0.45)")).toHaveLength(60);
+    expect(verticesOfRgba(batch.vertices, BUILDING_OUTLINE)).toHaveLength(0);
+    // One solid shadow rectangle over the whole rotated footprint (2x1
+    // native tiles), offset by the same +3/+3 as before.
+    expect(
+      hasVertexNearRgba(batch.vertices, TREE_SHADOW, 4 * 32 + 3, 5 * 32 + 3),
+    ).toBe(true);
+    expect(
+      hasVertexNearRgba(batch.vertices, TREE_SHADOW, 6 * 32 + 3, 6 * 32 + 3),
+    ).toBe(true);
+    // Tree shadows survive alongside it: 30 rows per circle, 6 per rect.
+    const shadowRows = verticesOfRgba(batch.vertices, TREE_SHADOW).length;
+    expect((shadowRows - 6) % (TREE_CANOPY_SEGMENTS * 3)).toBe(0);
   });
 
-  it("emits every shadow before roof fills regardless of building order", () => {
-    const shadow = parseColor("rgba(74, 56, 34, 0.25)");
-    const roof = parseColor(colors.buildingHouse);
-    for (const southernFirst of [true, false]) {
-      let state = createTestGameState();
-      for (const origin of southernFirst
-        ? [
-            { x: 4, y: 4 },
-            { x: 4, y: 3 },
-          ]
-        : [
-            { x: 4, y: 3 },
-            { x: 4, y: 4 },
-          ]) {
-        state = placeTestBuilding(state, "smallHouse", origin, 0);
-      }
-      const rows = rowsOf(buildMapBatch(state, "hidden").vertices);
+  it("follows the rotated footprint at a quarter turn", () => {
+    // largeHouse: native 3x2 tiles; a 90° rotation occupies 2x3 tiles and
+    // the shadow rect must match that rotated footprint, not the native one.
+    const state = placeTestBuilding(
+      createTestGameState(),
+      "largeHouse",
+      { x: 4, y: 3 },
+      90,
+    );
+    const batch = buildMapBatch(state);
 
-      const lastShadow = rows.reduce(
-        (last, row, index) => (sameColorRgba(row, shadow) ? index : last),
-        -1,
+    expect(
+      hasVertexNearRgba(batch.vertices, TREE_SHADOW, 4 * 32 + 3, 3 * 32 + 3),
+    ).toBe(true);
+    expect(
+      hasVertexNearRgba(batch.vertices, TREE_SHADOW, 6 * 32 + 3, 6 * 32 + 3),
+    ).toBe(true);
+    // The unrotated 3x2 far corner stays shadow-free.
+    expect(
+      hasVertexNearRgba(batch.vertices, TREE_SHADOW, 7 * 32 + 3, 5 * 32 + 3),
+    ).toBe(false);
+  });
+
+  it("skips shadow, pad and outline for bus stops and metro stations", () => {
+    const base = createTestGameState();
+    const baseShadowRows = verticesOfRgba(
+      buildMapBatch(base, "hidden").vertices,
+      TREE_SHADOW,
+    ).length;
+    // Place the transit building on a tile without a tree, so the baseline
+    // shadow count would be unchanged by any placement that adds no rect.
+    const treeTiles = new Set(
+      spriteRowsOf(buildMapBatch(base, "hidden").sprites).map(
+        (row) =>
+          `${Math.floor(row[0]! / tileSize)},${Math.floor(row[1]! / tileSize)}`,
+      ),
+    );
+    const target = base.map.tiles.find(
+      (tile) =>
+        tile.kind === "empty" &&
+        tile.area === undefined &&
+        !treeTiles.has(`${tile.x},${tile.y}`),
+    );
+    expect(target).toBeDefined();
+
+    for (const type of ["busStop", "metroStation"] as const) {
+      const batch = buildMapBatch(
+        placeTestBuilding(base, type, target!, 0),
+        "hidden",
       );
-      const firstFill = rows.findIndex((row) => sameColorRgba(row, roof));
-      expect(lastShadow).toBeGreaterThanOrEqual(0);
-      // A later building's shadow must not overpaint an earlier roof.
-      expect(firstFill).toBeGreaterThan(lastShadow);
+      // No detached 32x32 shadow square, no flat pad, no outline: the
+      // procedural transitBatch marker stays alone over terrain.
+      expect(verticesOfRgba(batch.vertices, TREE_SHADOW)).toHaveLength(
+        baseShadowRows,
+      );
+      expect(verticesOfRgba(batch.vertices, BUILDING_OUTLINE)).toHaveLength(0);
+      expect(
+        verticesOfRgba(batch.vertices, parseColor(colors.buildingBus)),
+      ).toHaveLength(0);
+      expect(
+        verticesOfRgba(batch.vertices, parseColor(colors.buildingMetro)),
+      ).toHaveLength(0);
+      // And no sprite instance either — only tree rows remain.
+      expect(spriteRowsOf(batch.sprites).every((row) => row[7]! < 3)).toBe(
+        true,
+      );
     }
   });
 });
@@ -776,15 +754,13 @@ function spriteRowsOf(sprites: Float32Array): number[][] {
   return rows;
 }
 
-/** Canopy circles are TREE_CANOPY_SEGMENTS triangles: 30 vertex rows each. */
-function canopyCount(batch: {
-  vertices: Float32Array;
-  sprites: Float32Array;
-}): number {
-  return (
-    verticesOfColor(batch.vertices, colors.treeCanopy).length /
-    (TREE_CANOPY_SEGMENTS * 3)
-  );
+const TREE_SHADOW = parseColor("rgba(74, 56, 34, 0.25)");
+const BUILDING_OUTLINE = parseColor("rgba(17, 24, 32, 0.45)");
+
+/** Tree sprite rows carry a tree layer (0-2); trees are emitted first, so
+ *  they replace the old canopy-circle count in these fixtures. */
+function treeRowCount(sprites: Float32Array): number {
+  return spriteRowsOf(sprites).filter((row) => row[7]! < 3).length;
 }
 
 describe("buildMapBatch sprite instances", () => {
@@ -801,9 +777,9 @@ describe("buildMapBatch sprite instances", () => {
     const state = createTestGameState();
     const batch = buildMapBatch(state, "hidden");
     const rows = spriteRowsOf(batch.sprites);
-    const treeRows = rows.slice(0, canopyCount(batch));
+    const treeRows = rows.slice(0, treeRowCount(batch.sprites));
     // The default state places no buildings: every sprite row is a tree.
-    expect(rows).toHaveLength(canopyCount(batch));
+    expect(rows).toHaveLength(treeRowCount(batch.sprites));
     expect(treeRows.length).toBeGreaterThan(0);
     expect(new Set(treeRows.map((row) => row[7]))).toEqual(new Set([0, 1, 2]));
     for (const [x, y, angle, hx, hy, su, sv, , cx, cy] of treeRows) {
@@ -829,7 +805,7 @@ describe("buildMapBatch sprite instances", () => {
     const state = createTestGameState();
     const before = buildMapBatch(state, "hidden");
     const rows = spriteRowsOf(before.sprites);
-    const treeRows = rows.slice(0, canopyCount(before));
+    const treeRows = rows.slice(0, treeRowCount(before.sprites));
     const target = treeRows[0]!;
     const tileX = Math.floor(target[0]! / tileSize);
     const tileY = Math.floor(target[1]! / tileSize);
@@ -865,7 +841,7 @@ describe("buildMapBatch sprite instances", () => {
       );
       const batch = buildMapBatch(state, "hidden");
       const rows = spriteRowsOf(batch.sprites);
-      expect(rows).toHaveLength(canopyCount(batch) + 1);
+      expect(rows).toHaveLength(treeRowCount(batch.sprites) + 1);
       const [x, y, angle, hx, hy, su, sv, layer] = rows[rows.length - 1]!;
       const want = expected[rotation];
       expect(x).toBeCloseTo(want.center[0] * tileSize, 6);

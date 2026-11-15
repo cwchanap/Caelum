@@ -34,6 +34,7 @@ import { pickMapTarget } from "../render/webgpu/pickMapTarget";
 import type { MapPick } from "../ui/mapPick";
 import {
   createWebGpuRenderer,
+  SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
   type WebGpuCapturedFrame,
   type WebGpuRenderFrame,
@@ -334,32 +335,41 @@ export function createWebGpuHostWithRenderer(
     return out;
   };
 
-  const transformInstances = (
+  /** One projection loop for both instanced kinds: project the origin into
+   *  clip space and write the world→clip factors into the row's two trailing
+   *  slots (offset 5 for 11-float vehicles, offset 8 for 10-float sprites);
+   *  angle and world-px extents pass through raw. */
+  const projectInstances = (
     instances: Float32Array<ArrayBuffer>,
+    stride: number,
+    clipOffset: number,
   ): Float32Array<ArrayBuffer> => {
     const t = transform;
     if (t === null || instances.length === 0) {
       return instances;
     }
     const out = new Float32Array(instances.length) as Float32Array<ArrayBuffer>;
-    for (let i = 0; i < instances.length; i += VEHICLE_INSTANCE_FLOATS) {
-      // Project only the origin; the shader rotates the world-px body and
-      // scales it by the per-instance clip factors (sy carries the y-flip,
-      // so angle and extents are passed through raw).
-      out[i] = instances[i] * t.sx + t.ox;
-      out[i + 1] = instances[i + 1] * t.sy + t.oy;
-      out[i + 2] = instances[i + 2];
-      out[i + 3] = instances[i + 3];
-      out[i + 4] = instances[i + 4];
-      out[i + 5] = t.sx;
-      out[i + 6] = t.sy;
-      out[i + 7] = instances[i + 5];
-      out[i + 8] = instances[i + 6];
-      out[i + 9] = instances[i + 7];
-      out[i + 10] = instances[i + 8];
+    for (let i = 0; i < instances.length; i += stride) {
+      out[i] = instances[i]! * t.sx + t.ox;
+      out[i + 1] = instances[i + 1]! * t.sy + t.oy;
+      for (let j = 2; j < stride; j += 1) {
+        out[i + j] = instances[i + j]!;
+      }
+      out[i + clipOffset] = t.sx;
+      out[i + clipOffset + 1] = t.sy;
     }
     return out;
   };
+
+  const transformInstances = (
+    instances: Float32Array<ArrayBuffer>,
+  ): Float32Array<ArrayBuffer> =>
+    projectInstances(instances, VEHICLE_INSTANCE_FLOATS, 5);
+
+  const transformSpriteInstances = (
+    instances: Float32Array<ArrayBuffer>,
+  ): Float32Array<ArrayBuffer> =>
+    projectInstances(instances, SPRITE_INSTANCE_FLOATS, 8);
 
   /** Assembles the frame's batches from the observed state — the exact input
    *  both drawFrame and captureFrame hand to the renderer. `tileCssPx` is the
@@ -380,6 +390,7 @@ export function createWebGpuHostWithRenderer(
     const gridMode = gridModeForUi(ui, tileCssPx);
     const overlays = buildOverlayRanges(latest, ui);
     const map = latest.map;
+    const scene = sceneBatch(latest, revision, gridMode);
     const { instances, vehicleIds } = encodeVehicleInstances({
       previous,
       latest,
@@ -395,13 +406,18 @@ export function createWebGpuHostWithRenderer(
     });
     return {
       frame: {
+        // Painter stages: structural solids, then the one textured sprite
+        // draw, then route/draft overlays, vehicles, and route handles.
         solids: [
           {
             role: "structural",
-            vertices: transformVertices(
-              sceneBatch(latest, revision, gridMode).vertices,
-            ),
+            vertices: transformVertices(scene.vertices),
           },
+        ],
+        sprites: {
+          instances: transformSpriteInstances(scene.sprites),
+        },
+        overSprites: [
           {
             role: "dynamic",
             vertices: transformVertices(overlays.underRoutes),
