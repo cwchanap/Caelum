@@ -158,6 +158,7 @@ interface FakeRenderer {
   lost: Promise<{ reason?: string; message: string }>;
   resolveLost(info: { reason?: string; message: string }): void;
   configure: Mock;
+  unconfigure: Mock;
   resize: Mock;
   render: Mock;
   captureFrame: Mock;
@@ -178,6 +179,7 @@ function createFakeRenderer(): FakeRenderer {
     lost,
     resolveLost,
     configure: vi.fn(),
+    unconfigure: vi.fn(),
     resize: vi.fn(),
     render: vi.fn((frame: WebGpuRenderFrame) => {
       frames.push(frame);
@@ -2032,16 +2034,15 @@ describe("createWebGpuHost frame contents", () => {
     expect(instances[2]).toBeCloseTo(Math.PI / 2, 5);
     expect(instances[3]).toBeCloseTo(VEHICLE_HALF_LENGTH, 5);
     expect(instances[4]).toBeCloseTo(VEHICLE_HALF_WIDTH, 5);
-    expect(instances[5]).toBeCloseTo(2 / 896, 9);
-    expect(instances[6]).toBeCloseTo(-2 / 736, 9);
-    // The projection relocates the producer's RGBA tail (slots 5-8) into the
-    // shader's color slots (7-10); the vehicle route color is #e04f39 at full
-    // opacity (no route emphasis in this fixture).
+    // Vehicle color stays at slots 5-8 and clip factors sit in trailing slots
+    // 9-10, matching sprite rows. The route color is #e04f39 at full opacity.
     const routeColor = parseColor("#e04f39");
-    expect(instances[7]).toBeCloseTo(routeColor[0]!, 7);
-    expect(instances[8]).toBeCloseTo(routeColor[1]!, 7);
-    expect(instances[9]).toBeCloseTo(routeColor[2]!, 7);
-    expect(instances[10]).toBeCloseTo(1, 7);
+    expect(instances[5]).toBeCloseTo(routeColor[0]!, 7);
+    expect(instances[6]).toBeCloseTo(routeColor[1]!, 7);
+    expect(instances[7]).toBeCloseTo(routeColor[2]!, 7);
+    expect(instances[8]).toBeCloseTo(1, 7);
+    expect(instances[9]).toBeCloseTo(2 / 896, 9);
+    expect(instances[10]).toBeCloseTo(-2 / 736, 9);
 
     // Sprite rows share the same one projection loop: the trailing clip
     // slots (offsets 8/9 of the 10-float stride) carry the same factors,
@@ -2262,13 +2263,77 @@ describe("createWebGpuHost teardown destruction", () => {
     host.start();
     expect(renderer.destroy).not.toHaveBeenCalled();
 
-    // Canvas unmount (New City / library screens) must keep GPU resources:
-    // the runtime owns the host and remounts it afterwards.
+    // Canvas unmount (New City / library screens) unconfigures the canvas
+    // context without destroying GPU resources: the runtime owns the host and
+    // remounts it afterwards.
     cleanup();
+    expect(renderer.unconfigure).toHaveBeenCalledTimes(1);
     expect(renderer.destroy).not.toHaveBeenCalled();
 
     host.destroy();
     expect(renderer.destroy).toHaveBeenCalledTimes(1);
+  });
+
+  it("destroy() stops a canvas-less rAF loop and ignores subsequent start/mount", () => {
+    const renderer = createFakeRenderer();
+    const state = unpaused(createTestGameState());
+    const host = createWebGpuHostWithRenderer(
+      {
+        getState: () => state,
+        getUi: () => createUiState(),
+        getCamera: () => null,
+        onCameraChange: () => {},
+        getSceneRevision: () => 1,
+        onTick: () => {},
+        onTileClick: () => {},
+        onHoverTile: () => {},
+        onRouteDraftContextMenu: () => false,
+        onDragStart: () => true,
+        onDragCurrent: () => {},
+        onDragCommit: () => {},
+        onDragCancel: () => {},
+        onFatalError: () => {},
+      },
+      renderer as unknown as WebGpuRenderer,
+    );
+
+    host.start();
+    expect(host.isRunning()).toBe(true);
+    expect(rafCallbacks).toHaveLength(1);
+
+    host.destroy();
+    expect(host.isRunning()).toBe(false);
+    expect(cancelAnimationFrame).toHaveBeenCalled();
+
+    // Post-destroy start/mount are terminal no-ops.
+    host.start();
+    expect(host.isRunning()).toBe(false);
+    const container = document.createElement("div");
+    const detach = host.mount(container);
+    expect(renderer.configure).not.toHaveBeenCalled();
+    expect(container.querySelector("canvas")).toBeNull();
+    detach();
+  });
+
+  it("reuses projected static sprite instances while scene and camera are unchanged", () => {
+    const fx = createFixture({
+      state: unpaused(stateWithVehicleForFrame()),
+    });
+    fx.host.start();
+    fx.fireFrame(16);
+    const firstSprites = fx.renderer.frames.at(-1)!.sprites!.instances;
+
+    fx.fireFrame(32);
+    const secondSprites = fx.renderer.frames.at(-1)!.sprites!.instances;
+    expect(secondSprites).toBe(firstSprites);
+
+    // Camera change invalidates the cached projection.
+    fx.callbacks.onCameraChange({ zoom: 1.5, center: { x: 14, y: 9 } });
+    fx.fireFrame(48);
+    const zoomedSprites = fx.renderer.frames.at(-1)!.sprites!.instances;
+    expect(zoomedSprites).not.toBe(firstSprites);
+
+    fx.host.stop();
   });
 
   it("internal remount to a different host detaches without destroying; destroy() destroys once", () => {

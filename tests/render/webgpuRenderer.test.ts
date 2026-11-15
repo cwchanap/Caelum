@@ -224,16 +224,15 @@ describe("WebGpuRenderer", () => {
         .descriptor.vertex.buffers ?? [],
     ).find((buffer) => buffer?.stepMode === "instance");
     expect(instanceBuffer).toBeDefined();
-    // 11 floats: origin(x,y) angle extents(l,w) clipScale(x,y) rgba. A
-    // regression back to the 9-float layout breaks this pin.
+    // 11 floats: origin(x,y) angle extents(l,w) rgba clipScale(x,y).
     expect(instanceBuffer!.arrayStride).toBe(44);
     expect(instanceBuffer!.arrayStride).toBe(VEHICLE_INSTANCE_FLOATS * 4);
     expect(Array.from(instanceBuffer!.attributes!)).toEqual([
       { shaderLocation: 1, offset: 0, format: "float32x2" }, // clip origin
       { shaderLocation: 2, offset: 8, format: "float32" }, // world angle
       { shaderLocation: 3, offset: 12, format: "float32x2" }, // world half-extents
-      { shaderLocation: 4, offset: 20, format: "float32x2" }, // clip factors
-      { shaderLocation: 5, offset: 28, format: "float32x4" }, // color
+      { shaderLocation: 4, offset: 20, format: "float32x4" }, // color
+      { shaderLocation: 5, offset: 36, format: "float32x2" }, // trailing clip factors
     ]);
   });
 
@@ -257,12 +256,12 @@ describe("WebGpuRenderer", () => {
       Math.PI / 2,
       7,
       4,
-      clipScaleX,
-      clipScaleY,
       0.88,
       0.31,
       0.22,
       1,
+      clipScaleX,
+      clipScaleY,
     ]);
     renderer.render({ solids: [], vehicles: [{ instances }] });
 
@@ -274,11 +273,11 @@ describe("WebGpuRenderer", () => {
     // Half-extents stay world px — NOT scaled to ~15 device px.
     expect(row[3]).toBe(7);
     expect(row[4]).toBe(4);
-    // Clip factors are ~0.0017 magnitude — NOT the ~2.1 device-px scale.
-    expect(row[5]).toBeCloseTo(clipScaleX, 9);
-    expect(row[6]).toBeCloseTo(clipScaleY, 9);
+    // Clip factors sit in trailing slots 9..10 and are ~0.0017 magnitude.
+    expect(row[9]).toBeCloseTo(clipScaleX, 9);
+    expect(row[10]).toBeCloseTo(clipScaleY, 9);
     // Implied clip-space quad half-extent: tiny (well under the ±1 viewport).
-    const clipHalfExtent = row[3]! * Math.abs(row[5]!);
+    const clipHalfExtent = row[3]! * Math.abs(row[9]!);
     expect(clipHalfExtent).toBeCloseTo((7 * scale * 2) / 2560, 9);
     expect(clipHalfExtent).toBeLessThan(0.02);
   });
@@ -643,6 +642,21 @@ describe("WebGpuRenderer", () => {
     renderer.render({ solids: [], vehicles: [] });
     expect(writes).toHaveLength(writeCount);
 
+    // Same sprite array reference rendered again: skips redundant writeBuffer.
+    const sameInstances = spriteInstances(2);
+    renderer.render({
+      solids: [],
+      sprites: { instances: sameInstances },
+      vehicles: [],
+    });
+    const writesAfterFirst = writes.length;
+    renderer.render({
+      solids: [],
+      sprites: { instances: sameInstances },
+      vehicles: [],
+    });
+    expect(writes).toHaveLength(writesAfterFirst);
+
     // Larger frame: grow-only replace.
     const bigger = renderer.render({
       solids: [],
@@ -652,6 +666,28 @@ describe("WebGpuRenderer", () => {
     expect(spriteBuffer.destroyed).toBe(true);
     expect(bigger.spriteInstances).toBe(4);
     expect(bigger.spriteDraws).toBe(1);
+  });
+
+  it("unconfigures the canvas context without destroying cached GPU resources", () => {
+    const { device, buffers } = createFakeDevice();
+    const texture = spriteAtlasTexture(device);
+    const renderer = createWebGpuRenderer(device, "bgra8unorm", texture);
+    const { canvas, unconfigured } = createFakeCanvas();
+    renderer.configure(canvas);
+    renderer.render({
+      solids: [{ role: "structural", vertices: solidVertices(1) }],
+      sprites: { instances: spriteInstances(1) },
+      vehicles: [{ instances: vehicleInstances(1) }],
+    });
+
+    renderer.unconfigure();
+
+    expect(unconfigured()).toBe(true);
+    expect(buffers.every((buffer) => !buffer.destroyed)).toBe(true);
+    expect((texture as unknown as FakeTexture).destroyed).toBe(false);
+    expect(() => renderer.render({ solids: [], vehicles: [] })).toThrow(
+      /not configured/,
+    );
   });
 
   it("destroys the owned sprite atlas texture with the renderer", () => {

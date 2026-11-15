@@ -695,7 +695,7 @@
 
   $effect(() => {
     if (shellError !== null && runtime !== null) {
-      runtime.stop();
+      runtime.dispose();
     }
   });
 

@@ -46,9 +46,21 @@ export const TREE_SPRITE_URLS = [tree01Url, tree02Url, tree03Url] as const;
 export const SPRITE_TEXELS_PER_TILE = 192;
 export const SPRITE_ATLAS_WIDTH = 576;
 export const SPRITE_ATLAS_HEIGHT = 384;
-export const SPRITE_MIP_LEVEL_COUNT = 5;
+// 8 mip levels cover 192x192 trees down to 1x1 texel (level 7), preventing
+// aliasing when Fit-scale on large maps shrinks trees below 12 px.
+export const SPRITE_MIP_LEVEL_COUNT = 8;
+export const TREE_SPRITE_LAYER_BASE = 0;
 export const SPRITE_LAYER_COUNT =
   TREE_SPRITE_URLS.length + Object.keys(BUILDING_SPRITE_URLS).length;
+
+/** Resolves a [0, 1) hash fraction to a tree layer index in the atlas. */
+export function treeSpriteLayer(fraction: number): number {
+  const index = Math.min(
+    TREE_SPRITE_URLS.length - 1,
+    Math.max(0, Math.floor(fraction * TREE_SPRITE_URLS.length)),
+  );
+  return TREE_SPRITE_LAYER_BASE + index;
+}
 
 /** Stable 15-layer order: tree variants first, then buildings in catalog
  *  order (the Record literal above mirrors BUILDING_CATALOG's key order). */
@@ -161,8 +173,8 @@ export async function createSpriteAtlasTexture(
   SPRITE_LAYER_SOURCES.forEach((source, layer) => {
     const image = images[layer]!;
     for (let level = 0; level < SPRITE_MIP_LEVEL_COUNT; level += 1) {
-      const width = source.width >> level;
-      const height = source.height >> level;
+      const width = Math.max(1, source.width >> level);
+      const height = Math.max(1, source.height >> level);
       context.clearRect(0, 0, SPRITE_ATLAS_WIDTH, SPRITE_ATLAS_HEIGHT);
       context.drawImage(image, 0, 0, width, height);
       device.queue.copyExternalImageToTexture(

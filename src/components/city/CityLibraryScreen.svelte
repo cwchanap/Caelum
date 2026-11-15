@@ -1,6 +1,6 @@
 <script lang="ts">
   import keyArt from "../../assets/sunny-diorama/menu/city-library.webp";
-  import appIcon from "../../assets/sunny-diorama/brand/app-icon-source.png";
+  import appIcon from "../../assets/sunny-diorama/brand/app-icon.png";
   import type { CitySummary } from "../../persistence/citySaveStore";
   import CityList from "./CityList.svelte";
 

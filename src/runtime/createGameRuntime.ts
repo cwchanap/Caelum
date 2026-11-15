@@ -404,19 +404,17 @@ export async function createGameRuntime(
   // Deliver the terminal snapshot to subscribers exactly once. Called only
   // from the terminal transition (`failBackend`) after all terminal state
   // (backendError, cleared UI, bumped tokens) has been installed and the
-  // canvas/preview cleanup has run. Renders one final frame so the cleared
-  // preview overlay is drawn, stops the animation loop, notifies every
-  // listener with the terminal snapshot, and latches `terminalPublished` so a
-  // second transition (or any later `publish()` via a late preview response)
-  // cannot re-notify. Idempotent: a runtime that is already terminal-and-
-  // published just returns the current snapshot without re-notifying.
+  // canvas/preview cleanup has run. Stops the animation loop, notifies every
+  // listener with the terminal snapshot (which transitions App to the shell
+  // error screen before failBackend calls `gameHost.destroy()`), and latches
+  // `terminalPublished` so a second transition (or any later `publish()` via
+  // a late preview response) cannot re-notify. Idempotent: a runtime that is
+  // already terminal-and-published just returns the current snapshot without
+  // re-notifying.
   const publishTerminalSnapshot = (): RuntimeSnapshot => {
     if (terminalPublished) return getSnapshot();
     const snapshot = getSnapshot();
-    // Stop the loop first, then render once: the stopped host schedules a
-    // one-shot frame draw instead of coalescing into a dead rAF loop.
     gameHost.stop();
-    gameHost.render();
     for (const listener of listeners) {
       listener(snapshot);
     }

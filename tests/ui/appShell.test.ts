@@ -1796,7 +1796,20 @@ describe("App command shell", () => {
     expect(screen.queryByTestId("topbar")).toBeNull();
     expect(screen.queryByTestId("game-canvas-host")).toBeNull();
     expect(screen.queryByTestId("command-shelf")).toBeNull();
-    expect(runtime.stop).toHaveBeenCalled();
+    expect(runtime.dispose).toHaveBeenCalled();
+  });
+
+  it("disposes the runtime when mounting the canvas fails into the shell error screen", async () => {
+    const { runtime } = createRuntimeHarness();
+    runtime.mountCanvas = vi.fn(() => {
+      throw new Error("WebGPU context lost during mount");
+    });
+    render(App, { props: { runtime } });
+
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      "WebGPU context lost during mount",
+    );
+    expect(runtime.dispose).toHaveBeenCalledTimes(1);
   });
 
   it("links Data metrics to persistent, clearable board overlays", async () => {

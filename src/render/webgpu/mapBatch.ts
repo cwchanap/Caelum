@@ -18,6 +18,7 @@ import {
   SPRITE_ATLAS_WIDTH,
   SPRITE_TEXELS_PER_TILE,
   spriteLayerFor,
+  treeSpriteLayer,
 } from "./spriteAtlas";
 import {
   ROAD_DIRECTION_OFFSET,
@@ -527,9 +528,7 @@ function drawTrees(
       BUILDING_SHADOW,
       TREE_CANOPY_SEGMENTS,
     );
-    // Variant index in [0, 3): tileHash is a fraction in [0,1), so the
-    // floor of its product with 3 picks one of the three tree layers.
-    const variant = Math.floor(tileHash(tile.x, tile.y, 5) * 3);
+    const variant = treeSpriteLayer(tileHash(tile.x, tile.y, 5));
     sprites.push(
       canopy.x,
       canopy.y,

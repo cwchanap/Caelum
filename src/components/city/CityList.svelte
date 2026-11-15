@@ -92,7 +92,7 @@
           class="city-avatar"
           data-testid="city-avatar"
           style={`background-color: ${avatarColor(city.id)}`}
-          aria-hidden="true">{city.name.trim().charAt(0)}</span
+          aria-hidden="true">{Array.from(city.name.trim())[0] ?? ""}</span
         >
         <input
           type="text"
