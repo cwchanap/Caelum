@@ -675,10 +675,14 @@ export function createWebGpuHostWithRenderer(
   };
 
   const mount = (host: HTMLElement): (() => void) => {
-    // Same host with an existing canvas: just refresh, reuse the detach.
-    if (surfaceHost === host && canvas !== null) {
+    // Same host with an existing canvas: just refresh, reuse the live
+    // detach. Returning this invocation's `detach` would hand back a cleanup
+    // whose handler bindings were never initialized (the function returns
+    // before their declarations run) — calling it throws and leaves the
+    // canvas and listeners attached.
+    if (surfaceHost === host && canvas !== null && activeDetach !== null) {
       render();
-      return detach;
+      return activeDetach;
     }
 
     // Different host (or first mount): detach any prior mount so its event
@@ -1247,13 +1251,20 @@ export async function createWebGpuHost(
     throw new Error("WebGPU adapter unavailable");
   }
   const device = await adapter.requestDevice();
-  const format = navigator.gpu.getPreferredCanvasFormat();
-  // Decode + upload all fifteen shipped sprites before any frame renders, so
-  // the textured pass never shows a blank atlas period between commits.
-  const spriteTexture = await createSpriteAtlasTexture(device);
-  return createWebGpuHostWithRenderer(
-    ctx,
-    createWebGpuRenderer(device, format, spriteTexture),
-    device,
-  );
+  try {
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    // Decode + upload all fifteen shipped sprites before any frame renders, so
+    // the textured pass never shows a blank atlas period between commits.
+    const spriteTexture = await createSpriteAtlasTexture(device);
+    return createWebGpuHostWithRenderer(
+      ctx,
+      createWebGpuRenderer(device, format, spriteTexture),
+      device,
+    );
+  } catch (error) {
+    // A failure here rejects the factory: no host reaches the caller, so the
+    // acquired device leaks unless the factory releases it before rethrowing.
+    device.destroy();
+    throw error;
+  }
 }

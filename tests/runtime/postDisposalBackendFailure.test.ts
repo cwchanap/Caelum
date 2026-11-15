@@ -200,4 +200,32 @@ describe("post-disposal backend failure publication", () => {
     await runtime.debugSetBudget(99_000);
     expect(listener).not.toHaveBeenCalled();
   });
+
+  it("a fatal backend failure releases the display host instead of waiting for app teardown", async () => {
+    const backend = createDelayedDispatchBackend();
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      backend,
+      initialCity: null,
+    });
+    const host = lastFakeHost()!;
+
+    const dispatchBlocked = backend.blockNextDispatch();
+    const dispatchPromise = runtime.debugSetBudget(42_000);
+    await dispatchBlocked;
+
+    backend.rejectDispatch(new Error("live backend failure"));
+    await Promise.resolve(dispatchPromise).catch(() => {
+      // failBackend may cause the dispatch to reject — that's fine.
+    });
+
+    // The shell error screen permanently replaces gameplay, and canvas
+    // unmount only detaches — the host must be destroyed at the transition.
+    expect(host.destroy).toHaveBeenCalledTimes(1);
+
+    // Explicit disposal still reaches the host; the host's own destroyed
+    // guard keeps the teardown single-shot.
+    runtime.dispose();
+    expect(host.destroy).toHaveBeenCalledTimes(2);
+  });
 });

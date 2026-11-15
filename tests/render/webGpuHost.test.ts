@@ -1148,6 +1148,25 @@ describe("createWebGpuHost lifecycle", () => {
     expect(typeof teardown).toBe("function");
   });
 
+  it("a repeated mount on the same host returns the live mount's detach", () => {
+    const { host, canvas, container, callbacks } = createFixture({
+      ui: { activeTool: "inspect" },
+    });
+
+    const teardown = host.mount(container);
+
+    // The repeat mount early-returns before its own handlers exist, so the
+    // cleanup it hands back must be the active mount's detach: calling it
+    // detaches the live canvas and listeners rather than throwing.
+    expect(() => teardown()).not.toThrow();
+    expect(container.querySelector("canvas")).toBeNull();
+
+    canvas.dispatchEvent(
+      new MouseEvent("click", { ...center({ x: 2, y: 3 }), bubbles: true }),
+    );
+    expect(callbacks.onTileClick).not.toHaveBeenCalled();
+  });
+
   it("ignores pointerdown outside the board", () => {
     const { canvas, callbacks } = createFixture({
       ui: { activeTool: "road" },
@@ -2376,6 +2395,28 @@ describe("createWebGpuHost gpu bootstrap", () => {
     await expect(createWebGpuHost(noopContext)).rejects.toThrow(
       "WebGPU adapter unavailable",
     );
+  });
+
+  it("destroys the acquired device when atlas initialization fails", async () => {
+    const harness = createFakeDevice();
+    vi.stubGlobal("navigator", {
+      gpu: {
+        requestAdapter: async () => ({
+          requestDevice: async () => harness.device,
+        }),
+        getPreferredCanvasFormat: () => "bgra8unorm",
+      },
+    });
+    vi.mocked(createSpriteAtlasTexture).mockRejectedValueOnce(
+      new Error("atlas decode failed"),
+    );
+
+    // The factory rejects without a host, so the caller can never destroy
+    // the device — the factory must release it itself.
+    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+      "atlas decode failed",
+    );
+    expect(harness.deviceDestroyed).toBe(true);
   });
 });
 

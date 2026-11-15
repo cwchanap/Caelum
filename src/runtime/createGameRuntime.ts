@@ -647,17 +647,26 @@ export async function createGameRuntime(
     // requested) still publishes exactly once so App's `setSnapshot` observes
     // `backendError` and renders the shell error screen.
     ui = clearedUi;
-    return disposalRequested ? getSnapshot() : publishTerminalSnapshot();
+    const snapshot = disposalRequested
+      ? getSnapshot()
+      : publishTerminalSnapshot();
+    // The shell error screen replaces gameplay permanently, and canvas
+    // unmount only detaches — release the GPU host now rather than waiting
+    // for app teardown (destroy() itself is idempotent).
+    gameHost.destroy();
+    return snapshot;
   };
 
   const dispose = (): void => {
     disposalRequested = true;
-    if (dead) return;
-    dead = true;
-    workingSave.dispose();
-    stopRuntime();
+    if (!dead) {
+      dead = true;
+      workingSave.dispose();
+      stopRuntime();
+    }
     // Terminal GPU teardown: canvas unmounts during screen switches only
-    // detach, so disposal must destroy the display host explicitly.
+    // detach, so disposal must destroy the display host explicitly — even
+    // when a fatal failure already marked the runtime dead.
     gameHost.destroy();
   };
 
