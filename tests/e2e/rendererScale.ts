@@ -10,6 +10,7 @@ import {
   type WebGpuRenderStats,
   type WebGpuRenderer,
 } from "../../src/render/webgpu/renderer";
+import { createSpriteAtlasTexture } from "../../src/render/webgpu/spriteAtlas";
 import { createUiState } from "../../src/ui/uiState";
 import { buildRenderScaleState } from "../helpers/renderScaleState";
 
@@ -22,6 +23,8 @@ export interface RendererScaleResult {
   encodedInstances: number;
   vehicleUploadBytes: number;
   solidDraws: number;
+  spriteInstances: number;
+  spriteDraws: number;
   vehicleDraws: number;
   medianCpuMs: number;
   p95CpuMs: number;
@@ -65,7 +68,9 @@ function median(samples: number[]): number {
 // Production render path: the real WebGPU host (rAF frame drawing, batch
 // caches, vehicle interpolation/encode) over the real renderer, driven one
 // render() per delivered frame. No runtime/backend orchestration — the
-// benchmark measures render cost, not app boot. The renderer is wrapped only
+// benchmark measures render cost, not app boot. The renderer gets the real
+// sprite atlas: the host's frames always carry scene sprites, so a two-
+// argument renderer would throw on every frame. The renderer is wrapped only
 // to record the last frame's encode stats.
 let state: GameState | null = null;
 let sceneRevision = 0;
@@ -80,7 +85,8 @@ if (adapter === null) {
 }
 const device = await adapter.requestDevice();
 const format = navigator.gpu.getPreferredCanvasFormat();
-const renderer = createWebGpuRenderer(device, format);
+const spriteTexture = await createSpriteAtlasTexture(device);
+const renderer = createWebGpuRenderer(device, format, spriteTexture);
 let lastStats: WebGpuRenderStats = {
   solidBatches: 0,
   solidVertices: 0,
@@ -169,6 +175,8 @@ window.__caelumRendererScale = {
       vehicleUploadBytes:
         lastStats.vehicleInstances * VEHICLE_INSTANCE_FLOATS * 4,
       solidDraws: lastStats.solidBatches,
+      spriteInstances: lastStats.spriteInstances,
+      spriteDraws: lastStats.spriteDraws,
       vehicleDraws: lastStats.vehicleDraws,
       medianCpuMs: median(samples),
       p95CpuMs: percentile(samples, 0.95),
