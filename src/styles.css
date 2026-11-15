@@ -2047,7 +2047,9 @@ body {
 }
 
 .city-library-screen {
-  min-height: 100vh;
+  /* Bounded so the card below can cap at 100% and the list scrolls inside;
+     body's overflow: hidden would otherwise clip overflowing rows. */
+  height: 100vh;
   display: grid;
   place-items: center start;
   padding: clamp(24px, 5vw, 64px);
@@ -2062,6 +2064,8 @@ body {
   flex-direction: column;
   gap: 1rem;
   width: min(30rem, 100%);
+  /* min-height: 0 lets max-height win over the content-based grid-item minimum. */
+  min-height: 0;
   max-height: 100%;
   padding: 1.5rem;
 }
