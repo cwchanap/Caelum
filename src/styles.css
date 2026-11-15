@@ -2127,6 +2127,10 @@ body {
   /* Long unbroken city names ellipsize instead of pushing the button
      outside the library card. */
   display: inline-flex;
+
+  /* Flexbox drops whitespace-only text between "Continue" and the name
+     span, so the visible space must come from the gap. */
+  gap: 6px;
   align-items: center;
   min-width: 0;
   max-width: 100%;
