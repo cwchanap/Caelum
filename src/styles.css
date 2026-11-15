@@ -2123,6 +2123,20 @@ body {
   background: var(--accent);
   border-color: var(--accent);
   color: var(--surface-raised);
+
+  /* Long unbroken city names ellipsize instead of pushing the button
+     outside the library card. */
+  display: inline-flex;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.city-library-continue-name {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .city-library-continue:hover:not(:disabled) {

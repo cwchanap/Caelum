@@ -656,6 +656,9 @@ export async function createGameRuntime(
     dead = true;
     workingSave.dispose();
     stopRuntime();
+    // Terminal GPU teardown: canvas unmounts during screen switches only
+    // detach, so disposal must destroy the display host explicitly.
+    gameHost.destroy();
   };
 
   const queueBackend = (

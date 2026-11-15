@@ -6,8 +6,11 @@ import {
   mapTileViewportPoint,
   openCommandDestination,
   runtimeSnapshot,
+  sampleTilePixels,
   selectBuildLeaf,
   selectTool,
+  settleLayout,
+  type PixelProbe,
 } from "./helpers";
 
 interface StoredCityRecord {
@@ -323,4 +326,67 @@ test("cancels New City opened from the City panel", async ({ page }) => {
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
   await page.getByRole("button", { name: "Cancel" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+});
+
+const LIFECYCLE_PROBE: PixelProbe = { tile: { x: 1, y: 1 }, dx: 8, dy: 8 };
+
+/** The runtime owns one WebGPU host for its whole life; the New City screen
+ *  unmounts GameCanvas while the runtime stays alive, so the remounted canvas
+ *  must render identically through the same device (real pixel readback). */
+test("canvas keeps rendering the same scene after cancelling New City from gameplay", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Cancel Pixels");
+  await expect(
+    page.locator("canvas[data-runtime-canvas='true']"),
+  ).toBeVisible();
+
+  // Park the pointer over the HUD so no hover ghost overlays the probe.
+  await page.mouse.move(2, 2);
+  await settleLayout(page);
+  const before = await sampleTilePixels(page, [LIFECYCLE_PROBE]);
+  expect(before[0]).not.toBeNull();
+
+  await openCommandDestination(page, "city");
+  await page
+    .getByTestId("panel-city")
+    .getByRole("button", { name: "New City" })
+    .click();
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  await expect(page.locator(".shell-error")).toHaveCount(0);
+
+  await page.mouse.move(2, 2);
+  await settleLayout(page);
+  const after = await sampleTilePixels(page, [LIFECYCLE_PROBE]);
+  expect(after[0]).toEqual(before[0]);
+});
+
+test("creating a second city from gameplay renders the new city", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "First Pixel City");
+
+  await openCommandDestination(page, "city");
+  await page
+    .getByTestId("panel-city")
+    .getByRole("button", { name: "New City" })
+    .click();
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+
+  await page.getByLabel("City name").fill("Second Pixel City");
+  await page.getByRole("radio", { name: "Small Town" }).check();
+  await page.getByRole("button", { name: "Create City" }).click();
+
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  await expect(page.locator(".shell-error")).toHaveCount(0);
+  const snapshot = await runtimeSnapshot(page);
+  expect(snapshot.persistence.activeCity?.name).toBe("Second Pixel City");
+  expect(snapshot.state.rules.sandbox.templateId).toBe("smallTown");
+
+  await page.mouse.move(2, 2);
+  await settleLayout(page);
+  const [probe] = await sampleTilePixels(page, [LIFECYCLE_PROBE]);
+  expect(probe).not.toBeNull();
 });

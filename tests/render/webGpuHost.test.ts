@@ -2238,18 +2238,22 @@ describe("createWebGpuHost grid mode scene caching", () => {
 });
 
 describe("createWebGpuHost teardown destruction", () => {
-  it("mount teardown destroys the renderer", () => {
+  it("mount teardown detaches only; host destroy() is the terminal teardown", () => {
     const { cleanup, renderer, host } = createFixture();
     host.start();
     expect(renderer.destroy).not.toHaveBeenCalled();
 
+    // Canvas unmount (New City / library screens) must keep GPU resources:
+    // the runtime owns the host and remounts it afterwards.
     cleanup();
+    expect(renderer.destroy).not.toHaveBeenCalled();
 
+    host.destroy();
     expect(renderer.destroy).toHaveBeenCalledTimes(1);
   });
 
-  it("internal remount to a different host detaches without destroying; unmount destroys", () => {
-    const { host, renderer, container } = createFixture();
+  it("internal remount to a different host detaches without destroying; destroy() destroys once", () => {
+    const { host, renderer, container, cleanup } = createFixture();
 
     const secondHost = document.createElement("div");
     document.body.appendChild(secondHost);
@@ -2257,11 +2261,16 @@ describe("createWebGpuHost teardown destruction", () => {
     // Internal re-mount only detaches: the renderer keeps its GPU resources.
     expect(renderer.destroy).not.toHaveBeenCalled();
 
-    // Mounting back is another internal re-mount, and the cleanup it returns
-    // is the terminal teardown.
-    const cleanup = host.mount(container);
+    // Mounting back is another internal re-mount, and every unmount cleanup
+    // only detaches; the terminal teardown is the host-level destroy().
+    const backCleanup = host.mount(container);
     expect(renderer.destroy).not.toHaveBeenCalled();
+    backCleanup();
     cleanup();
+    expect(renderer.destroy).not.toHaveBeenCalled();
+
+    host.destroy();
+    host.destroy();
     expect(renderer.destroy).toHaveBeenCalledTimes(1);
   });
 
@@ -2311,13 +2320,18 @@ describe("createWebGpuHost teardown destruction", () => {
       expect(harness.buffers.length).toBeGreaterThan(0);
       expect(harness.deviceDestroyed).toBe(false);
       // The factory uploaded the atlas into the renderer, which owns and
-      // destroys it with its other GPU resources at teardown.
+      // destroys it with its other GPU resources at the terminal destroy().
       const atlas = await vi
         .mocked(createSpriteAtlasTexture)
         .mock.results.at(-1)!.value;
       expect(atlas.destroy).not.toHaveBeenCalled();
 
+      // Unmount keeps the device alive for a later remount.
       cleanup();
+      expect(harness.deviceDestroyed).toBe(false);
+      expect(atlas.destroy).not.toHaveBeenCalled();
+
+      host.destroy();
 
       expect(atlas.destroy).toHaveBeenCalledTimes(1);
 

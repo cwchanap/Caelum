@@ -106,6 +106,11 @@ export interface GameHost {
    *  instead of canvas-side readbacks. Returns null while no canvas is
    *  mounted. */
   captureFrame(): Promise<WebGpuCapturedFrame | null>;
+  /** Terminal teardown: detaches any mount and destroys the renderer's GPU
+   *  resources (and the device when the host created it). Canvas unmount must
+   *  NOT destroy these — the runtime owns one host for its whole life and
+   *  remounts it after screen switches; only `destroy()` does. */
+  destroy(): void;
 }
 
 export type CreateGameHost = (context: WebGpuHostContext) => Promise<GameHost>;
@@ -142,8 +147,8 @@ interface ClipTransform {
 export function createWebGpuHostWithRenderer(
   ctx: WebGpuHostContext,
   renderer: WebGpuRenderer,
-  /** The GPU device the caller created for `renderer`. Teardown destroys it
-   *  after the renderer; tests injecting a fake renderer omit it. */
+  /** The GPU device the caller created for `renderer`. `destroy()` destroys
+   *  it after the renderer; tests injecting a fake renderer omit it. */
   device?: GPUDevice,
 ): GameHost {
   let surfaceHost: HTMLElement | null = null;
@@ -164,9 +169,26 @@ export function createWebGpuHostWithRenderer(
   let boardCssHeight = 0;
   let resizeObserver: ResizeObserver | null = null;
   let activeDetach: (() => void) | null = null;
+  let destroyed = false;
   // Re-aims the hover at the tile under the last on-board pointer position,
   // for camera moves that have no pointer event of their own (keys, buttons).
   let retrackPointer: (() => void) | null = null;
+
+  /** Terminal GPU teardown, invoked by the runtime's `dispose()`. Canvas
+   *  unmount during screen switches only detaches: the runtime owns one host
+   *  for its whole life and remounts it (New City / City Library round
+   *  trips), so destroying per unmount would kill the device mid-session. */
+  const destroy = (): void => {
+    if (destroyed) return;
+    destroyed = true;
+    activeDetach?.();
+    activeDetach = null;
+    // Destroy the renderer's GPU resources and, when the host owns the
+    // device, the device too. The resulting deliberate "destroyed" loss is
+    // ignored by the lost handler.
+    renderer.destroy();
+    device?.destroy();
+  };
 
   // 10 Hz one-in-flight tick admission.
   let accumulatedMs = 0;
@@ -653,15 +675,16 @@ export function createWebGpuHostWithRenderer(
   };
 
   const mount = (host: HTMLElement): (() => void) => {
-    // Same host with an existing canvas: just refresh, reuse the teardown.
+    // Same host with an existing canvas: just refresh, reuse the detach.
     if (surfaceHost === host && canvas !== null) {
       render();
-      return teardown;
+      return detach;
     }
 
     // Different host (or first mount): detach any prior mount so its event
     // listeners, ResizeObserver, and window listener don't leak. GPU
-    // resources survive the internal re-mount; only unmount destroys them.
+    // resources survive every unmount and re-mount; only destroy() (runtime
+    // dispose) destroys them.
     activeDetach?.();
     activeDetach = null;
 
@@ -1186,22 +1209,13 @@ export function createWebGpuHostWithRenderer(
       drawnTargets = null;
     }
 
-    function teardown(): void {
-      detach();
-      // Unmount is terminal: destroy the renderer's GPU resources and, when
-      // the host owns the device, the device too. The resulting deliberate
-      // "destroyed" loss is ignored by the lost handler.
-      renderer.destroy();
-      device?.destroy();
-    }
-
     retrackPointer = () => {
       if (lastPointer !== null) {
         trackPointer(lastPointer.clientX, lastPointer.clientY);
       }
     };
     activeDetach = detach;
-    return teardown;
+    return detach;
   };
 
   return {
@@ -1214,6 +1228,7 @@ export function createWebGpuHostWithRenderer(
     cameraForAction,
     adjustCamera,
     captureFrame,
+    destroy,
   };
 }
 

@@ -1174,6 +1174,22 @@ async function flushPromises(): Promise<void> {
 }
 
 describe("Game Runtime", () => {
+  it("dispose() is the terminal display-host teardown, destroying GPU resources", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    const host = lastFakeHost()!;
+
+    // Canvas unmount cleanup (screen switches) must not destroy the host.
+    runtime.mountCanvas({} as HTMLElement)();
+    expect(host.destroy).not.toHaveBeenCalled();
+
+    runtime.dispose();
+    expect(host.destroy).toHaveBeenCalledTimes(1);
+  });
+
   it("ignores an older route preview that resolves after the current generation", async () => {
     const initial = fullRustSnapshot({
       transit: {
@@ -3474,6 +3490,7 @@ describe("Game Runtime", () => {
             if (!animate) rafPending = false;
           },
           isRunning: () => running,
+          destroy: () => {},
         };
         return Object.assign(host, {
           setRafPending: () => {

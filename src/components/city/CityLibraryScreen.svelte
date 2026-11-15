@@ -70,7 +70,8 @@
             disabled={busy}
             onclick={() => onContinue(cities[0].id)}
           >
-            Continue {cities[0].name}
+            Continue
+            <span class="city-library-continue-name">{cities[0].name}</span>
           </button>
           <button type="button" disabled={busy} onclick={onNewCity}>
             New City

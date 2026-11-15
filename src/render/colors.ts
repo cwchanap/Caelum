@@ -20,14 +20,11 @@ export const colors = {
   bus: "#e04f39",
   metro: "#2867b2",
   buildingBus: "#e8734f",
-  buildingTerminal: "#c7472f",
   buildingMetro: "#3d7fd4",
+  // No longer rendered (the sprite pass replaced flat roofs) but kept as the
+  // negative-oracle/palette reference in webgpuMapBatch and visualFoundation
+  // tests that assert the old fill is gone.
   buildingHouse: "#a96a52",
-  buildingCommercial: "#cfa24a",
-  buildingIndustrial: "#776a84",
-  buildingOffice: "#4e87c8",
-  buildingCivic: "#429987",
-  buildingPark: "#3f844f",
   late: "#b92e35",
   unserved: "#6f2c8f",
   coverage: "rgba(40, 103, 178, 0.18)",
