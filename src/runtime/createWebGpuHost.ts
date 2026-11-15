@@ -20,6 +20,7 @@ import {
   buildMapBatch,
   gridModeForUi,
 } from "../render/webgpu/mapBatch";
+import { createSpriteAtlasTexture } from "../render/webgpu/spriteAtlas";
 import {
   buildTransitBatch,
   routeStyleKeyFor,
@@ -116,6 +117,15 @@ interface BatchCache {
   vertices: Float32Array<ArrayBuffer>;
 }
 
+/** One scene cache entry holds both the solid vertices and the sprite
+ *  instance rows of a single buildMapBatch pass. */
+interface SceneBatch {
+  key: string;
+  map: GameMap;
+  vertices: Float32Array<ArrayBuffer>;
+  sprites: Float32Array<ArrayBuffer>;
+}
+
 /** World-pixels → clip-space affine, derived from the board fit and DPR. */
 interface ClipTransform {
   sx: number;
@@ -175,7 +185,7 @@ export function createWebGpuHostWithRenderer(
 
   // World-space tessellation caches (the expensive part); vertex transforms
   // to clip space are applied per draw.
-  let sceneCache: BatchCache | null = null;
+  let sceneCache: SceneBatch | null = null;
   let routeCache: BatchCache | null = null;
 
   let transform: ClipTransform | null = null;
@@ -235,11 +245,11 @@ export function createWebGpuHostWithRenderer(
     };
   };
 
-  const sceneVertices = (
+  const sceneBatch = (
     state: GameState,
     revision: number,
     gridMode: GridMode,
-  ): Float32Array<ArrayBuffer> => {
+  ): SceneBatch => {
     const key = `scene:${revision}:${gridMode}`;
     if (
       sceneCache === null ||
@@ -249,10 +259,10 @@ export function createWebGpuHostWithRenderer(
       sceneCache = {
         key,
         map: state.map,
-        vertices: buildMapBatch(state, gridMode),
+        ...buildMapBatch(state, gridMode),
       };
     }
-    return sceneCache.vertices;
+    return sceneCache;
   };
 
   const routeVertices = (
@@ -389,7 +399,7 @@ export function createWebGpuHostWithRenderer(
           {
             role: "structural",
             vertices: transformVertices(
-              sceneVertices(latest, revision, gridMode),
+              sceneBatch(latest, revision, gridMode).vertices,
             ),
           },
           {
@@ -1197,9 +1207,12 @@ export async function createWebGpuHost(
   }
   const device = await adapter.requestDevice();
   const format = navigator.gpu.getPreferredCanvasFormat();
+  // Decode + upload all fifteen shipped sprites before any frame renders, so
+  // the textured pass never shows a blank atlas period between commits.
+  const spriteTexture = await createSpriteAtlasTexture(device);
   return createWebGpuHostWithRenderer(
     ctx,
-    createWebGpuRenderer(device, format),
+    createWebGpuRenderer(device, format, spriteTexture),
     device,
   );
 }

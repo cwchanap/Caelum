@@ -185,6 +185,9 @@ interface BufferEntry {
 export function createWebGpuRenderer(
   device: GPUDevice,
   format: GPUTextureFormat,
+  /** The pre-uploaded layered sprite atlas (spriteAtlas.ts). Production
+   *  always passes it; no-sprite renderer/benchmark test callers omit it. */
+  spriteTexture?: GPUTexture,
 ): WebGpuRenderer {
   const lost: Promise<WebGpuDeviceLoss> = device.lost.then((info) => ({
     reason: info.reason,
@@ -255,6 +258,9 @@ export function createWebGpuRenderer(
   let quadBuffer: GPUBuffer | null = null;
 
   const buffers = new Map<BufferRole, BufferEntry>();
+  // Owned by the renderer: destroyed with its other GPU resources in
+  // destroy(). The textured sprite pipeline consumes it (Task 4).
+  let spriteAtlas: GPUTexture | null = spriteTexture ?? null;
   let context: GPUCanvasContext | null = null;
   // Pixel size of the configured canvas, owned via resize(); also the size of
   // the offscreen captureFrame target.
@@ -472,6 +478,8 @@ export function createWebGpuRenderer(
       buffers.clear();
       quadBuffer?.destroy();
       quadBuffer = null;
+      spriteAtlas?.destroy();
+      spriteAtlas = null;
       context?.unconfigure();
       context = null;
     },

@@ -35,6 +35,7 @@ import {
   type Camera,
 } from "../../src/render/boardTransform";
 import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
+import { createSpriteAtlasTexture } from "../../src/render/webgpu/spriteAtlas";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
 import { createFakeDevice } from "../helpers/fakeWebGpu";
@@ -43,6 +44,23 @@ vi.mock("../../src/render/webgpu/mapBatch", async (importOriginal) => {
   const mod =
     await importOriginal<typeof import("../../src/render/webgpu/mapBatch")>();
   return { ...mod, buildMapBatch: vi.fn(mod.buildMapBatch) };
+});
+
+// jsdom ships no image decode; the real production host factory loads the
+// sprite atlas before creating the renderer, so stub that upload out here
+// and assert its texture is destroyed with the renderer's resources. The
+// rest of the module (typed table, layer math) stays real for mapBatch.
+vi.mock("../../src/render/webgpu/spriteAtlas", async (importOriginal) => {
+  const mod =
+    await importOriginal<
+      typeof import("../../src/render/webgpu/spriteAtlas")
+    >();
+  return {
+    ...mod,
+    createSpriteAtlasTexture: vi.fn(async () => ({
+      destroy: vi.fn(),
+    })),
+  };
 });
 
 // jsdom ships no PointerEvent and no Pointer Capture API. The WebGPU host
@@ -2254,8 +2272,16 @@ describe("createWebGpuHost teardown destruction", () => {
       // configure() created the quad buffer through the owned device.
       expect(harness.buffers.length).toBeGreaterThan(0);
       expect(harness.deviceDestroyed).toBe(false);
+      // The factory uploaded the atlas into the renderer, which owns and
+      // destroys it with its other GPU resources at teardown.
+      const atlas = await vi
+        .mocked(createSpriteAtlasTexture)
+        .mock.results.at(-1)!.value;
+      expect(atlas.destroy).not.toHaveBeenCalled();
 
       cleanup();
+
+      expect(atlas.destroy).toHaveBeenCalledTimes(1);
 
       expect(harness.deviceDestroyed).toBe(true);
       expect(harness.buffers.every((buffer) => buffer.destroyed)).toBe(true);

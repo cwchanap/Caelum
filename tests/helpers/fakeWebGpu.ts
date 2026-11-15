@@ -52,6 +52,17 @@ export interface FakeWrite {
   data: Float32Array;
 }
 
+export interface FakeExternalImageCopy {
+  texture: FakeTexture;
+  mipLevel: number;
+  /** z of the destination origin (the texture-array layer). */
+  originZ: number | undefined;
+  width: number | undefined;
+  height: number | undefined;
+  premultipliedAlpha: boolean | undefined;
+  colorSpace: string | undefined;
+}
+
 export interface FakeHarness {
   buffers: FakeBuffer[];
   pipelines: FakePipeline[];
@@ -61,6 +72,8 @@ export interface FakeHarness {
   passes: FakePass[];
   textures: FakeTexture[];
   copies: FakeTextureCopy[];
+  /** queue.copyExternalImageToTexture calls, in submission order. */
+  textureUploads: FakeExternalImageCopy[];
   /** Invoked inside mapAsync so a test can stage the buffer's mapped bytes
    *  before the renderer reads them. */
   onMapRead?: (buffer: FakeBuffer) => void;
@@ -79,6 +92,7 @@ export function createFakeDevice(): FakeHarness {
     passes: [],
     textures: [],
     copies: [],
+    textureUploads: [],
     device: null as unknown as GPUDevice,
     deviceDestroyed: false,
     resolveLost: () => {},
@@ -176,6 +190,27 @@ export function createFakeDevice(): FakeHarness {
     queue: {
       writeBuffer(buffer: FakeBuffer, offset: number, data: Float32Array) {
         harness.writes.push({ buffer, offset, data });
+      },
+      copyExternalImageToTexture(
+        _source: unknown,
+        destination: {
+          texture: FakeTexture;
+          mipLevel?: number;
+          origin?: { z?: number };
+          colorSpace?: string;
+          premultipliedAlpha?: boolean;
+        },
+        size: { width?: number; height?: number },
+      ) {
+        harness.textureUploads.push({
+          texture: destination.texture,
+          mipLevel: destination.mipLevel ?? 0,
+          originZ: destination.origin?.z,
+          width: size.width,
+          height: size.height,
+          premultipliedAlpha: destination.premultipliedAlpha,
+          colorSpace: destination.colorSpace,
+        });
       },
       submit(commandBuffers: { passes: FakePass[] }[]) {
         for (const commandBuffer of commandBuffers) {
