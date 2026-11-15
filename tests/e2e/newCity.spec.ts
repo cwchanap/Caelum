@@ -6,6 +6,7 @@ import {
   mapTileViewportPoint,
   openCommandDestination,
   runtimeSnapshot,
+  selectBuildLeaf,
   selectTool,
 } from "./helpers";
 
@@ -265,6 +266,50 @@ test("gates Create on a trimmed name and trims it into the saved city", async ({
 
   const snapshot = await runtimeSnapshot(page);
   expect(snapshot.persistence.activeCity?.name).toBe("Trimmed Smoke");
+});
+
+test("creates a Medium Creative city through the real WASM New City flow", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+
+  await page.getByLabel("City name").fill("Medium Creative Smoke");
+  await page
+    .getByRole("group", { name: "Map size" })
+    .getByRole("radio", { name: "Medium" })
+    .check();
+  await page
+    .getByRole("group", { name: "Economy" })
+    .getByRole("radio", { name: "Creative" })
+    .check();
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+
+  const created = await runtimeSnapshot(page);
+  // Medium Rust dimensions (SandboxMapSize::Medium, mirrored by MAP_SIZES).
+  expect(created.state.rules.sandbox.mapSize).toBe("medium");
+  expect([created.state.map.width, created.state.map.height]).toEqual([56, 36]);
+  expect(created.state.rules.economyPreset).toBe("creative");
+
+  // The Creative Rust rule: building is free. The road really lands while
+  // the budget never moves (Standard charges 100 per road tile).
+  const target = created.state.map.tiles.find(
+    (tile) => tile.kind === "empty" && tile.area === undefined,
+  );
+  expect(target).toBeDefined();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await clickMapTile(canvas, target!);
+  await expect
+    .poll(async () => {
+      const snapshot = await runtimeSnapshot(page);
+      return snapshot.state.map.tiles.find(
+        (tile) => tile.x === target!.x && tile.y === target!.y,
+      )?.kind;
+    })
+    .toBe("road");
+  expect((await runtimeSnapshot(page)).state.budget).toBe(120_000);
 });
 
 test("cancels New City opened from the City panel", async ({ page }) => {

@@ -331,6 +331,55 @@ export interface PixelProbe {
   dy: number;
 }
 
+export interface SampleFrameTransform {
+  scale: number;
+  offsetX: number;
+  offsetY: number;
+  /** Capture device pixels per CSS pixel (debugCaptureFrame / canvas rect). */
+  dpr: number;
+}
+
+/** The exact world→CSS transform and capture density sampleTilePixels uses,
+ *  for tests that need to compute expectations at capture-pixel precision
+ *  (e.g. filtered sprite-texel composites). Returns null without a canvas
+ *  or a frame, mirroring sampleTilePixels' null probes. */
+export async function sampleFrameTransform(
+  page: Page,
+): Promise<SampleFrameTransform | null> {
+  const box = await page
+    .locator("canvas[data-runtime-canvas='true']")
+    .boundingBox();
+  if (box === null) return null;
+  const view = await boardView(page);
+  const { scale, offsetX, offsetY } = getBoardTransform(
+    box,
+    view.map,
+    view.camera,
+  );
+  const rectWidth = await page.evaluate(() => {
+    const canvas = document.querySelector("canvas[data-runtime-canvas='true']");
+    return canvas instanceof HTMLCanvasElement
+      ? canvas.getBoundingClientRect().width
+      : 0;
+  });
+  const shot = await page.evaluate(async () => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          debugCaptureFrame?: () => Promise<{
+            width: number;
+          } | null>;
+        };
+      }
+    ).__caelumRuntime;
+    return runtime?.debugCaptureFrame === undefined
+      ? null
+      : runtime.debugCaptureFrame();
+  });
+  if (rectWidth === 0 || shot === null || shot.width === 0) return null;
+  return { scale, offsetX, offsetY, dpr: shot.width / rectWidth };
+}
+
 /**
  * Samples RGB triples from the rendered gameplay frame at world-space points
  * expressed as tile + world-pixel offsets. One capture covers every probe;

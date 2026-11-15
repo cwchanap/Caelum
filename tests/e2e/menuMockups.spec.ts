@@ -1,10 +1,20 @@
 import { expect, test } from "@playwright/test";
-import { createDefaultCity, openCommandDestination } from "./helpers";
+import { createDefaultCity } from "./helpers";
+
+interface RequiredControl {
+  /** CSS selector matching the required controls. */
+  selector: string;
+  /** Exact matched-element count when the composition fixes it. */
+  count?: number;
+}
 
 /** The reference compositions must fit their viewport without clipping:
- *  no document overflow, and every key element's box inside the viewport. */
+ *  no document overflow, and every required control's box inside the
+ *  viewport and inside every clipping (overflow) ancestor. Radio counts
+ *  alone do not prove visibility — each element is measured. */
 async function assertCompositionFits(
   page: import("@playwright/test").Page,
+  controls: RequiredControl[],
 ): Promise<void> {
   const overflow = await page.evaluate(() => {
     const root = document.documentElement;
@@ -18,45 +28,84 @@ async function assertCompositionFits(
 
   const viewport = page.viewportSize();
   expect(viewport).not.toBeNull();
-  const boxes = await page.evaluate((size) => {
-    const within = (element: Element | null): boolean => {
-      if (!(element instanceof Element)) return false;
-      const box = element.getBoundingClientRect();
-      return (
-        box.width > 0 &&
-        box.height > 0 &&
-        box.left >= 0 &&
-        box.top >= 0 &&
-        box.right <= size!.width &&
-        box.bottom <= size!.height
-      );
-    };
-    return {
-      screen: within(
-        document.querySelector(
-          "[data-testid='new-city-screen'], [data-testid='city-library-screen']",
-        ),
-      ),
-      preview: within(
-        document.querySelector("[data-testid='new-city-preview']"),
-      ),
-      card: within(document.querySelector(".city-library-card")),
-      firstRadio: within(document.querySelector("input[type='radio']")),
-      previewLoaded: (() => {
-        const image = document.querySelector(
-          "[data-testid='new-city-preview']",
-        ) as HTMLImageElement | null;
-        return image === null || image.complete;
-      })(),
-    };
-  }, viewport);
-  expect(boxes.screen).toBe(true);
-  // The New City composition carries the large right preview; the library
-  // carries the quiet left card. Each is asserted where it exists.
-  expect(boxes.preview || boxes.card).toBe(true);
-  expect(boxes.firstRadio || boxes.card).toBe(true);
-  if (boxes.preview) {
-    expect(boxes.previewLoaded).toBe(true);
+  const results = await page.evaluate(
+    ({ size, selectors }) => {
+      const clippingAncestor = (element: Element): string | null => {
+        const box = element.getBoundingClientRect();
+        for (
+          let node = element.parentElement;
+          node !== null;
+          node = node.parentElement
+        ) {
+          const style = window.getComputedStyle(node);
+          const clipsX = ["hidden", "clip", "auto", "scroll"].includes(
+            style.overflowX,
+          );
+          const clipsY = ["hidden", "clip", "auto", "scroll"].includes(
+            style.overflowY,
+          );
+          if (!clipsX && !clipsY) continue;
+          const clipBox = node.getBoundingClientRect();
+          if (
+            box.left < clipBox.left - 1 ||
+            box.right > clipBox.right + 1 ||
+            box.top < clipBox.top - 1 ||
+            box.bottom > clipBox.bottom + 1
+          ) {
+            const label =
+              typeof node.className === "string" && node.className.length > 0
+                ? node.className.split(" ")[0]
+                : node.id || node.tagName.toLowerCase();
+            return `${node.tagName.toLowerCase()}.${label}`;
+          }
+        }
+        return null;
+      };
+      return selectors.map((selector) => {
+        const elements = [...document.querySelectorAll(selector)];
+        let clipped: string | null = null;
+        let outsideViewport = 0;
+        let zeroSized = 0;
+        for (const element of elements) {
+          const box = element.getBoundingClientRect();
+          if (box.width <= 0 || box.height <= 0) {
+            zeroSized += 1;
+            continue;
+          }
+          if (
+            box.left < 0 ||
+            box.top < 0 ||
+            box.right > size.width ||
+            box.bottom > size.height
+          ) {
+            outsideViewport += 1;
+          }
+          clipped ??= clippingAncestor(element);
+        }
+        return {
+          selector,
+          matched: elements.length,
+          clipped,
+          outsideViewport,
+          zeroSized,
+        };
+      });
+    },
+    { size: viewport!, selectors: controls.map((control) => control.selector) },
+  );
+  for (const [index, control] of controls.entries()) {
+    const result = results[index]!;
+    const expected = control.count ?? 1;
+    expect(result.matched, `${control.selector} matched`).toBe(expected);
+    expect(result.zeroSized, `${control.selector} zero-sized controls`).toBe(0);
+    expect(
+      result.outsideViewport,
+      `${control.selector} outside the ${viewport!.width}x${viewport!.height} viewport`,
+    ).toBe(0);
+    expect(
+      result.clipped,
+      `${control.selector} clipped by a container`,
+    ).toBeNull();
   }
 }
 
@@ -87,7 +136,29 @@ test.describe("New City reference composition", () => {
             .locator("input[type='radio']"),
         ).toHaveCount(count, { timeout: 5000 });
       }
-      await assertCompositionFits(page);
+      // Every required control, not just the first radio: all eight radios,
+      // the name field and both action buttons must sit inside the viewport
+      // and inside every clipping container.
+      await assertCompositionFits(page, [
+        { selector: "[data-testid='new-city-screen']", count: 1 },
+        { selector: "[data-testid='new-city-preview']", count: 1 },
+        { selector: "input[name='template']", count: 3 },
+        { selector: "input[name='mapSize']", count: 3 },
+        { selector: "input[name='economy']", count: 2 },
+        { selector: "input[autocomplete='off']", count: 1 },
+        { selector: "button[type='submit']", count: 1 },
+        // The standalone screen renders only Create; Cancel exists solely in
+        // the City-panel flow.
+        { selector: ".new-city-actions button", count: 1 },
+      ]);
+      await expect(page.getByTestId("new-city-preview")).toBeVisible();
+      const previewLoaded = await page.evaluate(() => {
+        const image = document.querySelector(
+          "[data-testid='new-city-preview']",
+        ) as HTMLImageElement | null;
+        return image === null || image.complete;
+      });
+      expect(previewLoaded).toBe(true);
       await page.screenshot({
         path: testInfo.outputPath(
           `new-city-${viewport.width}x${viewport.height}.png`,
@@ -103,27 +174,35 @@ test.describe("City Library reference composition", () => {
       page,
     }, testInfo) => {
       await page.setViewportSize(viewport);
+      // Multiple saved cities so the library list (and every row's rename,
+      // Load, Delete, avatar and saved-time control) is measured, not just
+      // a single-row card.
       await createDefaultCity(page, "Library Shot A");
-      await openCommandDestination(page, "city");
-      await page
-        .getByTestId("panel-city")
-        .getByRole("button", { name: "Save Now" })
-        .click();
-      await expect(
-        page.getByTestId("panel-city").getByTestId("city-save-status"),
-      ).toHaveAttribute("data-dirty", "false");
+      await createDefaultCity(page, "Library Shot B");
+      await createDefaultCity(page, "Library Shot C");
       await page.goto("/");
       const library = page.getByTestId("city-library-screen");
       await expect(library).toBeVisible();
       await expect(library).toHaveCSS("background-image", /city-library\.webp/);
       await expect(library.locator("img[src*='app-icon']")).toBeVisible();
-      await expect(
-        page.getByRole("button", { name: /Continue Library Shot A/ }),
-      ).toBeVisible();
-      await expect(
-        page.getByRole("textbox", { name: "Rename Library Shot A" }),
-      ).toBeVisible();
-      await assertCompositionFits(page);
+      await expect(library.locator(".city-library-continue")).toHaveText(
+        /^Continue /,
+      );
+      // After a fresh reload no session is active, so every row carries a
+      // Load button.
+      await assertCompositionFits(page, [
+        { selector: "[data-testid='city-library-screen']", count: 1 },
+        { selector: ".city-library-card", count: 1 },
+        { selector: "img[src*='app-icon']", count: 1 },
+        { selector: ".city-library-continue", count: 1 },
+        { selector: ".city-library-actions button", count: 2 },
+        { selector: "[data-testid^='city-row-']", count: 3 },
+        { selector: "[data-testid='city-avatar']", count: 3 },
+        { selector: "input.city-name", count: 3 },
+        { selector: "time[datetime]", count: 3 },
+        { selector: "button[aria-label^='Load ']", count: 3 },
+        { selector: "[data-testid^='city-delete-']", count: 3 },
+      ]);
       await page.screenshot({
         path: testInfo.outputPath(
           `city-library-${viewport.width}x${viewport.height}.png`,
