@@ -1799,8 +1799,16 @@ export async function createGameRuntime(
     },
     commitDrag() {
       if (dead) return Promise.resolve(getSnapshot());
-      if (workingSave.isBusy()) return Promise.resolve(getSnapshot());
       const gesture = ui.drag;
+      // The pointerup ended the gesture even when a save owns the backend:
+      // leave a cleared drag rather than one pinned on screen forever.
+      if (workingSave.isBusy()) {
+        if (gesture === null) return Promise.resolve(getSnapshot());
+        invalidateRoadPreview();
+        return Promise.resolve(
+          commit(state, { ...clearRoadMutationPreview(ui), drag: null }),
+        );
+      }
       if (gesture === null) {
         return commit(state, ui);
       }
