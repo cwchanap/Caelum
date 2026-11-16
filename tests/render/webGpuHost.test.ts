@@ -840,6 +840,65 @@ describe("createWebGpuHost lifecycle", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
+  it("a stroke keeps the geometry it started in across a mid-drag redraw", () => {
+    // A dock toggle can land a resize + fresh drawn frame mid-gesture. The
+    // stroke must resolve every event in the geometry it began in — a
+    // release mapped under the new transform would stretch the stroke.
+    const { canvas, callbacks, setUi, host, fireFrame } = createFixture({
+      ui: { activeTool: "road" },
+    });
+    fireFrame(0); // drawn targets under the 1:1 board
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    expect(callbacks.onDragStart).toHaveBeenCalledWith({ x: 1, y: 0 });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+    });
+
+    // The board halves mid-gesture and the next frame draws under it.
+    const { map } = createTestGameState();
+    const halfWidth = (map.width * tileSize) / 2;
+    const boardHeight =
+      map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom;
+    Element.prototype.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: halfWidth,
+          height: boardHeight,
+          left: 0,
+          top: 0,
+          right: halfWidth,
+          bottom: boardHeight,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    host.render();
+    fireFrame(16);
+
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    // Under the redrawn transform the same clientX maps to a different tile.
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
+
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      button: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("wheel zoom and hover continue to work after context menu cancels drag", () => {
     const { canvas, callbacks, setUi } = createFixture({
       ui: { activeTool: "road" },

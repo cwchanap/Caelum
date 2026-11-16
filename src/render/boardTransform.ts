@@ -348,8 +348,8 @@ export function canvasToWorld(
   clientY: number,
   map: MapSize,
   transform: BoardTransform,
+  rect: DOMRect = canvas.getBoundingClientRect(),
 ): { world: Point; tile: Point } | null {
-  const rect = canvas.getBoundingClientRect();
   if (rect.width === 0 || rect.height === 0) {
     return null;
   }

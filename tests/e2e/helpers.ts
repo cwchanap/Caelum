@@ -81,6 +81,24 @@ export async function openCommandDestination(
 
 /** Let the render host observe a stage resize before map geometry is measured. */
 export async function settleLayout(page: Page): Promise<void> {
+  // The render loop pins the canvas to the observed host size inside
+  // drawFrame; a queued resize lands on some later frame, so fixed rAF waits
+  // can measure a box the next drawFrame is about to replace. Wait until the
+  // pinned canvas box matches the live host box — i.e. the drawn transform
+  // pointer events resolve against is the one measured below.
+  await page.waitForFunction(() => {
+    const canvas = document.querySelector<HTMLCanvasElement>(
+      "canvas[data-runtime-canvas='true']",
+    );
+    const host = canvas?.parentElement;
+    if (canvas == null || host == null) return true;
+    const canvasBox = canvas.getBoundingClientRect();
+    const hostBox = host.getBoundingClientRect();
+    return (
+      Math.abs(canvasBox.width - hostBox.width) < 1 &&
+      Math.abs(canvasBox.height - hostBox.height) < 1
+    );
+  });
   await page.evaluate(
     () =>
       new Promise<void>((resolve) => {

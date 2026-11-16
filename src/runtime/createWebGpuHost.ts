@@ -753,6 +753,9 @@ export function createWebGpuHostWithRenderer(
       moved: boolean;
     } | null = null;
     let dragPointerId: number | null = null;
+    // A drag resolves every event in the geometry it began in: a resize or
+    // scene flip mid-stroke must not re-anchor the remaining moves/release.
+    let dragMapping: ReturnType<typeof pointerMapping> | null = null;
     let suppressClick = false;
     let spaceHeld = false;
     let lastPointer: { clientX: number; clientY: number } | null = null;
@@ -764,6 +767,7 @@ export function createWebGpuHostWithRenderer(
      *  (a pointer actuates what is on screen), else the live state+camera —
      *  e.g. just after a city load, before the new scene's first frame. */
     const pointerMapping = (): {
+      rect: DOMRect;
       transform: BoardTransform;
       map: GameMap;
     } => {
@@ -772,17 +776,16 @@ export function createWebGpuHostWithRenderer(
         drawnTargets.revision === ctx.getSceneRevision()
       ) {
         return {
+          rect: boardRect(),
           transform: drawnTargets.transform,
           map: drawnTargets.state.map,
         };
       }
       const liveState = ctx.getState();
+      const rect = boardRect();
       return {
-        transform: getBoardTransform(
-          boardRect(),
-          liveState.map,
-          ctx.getCamera(),
-        ),
+        rect,
+        transform: getBoardTransform(rect, liveState.map, ctx.getCamera()),
         map: liveState.map,
       };
     };
@@ -792,10 +795,16 @@ export function createWebGpuHostWithRenderer(
     const pointerTarget = (
       clientX: number,
       clientY: number,
-    ): { world: Point; tile: Point } | null => {
-      const { transform, map } = pointerMapping();
-      return canvasToWorld(nextCanvas, clientX, clientY, map, transform);
-    };
+      mapping: ReturnType<typeof pointerMapping> = pointerMapping(),
+    ): { world: Point; tile: Point } | null =>
+      canvasToWorld(
+        nextCanvas,
+        clientX,
+        clientY,
+        mapping.map,
+        mapping.transform,
+        mapping.rect,
+      );
 
     const beginPan = (event: PointerEvent, moved: boolean): void => {
       pan = {
@@ -825,8 +834,14 @@ export function createWebGpuHostWithRenderer(
     // the hover tile (badge / building preview / hover highlight) follows.
     const trackPointer = (clientX: number, clientY: number): void => {
       lastPointer = { clientX, clientY };
-      const point = pointerTarget(clientX, clientY)?.tile ?? null;
-      if (ctx.getUi().drag !== null) {
+      const dragging = ctx.getUi().drag !== null;
+      const point =
+        pointerTarget(
+          clientX,
+          clientY,
+          dragging ? (dragMapping ?? undefined) : undefined,
+        )?.tile ?? null;
+      if (dragging) {
         ctx.onDragCurrent(point);
       } else {
         ctx.onHoverTile(point);
@@ -908,6 +923,7 @@ export function createWebGpuHostWithRenderer(
         releasePointer(dragPointerId);
         dragPointerId = null;
       }
+      dragMapping = null;
       if (pan === null) nextCanvas.style.cursor = "";
     };
 
@@ -959,6 +975,7 @@ export function createWebGpuHostWithRenderer(
         releasePointer(dragPointerId);
         dragPointerId = null;
       }
+      dragMapping = null;
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
@@ -997,11 +1014,16 @@ export function createWebGpuHostWithRenderer(
         }
         if (event.buttons === 0) {
           const point =
-            pointerTarget(event.clientX, event.clientY)?.tile ?? null;
+            pointerTarget(
+              event.clientX,
+              event.clientY,
+              dragMapping ?? undefined,
+            )?.tile ?? null;
           ctx.onDragCurrent(point);
           ctx.onDragCommit();
           releasePointer(dragPointerId);
           dragPointerId = null;
+          dragMapping = null;
           return;
         }
       }
@@ -1052,13 +1074,16 @@ export function createWebGpuHostWithRenderer(
       if (event.button !== 0 || !dragTool || ctx.getUi().drag !== null) {
         return;
       }
-      const point = pointerTarget(event.clientX, event.clientY)?.tile ?? null;
+      const mapping = pointerMapping();
+      const point =
+        pointerTarget(event.clientX, event.clientY, mapping)?.tile ?? null;
       if (point === null) {
         return;
       }
       const dragStarted = ctx.onDragStart(point);
       if (dragStarted) {
         dragPointerId = event.pointerId;
+        dragMapping = mapping;
         capturePointer(event.pointerId);
       }
     };
@@ -1079,13 +1104,16 @@ export function createWebGpuHostWithRenderer(
       if (dragPointerId !== null && event.pointerId !== dragPointerId) {
         return;
       }
-      const point = pointerTarget(event.clientX, event.clientY)?.tile ?? null;
+      const point =
+        pointerTarget(event.clientX, event.clientY, dragMapping ?? undefined)
+          ?.tile ?? null;
       // Snap the gesture to the release tile before committing, so a release on
       // a different tile than the last move builds to where the user let go.
       ctx.onDragCurrent(point);
       ctx.onDragCommit();
       releasePointer(event.pointerId);
       dragPointerId = null;
+      dragMapping = null;
     };
 
     const handlePointerLeave = (event: PointerEvent): void => {
@@ -1108,6 +1136,7 @@ export function createWebGpuHostWithRenderer(
             releasePointer(dragPointerId);
             dragPointerId = null;
           }
+          dragMapping = null;
         }
       }
       ctx.onHoverTile(null);
@@ -1135,6 +1164,7 @@ export function createWebGpuHostWithRenderer(
             releasePointer(dragPointerId);
             dragPointerId = null;
           }
+          dragMapping = null;
         }
       }
       ctx.onHoverTile(null);
@@ -1159,8 +1189,14 @@ export function createWebGpuHostWithRenderer(
 
     if (typeof ResizeObserver === "function") {
       resizeObserver = new ResizeObserver((entries) => {
-        const entry = entries[0];
-        if (entry === undefined) {
+        // A batch can carry several box changes; only the newest observation
+        // describes the current host size.
+        const entry = entries[entries.length - 1];
+        if (
+          entry === undefined ||
+          entry.contentRect.width <= 0 ||
+          entry.contentRect.height <= 0
+        ) {
           return;
         }
         observedCssWidth = entry.contentRect.width;
