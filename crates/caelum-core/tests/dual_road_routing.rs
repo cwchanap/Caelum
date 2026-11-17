@@ -597,7 +597,7 @@ fn dual_bidirectional_route_uses_the_legal_left_turn_and_lane() {
 }
 
 #[test]
-fn loop_closing_leg_reports_network_disconnected() {
+fn loop_closing_leg_reports_one_way_no_return() {
     let mut engine = GameEngine::new();
     dispatch(
         &mut engine,
@@ -627,11 +627,12 @@ fn loop_closing_leg_reports_network_disconnected() {
     assert_eq!(
         closing.status,
         RouteLegStatus::NetworkDisconnected,
-        "the closing leg must carry the coarse network failure: {closing:?}"
+        "the closing leg must keep the coarse network status: {closing:?}"
     );
     assert_eq!(
         closing.failure_reason,
-        Some(caelum_core::model::LegFailureReason::NetworkDisconnected)
+        Some(caelum_core::model::LegFailureReason::OneWayNoReturn),
+        "relaxing the eastbound arrows would connect this leg: {closing:?}"
     );
     assert!(preview
         .legs

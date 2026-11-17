@@ -3,11 +3,11 @@ use std::collections::{HashMap, VecDeque};
 use crate::engine::RoutingContext;
 use crate::heading::{canonical_headings, heading_between};
 use crate::model::{
-    GameMap, GameSnapshot, Heading, LegFailureReason, PathGeometry, Point, RouteLegKind,
-    RouteLegPath, RouteLegStatus, ServicePattern, StopRoadAccess, Tile, TrackPathStep, TransitMode,
-    TransitPath,
+    GameMap, GameSnapshot, Heading, LegFailureReason, PathGeometry, Point, RoadStructure,
+    RouteLegKind, RouteLegPath, RouteLegStatus, ServicePattern, StopRoadAccess, Tile,
+    TrackPathStep, TransitMode, TransitPath,
 };
-use crate::road_topology::RoadState;
+use crate::road_topology::{RoadState, RoadTopology};
 use crate::service_itinerary::{build_service_itinerary, ServiceLegSpec};
 use crate::stop_access::resolve_stop_access;
 use crate::transit::METRO_TILES_PER_SECOND;
@@ -40,7 +40,7 @@ pub fn resolve_route_legs(
     let specs = build_service_itinerary(pattern, waypoint_ids);
     // Pre-compute service leg paths so terminal reversals can reuse them
     // instead of re-resolving the adjacent service legs.
-    let service_paths: Vec<TransitPathResult> = specs
+    let mut service_paths: Vec<TransitPathResult> = specs
         .iter()
         .map(|spec| {
             if spec.kind == RouteLegKind::Service {
@@ -50,11 +50,82 @@ pub fn resolve_route_legs(
             }
         })
         .collect();
+    diagnose_one_way_service_failures(snapshot, mode, &specs, &mut service_paths);
     specs
         .iter()
         .enumerate()
         .map(|(index, spec)| resolve_leg(snapshot, context, mode, &service_paths, index, spec))
         .collect()
+}
+
+/// A bus service leg that fails with `NetworkDisconnected` may be blocked only
+/// by one-way arrows, not by missing geometry. Relax a single cloned map and
+/// re-run only the failed service legs so the player is told which fix applies.
+/// The relaxed map and its topology never reach gameplay: the real path stays
+/// unresolved and the authoritative map is untouched.
+fn diagnose_one_way_service_failures(
+    snapshot: &GameSnapshot,
+    mode: TransitMode,
+    specs: &[ServiceLegSpec],
+    service_paths: &mut [TransitPathResult],
+) {
+    if mode != TransitMode::Bus
+        || !service_paths
+            .iter()
+            .any(|path| matches!(path, Err(LegFailureReason::NetworkDisconnected)))
+    {
+        return;
+    }
+    let relaxed_map = map_without_one_way_restrictions(&snapshot.map);
+    let Ok(relaxed_topology) = RoadTopology::compile(&relaxed_map) else {
+        return;
+    };
+    for (index, spec) in specs.iter().enumerate() {
+        if spec.kind != RouteLegKind::Service
+            || !matches!(
+                service_paths[index],
+                Err(LegFailureReason::NetworkDisconnected)
+            )
+        {
+            continue;
+        }
+        let (Some(from), Some(to)) = (
+            resolve_stop_access(snapshot, &spec.from_waypoint_id),
+            resolve_stop_access(snapshot, &spec.to_waypoint_id),
+        ) else {
+            continue;
+        };
+        let relaxed = relaxed_topology.find_path_between_access_tiles(
+            &relaxed_map,
+            from.road_point,
+            to.road_point,
+            from.preferred_heading,
+            to.preferred_heading,
+        );
+        if relaxed.is_ok() {
+            service_paths[index] = Err(LegFailureReason::OneWayNoReturn);
+        }
+    }
+}
+
+/// Clear every authored one-way direction in a clone. Roundabout ports are
+/// relaxed too: `RoadTopology::compile` drops a captured inbound/outbound port
+/// whose neighbor no longer carries that arrow, which would disconnect the
+/// diagnostic ring instead of opening it. `None` keeps the port's existing
+/// geometry-only acceptance with reciprocal neighbor checks.
+fn map_without_one_way_restrictions(map: &GameMap) -> GameMap {
+    let mut relaxed = map.clone();
+    for tile in &mut relaxed.tiles {
+        tile.one_way = None;
+    }
+    for structure in &mut relaxed.road_structures {
+        if let RoadStructure::Roundabout { ports, .. } = structure {
+            for port in ports {
+                port.direction = None;
+            }
+        }
+    }
+    relaxed
 }
 
 fn resolve_leg(

@@ -36,7 +36,8 @@ export type LegFailureReason =
   | "networkDisconnected"
   | "noLegalEntryHeading"
   | "noLegalExitHeading"
-  | "noLegalTurnaround";
+  | "noLegalTurnaround"
+  | "oneWayNoReturn";
 export type BuildingType =
   | "busStop"
   | "busTerminal"

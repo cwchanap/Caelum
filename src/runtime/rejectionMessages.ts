@@ -118,6 +118,9 @@ export function routeFailureGuidance(
   reason: RouteFailureRow["reason"],
   context: { isLoopClosing: boolean; legKind: RouteLegKind },
 ): string {
+  if (reason === "oneWayNoReturn") {
+    return "One-way roads block this leg. Add a turnaround, a roundabout or a two-way road.";
+  }
   if (reason === "noLegalTurnaround") {
     return "No legal U-turn here; add a junction or roundabout.";
   }

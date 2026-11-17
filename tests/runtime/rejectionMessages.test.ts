@@ -145,6 +145,17 @@ describe("workingSaveErrorMessage", () => {
 });
 
 describe("routeFailureGuidance", () => {
+  it("guides oneWayNoReturn ahead of the loop-close fallback", () => {
+    expect(
+      routeFailureGuidance("oneWayNoReturn", {
+        isLoopClosing: true,
+        legKind: "service",
+      }),
+    ).toBe(
+      "One-way roads block this leg. Add a turnaround, a roundabout or a two-way road.",
+    );
+  });
+
   it("guides noLegalTurnaround", () => {
     expect(
       routeFailureGuidance("noLegalTurnaround", {

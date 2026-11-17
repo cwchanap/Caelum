@@ -174,6 +174,7 @@ pub enum LegFailureReason {
     NoLegalEntryHeading,
     NoLegalExitHeading,
     NoLegalTurnaround,
+    OneWayNoReturn,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
