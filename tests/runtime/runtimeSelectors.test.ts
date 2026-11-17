@@ -592,6 +592,14 @@ describe("route selectors", () => {
 
   it.each([
     {
+      reason: "oneWayNoReturn" as const,
+      pattern: "loop" as const,
+      legKind: "service" as const,
+      isLoopClosing: true,
+      guidance:
+        "One-way roads block this leg. Add a turnaround, a roundabout or a two-way road.",
+    },
+    {
       reason: "noRoadAccess" as const,
       pattern: "shuttle" as const,
       legKind: "service" as const,
