@@ -240,6 +240,16 @@ body {
   flex-shrink: 0;
 }
 
+.topbar-save-status button {
+  color: inherit;
+  font: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  text-decoration: underline;
+  cursor: pointer;
+}
+
 .topbar-trip-issues {
   display: inline-block;
   flex-shrink: 1;

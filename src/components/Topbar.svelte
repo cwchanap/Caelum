@@ -7,10 +7,12 @@
     cityName: string;
     busy: boolean;
     dirty: boolean;
+    status: { label: string; canRetry: boolean };
     paused: boolean;
     speed: GameState["speed"];
     onTogglePause: () => void;
     onSetSpeed: (speed: 1 | 2 | 4) => void;
+    onRetrySave: () => void;
   }
 
   const stats: Array<{
@@ -28,15 +30,13 @@
     cityName,
     busy,
     dirty,
+    status,
     paused,
     speed,
     onTogglePause,
     onSetSpeed,
+    onRetrySave,
   }: Props = $props();
-
-  const saveLabel = $derived(
-    busy ? "Working…" : dirty ? "Unsaved changes" : "Saved",
-  );
 </script>
 
 <section class="topbar" data-testid="topbar">
@@ -53,7 +53,11 @@
       class="chip topbar-save-status"
       data-testid="topbar-save-status"
       data-busy={busy}
-      data-dirty={dirty}>{saveLabel}</span
+      data-dirty={dirty}
+      >{status.label}{#if status.canRetry}
+        · <button type="button" disabled={busy} onclick={onRetrySave}
+          >Retry</button
+        >{/if}</span
     >
   </div>
 
@@ -77,8 +81,7 @@
     </div>
 
     <div
-      class:speed-group--paused={paused}
-      class="segmented speed-group"
+      class={["segmented speed-group", { "speed-group--paused": paused }]}
       role="group"
       aria-label="Simulation speed"
     >
@@ -87,7 +90,7 @@
           type="button"
           data-speed={speedOption}
           aria-pressed={speed === speedOption}
-          class:active={speed === speedOption}
+          class={{ active: speed === speedOption }}
           onclick={() => onSetSpeed(speedOption as 1 | 2 | 4)}
         >
           {speedOption}x

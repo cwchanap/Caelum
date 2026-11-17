@@ -138,8 +138,12 @@ async function applyDirtyFixture(
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await selectBuildLeaf(page, "roads", "road-twoWay");
   await dragMapTiles(page, canvas, { x: 2, y: 14 }, { x: 5, y: 14 });
+  await expect(page.getByTestId("topbar-save-status")).toHaveAttribute(
+    "data-dirty",
+    "true",
+  );
   await expect(page.getByTestId("topbar-save-status")).toHaveText(
-    "Unsaved changes",
+    /^Saved \d+ (s|min) ago$/,
   );
 }
 
@@ -373,7 +377,9 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
     await page.setViewportSize(viewport);
     await createDefaultCity(page, LONG_CITY_NAME);
     await expect(page.getByTestId("topbar")).toBeVisible();
-    await expect(page.getByTestId("topbar-save-status")).toHaveText("Saved");
+    await expect(page.getByTestId("topbar-save-status")).toHaveText(
+      /^Saved \d+ (s|min) ago$/,
+    );
 
     const geometry = await topbarGeometry(page);
     failures.push(...collectOverlapFailures(viewport, geometry));
@@ -389,7 +395,7 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
         expect.objectContaining({ label: "Daily cost", value: "$20,000" }),
       ]),
     );
-    expect(stressed.saveStatus).toBe("Unsaved changes");
+    expect(stressed.saveStatus).toMatch(/^Saved \d+ (s|min) ago$/);
     failures.push(...collectOverlapFailures(viewport, stressed));
     expect(
       stressed.cityNameWidth,
@@ -398,4 +404,33 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
   }
 
   expect(failures).toEqual([]);
+});
+
+test("dirty browser leave asks for confirmation after user activation", async ({
+  page,
+}) => {
+  await createDefaultCity(page);
+  await applyDirtyFixture(page);
+  const dialogPromise = page.waitForEvent("dialog");
+  void page.reload().catch(() => null);
+  const dialog = await dialogPromise;
+  expect(dialog.type()).toBe("beforeunload");
+  await dialog.dismiss();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+
+  const pause = page.getByRole("button", { name: "Pause", exact: true });
+  if (await pause.isVisible()) await pause.click();
+  await openCommandDestination(page, "city");
+  await page.getByRole("button", { name: "Save Now" }).click();
+  await expect(page.getByTestId("city-save-status")).toHaveAttribute(
+    "data-dirty",
+    "false",
+  );
+  let prompted = false;
+  page.once("dialog", async (event) => {
+    prompted = true;
+    await event.dismiss();
+  });
+  await page.reload();
+  expect(prompted).toBe(false);
 });
