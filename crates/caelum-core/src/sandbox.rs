@@ -221,6 +221,47 @@ pub(crate) fn create_sandbox_candidate(
                     .collect::<Vec<_>>(),
                 RoadPreset::OneWay,
             );
+            // Two-way caps join each paired one-way lane at the four map ends,
+            // so a returning Loop needs no separately built ring road.
+            let (east, south) = (i32::from(width) - 1, i32::from(height) - 1);
+            for points in [
+                vec![
+                    Point { x: 0, y: center.y },
+                    Point {
+                        x: 0,
+                        y: center.y + 1,
+                    },
+                ],
+                vec![
+                    Point {
+                        x: east,
+                        y: center.y,
+                    },
+                    Point {
+                        x: east,
+                        y: center.y + 1,
+                    },
+                ],
+                vec![
+                    Point { x: center.x, y: 0 },
+                    Point {
+                        x: center.x + 1,
+                        y: 0,
+                    },
+                ],
+                vec![
+                    Point {
+                        x: center.x,
+                        y: south,
+                    },
+                    Point {
+                        x: center.x + 1,
+                        y: south,
+                    },
+                ],
+            ] {
+                author_scenario_road_line(&mut map, &points, RoadPreset::TwoWay);
+            }
             refresh_all_automatic_junctions(&mut map)
                 .map_err(|_| template_invariant_error(SandboxTemplateId::Crossroads))?;
             let topology = RoadTopology::compile(&map)
@@ -729,6 +770,124 @@ mod tests {
             );
             assert_eq!(error.context.attempted_value.as_deref(), Some(attempted));
         }
+    }
+
+    #[test]
+    fn crossroads_caps_close_each_arm_with_two_way_bends_only() {
+        let candidate = create_sandbox_candidate(raw_request()).unwrap();
+        let map = &candidate.snapshot.map;
+        let width = i32::from(map.width);
+        let height = i32::from(map.height);
+        let origin = super::crossroads_junction_origin(map);
+        // (cap tile, its interior lane edge, its joining edge, partner tile,
+        // partner interior lane edge, partner joining edge)
+        let caps = [
+            (
+                Point { x: 0, y: origin.y },
+                Heading::East,
+                Heading::South,
+                Point {
+                    x: 0,
+                    y: origin.y + 1,
+                },
+                Heading::East,
+                Heading::North,
+            ),
+            (
+                Point {
+                    x: width - 1,
+                    y: origin.y,
+                },
+                Heading::West,
+                Heading::South,
+                Point {
+                    x: width - 1,
+                    y: origin.y + 1,
+                },
+                Heading::West,
+                Heading::North,
+            ),
+            (
+                Point { x: origin.x, y: 0 },
+                Heading::South,
+                Heading::East,
+                Point {
+                    x: origin.x + 1,
+                    y: 0,
+                },
+                Heading::South,
+                Heading::West,
+            ),
+            (
+                Point {
+                    x: origin.x,
+                    y: height - 1,
+                },
+                Heading::North,
+                Heading::East,
+                Point {
+                    x: origin.x + 1,
+                    y: height - 1,
+                },
+                Heading::North,
+                Heading::West,
+            ),
+        ];
+        for (cap, cap_interior, cap_join, partner, partner_interior, partner_join) in caps {
+            for (tile_point, interior, join) in [
+                (cap, cap_interior, cap_join),
+                (partner, partner_interior, partner_join),
+            ] {
+                let tile = map.tile(tile_point).expect("cap tile");
+                assert_eq!(tile.kind, "road");
+                assert_eq!(tile.one_way, None, "cap {tile_point:?} is a two-way bend");
+                assert_eq!(tile.road_structure_id, None);
+                assert_eq!(tile.road_connections.len(), 2);
+                assert!(
+                    tile.road_connections.contains(&interior),
+                    "cap tile {tile_point:?} keeps interior {interior:?}: {:?}",
+                    tile.road_connections
+                );
+                assert!(
+                    tile.road_connections.contains(&join),
+                    "cap tile {tile_point:?} joins {join:?}: {:?}",
+                    tile.road_connections
+                );
+            }
+        }
+
+        // Only the four arm caps and the canonical 2x2 center junction are
+        // two-way; every interior lane tile keeps its authored direction.
+        let two_way_tiles = map
+            .tiles
+            .iter()
+            .filter(|tile| tile.kind == "road" && tile.one_way.is_none())
+            .count();
+        assert_eq!(two_way_tiles, 12);
+        let assert_one_way = |point: Point, heading: Heading| {
+            let tile = map.tile(point).expect("lane tile");
+            assert_eq!(tile.kind, "road");
+            assert_eq!(tile.one_way, Some(heading), "lane tile {point:?}");
+            assert_eq!(tile.road_structure_id, None);
+        };
+        for x in 1..width - 1 {
+            if x == origin.x || x == origin.x + 1 {
+                continue;
+            }
+            assert_one_way(Point { x, y: origin.y }, Heading::West);
+            assert_one_way(Point { x, y: origin.y + 1 }, Heading::East);
+        }
+        for y in 1..height - 1 {
+            if y == origin.y || y == origin.y + 1 {
+                continue;
+            }
+            assert_one_way(Point { x: origin.x, y }, Heading::South);
+            assert_one_way(Point { x: origin.x + 1, y }, Heading::North);
+        }
+
+        // The caps introduce no additional automatic structure.
+        assert_eq!(map.road_structures.len(), 1);
+        assert!(map.road_structures[0].is_automatic_junction());
     }
 
     #[test]
