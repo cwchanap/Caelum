@@ -55,7 +55,7 @@
       data-busy={busy}
       data-dirty={dirty}
       >{status.label}{#if status.canRetry}
-        · <button type="button" disabled={busy} onclick={onRetrySave}
+        &nbsp;· <button type="button" disabled={busy} onclick={onRetrySave}
           >Retry</button
         >{/if}</span
     >
