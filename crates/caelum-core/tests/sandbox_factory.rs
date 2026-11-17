@@ -413,6 +413,132 @@ fn small_town_has_authored_structure_and_connected_building_access() {
 }
 
 #[test]
+fn crossroads_caps_provide_directed_return_for_each_arm_end_on_every_map_size() {
+    for (size, dimensions) in [
+        ("small", (28, 18)),
+        ("medium", (56, 36)),
+        ("large", (84, 54)),
+    ] {
+        let mut sized = request("crossroads");
+        sized.map_size = size.to_string();
+        let snapshot = create_sandbox_snapshot(sized).unwrap();
+        let topology = RoadTopology::compile(&snapshot.map).unwrap();
+        let (width, height) = dimensions;
+        let junction = Point {
+            x: 14 + (width - 28) / 2,
+            y: 8 + (height - 18) / 2,
+        };
+
+        assert_eq!(snapshot.map.road_structures.len(), 1);
+        assert!(snapshot.map.road_structures[0].is_automatic_junction());
+
+        // (inbound lane tile, return lane tile, the cap tiles traversed)
+        let ends = [
+            (
+                Point {
+                    x: 1,
+                    y: junction.y,
+                },
+                Point {
+                    x: 1,
+                    y: junction.y + 1,
+                },
+                [
+                    Point {
+                        x: 0,
+                        y: junction.y,
+                    },
+                    Point {
+                        x: 0,
+                        y: junction.y + 1,
+                    },
+                ],
+            ),
+            (
+                Point {
+                    x: width - 2,
+                    y: junction.y + 1,
+                },
+                Point {
+                    x: width - 2,
+                    y: junction.y,
+                },
+                [
+                    Point {
+                        x: width - 1,
+                        y: junction.y + 1,
+                    },
+                    Point {
+                        x: width - 1,
+                        y: junction.y,
+                    },
+                ],
+            ),
+            (
+                Point {
+                    x: junction.x + 1,
+                    y: 1,
+                },
+                Point {
+                    x: junction.x,
+                    y: 1,
+                },
+                [
+                    Point {
+                        x: junction.x + 1,
+                        y: 0,
+                    },
+                    Point {
+                        x: junction.x,
+                        y: 0,
+                    },
+                ],
+            ),
+            (
+                Point {
+                    x: junction.x,
+                    y: height - 2,
+                },
+                Point {
+                    x: junction.x + 1,
+                    y: height - 2,
+                },
+                [
+                    Point {
+                        x: junction.x,
+                        y: height - 1,
+                    },
+                    Point {
+                        x: junction.x + 1,
+                        y: height - 1,
+                    },
+                ],
+            ),
+        ];
+        for (inbound, outbound, caps) in ends {
+            for cap in caps {
+                let tile = snapshot.map.tile(cap).unwrap();
+                assert_eq!(tile.kind, "road");
+                assert_eq!(tile.one_way, None, "cap {cap:?} is a two-way bend");
+                assert_eq!(tile.road_structure_id, None);
+            }
+            let path = topology
+                .find_path_between_access_tiles(&snapshot.map, inbound, outbound, None, None)
+                .unwrap_or_else(|failure| {
+                    panic!("{size} crossroads end {inbound:?} must return: {failure:?}")
+                });
+            let steps = path.road_steps();
+            for cap in caps {
+                assert!(
+                    steps.iter().any(|step| step.position == cap),
+                    "{size} return path {inbound:?} must traverse cap {cap:?}"
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn crossroads_current_compiler_exposes_four_center_uturns() {
     let snapshot = create_sandbox_snapshot(request("crossroads")).unwrap();
     let topology = RoadTopology::compile(&snapshot.map).unwrap();

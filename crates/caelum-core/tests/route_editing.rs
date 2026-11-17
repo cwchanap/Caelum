@@ -8,7 +8,8 @@ use caelum_core::network::resolve_route_legs;
 use caelum_core::road_topology::RoadTopology;
 use caelum_core::transit::{self, BUS_COST, METRO_COST};
 use caelum_core::{
-    route_editor, GameEngine, GameIntent, RejectionCode, RoadPreset, RoutingContext,
+    create_sandbox_snapshot, route_editor, GameEngine, GameIntent, RejectionCode, RoadPreset,
+    RoutingContext, SandboxCreationRequest,
 };
 
 fn point(x: i32, y: i32) -> Point {
@@ -406,7 +407,9 @@ fn route_resolution_preserves_typed_failure_reasons_and_coarse_status() {
     dispatch(
         &mut disconnected_engine,
         GameIntent::AddBusStop {
-            point: point(2, 10),
+            // South of the isolated y=11 stub, so the stop cannot reach the
+            // default Crossroads ring through an adjacent lane.
+            point: point(2, 12),
         },
     );
     let disconnected_legs = resolved_bus_legs(
@@ -441,7 +444,7 @@ fn route_resolution_preserves_typed_failure_reasons_and_coarse_status() {
     dispatch(
         &mut loop_engine,
         GameIntent::AddBusStop {
-            point: point(2, 10),
+            point: point(2, 12),
         },
     );
     let loop_legs = resolved_bus_legs_with_pattern(
@@ -1476,4 +1479,47 @@ fn route_lifecycle_world_position(
         },
         caelum_core::model::TransitPathStepRef::Track(_) => unreachable!("bus fixture"),
     }
+}
+
+#[test]
+fn crossroads_east_arm_bus_loop_resolves_both_service_legs_without_extra_roads() {
+    let snapshot = create_sandbox_snapshot(SandboxCreationRequest {
+        template_id: "crossroads".to_string(),
+        map_size: "small".to_string(),
+        economy_preset: "creative".to_string(),
+        starting_capital: Some(0.0),
+        demand_multiplier: Some(1.0),
+    })
+    .unwrap();
+    let mut engine = GameEngine::from_snapshot(snapshot).unwrap();
+
+    // Roadside stops on the east arm's paired lanes: the north lane runs west
+    // and the south lane runs east. No other road is built.
+    for stop_point in [point(20, 7), point(20, 10)] {
+        let added = engine.dispatch(GameIntent::AddBusStop { point: stop_point });
+        assert!(added.applied, "stop {stop_point:?} should apply: {added:?}");
+    }
+    let created = engine.dispatch(GameIntent::CreateRoute {
+        mode: TransitMode::Bus,
+        pattern: ServicePattern::Loop,
+        waypoint_ids: ids(&["stop-001", "stop-002"]),
+    });
+    assert!(created.applied, "loop should save: {created:?}");
+
+    let snapshot = engine.snapshot();
+    let route = &snapshot.transit.routes[0];
+    assert_eq!(route.pattern, ServicePattern::Loop);
+    assert_eq!(route.legs.len(), 2);
+    assert!(route
+        .legs
+        .iter()
+        .all(|leg| leg.kind == RouteLegKind::Service));
+    assert!(
+        route
+            .legs
+            .iter()
+            .all(|leg| leg.status == RouteLegStatus::Connected),
+        "both Loop service legs must resolve through the capped arms: {:?}",
+        route.legs
+    );
 }

@@ -589,8 +589,8 @@
       {
         "id": "tile-14-0",
         "kind": "road",
-        "oneWay": "south",
         "roadConnections": [
+          "east",
           "south"
         ],
         "x": 14,
@@ -599,9 +599,9 @@
       {
         "id": "tile-15-0",
         "kind": "road",
-        "oneWay": "north",
         "roadConnections": [
-          "south"
+          "south",
+          "west"
         ],
         "x": 15,
         "y": 0
@@ -763,9 +763,9 @@
       {
         "id": "tile-0-8",
         "kind": "road",
-        "oneWay": "west",
         "roadConnections": [
-          "east"
+          "east",
+          "south"
         ],
         "x": 0,
         "y": 8
@@ -1063,8 +1063,8 @@
       {
         "id": "tile-27-8",
         "kind": "road",
-        "oneWay": "west",
         "roadConnections": [
+          "south",
           "west"
         ],
         "x": 27,
@@ -1073,8 +1073,8 @@
       {
         "id": "tile-0-9",
         "kind": "road",
-        "oneWay": "east",
         "roadConnections": [
+          "north",
           "east"
         ],
         "x": 0,
@@ -1373,8 +1373,8 @@
       {
         "id": "tile-27-9",
         "kind": "road",
-        "oneWay": "east",
         "roadConnections": [
+          "north",
           "west"
         ],
         "x": 27,
@@ -1537,9 +1537,9 @@
       {
         "id": "tile-14-17",
         "kind": "road",
-        "oneWay": "south",
         "roadConnections": [
-          "north"
+          "north",
+          "east"
         ],
         "x": 14,
         "y": 17
@@ -1547,9 +1547,9 @@
       {
         "id": "tile-15-17",
         "kind": "road",
-        "oneWay": "north",
         "roadConnections": [
-          "north"
+          "north",
+          "west"
         ],
         "x": 15,
         "y": 17
