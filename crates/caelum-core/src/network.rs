@@ -69,11 +69,7 @@ fn diagnose_one_way_service_failures(
     specs: &[ServiceLegSpec],
     service_paths: &mut [TransitPathResult],
 ) {
-    if mode != TransitMode::Bus
-        || !service_paths
-            .iter()
-            .any(|path| matches!(path, Err(LegFailureReason::NetworkDisconnected)))
-    {
+    if mode != TransitMode::Bus || !has_failed_service_leg(specs, service_paths) {
         return;
     }
     let relaxed_map = map_without_one_way_restrictions(&snapshot.map);
@@ -106,6 +102,17 @@ fn diagnose_one_way_service_failures(
             service_paths[index] = Err(LegFailureReason::OneWayNoReturn);
         }
     }
+}
+
+/// Whether a real service leg failed with `NetworkDisconnected`. Terminal
+/// reversals also carry `Err(NetworkDisconnected)` placeholders in
+/// `service_paths`; they must never trigger the diagnostic map clone and
+/// topology compile on their own.
+fn has_failed_service_leg(specs: &[ServiceLegSpec], service_paths: &[TransitPathResult]) -> bool {
+    specs.iter().zip(service_paths).any(|(spec, path)| {
+        spec.kind == RouteLegKind::Service
+            && matches!(path, Err(LegFailureReason::NetworkDisconnected))
+    })
 }
 
 /// Clear every authored one-way direction in a clone. Roundabout ports are
@@ -467,5 +474,49 @@ mod tests {
     fn waypoint_present_is_false_for_walk_mode() {
         let (snapshot, _topology) = routing_context();
         assert!(!waypoint_present(&snapshot, TransitMode::Walk, "stop-001"));
+    }
+
+    fn two_stop_shuttle_paths(
+        return_service_failure: Option<LegFailureReason>,
+    ) -> (Vec<ServiceLegSpec>, Vec<TransitPathResult>) {
+        let waypoints = vec!["stop-001".to_string(), "stop-002".to_string()];
+        let specs = build_service_itinerary(ServicePattern::Shuttle, &waypoints);
+        let succeeded = || {
+            Ok(TransitPath::Road {
+                steps: Vec::new(),
+                total_travel_seconds: 0.0,
+            })
+        };
+        let paths = vec![
+            succeeded(),
+            Err(LegFailureReason::NetworkDisconnected),
+            match return_service_failure {
+                Some(reason) => Err(reason),
+                None => succeeded(),
+            },
+            Err(LegFailureReason::NetworkDisconnected),
+        ];
+        (specs, paths)
+    }
+
+    #[test]
+    fn terminal_reversal_placeholders_do_not_request_one_way_diagnosis() {
+        let (specs, paths) = two_stop_shuttle_paths(None);
+        assert!(
+            !has_failed_service_leg(&specs, &paths),
+            "reversal placeholders are not failed service legs: {paths:?}"
+        );
+
+        let (specs, paths) = two_stop_shuttle_paths(Some(LegFailureReason::NoRoadAccess));
+        assert!(
+            !has_failed_service_leg(&specs, &paths),
+            "a NoRoadAccess service leg is not a one-way failure: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn failed_service_leg_requests_one_way_diagnosis() {
+        let (specs, paths) = two_stop_shuttle_paths(Some(LegFailureReason::NetworkDisconnected));
+        assert!(has_failed_service_leg(&specs, &paths));
     }
 }
