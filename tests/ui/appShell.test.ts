@@ -28,6 +28,18 @@ import type {
   RuntimeSnapshot,
 } from "../../src/runtime/types";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
+import {
+  createMemoryCitySaveStore,
+  createMemoryCitySaveStoreFailureControls,
+} from "../../src/persistence/memoryCitySaveStore";
+import { createGameRuntime } from "../../src/runtime/createGameRuntime";
+import { createFakeGameHost } from "../helpers/gameHost";
+import {
+  createPresentationUpdate,
+  createRustSnapshot,
+  previewBackendStubs,
+} from "../fixtures/rustSnapshot";
+import { record, seed } from "../fixtures/citySave";
 
 const nativeWindow = vi.hoisted(() => ({ onCloseRequested: vi.fn() }));
 vi.mock("@tauri-apps/api/window", () => ({
@@ -306,6 +318,85 @@ function deferred<T>() {
 }
 
 describe("App command shell", () => {
+  it("updates the city row after a real autosave without clearing a list error", async () => {
+    const failures = createMemoryCitySaveStoreFailureControls();
+    const store = createMemoryCitySaveStore({ failures });
+    await seed(store, record(CITY_NEW));
+    await seed(store, record(CITY_OLD));
+    let current = createRustSnapshot({ paused: true });
+    const backend = {
+      ...previewBackendStubs(),
+      async presentation() {
+        return createPresentationUpdate(current);
+      },
+      async snapshotForSave() {
+        return { ok: true as const, snapshot: current };
+      },
+      async dispatch() {
+        current = { ...current, budget: 90_000 };
+        return {
+          update: createPresentationUpdate(current, true),
+          applied: true,
+          rejection: null,
+        };
+      },
+      async tick() {
+        return {
+          update: createPresentationUpdate(current, false),
+          applied: false,
+          rejection: null,
+        };
+      },
+      async reset() {
+        return { ok: true as const, update: createPresentationUpdate(current) };
+      },
+    };
+    let now = CITY_NEW.savedAt;
+    const runtime = await createGameRuntime({
+      backend,
+      createHost: createFakeGameHost,
+      saveStore: store,
+      initialCity: CITY_NEW,
+      now: () => now,
+    });
+    vi.useFakeTimers();
+    const rendered = render(App, { props: { runtime } });
+    try {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      await fireEvent.click(screen.getByTestId("command-destination-city"));
+      expect(
+        screen.getByTestId("city-row-city-new").querySelector("time"),
+      ).toHaveAttribute("datetime", CITY_NEW.savedAt);
+
+      failures.failNext("listCities", "failed");
+      await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      await tick();
+      expect(
+        screen.getByRole("button", { name: "Retry city list" }),
+      ).toBeVisible();
+
+      now = "2026-08-10T14:00:00.000Z";
+      await runtime.debugSetBudget(90_000);
+      await vi.advanceTimersByTimeAsync(60_000);
+      await tick();
+
+      expect(runtime.getSnapshot().persistence.activeCity?.savedAt).toBe(now);
+      expect(
+        screen.getByTestId("city-row-city-new").querySelector("time"),
+      ).toHaveAttribute("datetime", now);
+      expect(
+        screen.getByTestId("city-row-city-old").querySelector("time"),
+      ).toHaveAttribute("datetime", CITY_OLD.savedAt);
+      expect(
+        screen.getByRole("button", { name: "Retry city list" }),
+      ).toBeVisible();
+    } finally {
+      rendered.unmount();
+      vi.useRealTimers();
+    }
+  });
+
   it("shows New City instead of game chrome when no city is active", async () => {
     const { runtime } = createRuntimeHarness({
       persistence: { activeCity: null },
@@ -907,6 +998,31 @@ describe("App command shell", () => {
     await tick();
     expect(screen.getByTestId("city-row-city-new")).toBeVisible();
     expect(screen.queryByTestId("city-row-city-old")).toBeNull();
+  });
+
+  it("keeps an autosaved timestamp when an older list read completes later", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const pending = deferred<{ ok: true; value: CitySummary[] }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({ ok: true as const, value: [CITY_NEW, CITY_OLD] })
+      .mockImplementationOnce(() => pending.promise);
+    render(App, { props: { runtime: harness.runtime } });
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await screen.findByTestId("city-row-city-new");
+    await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+
+    const savedAt = "2026-08-10T14:00:00.000Z";
+    harness.setPersistence({ activeCity: { ...CITY_NEW, savedAt } });
+    pending.resolve({ ok: true, value: [CITY_NEW, CITY_OLD] });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    await tick();
+    expect(
+      screen.getByTestId("city-row-city-new").querySelector("time"),
+    ).toHaveAttribute("datetime", savedAt);
   });
 
   it("disables Load and New City while the active city has unsaved changes", async () => {
