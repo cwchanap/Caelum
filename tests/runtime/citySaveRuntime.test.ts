@@ -521,6 +521,63 @@ describe("runtime autosave", () => {
     runtime.dispose();
   });
 
+  it("keeps dirty and failed status when the timer-driven save update fails, then retries", async () => {
+    const failures = createMemoryCitySaveStoreFailureControls();
+    const store = createMemoryCitySaveStore({ failures });
+    await seed(store, record(ACTIVE_CITY));
+    const updateCity = vi.spyOn(store, "updateCity");
+    const runtime = await runtimeWithStore(store);
+    await runtime.debugSetBudget(90_000);
+    failures.failNext("updateCity", "failed");
+
+    runtime.start();
+    await advanceAutosave();
+
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    expect(runtime.getSnapshot().persistence).toMatchObject({
+      busy: false,
+      save: "failed",
+      dirty: true,
+      error: null,
+    });
+
+    // The failed attempt left the city dirty, so the next interval retries.
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(2);
+    expect(runtime.getSnapshot().persistence).toMatchObject({
+      busy: false,
+      save: "idle",
+      dirty: false,
+    });
+    runtime.dispose();
+  });
+
+  it("keeps dirty and failed status when the timer-driven save throws", async () => {
+    const targetBackend: TestBackend = {
+      ...backend(),
+      async snapshotForSave() {
+        throw new Error("snapshot response was lost");
+      },
+    };
+    const store = createMemoryCitySaveStore();
+    await seed(store, record(ACTIVE_CITY));
+    const updateCity = vi.spyOn(store, "updateCity");
+    const runtime = await runtimeWithStore(store, { backend: targetBackend });
+    await runtime.debugSetBudget(90_000);
+
+    runtime.start();
+    await advanceAutosave();
+
+    expect(updateCity).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().persistence).toMatchObject({
+      busy: false,
+      save: "failed",
+      dirty: true,
+      error: null,
+    });
+    runtime.dispose();
+  });
+
   it("skips the tick when the city is clean or no city is active", async () => {
     const { updateCity, runtime } = await seededRuntime();
     runtime.start();
