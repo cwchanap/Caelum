@@ -69,6 +69,7 @@ function createRuntimeHarness(
     },
     busy: false,
     dirty: false,
+    save: "idle",
     error: null,
     ...options.persistence,
   };

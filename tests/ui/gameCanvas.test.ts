@@ -18,6 +18,7 @@ function snapshotFixture(): RuntimeSnapshot {
       activeCity: null,
       busy: false,
       dirty: false,
+      save: "idle",
       error: null,
     },
     backendError: null,

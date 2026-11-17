@@ -71,6 +71,10 @@ import type {
 
 const rotations = [0, 90, 180, 270] as const;
 const ROUTE_DRAFT_HISTORY_LIMIT = 100;
+// One eligible autosave attempt per minute; skipped attempts retry on the next
+// tick. The busy gate and the draft/gesture/preview guards keep a background
+// save from interrupting an interaction already in progress.
+const AUTOSAVE_INTERVAL_MS = 60_000;
 // These intents only move frame fields (clock, speed, budget); the scene
 // they carry cannot change what a route preview reads, so they must not
 // churn an open draft's preview request.
@@ -286,6 +290,9 @@ export async function createGameRuntime(
   const activeRouteSaveTokens = new Set<string>();
   let activeRoadMutation: RoadMutation | null = null;
   let hoverPreviewTimer: ReturnType<typeof setTimeout> | null = null;
+  // Installed by start(), cleared by stopRuntime() (so stop/failBackend/dispose
+  // share one teardown) and guarded so repeated start() calls never stack.
+  let autosaveTimer: ReturnType<typeof setInterval> | null = null;
   // Set when a world-changing update wants the armed hover preview
   // re-issued. Instead of one IPC per applied tick, the mark collapses a
   // burst into one trailing request; any fresh request (or invalidation)
@@ -611,6 +618,10 @@ export async function createGameRuntime(
   };
 
   const stopRuntime = (): void => {
+    if (autosaveTimer !== null) {
+      clearInterval(autosaveTimer);
+      autosaveTimer = null;
+    }
     previewCoordinator.invalidateRoute();
     invalidateRoadPreview();
     if (ui.roadMutationPreviewPending) {
@@ -1584,6 +1595,21 @@ export async function createGameRuntime(
     start() {
       if (dead) return;
       gameHost.start();
+      if (autosaveTimer !== null) return;
+      autosaveTimer = setInterval(() => {
+        if (dead) return;
+        const persistence = workingSave.getView();
+        if (persistence.activeCity === null || !persistence.dirty) return;
+        if (workingSave.isBusy()) return;
+        if (
+          ui.routeDraft !== null ||
+          ui.drag !== null ||
+          activeRoadMutation !== null
+        ) {
+          return;
+        }
+        void workingSave.controller.save();
+      }, AUTOSAVE_INTERVAL_MS);
     },
     stop,
     dispose,
