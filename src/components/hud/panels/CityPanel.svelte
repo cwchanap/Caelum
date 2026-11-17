@@ -9,6 +9,7 @@
     cities: CitySummary[] | null;
     busy: boolean;
     dirty: boolean;
+    statusLabel: string;
     error: string | null;
     onSave: () => void;
     onLoad: (cityId: string) => void;
@@ -24,6 +25,7 @@
     cities,
     busy,
     dirty,
+    statusLabel,
     error,
     onSave,
     onLoad,
@@ -45,7 +47,7 @@
       data-testid="city-save-status"
       data-dirty={dirty}
     >
-      {dirty ? "Unsaved changes" : "Saved"}
+      {statusLabel}
     </div>
 
     <div class="city-actions">

@@ -1,5 +1,6 @@
 <script lang="ts">
   import { onMount, tick } from "svelte";
+  import { getCurrentWindow } from "@tauri-apps/api/window";
   import CommandShelf from "./components/hud/CommandShelf.svelte";
   import CommandPanel from "./components/hud/CommandPanel.svelte";
   import BuildPanel from "./components/hud/panels/BuildPanel.svelte";
@@ -43,6 +44,8 @@
   import { workingSaveErrorMessage } from "./runtime/rejectionMessages";
   import type { NewCityRequest } from "./runtime/workingSaveRuntime";
   import type { CitySummary } from "./persistence/citySaveStore";
+  import { isTauriRuntime } from "./runtime/backend";
+  import { saveStatus } from "./runtime/saveStatus";
 
   interface Props {
     runtime: RuntimeController | null;
@@ -64,6 +67,17 @@
   let stageWidth = $state(0);
   let stageHeight = $state(0);
   let cityListRequestId = 0;
+  let stopPersistenceLifecycle: (() => void) | undefined;
+  let nowMs = $state(Date.now());
+  let closeEscape: {
+    id: string | undefined;
+    savedAt: string | undefined;
+  } | null = null;
+  const status = $derived(
+    snapshot === null
+      ? { label: "", canRetry: false }
+      : saveStatus(snapshot.persistence, nowMs),
+  );
 
   const cityError = $derived(
     cityListError ??
@@ -74,6 +88,15 @@
 
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
     snapshot = nextSnapshot;
+    const persistence = nextSnapshot.persistence;
+    if (
+      !persistence.dirty ||
+      (closeEscape !== null &&
+        (closeEscape.id !== persistence.activeCity?.id ||
+          closeEscape.savedAt !== persistence.activeCity?.savedAt))
+    ) {
+      closeEscape = null;
+    }
     if (nextSnapshot.backendError !== null) {
       shellError = nextSnapshot.backendError;
     }
@@ -168,7 +191,6 @@
 
   async function handleSaveCity(): Promise<void> {
     if (runtime === null) return;
-    beginPersistenceMutation();
     const result = await runtime.persistence.save();
     if (result.ok) await refreshCities();
   }
@@ -695,6 +717,7 @@
 
   $effect(() => {
     if (shellError !== null && runtime !== null) {
+      stopPersistenceLifecycle?.();
       runtime.dispose();
     }
   });
@@ -713,6 +736,74 @@
 
   onMount(() => {
     if (!shellError && runtime !== null) {
+      const currentRuntime = runtime;
+      const timer = window.setInterval(() => {
+        nowMs = Date.now();
+      }, 1000);
+      let unmounted = false;
+      let unlisten: (() => void) | undefined;
+      const beforeUnload = (event: BeforeUnloadEvent): void => {
+        if (currentRuntime.getSnapshot().persistence.dirty) {
+          event.preventDefault();
+          event.returnValue = "";
+        }
+      };
+      if (isTauriRuntime()) {
+        void getCurrentWindow()
+          .onCloseRequested(async (event) => {
+            const persistence = currentRuntime.getSnapshot().persistence;
+            if (!persistence.dirty) {
+              closeEscape = null;
+              return;
+            }
+            if (
+              closeEscape !== null &&
+              closeEscape.id === persistence.activeCity?.id &&
+              closeEscape.savedAt === persistence.activeCity?.savedAt
+            ) {
+              closeEscape = null;
+              return;
+            }
+            const identity = {
+              id: persistence.activeCity?.id,
+              savedAt: persistence.activeCity?.savedAt,
+            };
+            try {
+              if (
+                !persistence.busy &&
+                (await currentRuntime.persistence.save()).ok
+              )
+                return;
+            } catch {
+              // A rejected save must not close the window.
+            }
+            event.preventDefault();
+            const current = currentRuntime.getSnapshot().persistence;
+            closeEscape =
+              current.dirty &&
+              current.activeCity?.id === identity.id &&
+              current.activeCity?.savedAt === identity.savedAt
+                ? identity
+                : null;
+          })
+          .then((stop) => {
+            if (unmounted) stop();
+            else unlisten = stop;
+          })
+          .catch(() => {
+            if (!unmounted)
+              shellError = "Could not protect unsaved changes on close.";
+          });
+      } else {
+        window.addEventListener("beforeunload", beforeUnload);
+      }
+      stopPersistenceLifecycle = () => {
+        if (unmounted) return;
+        unmounted = true;
+        unlisten?.();
+        window.removeEventListener("beforeunload", beforeUnload);
+        window.clearInterval(timer);
+      };
       const unsubscribe = runtime.subscribe((nextSnapshot: RuntimeSnapshot) => {
         setSnapshot(nextSnapshot);
       });
@@ -721,6 +812,7 @@
       void refreshCities();
 
       return () => {
+        stopPersistenceLifecycle?.();
         unsubscribe();
         // Dispose (not just stop) so this runtime becomes terminal
         // synchronously. A mere `stop()` leaves the runtime alive — the canvas
@@ -792,10 +884,12 @@
           cityName={snapshot.persistence.activeCity?.name ?? ""}
           busy={snapshot.persistence.busy}
           dirty={snapshot.persistence.dirty}
+          {status}
           paused={snapshot.state.paused}
           speed={snapshot.state.speed}
           onTogglePause={handleTogglePause}
           onSetSpeed={handleSetSpeed}
+          onRetrySave={() => void handleSaveCity()}
         />
 
         <div
@@ -925,6 +1019,7 @@
                     {cities}
                     busy={currentSnapshot.persistence.busy}
                     dirty={currentSnapshot.persistence.dirty}
+                    statusLabel={status.label}
                     error={cityError}
                     onSave={() => void handleSaveCity()}
                     onLoad={(cityId) => void handleLoadCity(cityId)}

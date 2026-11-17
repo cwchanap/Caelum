@@ -29,6 +29,7 @@ describe("CityPanel", () => {
         cities: [activeCity],
         busy: false,
         dirty: false,
+        statusLabel: "Saved 12 s ago",
         error: null,
         onSave: vi.fn(),
         onLoad: vi.fn(),
@@ -44,6 +45,9 @@ describe("CityPanel", () => {
     expect(screen.getByTestId("city-save-status")).toHaveAttribute(
       "data-dirty",
       "false",
+    );
+    expect(screen.getByTestId("city-save-status")).toHaveTextContent(
+      "Saved 12 s ago",
     );
     expect(screen.getByText("Standard Sandbox")).toBeVisible();
     expect(screen.getByText("Crossroads")).toBeVisible();
@@ -70,6 +74,7 @@ describe("CityPanel", () => {
         cities: [activeCity],
         busy: false,
         dirty: true,
+        statusLabel: "Couldn't save",
         error: null,
         onSave: vi.fn(),
         onLoad: vi.fn(),
@@ -83,6 +88,10 @@ describe("CityPanel", () => {
       "Pause and Save before switching cities.",
     );
     expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+    expect(screen.queryByRole("button", { name: "Retry" })).toBeNull();
+    expect(screen.getByTestId("city-save-status")).toHaveTextContent(
+      "Couldn't save",
+    );
   });
 
   it("hides the switching hint when the active city is clean", () => {
@@ -93,6 +102,7 @@ describe("CityPanel", () => {
         cities: [activeCity],
         busy: false,
         dirty: false,
+        statusLabel: "Saved 12 s ago",
         error: null,
         onSave: vi.fn(),
         onLoad: vi.fn(),

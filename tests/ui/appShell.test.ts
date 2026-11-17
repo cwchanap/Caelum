@@ -29,6 +29,11 @@ import type {
 } from "../../src/runtime/types";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
 
+const nativeWindow = vi.hoisted(() => ({ onCloseRequested: vi.fn() }));
+vi.mock("@tauri-apps/api/window", () => ({
+  getCurrentWindow: () => nativeWindow,
+}));
+
 // jsdom ships no ResizeObserver; Svelte's dimension bindings only need a
 // mountable one. Unmocked element sizes stay 0, so the Inspector stays hidden
 // until stage and card dimensions are measured.
@@ -991,17 +996,10 @@ describe("App command shell", () => {
     ).toBeNull();
   });
 
-  it("a persistence mutation supersedes an in-flight city-list retry", async () => {
+  it("preserves a city-list error across failed Save and Retry, then refreshes after success", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: CITY_NEW },
     });
-    const retrying = deferred<{
-      ok: false;
-      error: {
-        kind: "store";
-        error: { operation: "listCities"; code: "failed" };
-      };
-    }>();
     harness.runtime.persistence.listCities = vi
       .fn()
       .mockResolvedValueOnce({
@@ -1011,41 +1009,44 @@ describe("App command shell", () => {
           error: { operation: "listCities" as const, code: "failed" as const },
         },
       })
-      .mockImplementationOnce(() => retrying.promise);
+      .mockResolvedValueOnce({ ok: true as const, value: [CITY_NEW] });
     const saveError = {
       kind: "store" as const,
       error: { operation: "updateCity" as const, code: "failed" as const },
     };
     harness.runtime.persistence.save = vi.fn(async () => {
-      harness.setPersistence({ error: saveError, busy: false });
+      harness.setPersistence({ error: saveError, busy: false, save: "failed" });
       return { ok: false as const, error: saveError };
     });
 
     render(App, { props: { runtime: harness.runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
-    const retry = await screen.findByRole("button", {
+    await screen.findByRole("button", {
       name: "Retry city list",
     });
-    await fireEvent.click(retry);
     await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
-
-    // The older retry fails after the save started; it must not mask the save
-    // error, since the save superseded the list attempt.
-    retrying.resolve({
-      ok: false,
-      error: {
-        kind: "store",
-        error: { operation: "listCities", code: "failed" },
-      },
-    });
-    await tick();
-
     expect(screen.getByRole("alert")).toHaveTextContent(
-      "Could not save the city.",
-    );
-    expect(screen.getByRole("alert")).not.toHaveTextContent(
       "Could not load the city list.",
     );
+    expect(
+      screen.getByRole("button", { name: "Retry city list" }),
+    ).toBeVisible();
+    const retry = screen.getByRole("button", { name: /^Retry$/ });
+    retry.focus();
+    expect(retry).toHaveFocus();
+    await fireEvent.click(retry);
+    expect(
+      screen.getByRole("button", { name: "Retry city list" }),
+    ).toBeVisible();
+    harness.runtime.persistence.save = vi.fn(async () => ({
+      ok: true as const,
+      value: CITY_NEW,
+    }));
+    await fireEvent.click(retry);
+    expect(await screen.findByTestId("city-row-city-new")).toBeVisible();
+    expect(
+      screen.queryByRole("button", { name: "Retry city list" }),
+    ).toBeNull();
   });
 
   it("starts in Select with no command panel open", () => {
@@ -1339,21 +1340,142 @@ describe("App command shell", () => {
     expect(screen.queryByText("Hold")).toBeNull();
   });
 
-  it("shows the CityPanel save wording in the topbar as persistence changes", () => {
+  it("shares status with CityPanel through dirty, saving and failure states", async () => {
     const { runtime, setPersistence } = createRuntimeHarness();
     render(App, { props: { runtime } });
-
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
     const status = () => screen.getByTestId("topbar-save-status");
-    expect(status()).toHaveTextContent("Saved");
-
+    const cityStatus = () => screen.getByTestId("city-save-status");
+    expect(status().textContent?.trim()).toBe(cityStatus().textContent?.trim());
     setPersistence({ dirty: true });
-    expect(status()).toHaveTextContent("Unsaved changes");
-
+    expect(status().textContent?.trim()).toBe(cityStatus().textContent?.trim());
+    setPersistence({ busy: true, save: "saving" });
+    expect(status()).toHaveTextContent("Saving…");
+    expect(cityStatus()).toHaveTextContent("Saving…");
+    setPersistence({ busy: false, save: "failed" });
+    expect(cityStatus()).toHaveTextContent("Couldn't save");
+    expect(
+      within(status()).getByRole("button", { name: "Retry" }),
+    ).toBeEnabled();
+    expect(screen.getAllByRole("button", { name: /^Retry$/ })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Save Now" })).toBeEnabled();
     setPersistence({ busy: true });
-    expect(status()).toHaveTextContent("Working…");
+    expect(
+      within(status()).getByRole("button", { name: "Retry" }),
+    ).toBeDisabled();
+  });
 
-    setPersistence({ busy: false, dirty: false });
-    expect(status()).toHaveTextContent("Saved");
+  it("prevents browser unload only while currently dirty and removes the listener on unmount", () => {
+    const harness = createRuntimeHarness();
+    const component = render(App, { props: { runtime: harness.runtime } });
+    const clean = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(clean);
+    expect(clean.defaultPrevented).toBe(false);
+    harness.setPersistence({ dirty: true });
+    const dirty = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(dirty);
+    expect(dirty.defaultPrevented).toBe(true);
+    component.unmount();
+    const after = new Event("beforeunload", { cancelable: true });
+    window.dispatchEvent(after);
+    expect(after.defaultPrevented).toBe(false);
+  });
+
+  it("unlistens when native registration resolves after unmount", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    const registration = deferred<() => void>();
+    const unlisten = vi.fn();
+    nativeWindow.onCloseRequested.mockReturnValueOnce(registration.promise);
+    try {
+      const { runtime } = createRuntimeHarness();
+      const component = render(App, { props: { runtime } });
+      component.unmount();
+      registration.resolve(unlisten);
+      await tick();
+      expect(unlisten).toHaveBeenCalledOnce();
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("unlistens on shell error after native registration", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    const unlisten = vi.fn();
+    nativeWindow.onCloseRequested.mockResolvedValueOnce(unlisten);
+    try {
+      const { runtime } = createRuntimeHarness();
+      const component = render(App, { props: { runtime } });
+      await tick();
+      await component.rerender({ runtime, error: "GPU lost" });
+      expect(unlisten).toHaveBeenCalledOnce();
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("blocks first failed or busy native close and invalidates stale escape after a save or city switch", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    nativeWindow.onCloseRequested.mockResolvedValue(() => {});
+    try {
+      const harness = createRuntimeHarness({ persistence: { dirty: true } });
+      harness.runtime.persistence.save = vi.fn(async () => ({
+        ok: false as const,
+        error: { kind: "busy" as const },
+      }));
+      render(App, { props: { runtime: harness.runtime } });
+      const handler = nativeWindow.onCloseRequested.mock.lastCall?.[0];
+      expect(handler).toBeDefined();
+      const close = async () => {
+        const event = { preventDefault: vi.fn() };
+        await handler(event);
+        return event.preventDefault.mock.calls.length;
+      };
+      expect(await close()).toBe(1);
+      expect(await close()).toBe(0);
+      expect(await close()).toBe(1);
+      harness.setPersistence({ activeCity: { ...CITY_NEW }, dirty: true });
+      expect(await close()).toBe(1);
+      harness.setPersistence({
+        activeCity: { ...CITY_NEW, savedAt: "2026-08-10T14:00:00.000Z" },
+        dirty: true,
+      });
+      expect(await close()).toBe(1);
+      harness.setPersistence({ busy: true });
+      expect(await close()).toBe(0);
+      expect(await close()).toBe(1);
+      harness.setPersistence({ dirty: false, busy: false });
+      expect(await close()).toBe(0);
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("saves before allowing a dirty native close", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    nativeWindow.onCloseRequested.mockResolvedValueOnce(() => {});
+    try {
+      const harness = createRuntimeHarness({ persistence: { dirty: true } });
+      render(App, { props: { runtime: harness.runtime } });
+      const handler = nativeWindow.onCloseRequested.mock.lastCall?.[0];
+      const event = { preventDefault: vi.fn() };
+      await handler(event);
+      expect(harness.runtime.persistence.save).toHaveBeenCalledOnce();
+      expect(event.preventDefault).not.toHaveBeenCalled();
+    } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
   });
 
   it("hides the trip warning chip when no trips are late or unserved", () => {
