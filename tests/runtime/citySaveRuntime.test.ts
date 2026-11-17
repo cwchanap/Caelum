@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type {
   CitySaveStore,
   CitySummary,
@@ -11,6 +11,7 @@ import type {
   GameBackend,
   PresentationUpdate,
   RestoreResult,
+  RoadMutationPreviewResponse,
   RustGameSnapshot,
 } from "../../src/runtime/backend/types";
 import type { SnapshotError } from "../../src/runtime/backend/persistenceContract";
@@ -115,6 +116,25 @@ async function runtimeWithStore(
     now: () => "2026-08-08T10:00:00.000Z",
     createCityId: () => "city-new",
   });
+}
+
+const AUTOSAVE_MS = 60_000;
+
+async function flushPromises(): Promise<void> {
+  for (let index = 0; index < 20; index += 1) await Promise.resolve();
+}
+
+async function advanceAutosave(): Promise<void> {
+  await vi.advanceTimersByTimeAsync(AUTOSAVE_MS);
+  await flushPromises();
+}
+
+async function seededRuntime() {
+  const store = createMemoryCitySaveStore();
+  await seed(store, record(ACTIVE_CITY));
+  const updateCity = vi.spyOn(store, "updateCity");
+  const runtime = await runtimeWithStore(store);
+  return { store, updateCity, runtime };
 }
 
 describe("runtime working-save integration", () => {
@@ -465,5 +485,235 @@ describe("runtime working-save integration", () => {
       error: { kind: "unavailable" },
     });
     expect(listener).not.toHaveBeenCalled();
+  });
+});
+
+describe("runtime autosave", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+  });
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("saves an eligible dirty city once after 60 seconds", async () => {
+    const { store, updateCity, runtime } = await seededRuntime();
+    await runtime.debugSetBudget(90_000);
+    expect(runtime.getSnapshot().persistence.dirty).toBe(true);
+
+    runtime.start();
+    await advanceAutosave();
+
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    expect(updateCity).toHaveBeenCalledWith(ACTIVE_CITY.id, {
+      savedAt: "2026-08-08T10:00:00.000Z",
+      snapshot: expect.objectContaining({ paused: true }),
+    });
+    expect(runtime.getSnapshot().persistence).toMatchObject({
+      dirty: false,
+      busy: false,
+      save: "idle",
+    });
+    await expect(store.readCity(ACTIVE_CITY.id)).resolves.toMatchObject({
+      ok: true,
+      value: { savedAt: "2026-08-08T10:00:00.000Z" },
+    });
+    runtime.dispose();
+  });
+
+  it("skips the tick when the city is clean or no city is active", async () => {
+    const { updateCity, runtime } = await seededRuntime();
+    runtime.start();
+    await advanceAutosave();
+    expect(updateCity).not.toHaveBeenCalled();
+    runtime.dispose();
+
+    const anonymousStore = createMemoryCitySaveStore();
+    const anonymousUpdate = vi.spyOn(anonymousStore, "updateCity");
+    const anonymous = await runtimeWithStore(anonymousStore, {
+      initialCity: null,
+    });
+    anonymous.start();
+    await advanceAutosave();
+    expect(anonymousUpdate).not.toHaveBeenCalled();
+    anonymous.dispose();
+  });
+
+  it("skips the tick while a save owns the busy gate", async () => {
+    const delegate = createMemoryCitySaveStore();
+    await seed(delegate, record(ACTIVE_CITY));
+    const store = createDelayedCitySaveStore(delegate);
+    store.defer("updateCity");
+    const updateCity = vi.spyOn(delegate, "updateCity");
+    const runtime = await runtimeWithStore(store);
+    await runtime.debugSetBudget(90_000);
+
+    runtime.start();
+    await advanceAutosave();
+    await store.waitForActive("updateCity");
+    expect(store.activeCount()).toBe(1);
+    expect(runtime.getSnapshot().persistence).toMatchObject({
+      busy: true,
+      save: "saving",
+    });
+
+    await advanceAutosave();
+    expect(store.activeCount()).toBe(1);
+
+    store.releaseNext("updateCity");
+    await flushPromises();
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    expect(runtime.getSnapshot().persistence).toMatchObject({
+      busy: false,
+      save: "idle",
+      dirty: false,
+    });
+    runtime.dispose();
+  });
+
+  it("skips the tick while a route draft is open", async () => {
+    const { updateCity, runtime } = await seededRuntime();
+    await runtime.debugSetBudget(90_000);
+    runtime.setTool("busRoute");
+    expect(runtime.getSnapshot().ui.routeDraft).not.toBeNull();
+
+    runtime.start();
+    await advanceAutosave();
+    await advanceAutosave();
+    expect(updateCity).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().ui.routeDraft).not.toBeNull();
+
+    runtime.handleEscape();
+    expect(runtime.getSnapshot().ui.routeDraft).toBeNull();
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    runtime.dispose();
+  });
+
+  it("does not start a save during a road gesture that still commits", async () => {
+    const targetBackend = backend();
+    const dispatch = vi.spyOn(targetBackend, "dispatch");
+    const store = createMemoryCitySaveStore();
+    await seed(store, record(ACTIVE_CITY));
+    const updateCity = vi.spyOn(store, "updateCity");
+    const runtime = await runtimeWithStore(store, { backend: targetBackend });
+    await runtime.debugSetBudget(90_000);
+
+    runtime.setTool("road");
+    runtime.startDrag({ x: 1, y: 1 });
+    runtime.setDragCurrent({ x: 2, y: 1 });
+    expect(runtime.getSnapshot().ui.drag).not.toBeNull();
+
+    runtime.start();
+    await advanceAutosave();
+    expect(updateCity).not.toHaveBeenCalled();
+    expect(runtime.getSnapshot().ui.drag).not.toBeNull();
+
+    await runtime.commitDrag();
+    expect(dispatch).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "layRoadLine" }),
+    );
+    expect(runtime.getSnapshot().ui.drag).toBeNull();
+
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    runtime.dispose();
+  });
+
+  it("skips the tick while a road mutation preview is in flight", async () => {
+    const base = backend();
+    let settle: (() => void) | null = null;
+    const targetBackend: TestBackend = {
+      ...base,
+      previewRoadMutation(request) {
+        return new Promise<RoadMutationPreviewResponse>((resolve) => {
+          settle = () =>
+            resolve({
+              generation: request.generation,
+              changedTiles: [],
+              authoredTiles: [],
+              generatedStructures: [],
+              cost: 0,
+              skippedTiles: [],
+              routeImpacts: [],
+              warnings: [],
+              rejection: null,
+            });
+        });
+      },
+    };
+    const store = createMemoryCitySaveStore();
+    await seed(store, record(ACTIVE_CITY));
+    const updateCity = vi.spyOn(store, "updateCity");
+    const runtime = await runtimeWithStore(store, { backend: targetBackend });
+    await runtime.debugSetBudget(90_000);
+
+    runtime.previewRoadMutation({ type: "layRoad", point: { x: 1, y: 1 } });
+    runtime.start();
+    await advanceAutosave();
+    expect(updateCity).not.toHaveBeenCalled();
+
+    settle!();
+    await flushPromises();
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    runtime.dispose();
+  });
+
+  it("keeps one interval across repeated start calls", async () => {
+    const { updateCity, runtime } = await seededRuntime();
+    await runtime.debugSetBudget(90_000);
+
+    runtime.start();
+    runtime.start();
+    expect(vi.getTimerCount()).toBe(1);
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(1);
+
+    await runtime.debugSetBudget(80_000);
+    runtime.start();
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(2);
+    runtime.dispose();
+  });
+
+  it("clears the interval on stop, dispose, and a fatal backend failure", async () => {
+    const stopped = await seededRuntime();
+    await stopped.runtime.debugSetBudget(90_000);
+    stopped.runtime.start();
+    stopped.runtime.stop();
+    await advanceAutosave();
+    expect(stopped.updateCity).not.toHaveBeenCalled();
+    stopped.runtime.dispose();
+
+    const disposed = await seededRuntime();
+    await disposed.runtime.debugSetBudget(90_000);
+    disposed.runtime.start();
+    disposed.runtime.dispose();
+    await advanceAutosave();
+    expect(disposed.updateCity).not.toHaveBeenCalled();
+
+    const fatal = await seededRuntime();
+    await fatal.runtime.debugSetBudget(90_000);
+    fatal.runtime.start();
+    lastFakeHost()!.context.onFatalError(new Error("gpu device lost"));
+    await advanceAutosave();
+    expect(fatal.updateCity).not.toHaveBeenCalled();
+    expect(fatal.runtime.getSnapshot().backendError).toBe("gpu device lost");
+  });
+
+  it("reinstalls exactly one interval after stop and restart", async () => {
+    const { updateCity, runtime } = await seededRuntime();
+    await runtime.debugSetBudget(90_000);
+
+    runtime.start();
+    runtime.stop();
+    expect(vi.getTimerCount()).toBe(0);
+
+    runtime.start();
+    expect(vi.getTimerCount()).toBe(1);
+    await advanceAutosave();
+    expect(updateCity).toHaveBeenCalledTimes(1);
+    runtime.dispose();
   });
 });

@@ -20,6 +20,7 @@ import type {
 } from "../../src/runtime/backend/persistenceContract";
 import {
   createWorkingSaveRuntime,
+  type RuntimePersistenceView,
   type WorkingSaveRuntime,
 } from "../../src/runtime/workingSaveRuntime";
 import { createDelayedCitySaveStore } from "./delayedCitySaveStore";
@@ -180,6 +181,7 @@ interface RuntimeFixture {
   saveStore: CitySaveStore | undefined;
   events: string[];
   readonly publications: number;
+  readonly publishedViews: RuntimePersistenceView[];
   readonly installedUpdate: PresentationUpdate | null;
   killRuntime(): void;
   failNextInstall(error: Error): void;
@@ -205,6 +207,7 @@ function createRuntimeFixture(
       ? createMemoryCitySaveStore()
       : options.saveStore;
   let publications = 0;
+  const publishedViews: RuntimePersistenceView[] = [];
   let installedUpdate: PresentationUpdate | null = null;
   let runtimeDead = false;
   let installError: Error | null = null;
@@ -230,6 +233,7 @@ function createRuntimeFixture(
     },
     publish() {
       publications += 1;
+      publishedViews.push(runtime.getView());
     },
     isRuntimeDead: () => runtimeDead,
   });
@@ -241,6 +245,9 @@ function createRuntimeFixture(
     events,
     get publications() {
       return publications;
+    },
+    get publishedViews() {
+      return publishedViews;
     },
     get installedUpdate() {
       return installedUpdate;
@@ -262,6 +269,7 @@ describe("working save runtime state", () => {
       activeCity: ACTIVE_CITY,
       busy: false,
       dirty: false,
+      save: "idle",
       error: null,
     });
 
@@ -452,13 +460,14 @@ describe("working save runtime saves", () => {
     expect(fixture.runtime.getView().dirty).toBe(true);
   });
 
-  it("maps a thrown gameplay-idle wait to host failure and releases busy", async () => {
+  it("maps a thrown gameplay-idle wait to a failed save and releases busy", async () => {
     const fixture = createRuntimeFixture({
       awaitGameplayIdle: async () => {
         throw new Error("gameplay did not settle");
       },
     });
     await seed(fixture.saveStore!, record(ACTIVE_CITY));
+    fixture.runtime.markDirty();
 
     await expect(fixture.runtime.controller.save()).resolves.toEqual({
       ok: false,
@@ -471,13 +480,11 @@ describe("working save runtime saves", () => {
       },
     });
     expect(fixture.runtime.isBusy()).toBe(false);
-    expect(fixture.runtime.getView().error).toEqual({
-      kind: "backend",
-      error: {
-        code: "hostFailure",
-        diagnostic: "gameplay did not settle",
-      },
-    });
+    expect(fixture.runtime.getView().save).toBe("failed");
+    expect(fixture.runtime.getView().dirty).toBe(true);
+    // Save failures live on the save discriminant; the generic persistence
+    // error channel belongs to the other operations.
+    expect(fixture.runtime.getView().error).toBeNull();
   });
 
   it("keeps the city dirty when saving returns a backend snapshot failure", async () => {
@@ -599,6 +606,203 @@ describe("working save runtime saves", () => {
     delayed.releaseNext("updateCity");
     await saving;
     expect(fixture.publications).toBe(publicationsBeforeDispose);
+  });
+});
+
+describe("working save runtime save status", () => {
+  function transitions(
+    fixture: RuntimeFixture,
+  ): Array<[boolean, RuntimePersistenceView["save"]]> {
+    return fixture.publishedViews.map((view) => [view.busy, view.save]);
+  }
+
+  it("marks an admitted save as saving and returns it to idle on success", async () => {
+    const delegate = createMemoryCitySaveStore();
+    await seed(delegate, record(ACTIVE_CITY));
+    const delayed = createDelayedCitySaveStore(delegate);
+    delayed.defer("updateCity");
+    const fixture = createRuntimeFixture({ saveStore: delayed });
+    fixture.runtime.markDirty();
+
+    const saving = fixture.runtime.controller.save();
+    await delayed.waitForActive("updateCity");
+    expect(fixture.runtime.getView()).toMatchObject({
+      busy: true,
+      save: "saving",
+      dirty: true,
+    });
+
+    delayed.releaseNext("updateCity");
+    await expect(saving).resolves.toMatchObject({
+      ok: true,
+      value: { id: ACTIVE_CITY.id },
+    });
+    expect(fixture.runtime.getView()).toMatchObject({
+      busy: false,
+      save: "idle",
+      dirty: false,
+    });
+    expect(transitions(fixture)).toEqual([
+      [true, "saving"],
+      [false, "idle"],
+    ]);
+  });
+
+  it("marks a failed update as failed while keeping the city dirty, then retries", async () => {
+    const failures = createMemoryCitySaveStoreFailureControls();
+    const store = createMemoryCitySaveStore({ failures });
+    await seed(store, record(ACTIVE_CITY));
+    const fixture = createRuntimeFixture({ saveStore: store });
+    fixture.runtime.markDirty();
+    failures.failNext("updateCity", "failed");
+
+    await expect(fixture.runtime.controller.save()).resolves.toMatchObject({
+      ok: false,
+      error: { kind: "store", error: { operation: "updateCity" } },
+    });
+    expect(fixture.runtime.getView()).toMatchObject({
+      busy: false,
+      save: "failed",
+      dirty: true,
+      error: null,
+    });
+
+    const retry = fixture.runtime.controller.save();
+    expect(fixture.runtime.getView().save).toBe("saving");
+    await expect(retry).resolves.toMatchObject({ ok: true });
+    expect(fixture.runtime.getView()).toMatchObject({
+      save: "idle",
+      dirty: false,
+    });
+    expect(transitions(fixture)).toEqual([
+      [true, "saving"],
+      [false, "failed"],
+      [true, "saving"],
+      [false, "idle"],
+    ]);
+  });
+
+  it("publishes the final failed status for idle-wait, backend, and storage throws", async () => {
+    const idleThrow = createRuntimeFixture({
+      awaitGameplayIdle: async () => {
+        throw new Error("gameplay did not settle");
+      },
+    });
+    idleThrow.runtime.markDirty();
+    await idleThrow.runtime.controller.save();
+
+    const backendThrow = createRuntimeFixture();
+    await seed(backendThrow.saveStore!, record(ACTIVE_CITY));
+    backendThrow.runtime.markDirty();
+    backendThrow.backend.setSnapshotForSaveOutcome(
+      new Error("snapshot response was lost"),
+    );
+    await backendThrow.runtime.controller.save();
+
+    const storageThrow = createRuntimeFixture({
+      saveStore: {
+        ...createMemoryCitySaveStore(),
+        async updateCity() {
+          throw new Error("storage closed");
+        },
+      },
+    });
+    await seed(storageThrow.saveStore!, record(ACTIVE_CITY));
+    storageThrow.runtime.markDirty();
+    await storageThrow.runtime.controller.save();
+
+    for (const fixture of [idleThrow, backendThrow, storageThrow]) {
+      expect(transitions(fixture)).toEqual([
+        [true, "saving"],
+        [false, "failed"],
+      ]);
+      expect(fixture.runtime.getView()).toMatchObject({
+        busy: false,
+        save: "failed",
+        dirty: true,
+      });
+    }
+  });
+
+  it("leaves the save status unchanged when a busy gate rejects Save", async () => {
+    const failures = createMemoryCitySaveStoreFailureControls();
+    const base = createMemoryCitySaveStore({ failures });
+    await seed(base, record(ACTIVE_CITY));
+    const delayed = createDelayedCitySaveStore(base);
+    delayed.defer("renameCity");
+    const fixture = createRuntimeFixture({ saveStore: delayed });
+    fixture.runtime.markDirty();
+    failures.failNext("updateCity", "failed");
+    await fixture.runtime.controller.save();
+    expect(fixture.runtime.getView().save).toBe("failed");
+
+    const renaming = fixture.runtime.controller.renameCity(
+      ACTIVE_CITY.id,
+      "Renamed City",
+    );
+    await delayed.waitForActive("renameCity");
+    expect(fixture.runtime.isBusy()).toBe(true);
+
+    await expect(fixture.runtime.controller.save()).resolves.toEqual({
+      ok: false,
+      error: { kind: "busy" },
+    });
+    expect(fixture.runtime.getView().save).toBe("failed");
+
+    delayed.releaseNext("renameCity");
+    await renaming;
+    expect(fixture.runtime.getView().save).toBe("failed");
+  });
+
+  it("keeps generic errors independent from the save channel", async () => {
+    const failures = createMemoryCitySaveStoreFailureControls();
+    const store = createMemoryCitySaveStore({ failures });
+    await seed(store, record(ACTIVE_CITY));
+    const fixture = createRuntimeFixture({ saveStore: store });
+
+    failures.failNext("renameCity", "failed");
+    await fixture.runtime.controller.renameCity(ACTIVE_CITY.id, "Nope");
+    const genericError = fixture.runtime.getView().error;
+    expect(genericError).toMatchObject({
+      kind: "store",
+      error: { operation: "renameCity" },
+    });
+
+    fixture.runtime.markDirty();
+    failures.failNext("updateCity", "failed");
+    await fixture.runtime.controller.save();
+    expect(fixture.runtime.getView().save).toBe("failed");
+    expect(fixture.runtime.getView().error).toEqual(genericError);
+
+    await expect(fixture.runtime.controller.save()).resolves.toMatchObject({
+      ok: true,
+    });
+    expect(fixture.runtime.getView().save).toBe("idle");
+    expect(fixture.runtime.getView().error).toEqual(genericError);
+  });
+
+  it("resets a prior failure when a load replaces the active city", async () => {
+    const loadedCity: CitySummary = {
+      id: "city-loaded",
+      name: "Loaded City",
+      createdAt: "2026-08-08T07:00:00.000Z",
+      savedAt: "2026-08-08T09:15:00.000Z",
+    };
+    const failures = createMemoryCitySaveStoreFailureControls();
+    const store = createMemoryCitySaveStore({ failures });
+    await seed(store, record(ACTIVE_CITY));
+    await seed(store, record(loadedCity));
+    const fixture = createRuntimeFixture({ saveStore: store });
+
+    failures.failNext("updateCity", "failed");
+    await fixture.runtime.controller.save();
+    expect(fixture.runtime.getView().save).toBe("failed");
+
+    await expect(
+      fixture.runtime.controller.load(loadedCity.id),
+    ).resolves.toMatchObject({ ok: true });
+    expect(fixture.runtime.getView().save).toBe("idle");
+    expect(fixture.runtime.getView().activeCity).toEqual(loadedCity);
   });
 });
 

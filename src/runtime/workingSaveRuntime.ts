@@ -19,10 +19,13 @@ import type {
   SnapshotError,
 } from "./backend";
 
+export type WorkingSaveStatus = "idle" | "saving" | "failed";
+
 export interface RuntimePersistenceView {
   activeCity: CitySummary | null;
   busy: boolean;
   dirty: boolean;
+  save: WorkingSaveStatus;
   error: WorkingSaveError | null;
 }
 
@@ -90,6 +93,7 @@ export function createWorkingSaveRuntime(
   let activeCity = host.initialCity;
   let busy = false;
   let dirty = false;
+  let saveStatus: WorkingSaveStatus = "idle";
   let error: WorkingSaveError | null = null;
   let disposed = false;
 
@@ -136,30 +140,49 @@ export function createWorkingSaveRuntime(
     },
   });
 
+  // One busy gate serves every persistence operation. `channel` keeps the two
+  // error surfaces apart: "error" operations own the generic `error`, while a
+  // "save" owns `save` and never clears or overwrites `error`.
   const runExclusive = async <T>(
+    channel: "error" | "save",
     work: () => Promise<WorkingSaveResult<T>>,
   ): Promise<WorkingSaveResult<T>> => {
     if (!isLive()) return { ok: false, error: { kind: "unavailable" } };
     if (busy) return { ok: false, error: { kind: "busy" } };
 
     busy = true;
-    error = null;
+    if (channel === "error") error = null;
+    else saveStatus = "saving";
     publishIfLive();
 
     try {
       await host.awaitGameplayIdle();
-      if (!isLive()) return { ok: false, error: { kind: "unavailable" } };
+      if (!isLive()) {
+        if (channel === "save") saveStatus = "failed";
+        return { ok: false, error: { kind: "unavailable" } };
+      }
 
       const result = await work();
-      if (isLive()) {
-        error = result.ok ? null : result.error;
+      if (channel === "error") {
+        if (isLive()) {
+          error = result.ok ? null : result.error;
+        }
+      } else if (result.ok) {
+        // Only a successful save (or city replacement) clears a prior failure.
+        saveStatus = "idle";
+      } else {
+        saveStatus = "failed";
       }
       return result;
     } catch (thrown: unknown) {
       const result: WorkingSaveResult<T> = isLive()
         ? { ok: false, error: backendHostFailure(thrown) }
         : { ok: false, error: { kind: "unavailable" } };
-      if (isLive() && !result.ok) error = result.error;
+      if (channel === "error") {
+        if (isLive() && !result.ok) error = result.error;
+      } else {
+        saveStatus = "failed";
+      }
       return result;
     } finally {
       busy = false;
@@ -214,7 +237,7 @@ export function createWorkingSaveRuntime(
   };
 
   const save = (): Promise<WorkingSaveResult<CitySummary>> =>
-    runExclusive(async () => {
+    runExclusive("save", async () => {
       const city = activeCity;
       if (city === null) {
         return { ok: false, error: { kind: "noActiveCity" } };
@@ -244,7 +267,7 @@ export function createWorkingSaveRuntime(
     });
 
   const load = (cityId: string): Promise<WorkingSaveResult<CitySummary>> =>
-    runExclusive(async () => {
+    runExclusive("error", async () => {
       // runExclusive has already awaited gameplay idle (draining admitted
       // gameplay work) before invoking this body. An applied tick drained
       // during that wait can mark the active city dirty after the App's
@@ -268,13 +291,14 @@ export function createWorkingSaveRuntime(
 
       activeCity = { ...stored.value.city, savedAt: stored.value.savedAt };
       dirty = false;
+      saveStatus = "idle";
       return { ok: true, value: activeCity };
     });
 
   const createCity = (
     request: NewCityRequest,
   ): Promise<WorkingSaveResult<CitySummary>> =>
-    runExclusive(async () => {
+    runExclusive("error", async () => {
       // Same drain-race guard as load: an applied tick drained during
       // awaitGameplayIdle can mark the active city dirty after the App's
       // pre-check passed. Refuse before building/installing the new city.
@@ -316,6 +340,7 @@ export function createWorkingSaveRuntime(
 
       activeCity = created.value;
       dirty = false;
+      saveStatus = "idle";
       return created;
     });
 
@@ -323,7 +348,7 @@ export function createWorkingSaveRuntime(
     cityId: string,
     name: string,
   ): Promise<WorkingSaveResult<CitySummary>> =>
-    runExclusive(async () => {
+    runExclusive("error", async () => {
       const saveStore = host.saveStore;
       if (saveStore === undefined) {
         return { ok: false, error: { kind: "unavailable" } };
@@ -342,7 +367,7 @@ export function createWorkingSaveRuntime(
     });
 
   const deleteCity = (cityId: string): Promise<WorkingSaveResult<void>> =>
-    runExclusive(async () => {
+    runExclusive("error", async () => {
       const saveStore = host.saveStore;
       if (saveStore === undefined) {
         return { ok: false, error: { kind: "unavailable" } };
@@ -359,6 +384,7 @@ export function createWorkingSaveRuntime(
       if (activeCity?.id === cityId) {
         activeCity = null;
         dirty = false;
+        saveStatus = "idle";
       }
       return deleted;
     });
@@ -374,7 +400,7 @@ export function createWorkingSaveRuntime(
 
   return {
     controller,
-    getView: () => ({ activeCity, busy, dirty, error }),
+    getView: () => ({ activeCity, busy, dirty, save: saveStatus, error }),
     isBusy: () => busy,
     markDirty: () => {
       if (activeCity !== null) dirty = true;
