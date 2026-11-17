@@ -1,9 +1,11 @@
 import { expect, test } from "@playwright/test";
 import { HUD_INSET } from "../../src/render/boardTransform";
 import {
+  armOneShotCitySaveFailure,
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
+  installOneShotCitySaveFailure,
   openCommandDestination,
   selectBuildLeaf,
   settleLayout,
@@ -25,6 +27,19 @@ interface ClusterBox {
   bottom: number;
 }
 
+interface RetryGeometry {
+  left: number;
+  right: number;
+  top: number;
+  bottom: number;
+  width: number;
+  height: number;
+  focusable: boolean;
+  tabIndex: number;
+  disabled: boolean;
+  clipped: boolean;
+}
+
 interface TopbarGeometry {
   city: ClusterBox;
   clock: ClusterBox;
@@ -40,6 +55,8 @@ interface TopbarGeometry {
   cityNameRight: number;
   cityNameTitle: string | null;
   saveStatus: string | null;
+  saveChip: ClusterBox & { dirty: string | null; busy: string | null };
+  retry: RetryGeometry | null;
 }
 
 async function topbarGeometry(
@@ -94,6 +111,14 @@ async function topbarGeometry(
     if (cityName === null) throw new Error("City name readout is missing");
     const cityNameBox = cityName.getBoundingClientRect();
 
+    const saveChip = topbar.querySelector<HTMLElement>(
+      '[data-testid="topbar-save-status"]',
+    );
+    if (saveChip === null) throw new Error("Save status chip is missing");
+    const saveChipBox = saveChip.getBoundingClientRect();
+    const retryButton = saveChip.querySelector<HTMLButtonElement>("button");
+    const retryBox = retryButton?.getBoundingClientRect() ?? null;
+
     return {
       city: clusterBox(".topbar-cluster--city"),
       clock: clusterBox(".topbar-cluster--clock"),
@@ -102,10 +127,32 @@ async function topbarGeometry(
       cityNameWidth: cityNameBox.width,
       cityNameRight: cityNameBox.right,
       cityNameTitle: cityName.getAttribute("title"),
-      saveStatus:
-        topbar
-          .querySelector<HTMLElement>('[data-testid="topbar-save-status"]')
-          ?.textContent?.trim() ?? null,
+      saveStatus: saveChip.textContent?.trim().replace(/\s+/g, " ") ?? null,
+      saveChip: {
+        left: saveChipBox.left,
+        right: saveChipBox.right,
+        top: saveChipBox.top,
+        bottom: saveChipBox.bottom,
+        dirty: saveChip.dataset.dirty ?? null,
+        busy: saveChip.dataset.busy ?? null,
+      },
+      retry:
+        retryButton === null || retryBox === null
+          ? null
+          : {
+              left: retryBox.left,
+              right: retryBox.right,
+              top: retryBox.top,
+              bottom: retryBox.bottom,
+              width: retryBox.width,
+              height: retryBox.height,
+              focusable: retryButton.tabIndex >= 0 && !retryButton.disabled,
+              tabIndex: retryButton.tabIndex,
+              disabled: retryButton.disabled,
+              clipped:
+                retryButton.scrollWidth > retryButton.clientWidth + 1 ||
+                retryButton.scrollHeight > retryButton.clientHeight + 1,
+            },
     };
   });
 }
@@ -213,6 +260,75 @@ function collectOverlapFailures(
         `${viewport.width}px ${name} cluster leaves the top HUD band: ${JSON.stringify(geometry)}`,
       );
     }
+  }
+  return failures;
+}
+
+function collectRetryFailures(
+  viewport: (typeof viewports)[number],
+  geometry: TopbarGeometry,
+): string[] {
+  const failures = collectOverlapFailures(viewport, geometry);
+  const chip = geometry.saveChip;
+  const retry = geometry.retry;
+  if (
+    geometry.saveStatus === null ||
+    !/^Couldn't save · Retry$/.test(geometry.saveStatus)
+  ) {
+    failures.push(
+      `${viewport.width}px failed chip text is not the real Retry composition: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (chip.dirty !== "true") {
+    failures.push(
+      `${viewport.width}px failed chip no longer reports dirty: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (retry === null) {
+    failures.push(
+      `${viewport.width}px failed chip has no real Retry button: ${JSON.stringify(geometry)}`,
+    );
+    return failures;
+  }
+  if (!retry.focusable) {
+    failures.push(
+      `${viewport.width}px Retry is not keyboard-focusable: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (retry.clipped || retry.width <= 0 || retry.height <= 0) {
+    failures.push(
+      `${viewport.width}px Retry is clipped: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (
+    chip.left < geometry.city.left - 1 ||
+    chip.right > geometry.city.right + 1 ||
+    chip.top < -1 ||
+    chip.bottom > HUD_INSET.top + 1
+  ) {
+    failures.push(
+      `${viewport.width}px save chip leaves the city cluster or HUD band: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (
+    retry.left < chip.left - 1 ||
+    retry.right > chip.right + 1 ||
+    retry.top < chip.top - 1 ||
+    retry.bottom > chip.bottom + 1
+  ) {
+    failures.push(
+      `${viewport.width}px Retry leaves the save chip: ${JSON.stringify(geometry)}`,
+    );
+  }
+  if (
+    retry.left < -1 ||
+    retry.right > viewport.width + 1 ||
+    retry.top < -1 ||
+    retry.bottom > viewport.height + 1
+  ) {
+    failures.push(
+      `${viewport.width}px Retry leaves the viewport: ${JSON.stringify(geometry)}`,
+    );
   }
   return failures;
 }
@@ -401,6 +517,51 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
       stressed.cityNameWidth,
       `${viewport.width}px city name keeps a usable ellipsized width: ${JSON.stringify(stressed)}`,
     ).toBeGreaterThanOrEqual(40);
+  }
+
+  expect(failures).toEqual([]);
+});
+
+test("real failed save keeps one focusable Retry chip at supported widths", async ({
+  page,
+}, testInfo) => {
+  await installOneShotCitySaveFailure(page);
+  const failures: string[] = [];
+
+  for (const viewport of viewports.filter(
+    (candidate) => candidate.width === 1024 || candidate.width === 1440,
+  )) {
+    await page.setViewportSize(viewport);
+    await createDefaultCity(page, LONG_CITY_NAME);
+    await applyDirtyFixture(page);
+    await openCommandDestination(page, "city");
+    await armOneShotCitySaveFailure(page);
+    await page.getByRole("button", { name: "Save Now" }).click();
+
+    const status = page.getByTestId("topbar-save-status");
+    await expect(status).toHaveAttribute("data-dirty", "true");
+    await expect(status).toHaveText(/^Couldn't save\u00a0· Retry$/);
+    await expect(
+      page.getByRole("button", { name: "Retry", exact: true }),
+    ).toHaveCount(1);
+
+    const geometry = await topbarGeometry(page);
+    failures.push(...collectRetryFailures(viewport, geometry));
+
+    const retry = status.getByRole("button", { name: "Retry", exact: true });
+    await retry.focus();
+    expect(
+      await retry.evaluate((element) => element === document.activeElement),
+    ).toBe(true);
+    await page.screenshot({
+      path: testInfo.outputPath(
+        `retry-chip-${viewport.width}x${viewport.height}.png`,
+      ),
+    });
+
+    // Recover through the real store so the next viewport starts clean.
+    await retry.click();
+    await expect(status).toHaveAttribute("data-dirty", "false");
   }
 
   expect(failures).toEqual([]);

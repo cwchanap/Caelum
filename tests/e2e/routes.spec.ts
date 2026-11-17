@@ -46,6 +46,18 @@ const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
 const stopMarkerRgb = [255, 255, 255] as const;
 const busMarkerRgb = [224, 79, 57] as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
+// The default Crossroads' built-in west arm: y=8 is westbound, y=9 eastbound,
+// and the x=0 two-way cap joins them. Stops sit on opposite sides of the arm.
+const CROSSROADS_ARM_STOPS = [
+  { x: 5, y: 7 },
+  { x: 5, y: 10 },
+] as const;
+// Both stops access the same westbound lane; the one-way test also removes
+// the x=0 cap so the eastbound first leg cannot loop around the arm.
+const CROSSROADS_ONE_WAY_STOPS = [
+  { x: 5, y: 7 },
+  { x: 10, y: 7 },
+] as const;
 
 function roadMovements(leg: RouteLegPath): MovementKind[] {
   return leg.currentPath?.kind === "road"
@@ -361,6 +373,109 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   await page.getByTestId("route-delete-route-001").click();
   await page.getByTestId("route-delete-route-001").click();
   await expect(page.getByTestId("route-name-route-001")).toHaveCount(0);
+});
+
+test("runs a first Crossroads loop on the built-in arm caps", async ({
+  page,
+}, testInfo) => {
+  await createDefaultCity(page, "Crossroads First Line");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  // No road is built: the default arm lanes and their new x=0 cap are the
+  // whole fixture. The stops sit on opposite sides of the west arm.
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of CROSSROADS_ARM_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of CROSSROADS_ARM_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await page.getByRole("radio", { name: "Loop" }).check();
+
+  // A two-stop Loop has both service legs; both must connect over the cap.
+  await waitForRoutePreview(page, 2);
+  await expect
+    .poll(async () => {
+      const draft = (await runtimeSnapshot(page)).ui.routeDraft;
+      return draft?.preview?.legs.map((leg) => leg.status) ?? null;
+    })
+    .toEqual(["connected", "connected"]);
+  await expect(page.getByTestId("route-preview-status")).toHaveText(
+    "Connected",
+  );
+  await expect(page.getByTestId("route-preview-failures")).toHaveCount(0);
+  await page.getByRole("button", { name: /^Save & run/ }).click();
+
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await expect(page.getByTestId("route-status-route-001")).toHaveText(
+    "Running",
+  );
+  await expect
+    .poll(async () => {
+      const transit = await readRuntimeTransit(page);
+      const route = transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return route?.vehicleIds.length ?? 0;
+    })
+    .toBeGreaterThan(0);
+
+  // The deployed buses actually operate: resuming changes their itinerary
+  // progress over the arm and its cap.
+  const vehicleProgress = async () =>
+    (await runtimeSnapshot(page)).state.transit.vehicles.map(
+      (vehicle) =>
+        `${vehicle.id}:${vehicle.itineraryIndex}:${vehicle.pathStepIndex}:${vehicle.stepProgress}`,
+    );
+  const initialProgress = await vehicleProgress();
+  await page.getByRole("button", { name: "Resume" }).click();
+  await expect
+    .poll(vehicleProgress, { timeout: 15_000 })
+    .not.toEqual(initialProgress);
+  await page.getByRole("button", { name: "Pause", exact: true }).click();
+  await page.screenshot({
+    path: testInfo.outputPath("crossroads-first-loop.png"),
+  });
+});
+
+test("names the one-way fix when a Crossroads loop loses an end cap", async ({
+  page,
+}, testInfo) => {
+  await createDefaultCity(page, "Crossroads One Way");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+
+  // Two roadside stops share the built-in westbound lane. The default x=0
+  // two-way cap normally closes this loop; removing its y=8 tile leaves only
+  // the one-way lanes, which the editor must identify and explain.
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of CROSSROADS_ONE_WAY_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await removeMapTile(page, canvas, { x: 0, y: 8 });
+
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of CROSSROADS_ONE_WAY_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await page.getByRole("radio", { name: "Loop" }).check();
+  await expect(page.getByTestId("route-preview-failures")).toContainText(
+    "One-way roads block this leg. Add a turnaround, a roundabout or a two-way road.",
+  );
+  await expect(page.locator(".route-failure")).toHaveCount(1);
+  await expect(page.getByTestId("route-preview-status")).toHaveText(
+    /cannot connect/,
+  );
+  await expect(page.locator("button.route-save")).toBeDisabled();
+  await page.screenshot({
+    path: testInfo.outputPath("crossroads-one-way-warning.png"),
+  });
 });
 
 test("proves route drafting can reach a stop beneath the Lines panel", async ({

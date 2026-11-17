@@ -1,8 +1,10 @@
 import { expect, test } from "@playwright/test";
 import {
+  armOneShotCitySaveFailure,
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
+  installOneShotCitySaveFailure,
   openCommandDestination,
   runtimeSnapshot,
   selectBuildLeaf,
@@ -251,4 +253,163 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   await expect(deleteB).toHaveText("Delete?");
   await deleteB.click();
   await expect(rowBPanel).toHaveCount(0);
+});
+
+test("autosaves a paused city through reload and skips a clean city", async ({
+  page,
+  context,
+}) => {
+  // Two real autosave intervals are observed in parallel: the primary page
+  // saves a dirty paused city while a second paused, clean city must write
+  // nothing. Fake timers are not installed, so the WebGPU rAF loop and the
+  // real IndexedDB store keep their production behavior.
+  test.setTimeout(120_000);
+
+  const witness = await context.newPage();
+  await createDefaultCity(witness, "Autosave Witness");
+  const witnessBefore = await runtimeSnapshot(witness);
+  const witnessSavedAt = witnessBefore.persistence.activeCity?.savedAt;
+  expect(witnessBefore.state.paused).toBe(true);
+  expect(witnessBefore.persistence.dirty).toBe(false);
+  expect(witnessSavedAt).toBeTruthy();
+
+  await createDefaultCity(page, "Autosave Crossroads");
+  // The dirty primary page owns the foreground interval; the clean witness
+  // still receives its 60s callback while backgrounded.
+  await page.bringToFront();
+  const created = await runtimeSnapshot(page);
+  const createdSavedAt = created.persistence.activeCity?.savedAt;
+  expect(created.state.paused).toBe(true);
+  expect(createdSavedAt).toBeTruthy();
+
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 2, y: 2 }, { x: 4, y: 2 });
+  const status = page.getByTestId("topbar-save-status");
+  await expect(status).toHaveAttribute("data-dirty", "true");
+
+  // One eligible 60s autosave tick persists the paused change.
+  await expect(status).toHaveAttribute("data-dirty", "false", {
+    timeout: 70_000,
+  });
+  await expect(status).toHaveText(/^Saved \d+ (s|min) ago$/);
+  await expect(status.getByRole("button", { name: "Retry" })).toHaveCount(0);
+  const autosaved = await runtimeSnapshot(page);
+  expect(autosaved.persistence.dirty).toBe(false);
+  expect(autosaved.persistence.save).toBe("idle");
+  expect(autosaved.persistence.activeCity?.savedAt).not.toBe(createdSavedAt);
+
+  // Allow a hidden-tab timer clamp before reading the witness: by now its own
+  // interval has fired and skipped the clean city at least once.
+  await page.waitForTimeout(3_000);
+  const witnessAfter = await runtimeSnapshot(witness);
+  expect(witnessAfter.persistence.activeCity?.savedAt).toBe(witnessSavedAt);
+  expect(witnessAfter.persistence.dirty).toBe(false);
+  expect(witnessAfter.persistence.save).toBe("idle");
+  await witness.close();
+
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Continue Autosave Crossroads" })
+    .click();
+  await expect(page.getByTestId("topbar-city-name")).toHaveText(
+    "Autosave Crossroads",
+  );
+  const restored = (await runtimeSnapshot(page)).state;
+  for (const x of [2, 3, 4]) {
+    expect(
+      restored.map.tiles.find((tile) => tile.x === x && tile.y === 2)?.kind,
+    ).toBe("road");
+  }
+
+  // Manual Save still works after an autosave, and both roads survive reload.
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 2, y: 4 }, { x: 4, y: 4 });
+  await openCommandDestination(page, "city");
+  const cityPanel = page.getByTestId("panel-city");
+  await cityPanel.getByRole("button", { name: "Save Now" }).click();
+  await expect(cityPanel.getByTestId("city-save-status")).toHaveAttribute(
+    "data-dirty",
+    "false",
+  );
+
+  await page.reload();
+  await page
+    .getByRole("button", { name: "Continue Autosave Crossroads" })
+    .click();
+  await expect(page.getByTestId("topbar-city-name")).toHaveText(
+    "Autosave Crossroads",
+  );
+  const manual = (await runtimeSnapshot(page)).state;
+  for (const x of [2, 3, 4]) {
+    expect(
+      manual.map.tiles.find((tile) => tile.x === x && tile.y === 2)?.kind,
+    ).toBe("road");
+    expect(
+      manual.map.tiles.find((tile) => tile.x === x && tile.y === 4)?.kind,
+    ).toBe("road");
+  }
+});
+
+test("a real failed save keeps dirty and one keyboard Retry recovers", async ({
+  page,
+}) => {
+  await installOneShotCitySaveFailure(page);
+  await createDefaultCity(page, "Retry Crossroads");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 7, y: 2 }, { x: 9, y: 2 });
+
+  await openCommandDestination(page, "city");
+  const cityPanel = page.getByTestId("panel-city");
+  const status = page.getByTestId("topbar-save-status");
+  await expect(status).toHaveAttribute("data-dirty", "true");
+
+  // The first armed city-store put throws; every later write is real.
+  await armOneShotCitySaveFailure(page);
+  await cityPanel.getByRole("button", { name: "Save Now" }).click();
+
+  await expect(status).toHaveText(/^Couldn't save\u00a0· Retry$/);
+  await expect(status).toHaveAttribute("data-dirty", "true");
+  await expect(cityPanel.getByTestId("city-save-status")).toHaveText(
+    "Couldn't save",
+  );
+  await expect(
+    page.getByRole("button", { name: "Retry", exact: true }),
+  ).toHaveCount(1);
+  await expect(
+    cityPanel.getByRole("button", { name: "Save Now" }),
+  ).toBeVisible();
+  await expect(
+    cityPanel.getByRole("button", { name: "Retry", exact: true }),
+  ).toHaveCount(0);
+
+  const retry = status.getByRole("button", { name: "Retry", exact: true });
+  await expect(retry).toBeEnabled();
+  await retry.focus();
+  expect(
+    await retry.evaluate((element) => element === document.activeElement),
+  ).toBe(true);
+  expect(
+    await retry.evaluate((element) => (element as HTMLButtonElement).tabIndex),
+  ).toBe(0);
+  await retry.press("Enter");
+
+  await expect(status).toHaveAttribute("data-dirty", "false");
+  await expect(status).toHaveText(/^Saved \d+ (s|min) ago$/);
+  await expect(
+    page.getByRole("button", { name: "Retry", exact: true }),
+  ).toHaveCount(0);
+
+  await page.reload();
+  await page.getByRole("button", { name: "Continue Retry Crossroads" }).click();
+  await expect(page.getByTestId("topbar-city-name")).toHaveText(
+    "Retry Crossroads",
+  );
+  const restored = (await runtimeSnapshot(page)).state;
+  for (const x of [7, 8, 9]) {
+    expect(
+      restored.map.tiles.find((tile) => tile.x === x && tile.y === 2)?.kind,
+    ).toBe("road");
+  }
 });

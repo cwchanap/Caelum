@@ -30,6 +30,57 @@ const TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
   smallTown: "Small Town",
 };
 
+interface IdbPutFailureHarness {
+  armed: boolean;
+}
+
+/**
+ * Install (but do not arm) a test-only interception of IndexedDB `put` calls.
+ * Playwright arms it through `armOneShotCitySaveFailure`; the first armed
+ * `put` into the city store throws a DOMException, then disarms itself so the
+ * retry uses the untouched real store method. `addInitScript` must run before
+ * navigation so the live browser bundle never needs a failure hook.
+ */
+export async function installOneShotCitySaveFailure(page: Page): Promise<void> {
+  await page.addInitScript(() => {
+    const harness = { armed: false };
+    Object.defineProperty(window, "__caelumE2EIdbPutFailure", {
+      configurable: true,
+      value: harness,
+    });
+    const originalPut = IDBObjectStore.prototype.put;
+    IDBObjectStore.prototype.put = function (
+      this: IDBObjectStore,
+      value: unknown,
+      key?: IDBValidKey,
+    ) {
+      if (harness.armed && this.name === "cities") {
+        harness.armed = false;
+        throw new DOMException(
+          "Test-only IndexedDB put failure",
+          "UnknownError",
+        );
+      }
+      return originalPut.call(this, value, key);
+    };
+  });
+}
+
+/** Arm the installed interception for exactly the next city-store put. */
+export async function armOneShotCitySaveFailure(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const harness = (
+      window as unknown as { __caelumE2EIdbPutFailure?: IdbPutFailureHarness }
+    ).__caelumE2EIdbPutFailure;
+    if (harness === undefined) {
+      throw new Error(
+        "installOneShotCitySaveFailure must run before navigation",
+      );
+    }
+    harness.armed = true;
+  });
+}
+
 export async function createDefaultCity(
   page: Page,
   name = "E2E City",
