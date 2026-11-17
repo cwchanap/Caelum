@@ -893,6 +893,9 @@ describe("working save runtime loads", () => {
       },
     };
     const fixture = createRuntimeFixture({ saveStore: store });
+    fixture.backend.setSnapshotForSaveOutcome(new Error("save failed"));
+    await fixture.runtime.controller.save();
+    expect(fixture.runtime.getView().save).toBe("failed");
     fixture.backend.setRestoreOutcome(new Error("restore response was lost"));
 
     await expect(
@@ -909,6 +912,7 @@ describe("working save runtime loads", () => {
     });
     expect(fixture.runtime.getView().activeCity).toBeNull();
     expect(fixture.runtime.getView().dirty).toBe(false);
+    expect(fixture.runtime.getView().save).toBe("idle");
 
     await expect(fixture.runtime.controller.save()).resolves.toEqual({
       ok: false,
@@ -944,6 +948,9 @@ describe("working save runtime loads", () => {
       },
     };
     const fixture = createRuntimeFixture({ saveStore: store });
+    fixture.backend.setSnapshotForSaveOutcome(new Error("save failed"));
+    await fixture.runtime.controller.save();
+    expect(fixture.runtime.getView().save).toBe("failed");
     fixture.failNextInstall(new Error("install was lost"));
 
     await expect(
@@ -960,6 +967,7 @@ describe("working save runtime loads", () => {
     });
     expect(fixture.runtime.getView().activeCity).toBeNull();
     expect(fixture.runtime.getView().dirty).toBe(false);
+    expect(fixture.runtime.getView().save).toBe("idle");
 
     await expect(fixture.runtime.controller.save()).resolves.toEqual({
       ok: false,

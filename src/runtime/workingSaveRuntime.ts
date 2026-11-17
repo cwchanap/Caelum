@@ -203,6 +203,7 @@ export function createWorkingSaveRuntime(
       if (isLive()) {
         activeCity = null;
         dirty = false;
+        saveStatus = "idle";
       }
       return { ok: false, error: backendHostFailure(thrown) };
     }
@@ -220,6 +221,7 @@ export function createWorkingSaveRuntime(
       if (isLive()) {
         activeCity = null;
         dirty = false;
+        saveStatus = "idle";
       }
       return { ok: false, error: backendHostFailure(thrown) };
     }

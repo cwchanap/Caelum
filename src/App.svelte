@@ -87,8 +87,19 @@
   );
 
   function setSnapshot(nextSnapshot: RuntimeSnapshot): void {
-    snapshot = nextSnapshot;
     const persistence = nextSnapshot.persistence;
+    const activeCity = persistence.activeCity;
+    if (
+      activeCity !== null &&
+      activeCity.id === snapshot?.persistence.activeCity?.id &&
+      activeCity.savedAt !== snapshot.persistence.activeCity.savedAt &&
+      cities !== null
+    ) {
+      cities = cities.map((city) =>
+        city.id === activeCity.id ? activeCity : city,
+      );
+    }
+    snapshot = nextSnapshot;
     if (
       !persistence.dirty ||
       (closeEscape !== null &&
@@ -111,11 +122,20 @@
   async function refreshCities(): Promise<void> {
     if (runtime === null) return;
     const requestId = ++cityListRequestId;
+    const activeBeforeRead = snapshot?.persistence.activeCity;
     const result = await runtime.persistence.listCities();
     if (requestId !== cityListRequestId) return;
 
     if (result.ok) {
-      cities = result.value;
+      const activeCity = snapshot?.persistence.activeCity;
+      cities =
+        activeCity != null &&
+        activeCity.id === activeBeforeRead?.id &&
+        activeCity.savedAt !== activeBeforeRead.savedAt
+          ? result.value.map((city) =>
+              city.id === activeCity.id ? activeCity : city,
+            )
+          : result.value;
       cityListError = null;
     } else {
       cityListError = workingSaveErrorMessage(result.error);
