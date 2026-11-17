@@ -2,88 +2,97 @@
 
 **Design:** [2026-11-16-hpa-976-autosave-crossroads-design.md](../specs/2026-11-16-hpa-976-autosave-crossroads-design.md)  
 **Linear:** https://linear.app/cwchanap/issue/HPA-976/autosave-cities-and-unblock-the-first-crossroads-line  
-**Baseline:** `main` / `ac3c7d787fc39685b25b795b0ec9fc643ac3bf6b`.  
-**PR policy:** **Exactly one PR for HPA-976.** This draft has the design + plan only. Implement all code, tests, and review follow-ups on this branch; do not split this ticket into additional PRs. No artwork is needed (existing UAT mockup is a reference).
+**Base:** `main` @ `ac3c7d787fc39685b25b795b0ec9fc643ac3bf6b`  
+**PR policy:** **Exactly one PR for this ticket, [#84](https://github.com/cwchanap/Caelum/pull/84)**. This remains a **planning-only draft**: add all implementation, tests, visual evidence, and review adjustments on this same branch. Do not open an implementation follow-up PR. No new art or SFX task is necessary.
 
-## Sequence and file ownership
+**Review changes:** Responds to [design review #5932259897](https://github.com/cwchanap/Caelum/pull/84#pullrequestreview-5932259897). Seven findings are incorporated: truthful chip during running ticks, guard against destructive busy-gate input loss, preserve non-save errors, share status formatting, required Tauri destroy permission + second-close escape, arrow-relaxed routing diagnosis, and reuse of existing automated tests.
 
-| Step | Change | Primary files |
+## File ownership / implementation order
+
+| Step | Primary existing files | Goal |
 | --- | --- | --- |
-| 1 | Autosave tests → scheduling and transient save state | `tests/runtime/workingSaveRuntime.test.ts`, `src/runtime/workingSaveRuntime.ts`, `src/runtime/createGameRuntime.ts` |
-| 2 | Topbar status, Retry, browser/native close | `src/components/Topbar.svelte`, `src/App.svelte`, `tests/ui/appShell.test.ts`; only necessary Tauri window capability |
-| 3 | Crossroads end turnarounds | `crates/caelum-core/src/sandbox.rs` and existing core route/template tests |
-| 4 | Rust one-way reason and UI guidance | `crates/caelum-core/src/model.rs`, `crates/caelum-core/src/road_topology.rs`, `src/domain/types.ts`, `src/runtime/runtimeSelectors.ts`, `src/runtime/rejectionMessages.ts`, existing Rust/TS tests |
-| 5 | Real host E2E, mockup screenshots, final checks | `tests/e2e/newCity.spec.ts`, `tests/e2e/routes.spec.ts` or a focused existing city persistence spec, existing `tests/e2e/helpers.ts`, Tauri MCP dev host |
+| 1 | `src/runtime/createGameRuntime.ts`, `src/runtime/workingSaveRuntime.ts`, `tests/runtime/citySaveRuntime.test.ts`, `tests/runtime/workingSaveRuntime.test.ts` | One timer, guarded admission, one save status, separate error channel |
+| 2 | `src/runtime/saveStatus.ts` (small new pure helper), `src/App.svelte`, `src/components/Topbar.svelte`, `src/components/hud/panels/CityPanel.svelte`, `src-tauri/capabilities/default.json`, existing UI tests | Shared label/Retry, browser prompt, safe native close |
+| 3 | `crates/caelum-core/src/sandbox.rs`, existing Rust template/route tests | Four Crossroads end caps with real directed return |
+| 4 | `crates/caelum-core/src/network.rs`, `crates/caelum-core/src/model.rs`, `src/domain/types.ts`, `src/runtime/rejectionMessages.ts`, existing Rust/TS tests | One-way cause without a new routing system |
+| 5 | Existing `tests/e2e/cityLibrary.spec.ts`, `routes.spec.ts`, `topbarViewport.spec.ts`, Tauri dev MCP bridge and CI | Automated full-player flow and mockup visual check |
 
-Use this as ownership guidance, not a mandate to touch every file. Preserve existing store backends, gameplay host APIs, CityPanel and the right-dock layout.
+Touch other files only when a required TypeScript literal or current test helper must be updated. Preserve the six-operation CitySaveStore, thin WASM/native gameplay hosts, save format, core routing success path and existing dock layout.
 
-### Step 1 — Establish autosave behavior with focused red→green tests
+## Step 1 — Tests first: eligible autosave with the current busy gate
 
-1. In `workingSaveRuntime.test.ts` reuse the existing `createRuntimeFixture` and memory store. Add **fake-timer** coverage for: no write while clean/no active city; dirty mutation followed by a single save by the 60-second tick; savedAt advanced + dirty cleared; skip while another persistence operation is busy; a rejected/throwing update leaves dirty and sets saveFailed; next interval/explicit Save retries; and `dispose()` clears its timer and blocks stale publishes.
-2. Add the smallest `startAutosave()`/stop-on-dispose lifecycle to `workingSaveRuntime`, idempotent so repeated `RuntimeController.start()` calls do not create duplicate intervals. Have `createGameRuntime.start()` enable the timer; disposal always disables it. Use one `setInterval(60_000)`. At each tick check active + dirty + not busy, then call the **same** `controller.save()` without awaiting in the timer and without enqueuing a second attempt.
-3. Keep existing `runExclusive` for snapshot capture and atomic update. Add only an ephemeral `saving`/`saveFailed` (or one minimal discriminant) to `RuntimePersistenceView` for exact status; set it based on the *save* operation rather than all busy mutations. Failed save does not clear dirty. New successful/manual saves clear failure. Preserve existing `error` mapping, load/create guards, six store methods and save format.
-4. Update test fixtures with new view fields; avoid new injectable scheduler/service abstractions solely for tests. Use Vitest fake timers and ensure timer ownership is torn down by tests. No autosave when runtime has not started.
+1. In `tests/runtime/citySaveRuntime.test.ts`, reuse the **real `createGameRuntime`** test fixture and existing `tests/runtime/delayedCitySaveStore.ts` for controlled in-flight writes. With Vitest fake timers, cover:
+   - only the first **eligible** 60s tick writes a dirty active city and updates `savedAt`;
+   - clean/no-city/busy/disposed states do not write;
+   - `ui.routeDraft`, `ui.drag`, or `activeRoadMutation` present at the interval cause a **skip**, not a queued save; a later eligible interval writes;
+   - repeated `start()` calls do not install duplicate intervals; `dispose()` and fatal teardown clear it;
+   - an in-flight autosave still uses the single gate, with no overlapping store updates.
+2. Implement a **single** `setInterval(60_000)` in `createGameRuntime.start()`, one nullable handle, and clear it in `dispose()`/fatal teardown. On each interval, check runtime live, active city, dirty, !busy, and no route draft/road gesture. Call `void workingSave.controller.save()` using existing busy protection; no extra `startAutosave()` method, generic scheduler, save queue or retry timeout.
+3. In `tests/runtime/workingSaveRuntime.test.ts`, focus on save status and errors: initial `save="idle"`, admitted Save sets `"saving"`, success resets idle and dirty false, failed write sets `"failed"` without clearing dirty; next manual Retry or next timer save succeeds. **Manual/autosave must leave existing shared `error` untouched**, including the start-time clearing that `runExclusive` currently performs. Unrelated load/create/rename/delete still use the original error behavior. If Save is rejected as already busy, do not publish a false "saving" state.
+4. Add exactly one `RuntimePersistenceView.save: "idle" | "saving" | "failed"` discriminant (not `saving` and `saveFailed` booleans). Make `runExclusive` preserve the generic error when invoked by `save()`—for example a focused `reportError` option—rather than duplicating its critical section. Reset stale save status when activating/deleting a city. Preserve existing write-failure semantics, id and snapshot stores.
+5. **Explicit limitation:** The existing gate **drops** inputs/ticks while a save is busy. The draft/gesture guards prevent the highest-risk cases, but may not eliminate every click collision. Do not claim the input is deferred. Test a normal input around the save boundary; fix a reproduced residual loss narrowly on this PR rather than adding a new input queue.
 
-**Proof:** A full dirty→autosave→clean transition, one representative store failure/retry, busy skip and cleanup pass as isolated runtime tests.
+**Proof:** Red→green runtime tests for dirty autosave, failed save and Retry, busy-skip/draft-skip/gesture-skip, single timer/dispose and independence of the generic error.
 
-### Step 2 — Show truthful status and protect browser/native exits
+## Step 2 — One shared status, browser unload and safe Tauri close
 
-1. In `Topbar.svelte` replace its all-operations "Working…" label with save-specific statuses derived from the view: saving first, failed+dirty, unsaved changes, then elapsed Saved time from `CitySummary.savedAt`. Keep the existing city chip/test ID and Sunny Diorama styling. A small mounted wall-clock ticker updates age; clean it up. Add an actual, keyboard-accessible **Retry** button only on save failure, disabled while busy. Use App's existing `handleSaveCity` callback; successful Retry refreshes the city list just like Save Now.
-2. In `App.svelte` pass `savedAt` + save flags + Retry handler. Keep Save Now and current city screens; don't refactor Shell/CityPanel. Attach a synchronous browser `beforeunload` listener within `onMount` only when not in Tauri, querying `runtime.getSnapshot()` (never an outdated captured `snapshot`). Dirty → `preventDefault` plus legacy `returnValue`; clean → no prompt. Remove listener on teardown.
-3. For Tauri, dynamically import `@tauri-apps/api/window` only after `isTauriRuntime()`. Register `getCurrentWindow().onCloseRequested(async event => { ... })`; when dirty await one `runtime.persistence.save()`; prevent default close on failure/busy/unavailable, otherwise let Tauri close. Register/unregister once, respecting the existing App cleanup/disposal. No extra Rust command, dialog, queue, blocking UI or cross-window coordination. Confirm the real Tauri 2 window capability allows the listener/normal close; add the minimum permission only if the native test shows it is required.
-4. Update `tests/ui/appShell.test.ts`: old "Working…" expectations become "Saving…"; assert Saved age, Unsaved changes, failure/Retry, Retry click through controller, and dirty-only beforeunload. Test native-close listener with a mocked module only for state transitions; do not treat a jsdom mock as native acceptance.
+1. Add `src/runtime/saveStatus.ts` as a **pure** `saveStatus(view, nowMs) -> { label, canRetry }` function with order **Saving… > Couldn't save · Retry > Saved N ago**. Use the existing `activeCity.savedAt`; the live tick's dirty bit affects autosave and unload, **not the chip label**. Test elapsed seconds/minutes, pending dirty after a successful save, failure, and saving under an unrelated city-operation error in a focused node Vitest unit.
+2. In `App.svelte`, keep **one** small wall-time tick (~1s) and derive the status once. Pass the same result to both `Topbar.svelte` and `CityPanel.svelte`, which currently have duplicate status labels. Preserve `topbar-save-status`, `city-save-status`, manual Save Now, and CityPanel's dirty New City/Load gating. Provide a single accessible **Retry** button in the chip on failure, disabled while busy and calling the existing `handleSaveCity()`. Do not create a shared Svelte component just to render this short text.
+3. Browser host: in App's mount lifecycle, register `beforeunload` only when `!isTauriRuntime()`; check the **current** `runtime.getSnapshot().persistence.dirty` synchronously, call `preventDefault()` plus legacy `returnValue` if dirty, remove listener on unmount. Do not write IndexedDB on unload. Exercise the browser-native dialog in Playwright after a real user gesture.
+4. Tauri: change `src-tauri/capabilities/default.json` to include **`core:window:allow-destroy`**, needed because `onCloseRequested` destroys a window after the listener returns without prevention. Register native-only `getCurrentWindow().onCloseRequested` in App; a dirty close attempts one `runtime.persistence.save()`. Success/clean → close; first failed or already-busy attempt → prevent close and expose the existing status/Save Now; **second explicit close → exit even dirty**, using one local escape flag. Clear that flag on clean/successful save, clean up listener on unmount, and avoid native commands/dialog plugins.
+5. In `tests/ui/appShell.test.ts`, update formerly expected "Working…" / "Unsaved changes" labels to shared Saved-time/Saving/failed states. Verify both Topbar and CityPanel show the same status; Retry triggers the existing controller and clears failure; dirty-only browser unload; mocked native close first-block/second-close escape and clean success. No new native store fault injection. Preserve all existing city-management, keyboard, screen switch and focus tests.
 
-**Proof:** The save chip never mistakes a rename/load for Save, failed Retry is usable, a dirty browser reload prompts, a clean reload does not, and the Tauri close path is testable without new native infrastructure.
+**Proof:** Real Save Now remains intact; the two status areas cannot disagree; non-save errors remain visible; browser dirty prompt and native first/second close act as designed.
 
-### Step 3 — Give all Crossroads arms legal turnarounds
+## Step 3 — Rust Crossroads return paths (no general U-turn)
 
-1. Extend `sandbox.rs`'s Crossroads branch after the four current one-way `author_scenario_road_line` calls. Compute width/height from the selected `SandboxMapSize`, use existing center coords, and author four short `TwoWay` connectors joining paired lanes at x=0, x=width−1, y=0, and y=height−1. Preserve the interior arrows. Call the existing junction refresh and topology compilation **once**, as before.
-2. Run `validate_crossroads_candidate` unchanged initially; strengthen its coverage only if it currently assumes a nonessential end detail. Its central 2×2 junction and routing transitions must remain correct; do not weaken checks to accommodate new caps.
-3. Add a Rust route/topology test that places representative bus stops beside the east arm and proves a **Loop** is connected in both directions. Add a parameterized assertion for Small/Medium/Large and for legal directed turn/return at each end (not just a geometric road connection). Keep negative template-validator tests and Blank Grid/Small Town unchanged.
-4. No schema bump: no snapshot field or wire layout changed. Existing city snapshots should not be rewritten; **do not backfill turnarounds in saved cities**.
+1. Extend the Crossroads branch in `sandbox.rs::create_sandbox_candidate` **after** the existing four one-way lines, **before** `refresh_all_automatic_junctions`. Add four two-point `author_scenario_road_line(..., RoadPreset::TwoWay)` caps at west/east x-bounds and north/south y-bounds, joining each paired lane. Calculate coordinates from existing map-size dimensions and center. Do not rewrite the arterial lines.
+2. Keep the existing `validate_crossroads_candidate` center structure, ports and transitions intact. `road.rs::merge_lane_direction(None)` should turn only the four ends into ordinary two-way bends with no additional automatic structures; assert this rather than removing the validator's structure-count check. Also assert interior tiles retain their directed one-way values.
+3. In existing Rust sandbox and route tests, prove directed return connectivity for four arm ends across Small/Medium/Large; for a representative east-arm pair place roadside bus stops and resolve a real **Loop** (both service legs Connected). Retain existing negative template-validator cases and Blank Grid/Small Town behavior.
+4. Snapshot shape and version remain unchanged; old saved maps are neither rebuilt nor migrated.
 
-**Proof:** A newly generated Crossroads map routes both ways where it formerly dead-ended and validates with the existing core; no arbitrary U-turn rule was added.
+**Proof:** A fresh default Crossroads can Save & run a first bus loop without a separately constructed ring road.
 
-### Step 4 — Classify only genuine one-way dead ends
+## Step 4 — One-way diagnosis in `network.rs`, not a new pathfinder
 
-1. First add core red tests in the existing `crates/caelum-core/tests/road_topology.rs` or `route_editing.rs` for a loop service leg that fails because a one-way access lane runs to a terminal without return. Assert typed `OneWayNoReturn`; retain tests showing `NetworkDisconnected` for physically disconnected roads, `NoLegalTurnaround` for terminal reversal, and heading/no-access failures.
-2. Extend `model.rs::LegFailureReason` with `OneWayNoReturn`. In the failed service-leg path search of `road_topology.rs`, use a read-only, failure-only diagnostic: positive evidence of geometric reciprocal-edge connectivity **plus** one-way/no-reachable-turnaround cause for the failed origin; otherwise keep the existing failure reason. Do not change `find_path` success cases, road mutation legality, or globally grant U-turns. Use existing deterministic state/connection helpers rather than building a separate route engine.
-3. Mirror `oneWayNoReturn` in `src/domain/types.ts`, update current wire/route tests as needed, and teach `routeFailureGuidance` to use the **already derived** `fromLabel` supplied from `runtimeSelectors.ts`. Produce: "The road past Stop H is one-way and has no way back. Add a turnaround, a roundabout or a two-way road." Existing failure-row heading already displays "Stop H → Stop C". No Rust stop-name field.
-4. Extend `tests/runtime/rejectionMessages.test.ts` and `runtimeSelectors.test.ts` with named-stop guidance and non-one-way fallback assertions. Verify legacy strings still apply to disconnected/loop-close/terminal reversal cases.
+1. Write Rust tests first for a bus service leg that currently fails with `NetworkDisconnected` but succeeds with the same endpoint access **when arrow restrictions are relaxed**. Pin the **loop-closing leg**, which otherwise falls into generic loop failure wording. Include a physically disconnected negative case; keep terminal-reversal `NoLegalTurnaround`, no-access, and already-connected cases intact.
+2. Add `LegFailureReason::OneWayNoReturn` in `model.rs` (serde `oneWayNoReturn`) and the existing TS union in `src/domain/types.ts`. No new route status, host API or persisted snapshot field.
+3. In `network.rs::resolve_route_legs` let the existing directed `resolve_service_path` run first. **Only if** one or more **bus service** paths fail with `NetworkDisconnected`, clone the map, clear `one_way` on ordinary road tiles, compile one alternate `RoadTopology` for **that route resolution**, and rerun the **same** `find_path_between_access_tiles` using each failed leg's unchanged stop access points/preferences. Success of this diagnostic means directions caused the failure → replace that failure reason with `OneWayNoReturn`. Failure/compile error → keep `NetworkDisconnected`. Never use this topology for valid routes, gameplay or road rules.
+4. In `src/runtime/rejectionMessages.ts::routeFailureGuidance`, keep its current signature and return for `oneWayNoReturn`: **"One-way roads block this leg. Add a turnaround, a roundabout or a two-way road."** The existing failure-row heading already displays the specific stops (e.g. Stop H → Stop C); a message claiming the dead end is *past Stop H* is not supported by this diagnosis. Check this case **before** the `networkDisconnected && isLoopClosing` fallback. No extra data passed through `runtimeSelectors.ts`.
+5. Extend `tests/runtime/rejectionMessages.test.ts` and `runtimeSelectors.test.ts` only as needed: correct specific warning for the loop-closing leg, generic fallback for physical disconnection, existing heading/turnaround guidance intact.
 
-**Proof:** The repro has actionable text, unrelated broken legs are not reclassified, and Rust/TypeScript reason names match.
+**Proof:** A real one-way-caused failure has actionable text, while a missing road remains an ordinary disconnected error; unchanged successful routing.
 
-### Step 5 — Automated end-to-end acceptance, screenshot comparison and gates
+## Step 5 — Existing E2E specs, MCP visual check and final gates
 
-**Only agent/MCP-driven acceptance; no human sign-off step.** Reuse current test helpers and CI, not a new visual runner.
+**Acceptance is agent/MCP-driven; no human approval criterion. No new E2E file/test service or native fault-injection surface.**
 
-1. **Browser persistence E2E (real WASM + IndexedDB):** Create Crossroads, mutate budget/road/zone using an existing helper, verify dirty; fast-forward a deterministic Playwright clock beyond 60 seconds (not game time), observe Saved age and clean state, reload, Continue and assert the exact Rust-authored change survived. Verify manual Save Now still persists and no duplicate autosaves occur while clean. Drive the browser with Playwright through MCP and record its result.
-2. **Beforeunload and failed-save E2E:** After a user click (browser activation), trigger reload with dirty state, verify the browser-native dialog and cancel it, then verify data remains active. Save, reload without dialog. Simulate a single store failure via the existing test seam (or a narrowly scoped dev-only injection if unavoidable), assert "Couldn't save · Retry" and retained dirty state, click Retry and verify the saved result. Keep the seam limited to tests and avoid new production storage APIs.
-3. **First Crossroads line E2E:** Using real WASM and the existing route UI helpers, New City → default Crossroads → bus stops on opposite sides of the east arm → New bus line → Loop → all legs Connected → Save & run → line is active with fleet. Keep the same scenario as the Linear UAT; inspect the gameplay snapshot and UI, not solely labels.
-4. **One-way/no-return E2E:** In a newly authored dead-end one-way case (not the repaired default template), assert Stop H → Stop C cannot connect and displays the one-way explanatory text. Create a truly disconnected road case and assert the old generic message. No broader route-editor redesign; HPA-977 owns that.
-5. **Mockup screenshot check via MCP/Playwright:** At 1440×900 capture city chip with Saved age, Saving, failed Retry and the failed route panel; compare visually against HPA-976 `t1-autosave-and-one-way-message.png` / annotated HTML `?screen=t1&anno=1`, checking copy, prominence, positioning and absence of overlap. At 1024×768 capture status/Retry/route warning and assert no clipping or hidden button. Store screenshots with normal Playwright artifacts and document differences in this PR.
-6. **Tauri-specific E2E via existing MCP bridge:** Launch `bun run tauri:dev` with `mcp-bridge` feature already enabled by dev config. Modify city → close while dirty → relaunch → load → assert saved mutation. Force a representative failed native update through the existing Tauri store/test seam, assert close is prevented and Retry is offered. Browser checks cover all *shared* runtime/UI/core behavior; native close must be verified separately because it is platform-specific.
-7. **Full gates on implementation:** Run `bun run check`, `bun run format:check`, `bun run lint`, `bun run test:unit`, `bun run test:e2e`, `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`. After the implementation is ready, mark this **same PR** ready for review so the current CI executes; confirm TS/Rust/Playwright and macOS + Windows Tauri bundle jobs. Do not count draft-PR skipped checks as passing.
+1. **Autosave → reload → Continue (browser, real WASM+IndexedDB):** Extend `tests/e2e/cityLibrary.spec.ts`'s existing Save Now/reload journey. Create and modify a city, **pause**, wait/advance one eligible 60s autosave, check the chip and `savedAt`, reload/Continue and assert actual saved Rust map/budget/time. To avoid WebGPU race issues, install Playwright `page.clock` **before navigation** if using the fake clock; it also affects `requestAnimationFrame` and `performance.now`. If that breaks WebGPU, use one bounded genuine ~60s E2E run rather than dropping the real autosave end-to-end acceptance or adding new production timer parameters. Assert clean/no-extra-write while paused; running ticks legitimately dirty again.
+2. **Unload/Retry coverage:** In the same existing city flow, a user gesture → dirty state → reload attempt triggers browser-native beforeunload; cancel and ensure gameplay remains. Pause + Save Now → no prompt. Fail/Retry should be covered through existing memory/delayed-store runtime tests and mocked UI, not a dev-only IndexedDB injection API. Verify the real chip button is keyboard-focusable in the viewport E2E.
+3. **First bus loop:** Extend `tests/e2e/routes.spec.ts`: default Crossroads → stops beside opposite directions of the east arm → Loop preview all legs Connected → Save & run → real Rust/WASM route active with fleet. No new route editor or mock state.
+4. **One-way error:** In existing Rust and TS route tests prove arrows-only failure, physically disconnected fallback and loop-closing warning. If an existing browser route scenario can assert the new copy without building extra world fixture, extend it; avoid an E2E-only mega-fixture.
+5. **Visual acceptance against Linear mockup:** Extend `tests/e2e/topbarViewport.spec.ts`, which already checks **1024×768 and 1440×900**, to exercise Saved-age, Saving, and Couldn't save/Retry states and assert no overlap, clipping or hidden controls. Capture screenshots with its existing Playwright/MCP artifact flow; compare the chip arrangement and the failed-leg dock warning layout to the attached HPA-976 **`t1-autosave-and-one-way-message.png`**, documenting any meaningful differences. Do not add a standalone pixel-golden screenshot suite or a separate manual visual pass.
+6. **Native-only MCP smoke:** Use the existing `bun run tauri:dev` / `mcp-bridge` host: dirty city → window close → relaunch → load and confirm the saved change. Check on macOS whether Cmd+Q / app-menu Quit bypasses `onCloseRequested`; document observed behavior and the 60s best-effort limit. First-failed/busy-close and second-close escape are automated in the mocked UI tests, **not** by creating a native store injection seam.
+7. **Full gates on the implemented PR:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `bun run check`, `bun run format:check`, `bun run lint`, `bun run test:unit`, `bun run test:e2e`, and relevant macOS/Windows Tauri bundle CI jobs. This **draft PR skips CI**; once implementation is complete, mark **this same PR** ready so those jobs execute. Do not claim any passing checks for the planning-only commit.
 
-## Acceptance checklist (to complete on the implementation update, not this design-only commit)
+## Acceptance checklist — remains incomplete until implementation
 
-- [ ] Autosave ≤60s of dirty play; manual Save and Retry reuse one atomic update, no extra save slot/history
-- [ ] Failed autosave preserves dirty and actionable Retry; busy/no-city/clean/disposed cases do not write
-- [ ] Native browser prompt only for dirty unload; Tauri close saves or stays open on failure
-- [ ] New Crossroads first Loop connects and Save & run creates active line; all four ends work on 3 map sizes
-- [ ] One-way no-return reason/copy works with named stops, distinct from disconnected and terminal reversal
-- [ ] MCP Playwright browser E2E + screenshot visual comparison to Linear mockup at 1440×900 / 1024×768
-- [ ] MCP native Tauri close/relaunch smoke including failed save (platform-specific)
-- [ ] Format, static analysis, Rust/unit, real-WASM E2E and required desktop CI jobs green
-- [ ] All work retained in **one HPA-976 PR**; no second PR, schema migration, new art or unrelated panel redesign
+- [ ] One timer; eligible dirty city automatically saves around 60s, manual Save intact, no new save format/queue/history
+- [ ] Busy, no-city, clean, disposed, draft and road-gesture guards; no overlap; known busy-gate input dropping called out and tested
+- [ ] Failed Save retains dirty, shared error untouched, Retry succeeds; pure shared saveStatus shows Saved-age/Saving/failed even during live simulation
+- [ ] Browser dirty beforeunload prompts after user activation; clean reload does not
+- [ ] Native `core:window:allow-destroy`, dirty close saves, failure/busy blocks once then second close exits; Cmd+Q limitation recorded via MCP
+- [ ] All four Crossroads turnarounds valid for three map sizes, default Loop Connected and Save & run verified
+- [ ] Arrow-caused `OneWayNoReturn` vs physically disconnected and terminal-reversal reasons; accurate one-way copy shown
+- [ ] Existing city/route Playwright real-WASM/IndexedDB E2E via MCP and **mockup visual screenshot check** at 1024×768 / 1440×900
+- [ ] Rust, TS, Playwright and native bundle CI gates pass when ready for review
+- [ ] No extra PR, new assets, generalized routing/persistence framework, or compatibility migration
 
-## Implementation risks to verify early
+## Risks and implementation guardrails
 
-- Authoring a two-tile `TwoWay` end cap overlays existing `OneWay` endpoints. Check `road.rs::merge_lane_direction` and the refreshed structure count: an unintentional extra automatic junction or lost one-way interior arrow is a failed test, not a reason to remove central validator checks.
-- The route finder uses a directed tile × heading graph. A directed search failure does **not** prove why it failed; diagnose only when a one-way/no-return witness exists, especially for a service leg rather than a terminal-reversal leg.
-- Tauri 2's `onCloseRequested` awaits its async handler, while browser `beforeunload` cannot wait for IndexedDB. Keep the host-specific paths separate and test the real native window capabilities.
-- The existing save gate may skip a simulation tick while writing; don't silently add a second save concurrency model. Measure only if this becomes a visible gameplay issue.
-
-## Explicitly not in this ticket
-
-No persistence rewrite, autosave generations/checkpoints, crash recovery, save migration, generalized U-turn legalization, route-editor dock rewrite (HPA-977), UI polish bundle (HPA-978), new transit marker artwork (HPA-979), or other PR split.
+- **Do not let autosave erase a CityPanel error:** opt `save()` out of shared `runExclusive` error mutations, including before the async work begins.
+- **No false "Saved" guarantee:** the label records when the working save was last written; active ticks may already have dirtied the current state again. Pause before clean-state assertions.
+- **No pretend input deferral:** the current busy gate drops clicks/dispatches; the timer skips route drafts, drag and road mutation. If residual interactive loss is reproducible, resolve it narrowly without a queue.
+- **TwoWay caps:** prove road connections and arrows with actual compiled topology while keeping the existing center validator.
+- **OneWay diagnosis:** the relaxed map should prove only arrow restrictions, not the location of a dead end. Compile once only on failure and keep real topology authority.
+- **Native close:** Tauri 2 `onCloseRequested` requires `allow-destroy`. Second-close exit is deliberate when saving fails; native quit paths may skip window close requests. Never promise more than best-effort autosave.
