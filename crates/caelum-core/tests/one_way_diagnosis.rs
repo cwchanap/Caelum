@@ -220,6 +220,61 @@ fn disconnected_geometry_stays_network_disconnected_after_arrow_relaxation() {
 }
 
 #[test]
+fn stale_roundabout_port_on_two_way_neighbor_keeps_network_disconnected() {
+    let mut engine = blank_grid_engine();
+    dispatch(
+        &mut engine,
+        GameIntent::PlaceRoundabout {
+            origin: point(5, 5),
+            size: RoundaboutSize::Compact2x2,
+        },
+    );
+    // Two-way approaches on the west and east boundary ports.
+    road_line(
+        &mut engine,
+        (2..=4).rev().map(|x| point(x, 6)).collect(),
+        RoadPreset::TwoWay,
+    );
+    road_line(
+        &mut engine,
+        (7..=9).map(|x| point(x, 6)).collect(),
+        RoadPreset::TwoWay,
+    );
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(2, 5) });
+    dispatch(&mut engine, GameIntent::AddBusStop { point: point(8, 5) });
+
+    // A stale capture (e.g. loaded from a save) can claim Inbound on a port
+    // whose neighbor is two-way; normal compilation drops the port and the
+    // east exit closes, but nothing one-way-related is wrong with the map.
+    let mut snapshot = engine.snapshot();
+    for structure in &mut snapshot.map.road_structures {
+        if let RoadStructure::Roundabout { ports, .. } = structure {
+            for port in ports.iter_mut() {
+                if port.point == point(6, 6) && port.edge == Heading::East {
+                    port.direction = Some(PortDirection::Inbound);
+                }
+            }
+        }
+    }
+    let engine = GameEngine::from_snapshot(snapshot).expect("stale-port snapshot loads");
+
+    let legs = preview_legs(
+        &engine,
+        ServicePattern::Loop,
+        ids(&["stop-001", "stop-002"]),
+    );
+
+    for service_leg in legs.iter().filter(|leg| leg.kind == RouteLegKind::Service) {
+        assert_eq!(service_leg.status, RouteLegStatus::NetworkDisconnected);
+        assert_eq!(
+            service_leg.failure_reason,
+            Some(LegFailureReason::NetworkDisconnected),
+            "a stale port on a two-way neighbor is not a one-way failure: {service_leg:?}"
+        );
+    }
+}
+
+#[test]
 fn connected_two_way_service_legs_stay_connected() {
     let mut engine = blank_grid_engine();
     road_line(

@@ -1,11 +1,11 @@
 use std::collections::{HashMap, VecDeque};
 
 use crate::engine::RoutingContext;
-use crate::heading::{canonical_headings, heading_between};
+use crate::heading::{canonical_headings, heading_between, offset};
 use crate::model::{
-    GameMap, GameSnapshot, Heading, LegFailureReason, PathGeometry, Point, RoadStructure,
-    RouteLegKind, RouteLegPath, RouteLegStatus, ServicePattern, StopRoadAccess, Tile,
-    TrackPathStep, TransitMode, TransitPath,
+    GameMap, GameSnapshot, Heading, LegFailureReason, PathGeometry, Point, PortDirection,
+    RoadStructure, RouteLegKind, RouteLegPath, RouteLegStatus, ServicePattern, StopRoadAccess,
+    Tile, TrackPathStep, TransitMode, TransitPath,
 };
 use crate::road_topology::{RoadState, RoadTopology};
 use crate::service_itinerary::{build_service_itinerary, ServiceLegSpec};
@@ -118,8 +118,10 @@ fn has_failed_service_leg(specs: &[ServiceLegSpec], service_paths: &[TransitPath
 /// Clear every authored one-way direction in a clone. Roundabout ports are
 /// relaxed too: `RoadTopology::compile` drops a captured inbound/outbound port
 /// whose neighbor no longer carries that arrow, which would disconnect the
-/// diagnostic ring instead of opening it. `None` keeps the port's existing
-/// geometry-only acceptance with reciprocal neighbor checks.
+/// diagnostic ring instead of opening it. Only ports whose current neighbor
+/// carries an arrow are relaxed, to `TwoWay` — the direction capture produces
+/// for an unrestricted neighbor. A stale capture on a two-way neighbor keeps
+/// its rejected direction so the leg keeps its original failure.
 fn map_without_one_way_restrictions(map: &GameMap) -> GameMap {
     let mut relaxed = map.clone();
     for tile in &mut relaxed.tiles {
@@ -128,7 +130,12 @@ fn map_without_one_way_restrictions(map: &GameMap) -> GameMap {
     for structure in &mut relaxed.road_structures {
         if let RoadStructure::Roundabout { ports, .. } = structure {
             for port in ports {
-                port.direction = None;
+                let neighbor_one_way = map
+                    .tile(offset(port.point, port.edge))
+                    .and_then(|tile| tile.one_way);
+                if neighbor_one_way.is_some() {
+                    port.direction = Some(PortDirection::TwoWay);
+                }
             }
         }
     }
