@@ -2,7 +2,7 @@
 
 **Linear:** https://linear.app/cwchanap/issue/HPA-976/autosave-cities-and-unblock-the-first-crossroads-line  
 **Baseline:** `main` @ `ac3c7d787fc39685b25b795b0ec9fc643ac3bf6b`  
-**PR:** [#84](https://github.com/cwchanap/Caelum/pull/84). This draft is **documentation-only**; all implementation, tests and review follow-ups belong to this **same PR**.  
+**PR:** [#84](https://github.com/cwchanap/Caelum/pull/84). Implementation, tests and review follow-ups all landed in this **same PR**.  
 **Reviewed against:** [design review #5932259897](https://github.com/cwchanap/Caelum/pull/84#pullrequestreview-5932259897).
 
 ## Outcome and scope
@@ -71,7 +71,7 @@ Add `LegFailureReason::OneWayNoReturn` / TypeScript `oneWayNoReturn` only for fa
 In `network.rs::resolve_route_legs`, resolve normally first. Only if at least one bus service leg failed with `NetworkDisconnected`, clone `snapshot.map` for a **single** diagnostic topology per route-resolution call and:
 
 1. Clear `one_way` on ordinary road tiles **in this clone only**.
-2. For each `RoadStructure::Roundabout` in the clone, also set every captured `RoadPort.direction = None`. This is essential: `RoadTopology::compile` filters ports with `roundabouts::port_matches_current_map`. Captured inbound/outbound port direction no longer matches an adjoining road after its `one_way` was cleared; `None` enables the existing geometry-only fallback while retaining reciprocal boundary-connection checks.
+2. For each `RoadStructure::Roundabout` in the clone, relax each captured `RoadPort.direction` to `Some(TwoWay)` — the direction capture produces for an unrestricted neighbor — but **only when the port's current neighbor carries an arrow**. This is essential: `RoadTopology::compile` filters ports with `roundabouts::port_matches_current_map`, and a captured inbound/outbound port direction no longer matches an adjoining road after its `one_way` was cleared. A port rejected for reasons unrelated to one-way arrows (a stale capture on a two-way neighbor) keeps its rejected direction so the leg keeps the original failure.
 3. Recompile `RoadTopology` on that clone, and rerun the **same** `find_path_between_access_tiles` using the original stop access points/preferences against **the diagnostic map**. A successful relaxed path proves one-way direction rules caused the failed leg; label it `OneWayNoReturn`. A failed compile/search leaves `NetworkDisconnected`. Never apply the diagnostic map or its transitions to gameplay.
 
 Test a simple one-way dead end, a **roundabout adjoining one-way roads**, a physical disconnection that stays disconnected, and an already-valid directed service leg. Include a **loop-closing** failure whose reason must reach the new guidance branch. Roundabout port direction must remain **unchanged in the authoritative map**.
@@ -83,7 +83,7 @@ Keep `routeFailureGuidance`'s existing signature and use honest copy: **"One-way
 - **Save failure separation:** `runExclusive` must update save status in the same final publication even if awaiting gameplay idle throws. `App.handleSaveCity` must not clear `cityListError` on failed Save/Retry.
 - **Input:** The busy gate still drops brief inputs and ticks. Skip autosave during draft/gesture; avoid a new input queue without a reproduced issue.
 - **Dirty simulation:** Applied ticks immediately dirty a saved city again. Pause before asserting clean state or no unload prompt; the chip truthfully shows time since last successful save.
-- **Diagnostic:** Clearing one-way road arrows alone can disconnect captured roundabout ports; also relax port directions in the **clone**. Never alter real road topology or call the diagnostic on successful paths.
+- **Diagnostic:** Clearing one-way road arrows alone can disconnect captured roundabout ports; also relax port directions in the **clone**, but only where the current neighbor carries an arrow — relaxing unconditionally revives ports rejected for other reasons and mislabels their failures `OneWayNoReturn`. Never alter real road topology or call the diagnostic on successful paths.
 - **Native lifecycle:** Async `onCloseRequested` registration needs teardown-race protection. A second close exits after an unsaved failed/busy close only if no new successful save invalidated that escape. Cmd+Q may bypass window close.
 - **Test scope:** Reuse current Rust/unit, real-WASM city-library, route, viewport, and native MCP coverage; add no native fault-injection or screenshot framework.
 - No extra save slots, persistence history, migration, general U-turns, HUD redesign, new images, or platform parity matrix.
@@ -96,6 +96,6 @@ Keep `routeFailureGuidance`'s existing signature and use honest copy: **"One-way
 4. **Rust and browser Crossroads:** Verify four directed turnarounds across Small/Medium/Large, and real default Crossroads → roadside stops → Loop Connected → Save & run (WASM). One-way-caused service failure versus physically disconnected fallback and terminal reversal are distinct; include one-way roads adjoining a roundabout in the Rust diagnostic tests.
 5. **Mockup visual check:** In the existing `tests/e2e/topbarViewport.spec.ts` (including 1024×768 and 1440×900), assert the new chip wording, dimensions, no clipped Retry button and accessible focus. Capture/compare the composition and right-dock warning with attached HPA-976 `t1-autosave-and-one-way-message.png` through Playwright/MCP; no extra screenshot system. Update the preexisting exact "Saved"/"Unsaved changes" viewport assertions **in the same Step 2 implementation change**, not after they fail.
 6. **Native-only MCP smoke:** With the existing Tauri dev MCP bridge, dirty window-close → relaunch → persisted city, Cmd+Q/app-menu Quit behavior. Mocked UI tests cover asynchronous listener unmount, first-blocked close, second-close escape, and invalidation after a completed autosave followed by new dirty edits. No native fault injection.
-7. **Gates:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `bun run check`, `bun run format:check`, `bun run lint`, `bun run test:unit`, `bun run test:e2e`, and existing native bundles in non-draft CI. The documentation-only draft does **not** claim green checks.
+7. **Gates:** `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `bun run check`, `bun run format:check`, `bun run lint`, `bun run test:unit`, `bun run test:e2e`, and existing native bundles in non-draft CI — all green on the current head.
 
 All acceptance is automated via MCP/test tooling; no human acceptance step or second implementation PR.
