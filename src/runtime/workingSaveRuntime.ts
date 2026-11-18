@@ -238,8 +238,17 @@ export function createWorkingSaveRuntime(
     return callStore("listCities", undefined, () => store.listCities());
   };
 
-  const save = (): Promise<WorkingSaveResult<CitySummary>> =>
-    runExclusive("save", async () => {
+  const save = (): Promise<WorkingSaveResult<CitySummary>> => {
+    if (!isLive()) {
+      return Promise.resolve({ ok: false, error: { kind: "unavailable" } });
+    }
+    if (busy) {
+      return Promise.resolve({ ok: false, error: { kind: "busy" } });
+    }
+    if (activeCity === null) {
+      return Promise.resolve({ ok: false, error: { kind: "noActiveCity" } });
+    }
+    return runExclusive("save", async () => {
       const city = activeCity;
       if (city === null) {
         return { ok: false, error: { kind: "noActiveCity" } };
@@ -267,6 +276,7 @@ export function createWorkingSaveRuntime(
       dirty = false;
       return saved;
     });
+  };
 
   const load = (cityId: string): Promise<WorkingSaveResult<CitySummary>> =>
     runExclusive("error", async () => {

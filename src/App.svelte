@@ -69,10 +69,19 @@
   let cityListRequestId = 0;
   let stopPersistenceLifecycle: (() => void) | undefined;
   let nowMs = $state(Date.now());
-  let closeEscape: {
+  interface CloseCityVersion {
     id: string | undefined;
     savedAt: string | undefined;
-  } | null = null;
+  }
+
+  let closeEscape: CloseCityVersion | null = null;
+
+  function sameCityVersion(
+    expected: CloseCityVersion,
+    city: CitySummary | null,
+  ): boolean {
+    return expected.id === city?.id && expected.savedAt === city?.savedAt;
+  }
   const status = $derived(
     snapshot === null
       ? { label: "", canRetry: false }
@@ -102,9 +111,7 @@
     snapshot = nextSnapshot;
     if (
       !persistence.dirty ||
-      (closeEscape !== null &&
-        (closeEscape.id !== persistence.activeCity?.id ||
-          closeEscape.savedAt !== persistence.activeCity?.savedAt))
+      (closeEscape !== null && !sameCityVersion(closeEscape, activeCity))
     ) {
       closeEscape = null;
     }
@@ -778,13 +785,12 @@
             }
             if (
               closeEscape !== null &&
-              closeEscape.id === persistence.activeCity?.id &&
-              closeEscape.savedAt === persistence.activeCity?.savedAt
+              sameCityVersion(closeEscape, persistence.activeCity)
             ) {
               closeEscape = null;
               return;
             }
-            const identity = {
+            const identity: CloseCityVersion = {
               id: persistence.activeCity?.id,
               savedAt: persistence.activeCity?.savedAt,
             };
@@ -800,9 +806,7 @@
             event.preventDefault();
             const current = currentRuntime.getSnapshot().persistence;
             closeEscape =
-              current.dirty &&
-              current.activeCity?.id === identity.id &&
-              current.activeCity?.savedAt === identity.savedAt
+              current.dirty && sameCityVersion(identity, current.activeCity)
                 ? identity
                 : null;
           })
@@ -810,9 +814,10 @@
             if (unmounted) stop();
             else unlisten = stop;
           })
-          .catch(() => {
-            if (!unmounted)
-              shellError = "Could not protect unsaved changes on close.";
+          .catch((err: unknown) => {
+            if (!unmounted) {
+              console.warn("Could not protect unsaved changes on close.", err);
+            }
           });
       } else {
         window.addEventListener("beforeunload", beforeUnload);

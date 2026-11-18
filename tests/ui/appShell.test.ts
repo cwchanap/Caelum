@@ -1468,6 +1468,9 @@ describe("App command shell", () => {
     setPersistence({ busy: true, save: "saving" });
     expect(status()).toHaveTextContent("Saving…");
     expect(cityStatus()).toHaveTextContent("Saving…");
+    setPersistence({ busy: true, save: "idle" });
+    expect(status()).toHaveTextContent("Working…");
+    expect(cityStatus()).toHaveTextContent("Working…");
     setPersistence({ busy: false, save: "failed" });
     expect(cityStatus()).toHaveTextContent("Couldn't save");
     expect(
@@ -1590,6 +1593,33 @@ describe("App command shell", () => {
       expect(harness.runtime.persistence.save).toHaveBeenCalledOnce();
       expect(event.preventDefault).not.toHaveBeenCalled();
     } finally {
+      Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
+    }
+  });
+
+  it("warns without killing the shell when native close registration fails", async () => {
+    Object.defineProperty(window, "__TAURI_INTERNALS__", {
+      value: {},
+      configurable: true,
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    nativeWindow.onCloseRequested.mockRejectedValueOnce(
+      new Error("listener denied"),
+    );
+    try {
+      const { runtime } = createRuntimeHarness();
+      render(App, { props: { runtime } });
+      await tick();
+      await Promise.resolve();
+      expect(warn).toHaveBeenCalledWith(
+        "Could not protect unsaved changes on close.",
+        expect.any(Error),
+      );
+      expect(runtime.dispose).not.toHaveBeenCalled();
+      expect(screen.queryByText(/Shell Error:/)).toBeNull();
+      expect(screen.getByTestId("topbar")).toBeVisible();
+    } finally {
+      warn.mockRestore();
       Reflect.deleteProperty(window, "__TAURI_INTERNALS__");
     }
   });

@@ -522,6 +522,7 @@ describe("working save runtime saves", () => {
       ok: false,
       error: { kind: "noActiveCity" },
     });
+    expect(runtime.getView().save).toBe("idle");
     expect(updates).toBe(0);
   });
 
