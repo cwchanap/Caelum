@@ -7,7 +7,9 @@ use crate::model::{
     GameSnapshot, Heading, MovementKind, Point, RoadStructure, RouteLegPath, RouteLegStatus,
     ServicePattern, TransitMode, TransitNodeStatus,
 };
-use crate::network::resolve_route_legs;
+use crate::network::{
+    resolve_route_legs, resolve_route_legs_with_diagnostic_cache, OneWayDiagnosticCache,
+};
 use crate::rejection::{GameplayRejection, RejectionCode, RejectionContext};
 use crate::road::{self, RoadMutation, RoadMutationResult};
 use crate::road_topology::RoadTopology;
@@ -599,18 +601,20 @@ fn route_impacts(
     let context = RoutingContext {
         road_topology: candidate_topology,
     };
+    let diagnostic_cache = OneWayDiagnosticCache::default();
     let mut impacts = Vec::new();
     for route in &previous.transit.routes {
         // Merge with stored history so broken legs keep `last_valid_path` and
         // classify the same way as commit's `recompute_all_routes`.
         let legs = merge_resolved_legs(
             Some(&route.legs),
-            resolve_route_legs(
+            resolve_route_legs_with_diagnostic_cache(
                 candidate,
                 context,
                 TransitMode::Bus,
                 &route.stop_ids,
                 route.pattern,
+                &diagnostic_cache,
             ),
         );
         if let Some(kind) = classify_route_impact(&route.legs, &legs) {

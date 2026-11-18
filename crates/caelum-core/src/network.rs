@@ -1,3 +1,4 @@
+use std::cell::OnceCell;
 use std::collections::{HashMap, VecDeque};
 
 use crate::engine::RoutingContext;
@@ -20,12 +21,55 @@ pub fn find_track_path(map: &GameMap, from: &Point, to: &Point) -> Option<Transi
     Some(track_path_from_points(points, METRO_TILES_PER_SECOND))
 }
 
+/// Lazily compiled relaxed road topology shared across all routes resolved
+/// against one snapshot so multi-route commits and hover previews clone and
+/// compile the map at most once.
+#[derive(Default)]
+pub(crate) struct OneWayDiagnosticCache {
+    relaxed: OnceCell<Option<(GameMap, RoadTopology)>>,
+    #[cfg(test)]
+    build_count: std::cell::Cell<usize>,
+}
+
+impl OneWayDiagnosticCache {
+    fn get(&self, map: &GameMap) -> Option<&(GameMap, RoadTopology)> {
+        self.relaxed
+            .get_or_init(|| {
+                #[cfg(test)]
+                self.build_count.set(self.build_count.get() + 1);
+                let relaxed_map = map_without_one_way_restrictions(map);
+                let relaxed_topology = RoadTopology::compile(&relaxed_map).ok()?;
+                Some((relaxed_map, relaxed_topology))
+            })
+            .as_ref()
+    }
+}
+
 pub fn resolve_route_legs(
     snapshot: &GameSnapshot,
     context: RoutingContext<'_>,
     mode: TransitMode,
     waypoint_ids: &[String],
     pattern: ServicePattern,
+) -> Vec<RouteLegPath> {
+    let diagnostic_cache = OneWayDiagnosticCache::default();
+    resolve_route_legs_with_diagnostic_cache(
+        snapshot,
+        context,
+        mode,
+        waypoint_ids,
+        pattern,
+        &diagnostic_cache,
+    )
+}
+
+pub(crate) fn resolve_route_legs_with_diagnostic_cache(
+    snapshot: &GameSnapshot,
+    context: RoutingContext<'_>,
+    mode: TransitMode,
+    waypoint_ids: &[String],
+    pattern: ServicePattern,
+    diagnostic_cache: &OneWayDiagnosticCache,
 ) -> Vec<RouteLegPath> {
     let Some(first_waypoint_id) = waypoint_ids.first() else {
         return Vec::new();
@@ -50,7 +94,7 @@ pub fn resolve_route_legs(
             }
         })
         .collect();
-    diagnose_one_way_service_failures(snapshot, mode, &specs, &mut service_paths);
+    diagnose_one_way_service_failures(snapshot, mode, &specs, &mut service_paths, diagnostic_cache);
     specs
         .iter()
         .enumerate()
@@ -59,30 +103,25 @@ pub fn resolve_route_legs(
 }
 
 /// A bus service leg that fails with `NetworkDisconnected` may be blocked only
-/// by one-way arrows, not by missing geometry. Relax a single cloned map and
-/// re-run only the failed service legs so the player is told which fix applies.
-/// The relaxed map and its topology never reach gameplay: the real path stays
-/// unresolved and the authoritative map is untouched.
+/// by one-way arrows, not by missing geometry. Relax a single cloned map once
+/// per snapshot and re-run only the failed service legs so the player is told
+/// which fix applies. The relaxed map and its topology never reach gameplay:
+/// the real path stays unresolved and the authoritative map is untouched.
 fn diagnose_one_way_service_failures(
     snapshot: &GameSnapshot,
     mode: TransitMode,
     specs: &[ServiceLegSpec],
     service_paths: &mut [TransitPathResult],
+    diagnostic_cache: &OneWayDiagnosticCache,
 ) {
     if mode != TransitMode::Bus || !has_failed_service_leg(specs, service_paths) {
         return;
     }
-    let relaxed_map = map_without_one_way_restrictions(&snapshot.map);
-    let Ok(relaxed_topology) = RoadTopology::compile(&relaxed_map) else {
+    let Some((relaxed_map, relaxed_topology)) = diagnostic_cache.get(&snapshot.map) else {
         return;
     };
     for (index, spec) in specs.iter().enumerate() {
-        if spec.kind != RouteLegKind::Service
-            || !matches!(
-                service_paths[index],
-                Err(LegFailureReason::NetworkDisconnected)
-            )
-        {
+        if !is_disconnected_service_leg(spec, &service_paths[index]) {
             continue;
         }
         let (Some(from), Some(to)) = (
@@ -92,7 +131,7 @@ fn diagnose_one_way_service_failures(
             continue;
         };
         let relaxed = relaxed_topology.find_path_between_access_tiles(
-            &relaxed_map,
+            relaxed_map,
             from.road_point,
             to.road_point,
             from.preferred_heading,
@@ -104,15 +143,19 @@ fn diagnose_one_way_service_failures(
     }
 }
 
+fn is_disconnected_service_leg(spec: &ServiceLegSpec, path: &TransitPathResult) -> bool {
+    spec.kind == RouteLegKind::Service && matches!(path, Err(LegFailureReason::NetworkDisconnected))
+}
+
 /// Whether a real service leg failed with `NetworkDisconnected`. Terminal
 /// reversals also carry `Err(NetworkDisconnected)` placeholders in
 /// `service_paths`; they must never trigger the diagnostic map clone and
 /// topology compile on their own.
 fn has_failed_service_leg(specs: &[ServiceLegSpec], service_paths: &[TransitPathResult]) -> bool {
-    specs.iter().zip(service_paths).any(|(spec, path)| {
-        spec.kind == RouteLegKind::Service
-            && matches!(path, Err(LegFailureReason::NetworkDisconnected))
-    })
+    specs
+        .iter()
+        .zip(service_paths)
+        .any(|(spec, path)| is_disconnected_service_leg(spec, path))
 }
 
 /// Clear every authored one-way direction in a clone. Roundabout ports are
@@ -525,5 +568,62 @@ mod tests {
     fn failed_service_leg_requests_one_way_diagnosis() {
         let (specs, paths) = two_stop_shuttle_paths(Some(LegFailureReason::NetworkDisconnected));
         assert!(has_failed_service_leg(&specs, &paths));
+    }
+
+    #[test]
+    fn shared_diagnostic_cache_compiles_relaxed_topology_once_across_routes() {
+        use crate::engine::GameEngine;
+        use crate::intent::GameIntent;
+        use crate::RoadPreset;
+
+        let mut engine = GameEngine::new();
+        engine.dispatch(GameIntent::LayRoadLine {
+            points: (2..=11).map(|x| (x, 5).into()).collect(),
+            preset: RoadPreset::OneWay,
+        });
+        for x in [2, 5, 8, 10] {
+            engine.dispatch(GameIntent::AddBusStop {
+                point: (x, 4).into(),
+            });
+        }
+        let snapshot = engine.snapshot();
+        let topology = RoadTopology::compile(&snapshot.map).expect("topology compiles");
+        let context = RoutingContext {
+            road_topology: &topology,
+        };
+        let cache = OneWayDiagnosticCache::default();
+
+        // First broken route builds the relaxed map and topology once; second reuses it.
+        let forward_only = resolve_route_legs_with_diagnostic_cache(
+            &snapshot,
+            context,
+            TransitMode::Bus,
+            &["stop-001".to_string(), "stop-002".to_string()],
+            ServicePattern::Shuttle,
+            &cache,
+        );
+        assert_eq!(
+            forward_only[2].failure_reason,
+            Some(LegFailureReason::OneWayNoReturn)
+        );
+        assert_eq!(cache.build_count.get(), 1);
+
+        let second_route = resolve_route_legs_with_diagnostic_cache(
+            &snapshot,
+            context,
+            TransitMode::Bus,
+            &["stop-003".to_string(), "stop-004".to_string()],
+            ServicePattern::Shuttle,
+            &cache,
+        );
+        assert_eq!(
+            second_route[2].failure_reason,
+            Some(LegFailureReason::OneWayNoReturn)
+        );
+        assert_eq!(
+            cache.build_count.get(),
+            1,
+            "second disconnected route on the same snapshot must reuse the cached relaxed topology"
+        );
     }
 }

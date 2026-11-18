@@ -6,7 +6,9 @@ use crate::model::{
     GameSnapshot, Heading, PathGeometry, Platform, RouteLegPath, RouteLegStatus, ServiceDirection,
     ServicePattern, TransitMode, TransitPath, TransitPathStepRef, TripPosition, Vehicle,
 };
-use crate::network::resolve_route_legs;
+use crate::network::{
+    resolve_route_legs, resolve_route_legs_with_diagnostic_cache, OneWayDiagnosticCache,
+};
 use crate::service_itinerary::{service_visits, ServiceVisit};
 use crate::stop_access::resolve_stop_access;
 use crate::transit::invalidate_trips_for_line;
@@ -168,6 +170,7 @@ pub(crate) fn derive_route_states(
     snapshot: &GameSnapshot,
     context: RoutingContext<'_>,
 ) -> Vec<RouteDerivedState> {
+    let diagnostic_cache = OneWayDiagnosticCache::default();
     let mut derived =
         Vec::with_capacity(snapshot.transit.routes.len() + snapshot.transit.metro_lines.len());
     for route in &snapshot.transit.routes {
@@ -179,6 +182,7 @@ pub(crate) fn derive_route_states(
             &route.stop_ids,
             route.pattern,
             &route.legs,
+            &diagnostic_cache,
         ));
     }
     for line in &snapshot.transit.metro_lines {
@@ -190,11 +194,13 @@ pub(crate) fn derive_route_states(
             &line.station_ids,
             line.pattern,
             &line.legs,
+            &diagnostic_cache,
         ));
     }
     derived
 }
 
+#[allow(clippy::too_many_arguments)]
 fn derive_single_route_state(
     snapshot: &GameSnapshot,
     context: RoutingContext<'_>,
@@ -203,8 +209,16 @@ fn derive_single_route_state(
     waypoint_ids: &[String],
     pattern: ServicePattern,
     legs: &[RouteLegPath],
+    diagnostic_cache: &OneWayDiagnosticCache,
 ) -> RouteDerivedState {
-    let resolved = resolve_route_legs(snapshot, context, mode, waypoint_ids, pattern);
+    let resolved = resolve_route_legs_with_diagnostic_cache(
+        snapshot,
+        context,
+        mode,
+        waypoint_ids,
+        pattern,
+        diagnostic_cache,
+    );
     let legs = merge_resolved_legs(Some(legs), resolved);
     let path_broken = legs
         .iter()
@@ -222,6 +236,7 @@ fn recompute_bus_routes(
     candidate: &mut GameSnapshot,
     context: RoutingContext<'_>,
 ) {
+    let diagnostic_cache = OneWayDiagnosticCache::default();
     for route_index in 0..candidate.transit.routes.len() {
         let route = candidate.transit.routes[route_index].clone();
         let previous_route = previous
@@ -229,12 +244,13 @@ fn recompute_bus_routes(
             .routes
             .iter()
             .find(|previous_route| previous_route.id == route.id);
-        let resolved = resolve_route_legs(
+        let resolved = resolve_route_legs_with_diagnostic_cache(
             candidate,
             context,
             TransitMode::Bus,
             &route.stop_ids,
             route.pattern,
+            &diagnostic_cache,
         );
         let legs = merge_resolved_legs(previous_route.map(|route| route.legs.as_slice()), resolved);
         let path_broken = legs
