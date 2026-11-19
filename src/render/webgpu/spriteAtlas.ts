@@ -136,21 +136,33 @@ async function decodeSpriteImage(
 }
 
 /**
- * Decodes all fifteen shipped sprites, validates their dimensions (one texel
- * per footprint tile, 192x192 trees) and uploads them into a single layered
- * `texture_2d_array`: one transparent 576x384 layer per sprite, five CPU
- * mips generated through one fixed-size 2D canvas (never resized — resizing
- * resets image smoothing). Each mip uploads only its source-sized top-left
- * crop; the rest of every layer stays transparent. Throws on any bad load,
- * so callers fail startup loudly instead of drawing a broken atlas.
+ * Decodes all fifteen shipped sprites and validates their dimensions (one
+ * texel per footprint tile, 192x192 trees), returning them in the stable
+ * 15-layer order (trees, then buildings in catalog order). Throws on any
+ * bad load, so callers fail startup loudly instead of drawing a broken
+ * atlas. The Canvas2D fallback consumes the same validated images directly.
  */
-export async function createSpriteAtlasTexture(
-  device: GPUDevice,
-): Promise<GPUTexture> {
-  const images = await Promise.all(
+export async function loadSpriteImages(): Promise<readonly HTMLImageElement[]> {
+  return Promise.all(
     SPRITE_LAYER_SOURCES.map((source) => decodeSpriteImage(source)),
   );
+}
 
+/**
+ * Uploads the already-decoded, dimension-validated images from
+ * `loadSpriteImages()` into a single layered `texture_2d_array`: one
+ * transparent 576x384 layer per sprite, five CPU mips generated through one
+ * fixed-size 2D canvas (never resized — resizing resets image smoothing).
+ * Each mip uploads only its source-sized top-left crop; the rest of every
+ * layer stays transparent. Synchronous: decoding happened in
+ * `loadSpriteImages()`. Destroys the partially created texture and
+ * rethrows on any upload failure, so callers fail startup loudly instead
+ * of drawing a broken atlas.
+ */
+export function createSpriteAtlasTexture(
+  device: GPUDevice,
+  images: readonly HTMLImageElement[],
+): GPUTexture {
   const canvas = document.createElement("canvas");
   canvas.width = SPRITE_ATLAS_WIDTH;
   canvas.height = SPRITE_ATLAS_HEIGHT;
@@ -170,26 +182,31 @@ export async function createSpriteAtlasTexture(
     usage: SPRITE_TEXTURE_USAGE,
   });
 
-  SPRITE_LAYER_SOURCES.forEach((source, layer) => {
-    const image = images[layer]!;
-    for (let level = 0; level < SPRITE_MIP_LEVEL_COUNT; level += 1) {
-      const width = Math.max(1, source.width >> level);
-      const height = Math.max(1, source.height >> level);
-      context.clearRect(0, 0, SPRITE_ATLAS_WIDTH, SPRITE_ATLAS_HEIGHT);
-      context.drawImage(image, 0, 0, width, height);
-      device.queue.copyExternalImageToTexture(
-        { source: canvas },
-        {
-          texture,
-          mipLevel: level,
-          origin: { z: layer },
-          colorSpace: "srgb",
-          premultipliedAlpha: true,
-        },
-        { width, height },
-      );
-    }
-  });
+  try {
+    SPRITE_LAYER_SOURCES.forEach((source, layer) => {
+      const image = images[layer]!;
+      for (let level = 0; level < SPRITE_MIP_LEVEL_COUNT; level += 1) {
+        const width = Math.max(1, source.width >> level);
+        const height = Math.max(1, source.height >> level);
+        context.clearRect(0, 0, SPRITE_ATLAS_WIDTH, SPRITE_ATLAS_HEIGHT);
+        context.drawImage(image, 0, 0, width, height);
+        device.queue.copyExternalImageToTexture(
+          { source: canvas },
+          {
+            texture,
+            mipLevel: level,
+            origin: { z: layer },
+            colorSpace: "srgb",
+            premultipliedAlpha: true,
+          },
+          { width, height },
+        );
+      }
+    });
+  } catch (error) {
+    texture.destroy();
+    throw error;
+  }
 
   return texture;
 }

@@ -49,9 +49,10 @@ vi.mock("../../src/render/webgpu/mapBatch", async (importOriginal) => {
 });
 
 // jsdom ships no image decode; the real production host factory loads the
-// sprite atlas before creating the renderer, so stub that upload out here
-// and assert its texture is destroyed with the renderer's resources. The
-// rest of the module (typed table, layer math) stays real for mapBatch.
+// sprite images and uploads the atlas before creating the renderer, so stub
+// both out here and assert the texture is destroyed with the renderer's
+// resources. The rest of the module (typed table, layer math) stays real
+// for mapBatch.
 vi.mock("../../src/render/webgpu/spriteAtlas", async (importOriginal) => {
   const mod =
     await importOriginal<
@@ -59,7 +60,8 @@ vi.mock("../../src/render/webgpu/spriteAtlas", async (importOriginal) => {
     >();
   return {
     ...mod,
-    createSpriteAtlasTexture: vi.fn(async () => ({
+    loadSpriteImages: vi.fn(async () => []),
+    createSpriteAtlasTexture: vi.fn(() => ({
       createView: () => ({}),
       destroy: vi.fn(),
     })),
@@ -2466,7 +2468,7 @@ describe("createGameHost teardown destruction", () => {
       expect(harness.deviceDestroyed).toBe(false);
       // The factory uploaded the atlas into the renderer, which owns and
       // destroys it with its other GPU resources at the terminal destroy().
-      const atlas = await vi
+      const atlas = vi
         .mocked(createSpriteAtlasTexture)
         .mock.results.at(-1)!.value;
       expect(atlas.destroy).not.toHaveBeenCalled();
@@ -2533,9 +2535,9 @@ describe("createGameHost gpu bootstrap", () => {
         getPreferredCanvasFormat: () => "bgra8unorm",
       },
     });
-    vi.mocked(createSpriteAtlasTexture).mockRejectedValueOnce(
-      new Error("atlas decode failed"),
-    );
+    vi.mocked(createSpriteAtlasTexture).mockImplementationOnce(() => {
+      throw new Error("atlas decode failed");
+    });
 
     // The factory rejects without a host, so the caller can never destroy
     // the device — the factory must release it itself.

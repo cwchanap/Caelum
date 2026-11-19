@@ -20,7 +20,10 @@ import {
   buildMapBatch,
   gridModeForUi,
 } from "../render/webgpu/mapBatch";
-import { createSpriteAtlasTexture } from "../render/webgpu/spriteAtlas";
+import {
+  createSpriteAtlasTexture,
+  loadSpriteImages,
+} from "../render/webgpu/spriteAtlas";
 import {
   buildTransitBatch,
   routeStyleKeyFor,
@@ -1329,9 +1332,11 @@ export async function createGameHost(ctx: GameHostContext): Promise<GameHost> {
   const device = await adapter.requestDevice();
   try {
     const format = navigator.gpu.getPreferredCanvasFormat();
-    // Decode + upload all fifteen shipped sprites before any frame renders, so
-    // the textured pass never shows a blank atlas period between commits.
-    const spriteTexture = await createSpriteAtlasTexture(device);
+    // Decode all fifteen shipped sprites first, then upload the validated
+    // images synchronously, so the textured pass never shows a blank atlas
+    // period between commits.
+    const spriteImages = await loadSpriteImages();
+    const spriteTexture = createSpriteAtlasTexture(device, spriteImages);
     return createGameHostWithRenderer(
       ctx,
       createWebGpuRenderer(device, format, spriteTexture),
