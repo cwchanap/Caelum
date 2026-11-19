@@ -42,6 +42,7 @@ import {
   type GameplayRenderer,
   type RenderFrame,
 } from "../render/gameplayRenderer";
+import { createCanvas2dRenderer } from "../render/canvas2d/renderer";
 import { createWebGpuRenderer } from "../render/webgpu/renderer";
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
@@ -93,9 +94,8 @@ export interface GameHostContext {
 /** The one display host around the renderer chosen once at startup. The
  *  former full Canvas2D gameplay renderer was deleted by HPA-640; HPA-1144
  *  adds a new, limited Canvas2D fallback that startup selection picks only
- *  when WebGPU capability/setup is unavailable (until that checkpoint the
- *  production factory below is WebGPU-only). Input, camera, batching, the
- *  rAF loop, tick admission, and lifecycle are identical for both. */
+ *  when WebGPU capability/setup is unavailable. Input, camera, batching,
+ *  the rAF loop, tick admission, and lifecycle are identical for both. */
 export interface GameHost {
   mount(host: HTMLElement): () => void;
   render(): void;
@@ -151,8 +151,8 @@ interface ClipTransform {
 
 /**
  * Builds the host around an existing renderer. Tests inject a narrow fake
- * renderer here; production passes the real WebGPU renderer until the
- * HPA-1144 startup selection adds the Canvas2D fallback.
+ * renderer here; production passes the renderer chosen once at startup
+ * (WebGPU preferred, Canvas2D fallback).
  */
 export function createGameHostWithRenderer(
   ctx: GameHostContext,
@@ -738,6 +738,7 @@ export function createGameHostWithRenderer(
 
     const nextCanvas = document.createElement("canvas");
     nextCanvas.dataset.runtimeCanvas = "true";
+    nextCanvas.dataset.renderer = renderer.kind;
     nextCanvas.style.width = "100%";
     nextCanvas.style.height = "100%";
     nextCanvas.style.display = "block";
@@ -1318,33 +1319,80 @@ export function createGameHostWithRenderer(
 }
 
 /**
- * Production host factory: creates the GPU device before returning so the
- * runtime's public `mountCanvas(host): () => void` contract stays synchronous.
+ * One-shot startup WebGPU capability probe (HPA-1144): checks `navigator.gpu`,
+ * requests the "webgpu" context on a disposable 16×16 canvas (so requesting
+ * WebGPU cannot poison the real gameplay canvas's 2D mode), then the adapter,
+ * device and preferred format, and finally configures and unconfigures the
+ * probe context so swapchain-setup failures surface before the first frame.
+ * Returns the acquired device and format, or null on any capability failure —
+ * with the owned device already destroyed. Deliberately narrow: sprite-asset,
+ * atlas-upload and pipeline errors stay fatal outside this probe.
+ */
+async function probeWebGpuCapability(): Promise<{
+  device: GPUDevice;
+  format: GPUTextureFormat;
+} | null> {
+  let device: GPUDevice | null = null;
+  try {
+    if (navigator.gpu === undefined) {
+      return null;
+    }
+    const probeCanvas = document.createElement("canvas");
+    probeCanvas.width = 16;
+    probeCanvas.height = 16;
+    const probeContext = probeCanvas.getContext("webgpu");
+    if (probeContext === null) {
+      return null;
+    }
+    const adapter = await navigator.gpu.requestAdapter();
+    if (adapter === null) {
+      return null;
+    }
+    device = await adapter.requestDevice();
+    const format = navigator.gpu.getPreferredCanvasFormat();
+    probeContext.configure({ device, format, alphaMode: "opaque" });
+    probeContext.unconfigure();
+    return { device, format };
+  } catch {
+    // Capability/setup failure: release the device the probe acquired (if
+    // any) and let the caller select the Canvas2D fallback.
+    device?.destroy();
+    return null;
+  }
+}
+
+/**
+ * Production host factory. Decodes the shipped sprites first, outside the
+ * fallback catch, so a bad asset stays fatal. Renderer selection then runs
+ * once: a WebGPU capability/setup failure (absent API/context, rejected
+ * adapter/device/format, failed probe configure/unconfigure) destroys any
+ * acquired device and constructs the Canvas2D fallback; atlas upload and
+ * GPU renderer/pipeline construction stay fatal and clean up the texture
+ * and device they no longer hand out. There is no second fallback — a null
+ * 2D context at mount reports a clear fatal error. Device creation happens
+ * before returning so the runtime's public
+ * `mountCanvas(host): () => void` contract stays synchronous.
  */
 export async function createGameHost(ctx: GameHostContext): Promise<GameHost> {
-  if (navigator.gpu === undefined) {
-    throw new Error("WebGPU is unavailable in this browser");
-  }
-  const adapter = await navigator.gpu.requestAdapter();
-  if (adapter === null) {
-    throw new Error("WebGPU adapter unavailable");
-  }
-  const device = await adapter.requestDevice();
-  try {
-    const format = navigator.gpu.getPreferredCanvasFormat();
-    // Decode all fifteen shipped sprites first, then upload the validated
-    // images synchronously, so the textured pass never shows a blank atlas
-    // period between commits.
-    const spriteImages = await loadSpriteImages();
-    const spriteTexture = createSpriteAtlasTexture(device, spriteImages);
+  const spriteImages = await loadSpriteImages();
+  const capability = await probeWebGpuCapability();
+  if (capability === null) {
     return createGameHostWithRenderer(
       ctx,
-      createWebGpuRenderer(device, format, spriteTexture),
-      device,
+      createCanvas2dRenderer(spriteImages),
     );
+  }
+  const { device, format } = capability;
+  let spriteTexture: GPUTexture | null = null;
+  try {
+    spriteTexture = createSpriteAtlasTexture(device, spriteImages);
+    const renderer = createWebGpuRenderer(device, format, spriteTexture);
+    return createGameHostWithRenderer(ctx, renderer, device);
   } catch (error) {
-    // A failure here rejects the factory: no host reaches the caller, so the
-    // acquired device leaks unless the factory releases it before rethrowing.
+    // Fatal GPU setup, never a capability failure: destroy the handed-over
+    // atlas texture (the uploader already cleaned its own partial texture
+    // when it threw) and the acquired device before rethrowing.
+    spriteTexture?.destroy();
     device.destroy();
     throw error;
   }
