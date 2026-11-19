@@ -629,13 +629,17 @@ describe("createCanvas2dRenderer", () => {
     // at alpha 0.5 must not dim sprites (alpha 0 would erase them).
     const stats = renderer.render({
       solids: [
-        solid("dynamic", [0, 1, 0, 0.5], [
+        solid(
+          "dynamic",
+          [0, 1, 0, 0.5],
           [
-            [-1, -1],
-            [1, -1],
-            [1, 1],
+            [
+              [-1, -1],
+              [1, -1],
+              [1, 1],
+            ],
           ],
-        ]),
+        ),
       ],
       sprites: spriteRow([0, 0], 0, 12, 12, [1, 1], 0, [0.5, -0.5]),
       vehicles: [],

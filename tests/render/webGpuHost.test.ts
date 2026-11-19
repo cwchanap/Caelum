@@ -18,6 +18,7 @@ import type {
 import {
   createGameHost,
   createGameHostWithRenderer,
+  type GameHost,
   type GameHostContext,
 } from "../../src/runtime/createGameHost";
 import {
@@ -37,10 +38,13 @@ import {
 } from "../../src/render/boardTransform";
 import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
 import { parseColor } from "../../src/render/webgpu/primitives";
-import { createSpriteAtlasTexture } from "../../src/render/webgpu/spriteAtlas";
+import {
+  createSpriteAtlasTexture,
+  loadSpriteImages,
+} from "../../src/render/webgpu/spriteAtlas";
 import { createUiState, type UiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
-import { createFakeDevice } from "../helpers/fakeWebGpu";
+import { createFakeDevice, type FakeHarness } from "../helpers/fakeWebGpu";
 
 vi.mock("../../src/render/webgpu/mapBatch", async (importOriginal) => {
   const mod =
@@ -2491,7 +2495,7 @@ describe("createGameHost teardown destruction", () => {
   });
 });
 
-describe("createGameHost gpu bootstrap", () => {
+describe("createGameHost startup capability selection", () => {
   const noopContext: GameHostContext = {
     getState: () => createTestGameState(),
     getUi: () => createUiState(),
@@ -2509,41 +2513,319 @@ describe("createGameHost gpu bootstrap", () => {
     onFatalError: () => {},
   };
 
-  it("rejects when navigator.gpu is unavailable", async () => {
-    vi.stubGlobal("navigator", {});
-    await expect(createGameHost(noopContext)).rejects.toThrow(
-      "WebGPU is unavailable in this browser",
-    );
+  beforeEach(() => {
+    // Calls accumulate per mock across the file; each selection test asserts
+    // on its own factory run only.
+    vi.clearAllMocks();
   });
 
-  it("rejects when the adapter request returns null", async () => {
-    vi.stubGlobal("navigator", {
-      gpu: { requestAdapter: async () => null },
+  /** Fake GPUCanvasContext recording configure/unconfigure order, with
+   *  throw injection for each probe-failure mode. */
+  function createFakeGpuContext(options?: {
+    configureThrows?: Error;
+    unconfigureThrows?: Error;
+  }): { calls: string[]; configure: Mock; unconfigure: Mock } {
+    const calls: string[] = [];
+    return {
+      calls,
+      configure: vi.fn((descriptor: GPUCanvasConfiguration) => {
+        calls.push(`configure ${descriptor.alphaMode}`);
+        if (options?.configureThrows) throw options.configureThrows;
+      }),
+      unconfigure: vi.fn(() => {
+        calls.push("unconfigure");
+        if (options?.unconfigureThrows) throw options.unconfigureThrows;
+      }),
+    };
+  }
+
+  /** Stubs HTMLCanvasElement.getContext: "webgpu" resolves to `gpuContext`
+   *  (null = the context request itself fails), "2d" always yields a usable
+   *  minimal context so the Canvas2D fallback renderer can configure its
+   *  mounted canvas (these tests never draw: rAF callbacks never fire).
+   *  Returns every call's canvas + type in order. */
+  function stubCanvasGetContext(
+    gpuContext: unknown,
+  ): Array<{ canvas: HTMLCanvasElement; type: string }> {
+    const calls: Array<{ canvas: HTMLCanvasElement; type: string }> = [];
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
+      function (this: HTMLCanvasElement, type: string) {
+        calls.push({ canvas: this, type });
+        if (type === "webgpu") return gpuContext;
+        if (type === "2d") return { canvas: this };
+        return null;
+      } as never,
+    );
+    return calls;
+  }
+
+  /** Full navigator.gpu stub around a fake-device harness, with per-step
+   *  capability-failure injection. */
+  function stubNavigatorGpu(
+    harness: FakeHarness,
+    options?: {
+      adapter?: null | Error;
+      deviceThrows?: Error;
+      formatThrows?: Error;
+    },
+  ): { requestAdapter: Mock; requestDevice: Mock } {
+    const requestDevice = vi.fn(async () => {
+      if (options?.deviceThrows) throw options.deviceThrows;
+      return harness.device;
     });
-    await expect(createGameHost(noopContext)).rejects.toThrow(
-      "WebGPU adapter unavailable",
-    );
-  });
-
-  it("destroys the acquired device when atlas initialization fails", async () => {
-    const harness = createFakeDevice();
+    const requestAdapter = vi.fn(async () => {
+      if (options?.adapter instanceof Error) throw options.adapter;
+      return options?.adapter === null ? null : { requestDevice };
+    });
     vi.stubGlobal("navigator", {
       gpu: {
-        requestAdapter: async () => ({
-          requestDevice: async () => harness.device,
-        }),
-        getPreferredCanvasFormat: () => "bgra8unorm",
+        requestAdapter,
+        getPreferredCanvasFormat: () => {
+          if (options?.formatThrows) throw options.formatThrows;
+          return "bgra8unorm";
+        },
       },
     });
+    return { requestAdapter, requestDevice };
+  }
+
+  /** Runs the production factory and mounts its host; returns the mounted
+   *  gameplay canvas plus teardown. */
+  async function mountProductionHost(): Promise<{
+    host: GameHost;
+    canvas: HTMLCanvasElement;
+    detach: () => void;
+  }> {
+    const host = await createGameHost(noopContext);
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const detach = host.mount(container);
+    const canvas = container.querySelector("canvas");
+    if (canvas === null) throw new Error("host mounted no canvas");
+    return { host, canvas, detach };
+  }
+
+  it("selects WebGPU, probing a disposable 16×16 canvas before mount", async () => {
+    const harness = createFakeDevice();
+    const gpuContext = createFakeGpuContext();
+    const nav = stubNavigatorGpu(harness);
+    const contextCalls = stubCanvasGetContext(gpuContext);
+
+    const host = await createGameHost(noopContext);
+
+    // The probe configured the acquired device on a disposable 16×16 canvas,
+    // then unconfigured it, before any gameplay canvas existed.
+    const webgpuCalls = contextCalls.filter((c) => c.type === "webgpu");
+    expect(webgpuCalls.length).toBe(1);
+    const probeCanvas = webgpuCalls[0]!.canvas;
+    expect(probeCanvas.width).toBe(16);
+    expect(probeCanvas.height).toBe(16);
+    expect(gpuContext.calls).toEqual(["configure opaque", "unconfigure"]);
+    expect(gpuContext.configure).toHaveBeenCalledWith({
+      device: harness.device,
+      format: "bgra8unorm",
+      alphaMode: "opaque",
+    });
+
+    // Atlas upload runs outside the capability boundary on the acquired
+    // device with the decoded sprite images; the device stays alive.
+    expect(vi.mocked(createSpriteAtlasTexture)).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(createSpriteAtlasTexture)).toHaveBeenCalledWith(
+      harness.device,
+      [],
+    );
+    expect(harness.deviceDestroyed).toBe(false);
+
+    // The mounted gameplay canvas records the chosen renderer, distinct from
+    // the probe canvas.
+    const container = document.createElement("div");
+    document.body.appendChild(container);
+    const detach = host.mount(container);
+    const canvas = container.querySelector("canvas");
+    expect(canvas).not.toBeNull();
+    expect(canvas!.dataset.renderer).toBe("webgpu");
+    expect(canvas!.dataset.runtimeCanvas).toBe("true");
+    expect(contextCalls.filter((c) => c.type === "webgpu").length).toBe(2);
+
+    // A City Library round trip remounts fresh canvases without ever
+    // re-running capability selection.
+    detach();
+    const remountContainer = document.createElement("div");
+    document.body.appendChild(remountContainer);
+    host.mount(remountContainer);
+    expect(remountContainer.querySelector("canvas")!.dataset.renderer).toBe(
+      "webgpu",
+    );
+    expect(nav.requestAdapter).toHaveBeenCalledTimes(1);
+    expect(gpuContext.configure).toHaveBeenCalledTimes(3); // probe + 2 mounts
+
+    host.destroy();
+    expect(harness.deviceDestroyed).toBe(true);
+  });
+
+  /** Every startup capability failure the fallback must absorb: the factory
+   *  resolves with a Canvas2D host and never touches the GPU asset path. */
+  const capabilityFailureCases: Array<{
+    name: string;
+    /** Whether the probe acquired the fake device before failing. */
+    deviceAcquired: boolean;
+    stub: (harness: FakeHarness) => void;
+  }> = [
+    {
+      name: "navigator.gpu is absent",
+      deviceAcquired: false,
+      stub: () => vi.stubGlobal("navigator", {}),
+    },
+    {
+      name: "the adapter request returns null",
+      deviceAcquired: false,
+      stub: (harness) => stubNavigatorGpu(harness, { adapter: null }),
+    },
+    {
+      name: "the adapter request rejects",
+      deviceAcquired: false,
+      stub: (harness) =>
+        stubNavigatorGpu(harness, { adapter: new Error("adapter refused") }),
+    },
+    {
+      name: "the device request rejects",
+      deviceAcquired: false,
+      stub: (harness) =>
+        stubNavigatorGpu(harness, {
+          deviceThrows: new Error("device refused"),
+        }),
+    },
+    {
+      name: "the probe canvas has no webgpu context",
+      deviceAcquired: false,
+      stub: (harness) => {
+        stubNavigatorGpu(harness);
+        stubCanvasGetContext(null);
+      },
+    },
+    {
+      name: "the preferred canvas format is unavailable",
+      deviceAcquired: true,
+      stub: (harness) => {
+        stubNavigatorGpu(harness, {
+          formatThrows: new Error("no preferred format"),
+        });
+        stubCanvasGetContext(createFakeGpuContext());
+      },
+    },
+    {
+      name: "the probe context cannot configure",
+      deviceAcquired: true,
+      stub: (harness) => {
+        stubNavigatorGpu(harness);
+        stubCanvasGetContext(
+          createFakeGpuContext({
+            configureThrows: new Error("swapchain setup failed"),
+          }),
+        );
+      },
+    },
+    {
+      name: "the probe context cannot unconfigure",
+      deviceAcquired: true,
+      stub: (harness) => {
+        stubNavigatorGpu(harness);
+        stubCanvasGetContext(
+          createFakeGpuContext({
+            unconfigureThrows: new Error("unconfigure failed"),
+          }),
+        );
+      },
+    },
+  ];
+
+  it.each(capabilityFailureCases)(
+    "falls back to Canvas2D when $name",
+    async ({ stub }) => {
+      const harness = createFakeDevice();
+      stub(harness);
+
+      // Capability failure is a renderer choice, never a factory rejection.
+      const { canvas, detach } = await mountProductionHost();
+      expect(canvas.dataset.renderer).toBe("canvas2d");
+      expect(canvas.dataset.runtimeCanvas).toBe("true");
+      detach();
+
+      // The capability boundary ends before any GPU asset upload runs.
+      expect(vi.mocked(createSpriteAtlasTexture)).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(
+    capabilityFailureCases.filter(
+      (capabilityCase) => capabilityCase.deviceAcquired,
+    ),
+  )("destroys the acquired device when $name", async ({ stub }) => {
+    const harness = createFakeDevice();
+    stub(harness);
+
+    // The probe acquired the device, then failed setup: the factory owns
+    // the doomed device and must release it itself before falling back.
+    await mountProductionHost();
+    expect(harness.deviceDestroyed).toBe(true);
+  });
+
+  it("rejects when sprite assets fail to load, before acquiring any device", async () => {
+    const harness = createFakeDevice();
+    stubNavigatorGpu(harness);
+    stubCanvasGetContext(createFakeGpuContext());
+    vi.mocked(loadSpriteImages).mockRejectedValueOnce(
+      new Error("sprite decode failed"),
+    );
+
+    // Asset decoding precedes capability probing and the fallback catch: a
+    // bad shipped sprite stays fatal instead of silently selecting Canvas2D.
+    await expect(createGameHost(noopContext)).rejects.toThrow(
+      "sprite decode failed",
+    );
+    expect(harness.deviceDestroyed).toBe(false);
+    expect(vi.mocked(createSpriteAtlasTexture)).not.toHaveBeenCalled();
+  });
+
+  it("destroys the acquired device and stays fatal when atlas upload fails", async () => {
+    const harness = createFakeDevice();
+    stubNavigatorGpu(harness);
+    stubCanvasGetContext(createFakeGpuContext());
     vi.mocked(createSpriteAtlasTexture).mockImplementationOnce(() => {
       throw new Error("atlas decode failed");
     });
 
     // The factory rejects without a host, so the caller can never destroy
-    // the device — the factory must release it itself.
+    // the device — the factory must release it itself. (The uploader's own
+    // partial-texture cleanup is asserted in spriteAtlas tests.)
     await expect(createGameHost(noopContext)).rejects.toThrow(
       "atlas decode failed",
     );
+    expect(harness.deviceDestroyed).toBe(true);
+  });
+
+  it("destroys the atlas texture and device when GPU pipeline creation fails", async () => {
+    const harness = createFakeDevice();
+    stubNavigatorGpu(harness);
+    stubCanvasGetContext(createFakeGpuContext());
+    const atlasTexture = { createView: () => ({}), destroy: vi.fn() };
+    vi.mocked(createSpriteAtlasTexture).mockImplementationOnce(
+      () => atlasTexture as unknown as GPUTexture,
+    );
+    // The real renderer builds pipelines on the fake device at construction;
+    // fail the first one after the texture was already handed over.
+    (
+      harness.device as unknown as { createRenderPipeline: () => never }
+    ).createRenderPipeline = () => {
+      throw new Error("pipeline creation failed");
+    };
+
+    // A shader/pipeline bug is terminal — never a capability fallback — and
+    // the factory releases the texture and device it no longer hands out.
+    await expect(createGameHost(noopContext)).rejects.toThrow(
+      "pipeline creation failed",
+    );
+    expect(atlasTexture.destroy).toHaveBeenCalledTimes(1);
     expect(harness.deviceDestroyed).toBe(true);
   });
 });
