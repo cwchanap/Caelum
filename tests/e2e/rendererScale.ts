@@ -3,13 +3,13 @@ import {
   createGameHostWithRenderer,
   type GameHostContext,
 } from "../../src/runtime/createGameHost";
+import { createWebGpuRenderer } from "../../src/render/webgpu/renderer";
 import {
-  createWebGpuRenderer,
   VEHICLE_INSTANCE_FLOATS,
-  type WebGpuRenderFrame,
-  type WebGpuRenderStats,
-  type WebGpuRenderer,
-} from "../../src/render/webgpu/renderer";
+  type GameplayRenderer,
+  type RenderFrame,
+  type RenderStats,
+} from "../../src/render/gameplayRenderer";
 import { createSpriteAtlasTexture } from "../../src/render/webgpu/spriteAtlas";
 import { createUiState } from "../../src/ui/uiState";
 import { buildRenderScaleState } from "../helpers/renderScaleState";
@@ -87,7 +87,7 @@ const device = await adapter.requestDevice();
 const format = navigator.gpu.getPreferredCanvasFormat();
 const spriteTexture = await createSpriteAtlasTexture(device);
 const renderer = createWebGpuRenderer(device, format, spriteTexture);
-let lastStats: WebGpuRenderStats = {
+let lastStats: RenderStats = {
   solidBatches: 0,
   solidVertices: 0,
   spriteInstances: 0,
@@ -95,9 +95,9 @@ let lastStats: WebGpuRenderStats = {
   vehicleInstances: 0,
   vehicleDraws: 0,
 };
-const recordingRenderer: WebGpuRenderer = {
+const recordingRenderer: GameplayRenderer = {
   ...renderer,
-  render: (frame: WebGpuRenderFrame) => {
+  render: (frame: RenderFrame) => {
     lastStats = renderer.render(frame);
     return lastStats;
   },

@@ -23,9 +23,9 @@ import {
 import {
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
-  type WebGpuRenderFrame,
-  type WebGpuRenderer,
-} from "../../src/render/webgpu/renderer";
+  type GameplayRenderer,
+  type RenderFrame,
+} from "../../src/render/gameplayRenderer";
 import {
   VEHICLE_HALF_LENGTH,
   VEHICLE_HALF_WIDTH,
@@ -155,6 +155,7 @@ afterEach(() => {
 });
 
 interface FakeRenderer {
+  kind: "webgpu";
   lost: Promise<{ reason?: string; message: string }>;
   resolveLost(info: { reason?: string; message: string }): void;
   configure: Mock;
@@ -163,7 +164,7 @@ interface FakeRenderer {
   render: Mock;
   captureFrame: Mock;
   destroy: Mock;
-  frames: WebGpuRenderFrame[];
+  frames: RenderFrame[];
 }
 
 function createFakeRenderer(): FakeRenderer {
@@ -174,14 +175,15 @@ function createFakeRenderer(): FakeRenderer {
   const lost = new Promise<{ reason?: string; message: string }>((resolve) => {
     resolveLost = resolve;
   });
-  const frames: WebGpuRenderFrame[] = [];
+  const frames: RenderFrame[] = [];
   return {
+    kind: "webgpu",
     lost,
     resolveLost,
     configure: vi.fn(),
     unconfigure: vi.fn(),
     resize: vi.fn(),
-    render: vi.fn((frame: WebGpuRenderFrame) => {
+    render: vi.fn((frame: RenderFrame) => {
       frames.push(frame);
       return {
         solidBatches: 0,
@@ -276,7 +278,7 @@ function createFixture(options?: {
 
   const host = createGameHostWithRenderer(
     ctx,
-    renderer as unknown as WebGpuRenderer,
+    renderer as unknown as GameplayRenderer,
   );
 
   const boardWidth = state.map.width * tileSize;
@@ -2353,7 +2355,7 @@ describe("createGameHost teardown destruction", () => {
         onDragCancel: () => {},
         onFatalError: () => {},
       },
-      renderer as unknown as WebGpuRenderer,
+      renderer as unknown as GameplayRenderer,
     );
 
     host.start();

@@ -6,7 +6,7 @@ import {
 import {
   VEHICLE_INSTANCE_FLOATS,
   VEHICLE_LANE_OFFSET_PX,
-} from "../../src/render/webgpu/renderer";
+} from "../../src/render/gameplayRenderer";
 import {
   VEHICLE_HALF_LENGTH,
   VEHICLE_HALF_WIDTH,

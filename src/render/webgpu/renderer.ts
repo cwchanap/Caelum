@@ -1,92 +1,20 @@
 import { colors } from "../colors";
 import { SOLID_VERTEX_FLOATS, parseColor } from "./primitives";
+import {
+  SPRITE_INSTANCE_FLOATS,
+  VEHICLE_INSTANCE_FLOATS,
+  VEHICLE_LANE_OFFSET_PX,
+  VEHICLE_RIM_PX,
+  type BatchRole,
+  type CapturedFrame,
+  type GameplayRenderer,
+  type RenderFrame,
+  type RenderStats,
+  type SolidBatch,
+  type WebGpuDeviceLoss,
+} from "../gameplayRenderer";
 
-export interface WebGpuDeviceLoss {
-  reason?: string;
-  message: string;
-}
-
-/** GPU buffer identity by painter role, not per-batch key: the spec pins
- *  exactly five grow-only buffers — structural, route-style, one dynamic
- *  shared by the ordered dynamic ranges, the vehicle instance buffer, and
- *  the sprite instance buffer. Geometry rebuild decisions stay on the
- *  host's string cache keys. */
-export type WebGpuBatchRole = "structural" | "route" | "dynamic";
-type BufferRole = WebGpuBatchRole | "vehicle" | "sprite";
-
-/** Solid (non-instanced) triangle batch: interleaved x,y,r,g,b,a vertices. */
-export interface WebGpuSolidBatch {
-  role: WebGpuBatchRole;
-  vertices: Float32Array<ArrayBuffer>;
-}
-
-/** Instanced vehicle batch. Instance layout: clip origin (x, y), world angle,
- *  world half-extents (length, width), RGBA color, trailing clip factors. */
-export interface WebGpuVehicleBatch {
-  instances: Float32Array<ArrayBuffer>;
-}
-
-/** Instanced textured sprite batch (trees + buildings). Instance layout per
- *  SPRITE_INSTANCE_FLOATS below: world origin (x, y), angle, world
- *  half-extents (x, y), uv scale (x, y), texture layer, host clip factors. */
-export interface WebGpuSpriteBatch {
-  instances: Float32Array<ArrayBuffer>;
-}
-
-export interface WebGpuRenderFrame {
-  /** Solid batches drawn before sprites, in painter order. */
-  solids: readonly WebGpuSolidBatch[];
-  /** One instanced textured draw after the structural solids. */
-  sprites?: WebGpuSpriteBatch;
-  /** Solid batches drawn after sprites (underRoutes, routes, drafts). */
-  overSprites?: readonly WebGpuSolidBatch[];
-  /** Instanced vehicle batches, concatenated into one upload in frame order. */
-  vehicles: readonly WebGpuVehicleBatch[];
-  /** Solid batches drawn after vehicles (route handles), in painter order. */
-  overVehicles?: readonly WebGpuSolidBatch[];
-}
-
-export interface WebGpuRenderStats {
-  solidBatches: number;
-  solidVertices: number;
-  spriteInstances: number;
-  spriteDraws: number;
-  vehicleInstances: number;
-  vehicleDraws: number;
-}
-
-/** A rendered frame read back to CPU memory: row-tight RGBA8 in device
- *  pixels, top-left origin — the same layout ImageData exposes. */
-export interface WebGpuCapturedFrame {
-  width: number;
-  height: number;
-  pixels: Uint8ClampedArray;
-}
-
-export interface WebGpuRenderer {
-  readonly lost: Promise<WebGpuDeviceLoss>;
-  configure(canvas: HTMLCanvasElement): void;
-  unconfigure(): void;
-  resize(width: number, height: number): void;
-  render(frame: WebGpuRenderFrame): WebGpuRenderStats;
-  /** Renders `frame` into an offscreen target at the resize() pixel size and
-   *  reads it back via copyTextureToBuffer + mapAsync. Unlike canvas-side
-   *  readbacks (toDataURL, drawImage, screenshots), this does not depend on
-   *  canvas presentation reaching the compositor, which headless/software-
-   *  Vulkan Chromium never completes. Returns null while unconfigured. */
-  captureFrame(frame: WebGpuRenderFrame): Promise<WebGpuCapturedFrame | null>;
-  destroy(): void;
-}
-
-/** Interleaved vehicle instance layout (see WebGpuVehicleBatch). */
-export const VEHICLE_INSTANCE_FLOATS = 11;
-
-/** Interleaved sprite instance layout (see WebGpuSpriteBatch, emitted by
- *  mapBatch.ts): world origin (x, y), angle, world half-extents (x, y),
- *  uv scale (x, y), texture layer, two trailing host clip-scale slots. */
-export const SPRITE_INSTANCE_FLOATS = 10;
-
-export const VEHICLE_LANE_OFFSET_PX = 8;
+type BufferRole = BatchRole | "vehicle" | "sprite";
 
 const [emptyR, emptyG, emptyB] = parseColor(colors.empty);
 const CLEAR_COLOR: GPUColor = { r: emptyR, g: emptyG, b: emptyB, a: 1 };
@@ -177,7 +105,7 @@ fn fsMain(output: VertexOutput) -> @location(0) vec4f {
     output.extents.x - abs(output.quad.x),
     output.extents.y - abs(output.quad.y),
   );
-  if (edge < 1.5) {
+  if (edge < ${VEHICLE_RIM_PX.toFixed(1)}) {
     return vec4f(1.0, 1.0, 1.0, output.color.a);
   }
   return output.color;
@@ -274,7 +202,7 @@ export function createWebGpuRenderer(
   /** The pre-uploaded layered sprite atlas (spriteAtlas.ts). Production
    *  always passes it; no-sprite renderer/benchmark test callers omit it. */
   spriteTexture?: GPUTexture,
-): WebGpuRenderer {
+): GameplayRenderer {
   const lost: Promise<WebGpuDeviceLoss> = device.lost.then((info) => ({
     reason: info.reason,
     message: info.message,
@@ -433,9 +361,9 @@ export function createWebGpuRenderer(
    *  presented-canvas path and the offscreen capture path run through this so
    *  a captured frame is byte-identical to what the canvas pass encodes. */
   const encodeFrame = (
-    frame: WebGpuRenderFrame,
+    frame: RenderFrame,
     view: GPUTextureView,
-  ): { encoder: GPUCommandEncoder; stats: WebGpuRenderStats } => {
+  ): { encoder: GPUCommandEncoder; stats: RenderStats } => {
     // Callers guard configuration (render checks context, captureFrame
     // checks quadBuffer); configure() always establishes both together.
     const quad = quadBuffer!;
@@ -454,7 +382,7 @@ export function createWebGpuRenderer(
     // Grow each role buffer once per frame, before any writes, to the
     // frame's total role size — never shrinks across frames.
     const roleTotals = new Map<BufferRole, number>();
-    const totalize = (batches: readonly WebGpuSolidBatch[]): void => {
+    const totalize = (batches: readonly SolidBatch[]): void => {
       for (const batch of batches) {
         if (batch.vertices.length === 0) continue;
         roleTotals.set(
@@ -473,7 +401,7 @@ export function createWebGpuRenderer(
     let solidBatches = 0;
     let solidVertices = 0;
     const roleOffsets = new Map<BufferRole, number>();
-    const drawSolids = (batches: readonly WebGpuSolidBatch[]): void => {
+    const drawSolids = (batches: readonly SolidBatch[]): void => {
       pass.setPipeline(solidPipeline);
       for (const batch of batches) {
         if (batch.vertices.length === 0) {
@@ -563,6 +491,7 @@ export function createWebGpuRenderer(
   };
 
   return {
+    kind: "webgpu",
     lost,
     configure(canvas: HTMLCanvasElement): void {
       const canvasContext = canvas.getContext("webgpu");
@@ -581,7 +510,7 @@ export function createWebGpuRenderer(
       pixelWidth = nextWidth;
       pixelHeight = nextHeight;
     },
-    render(frame: WebGpuRenderFrame): WebGpuRenderStats {
+    render(frame: RenderFrame): RenderStats {
       if (!context) {
         throw new Error("WebGPU renderer is not configured");
       }
@@ -592,9 +521,7 @@ export function createWebGpuRenderer(
       device.queue.submit([encoder.finish()]);
       return stats;
     },
-    async captureFrame(
-      frame: WebGpuRenderFrame,
-    ): Promise<WebGpuCapturedFrame | null> {
+    async captureFrame(frame: RenderFrame): Promise<CapturedFrame | null> {
       if (quadBuffer === null || pixelWidth === 0 || pixelHeight === 0) {
         return null;
       }

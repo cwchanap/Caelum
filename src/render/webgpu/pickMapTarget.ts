@@ -2,7 +2,7 @@ import type { GameState, Point } from "../../domain/types";
 import type { MapPick } from "../../ui/mapPick";
 import { tileCenter, tileSize } from "../boardTransform";
 import { pointAt } from "../pathGeometry";
-import { VEHICLE_INSTANCE_FLOATS } from "./renderer";
+import { VEHICLE_INSTANCE_FLOATS } from "../gameplayRenderer";
 import {
   corridorsFor,
   presentationForRoute,

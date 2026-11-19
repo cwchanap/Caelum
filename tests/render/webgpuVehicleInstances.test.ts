@@ -14,10 +14,8 @@ import {
   VEHICLE_HALF_WIDTH,
   type WorldViewport,
 } from "../../src/render/webgpu/vehicleInstances";
-import {
-  createWebGpuRenderer,
-  VEHICLE_INSTANCE_FLOATS,
-} from "../../src/render/webgpu/renderer";
+import { createWebGpuRenderer } from "../../src/render/webgpu/renderer";
+import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
 import { createFakeCanvas, createFakeDevice } from "../helpers/fakeWebGpu";
 import { pointAndTangentAt } from "../../src/render/pathGeometry";
 import { tileSize } from "../../src/render/boardTransform";

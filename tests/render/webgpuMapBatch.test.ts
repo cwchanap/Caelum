@@ -11,7 +11,7 @@ import {
   gridModeForTool,
   gridModeForUi,
 } from "../../src/render/webgpu/mapBatch";
-import { SPRITE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
+import { SPRITE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
 import {
   BUILDING_SPRITE_LAYERS,
   SPRITE_ATLAS_HEIGHT,
