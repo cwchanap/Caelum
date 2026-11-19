@@ -63,7 +63,7 @@ const PINCH_ZOOM_PER_PX = 0.01;
  * host can keep its one-in-flight admission gate; a void return is treated as
  * resolving immediately.
  */
-export interface WebGpuHostContext {
+export interface GameHostContext {
   getState: () => GameState;
   getUi: () => UiState;
   /** Runtime-owned map view; `null` fits the whole map. */
@@ -113,7 +113,7 @@ export interface GameHost {
   destroy(): void;
 }
 
-export type CreateGameHost = (context: WebGpuHostContext) => Promise<GameHost>;
+export type CreateGameHost = (context: GameHostContext) => Promise<GameHost>;
 
 /** World-space batch caches keyed by scene revision + grid mode / route
  *  emphasis. */
@@ -144,8 +144,8 @@ interface ClipTransform {
  * Builds the host around an existing renderer. Tests inject a narrow fake
  * renderer here; production passes the real WebGPU renderer.
  */
-export function createWebGpuHostWithRenderer(
-  ctx: WebGpuHostContext,
+export function createGameHostWithRenderer(
+  ctx: GameHostContext,
   renderer: WebGpuRenderer,
   /** The GPU device the caller created for `renderer`. `destroy()` destroys
    *  it after the renderer; tests injecting a fake renderer omit it. */
@@ -1308,8 +1308,8 @@ export function createWebGpuHostWithRenderer(
  * Production host factory: creates the GPU device before returning so the
  * runtime's public `mountCanvas(host): () => void` contract stays synchronous.
  */
-export async function createWebGpuHost(
-  ctx: WebGpuHostContext,
+export async function createGameHost(
+  ctx: GameHostContext,
 ): Promise<GameHost> {
   if (navigator.gpu === undefined) {
     throw new Error("WebGPU is unavailable in this browser");
@@ -1324,7 +1324,7 @@ export async function createWebGpuHost(
     // Decode + upload all fifteen shipped sprites before any frame renders, so
     // the textured pass never shows a blank atlas period between commits.
     const spriteTexture = await createSpriteAtlasTexture(device);
-    return createWebGpuHostWithRenderer(
+    return createGameHostWithRenderer(
       ctx,
       createWebGpuRenderer(device, format, spriteTexture),
       device,

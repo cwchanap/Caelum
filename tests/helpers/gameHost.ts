@@ -2,9 +2,9 @@ import { vi, type Mock } from "vitest";
 import type {
   CreateGameHost,
   GameHost,
-  WebGpuHostContext,
-} from "../../src/runtime/createWebGpuHost";
-import { createWebGpuHostWithRenderer } from "../../src/runtime/createWebGpuHost";
+  GameHostContext,
+} from "../../src/runtime/createGameHost";
+import { createGameHostWithRenderer } from "../../src/runtime/createGameHost";
 import type { WebGpuRenderer } from "../../src/render/webgpu/renderer";
 
 /**
@@ -13,7 +13,7 @@ import type { WebGpuRenderer } from "../../src/render/webgpu/renderer";
  * construction records its host; tests reach it via `lastFakeHost()`.
  */
 export interface FakeGameHost extends GameHost {
-  context: WebGpuHostContext;
+  context: GameHostContext;
   mount: Mock;
   render: Mock;
   start: Mock;
@@ -81,4 +81,4 @@ export function createNoopWebGpuRenderer(): WebGpuRenderer {
  *  a no-op renderer. The `createHost` seam for tests that exercise the
  *  production host behavior in Node/jsdom; never touches navigator.gpu. */
 export const createJsdomGameHost: CreateGameHost = async (context) =>
-  createWebGpuHostWithRenderer(context, createNoopWebGpuRenderer());
+  createGameHostWithRenderer(context, createNoopWebGpuRenderer());

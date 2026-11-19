@@ -52,10 +52,10 @@ import type {
 } from "./backend";
 import type { CitySaveStore, CitySummary } from "../persistence/citySaveStore";
 import {
-  createWebGpuHost,
+  createGameHost,
   type CreateGameHost,
-  type WebGpuHostContext,
-} from "./createWebGpuHost";
+  type GameHostContext,
+} from "./createGameHost";
 import type { Camera } from "../render/boardTransform";
 import { createPreviewCoordinator } from "./previewCoordinator";
 import { selectShellState } from "./runtimeSelectors";
@@ -160,7 +160,7 @@ export interface CreateGameRuntimeOptions {
    *  milliseconds. Defaults to 50ms to coalesce rapid pointermove events on
    *  Tauri (IPC round-trip per event). Set to 0 to disable debouncing. */
   hoverPreviewDebounceMs?: number;
-  /** Async display-host factory. Production defaults to `createWebGpuHost`;
+  /** Async display-host factory. Production defaults to `createGameHost`;
    *  Node/jsdom tests inject a fake host so no WebGPU device is required. */
   createHost?: CreateGameHost;
 }
@@ -329,7 +329,7 @@ export async function createGameRuntime(
   // point `api` is initialized), mirroring the prior `frame` -> `api.tick`
   // forward reference. `onTick` returns the tick promise so the host can keep
   // its one-in-flight 10 Hz admission gate.
-  const hostContext: WebGpuHostContext = {
+  const hostContext: GameHostContext = {
     getState: () => state,
     getUi: () => ui,
     getCamera: () => camera,
@@ -367,7 +367,7 @@ export async function createGameRuntime(
       void failBackend(error);
     },
   };
-  const gameHost = await (options.createHost ?? createWebGpuHost)(hostContext);
+  const gameHost = await (options.createHost ?? createGameHost)(hostContext);
 
   // Whether the single terminal snapshot has already been delivered to
   // subscribers. `dead` gates all further backend/store mutations and
