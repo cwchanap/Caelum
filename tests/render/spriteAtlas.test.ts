@@ -9,6 +9,7 @@ import {
   SPRITE_TEXELS_PER_TILE,
   TREE_SPRITE_URLS,
   createSpriteAtlasTexture,
+  loadSpriteImages,
   type SpriteBuildingType,
 } from "../../src/render/webgpu/spriteAtlas";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
@@ -160,12 +161,62 @@ describe("sprite atlas table", () => {
   });
 });
 
+describe("loadSpriteImages", () => {
+  it("decodes all fifteen sprites in stable layer order with validated dimensions", async () => {
+    registerShippedDimensions();
+
+    const images = await loadSpriteImages();
+
+    expect(images).toHaveLength(SPRITE_LAYER_COUNT);
+    for (const [index, url] of TREE_SPRITE_URLS.entries()) {
+      expect(images[index]!.src).toBe(url);
+      expect(images[index]!.naturalWidth).toBe(SPRITE_TEXELS_PER_TILE);
+      expect(images[index]!.naturalHeight).toBe(SPRITE_TEXELS_PER_TILE);
+    }
+    for (const [type, layer] of Object.entries(BUILDING_SPRITE_LAYERS) as [
+      SpriteBuildingType,
+      number,
+    ][]) {
+      expect(images[layer]!.src).toBe(BUILDING_SPRITE_URLS[type]);
+      expect(images[layer]!.naturalWidth).toBe(
+        BUILDING_CATALOG[type].width * SPRITE_TEXELS_PER_TILE,
+      );
+      expect(images[layer]!.naturalHeight).toBe(
+        BUILDING_CATALOG[type].height * SPRITE_TEXELS_PER_TILE,
+      );
+    }
+  });
+
+  it("fails clearly when a sprite decodes with unexpected dimensions", async () => {
+    registerShippedDimensions();
+    imageDimensions.set(BUILDING_SPRITE_URLS.smallHouse, {
+      width: 128,
+      height: 64,
+    });
+
+    await expect(loadSpriteImages()).rejects.toThrow(
+      /smallHouse.*expected 384x192.*got 128x64/s,
+    );
+    // Decode validation precedes any upload: no canvas is ever created.
+    expect(contexts).toHaveLength(0);
+  });
+
+  it("fails clearly when an image fails to decode, naming the sprite", async () => {
+    registerShippedDimensions();
+    imageDimensions.delete(TREE_SPRITE_URLS[0]!);
+
+    await expect(loadSpriteImages()).rejects.toThrow(
+      /sprite "tree-01" failed to decode.*could not be decoded/s,
+    );
+  });
+});
+
 describe("createSpriteAtlasTexture", () => {
   it("uploads one rgba8unorm 576x384x15 five-mip 2d-array texture", async () => {
     registerShippedDimensions();
     const { device, textures, textureUploads } = createFakeDevice();
 
-    const texture = await createSpriteAtlasTexture(device);
+    const texture = createSpriteAtlasTexture(device, await loadSpriteImages());
 
     expect(texture).toBe(textures[0]);
     expect(textures).toHaveLength(1);
@@ -191,7 +242,7 @@ describe("createSpriteAtlasTexture", () => {
     registerShippedDimensions();
     const { device, textureUploads } = createFakeDevice();
 
-    await createSpriteAtlasTexture(device);
+    createSpriteAtlasTexture(device, await loadSpriteImages());
 
     const mipSizes = (
       sourceWidth: number,
@@ -240,7 +291,7 @@ describe("createSpriteAtlasTexture", () => {
     registerShippedDimensions();
     const { device } = createFakeDevice();
 
-    await createSpriteAtlasTexture(device);
+    createSpriteAtlasTexture(device, await loadSpriteImages());
 
     expect(contexts).toHaveLength(1);
     const context = contexts[0]!;
@@ -267,27 +318,20 @@ describe("createSpriteAtlasTexture", () => {
     );
   });
 
-  it("fails clearly when a sprite decodes with unexpected dimensions", async () => {
+  it("destroys the partially created texture when an upload throws", async () => {
     registerShippedDimensions();
-    imageDimensions.set(BUILDING_SPRITE_URLS.smallHouse, {
-      width: 128,
-      height: 64,
-    });
-    const { device } = createFakeDevice();
-
-    await expect(createSpriteAtlasTexture(device)).rejects.toThrow(
-      /smallHouse.*expected 384x192.*got 128x64/s,
+    const { device, textures } = createFakeDevice();
+    vi.spyOn(device.queue, "copyExternalImageToTexture").mockImplementation(
+      () => {
+        throw new Error("upload failed");
+      },
     );
-    expect(contexts).toHaveLength(0);
-  });
+    const images = await loadSpriteImages();
 
-  it("fails clearly when an image fails to decode, naming the sprite", async () => {
-    registerShippedDimensions();
-    imageDimensions.delete(TREE_SPRITE_URLS[0]!);
-    const { device } = createFakeDevice();
-
-    await expect(createSpriteAtlasTexture(device)).rejects.toThrow(
-      /sprite "tree-01" failed to decode.*could not be decoded/s,
+    expect(() => createSpriteAtlasTexture(device, images)).toThrow(
+      "upload failed",
     );
+    expect(textures).toHaveLength(1);
+    expect(textures[0]!.destroyed).toBe(true);
   });
 });

@@ -10,7 +10,10 @@ import {
   type RenderFrame,
   type RenderStats,
 } from "../../src/render/gameplayRenderer";
-import { createSpriteAtlasTexture } from "../../src/render/webgpu/spriteAtlas";
+import {
+  createSpriteAtlasTexture,
+  loadSpriteImages,
+} from "../../src/render/webgpu/spriteAtlas";
 import { createUiState } from "../../src/ui/uiState";
 import { buildRenderScaleState } from "../helpers/renderScaleState";
 
@@ -85,7 +88,8 @@ if (adapter === null) {
 }
 const device = await adapter.requestDevice();
 const format = navigator.gpu.getPreferredCanvasFormat();
-const spriteTexture = await createSpriteAtlasTexture(device);
+const spriteImages = await loadSpriteImages();
+const spriteTexture = createSpriteAtlasTexture(device, spriteImages);
 const renderer = createWebGpuRenderer(device, format, spriteTexture);
 let lastStats: RenderStats = {
   solidBatches: 0,
