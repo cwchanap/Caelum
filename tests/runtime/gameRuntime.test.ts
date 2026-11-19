@@ -27,8 +27,8 @@ import { staleHeldRoadPreview } from "../../src/runtime/runtimeSelectors";
 import type {
   CreateGameHost,
   GameHost,
-  WebGpuHostContext,
-} from "../../src/runtime/createWebGpuHost";
+  GameHostContext,
+} from "../../src/runtime/createGameHost";
 import {
   createFakeGameHost,
   createJsdomGameHost,
@@ -3506,7 +3506,7 @@ describe("Game Runtime", () => {
           })
         | null = null;
       return {
-        createHost: async (context: WebGpuHostContext) => {
+        createHost: async (context: GameHostContext) => {
           current = (await createHost(context)) as NonNullable<typeof current>;
           return current;
         },
@@ -8524,7 +8524,7 @@ describe("debugCaptureFrame", () => {
 describe("default game host", () => {
   it("rejects construction when the production WebGPU host is unavailable", async () => {
     // No createHost seam: the runtime falls back to the production
-    // createWebGpuHost, which rejects outside a WebGPU-capable browser.
+    // createGameHost, which rejects outside a WebGPU-capable browser.
     await expect(createGameRuntime({ backend: backendSpy() })).rejects.toThrow(
       "WebGPU",
     );

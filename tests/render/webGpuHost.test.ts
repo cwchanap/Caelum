@@ -16,10 +16,10 @@ import type {
   Vehicle,
 } from "../../src/domain/types";
 import {
-  createWebGpuHost,
-  createWebGpuHostWithRenderer,
-  type WebGpuHostContext,
-} from "../../src/runtime/createWebGpuHost";
+  createGameHost,
+  createGameHostWithRenderer,
+  type GameHostContext,
+} from "../../src/runtime/createGameHost";
 import {
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
@@ -203,7 +203,7 @@ function createFakeRenderer(): FakeRenderer {
 }
 
 interface Fixture {
-  host: ReturnType<typeof createWebGpuHostWithRenderer>;
+  host: ReturnType<typeof createGameHostWithRenderer>;
   renderer: FakeRenderer;
   canvas: HTMLCanvasElement;
   container: HTMLDivElement;
@@ -266,7 +266,7 @@ function createFixture(options?: {
 
   const renderer = createFakeRenderer();
 
-  const ctx: WebGpuHostContext = {
+  const ctx: GameHostContext = {
     getState: () => state,
     getUi: () => ui,
     getCamera: () => camera,
@@ -274,7 +274,7 @@ function createFixture(options?: {
     ...callbacks,
   };
 
-  const host = createWebGpuHostWithRenderer(
+  const host = createGameHostWithRenderer(
     ctx,
     renderer as unknown as WebGpuRenderer,
   );
@@ -380,7 +380,7 @@ async function flushMicrotasks(): Promise<void> {
   await Promise.resolve();
 }
 
-describe("createWebGpuHost lifecycle", () => {
+describe("createGameHost lifecycle", () => {
   it("mount creates a canvas, configures the renderer, and cleans up", () => {
     const { canvas, container, cleanup, renderer, fireFrame } = createFixture();
 
@@ -1323,7 +1323,7 @@ describe("createWebGpuHost lifecycle", () => {
   });
 });
 
-describe("createWebGpuHost 10 Hz tick admission", () => {
+describe("createGameHost 10 Hz tick admission", () => {
   it("submits at most 10 host ticks across 1 second of 60Hz rAF", async () => {
     const { host, callbacks, fireFrame } = createFixture({
       state: runningState(),
@@ -1540,7 +1540,7 @@ describe("createWebGpuHost 10 Hz tick admission", () => {
   });
 });
 
-describe("createWebGpuHost render coalescing", () => {
+describe("createGameHost render coalescing", () => {
   it("does not draw twice around an accepted running tick", () => {
     const { host, renderer, callbacks, fireFrame } = createFixture({
       state: runningState(),
@@ -1580,7 +1580,7 @@ describe("createWebGpuHost render coalescing", () => {
   });
 });
 
-describe("createWebGpuHost observed vehicle history", () => {
+describe("createGameHost observed vehicle history", () => {
   function straightLeg(
     from: { x: number; y: number },
     to: {
@@ -1770,7 +1770,7 @@ describe("createWebGpuHost observed vehicle history", () => {
   });
 });
 
-describe("createWebGpuHost map target picking", () => {
+describe("createGameHost map target picking", () => {
   it("picks the drawn vehicle under a zoomed click, and suppresses after a pan", () => {
     const fx = createFixture({
       state: stateWithVehicleForFrame(),
@@ -2016,7 +2016,7 @@ describe("createWebGpuHost map target picking", () => {
   });
 });
 
-describe("createWebGpuHost device loss", () => {
+describe("createGameHost device loss", () => {
   it("reports unexpected device loss to onFatalError exactly once", async () => {
     const { renderer, callbacks } = createFixture();
 
@@ -2050,7 +2050,7 @@ describe("createWebGpuHost device loss", () => {
   });
 });
 
-describe("createWebGpuHost frame contents", () => {
+describe("createGameHost frame contents", () => {
   it("draws solid ranges and vehicle instances in painter order", () => {
     const fx = createFixture({ state: stateWithVehicleForFrame() });
     fx.host.start();
@@ -2177,7 +2177,7 @@ describe("createWebGpuHost frame contents", () => {
   });
 });
 
-describe("createWebGpuHost grid mode scene caching", () => {
+describe("createGameHost grid mode scene caching", () => {
   const callsForState = (state: GameState): number =>
     vi.mocked(buildMapBatch).mock.calls.filter(([arg]) => arg === state).length;
   const callsForMap = (map: GameMap): number =>
@@ -2316,7 +2316,7 @@ describe("createWebGpuHost grid mode scene caching", () => {
   });
 });
 
-describe("createWebGpuHost teardown destruction", () => {
+describe("createGameHost teardown destruction", () => {
   it("mount teardown detaches only; host destroy() is the terminal teardown", () => {
     const { cleanup, renderer, host } = createFixture();
     host.start();
@@ -2336,7 +2336,7 @@ describe("createWebGpuHost teardown destruction", () => {
   it("destroy() stops a canvas-less rAF loop and ignores subsequent start/mount", () => {
     const renderer = createFakeRenderer();
     const state = unpaused(createTestGameState());
-    const host = createWebGpuHostWithRenderer(
+    const host = createGameHostWithRenderer(
       {
         getState: () => state,
         getUi: () => createUiState(),
@@ -2418,7 +2418,7 @@ describe("createWebGpuHost teardown destruction", () => {
   });
 
   it("production host teardown destroys the renderer and the device it created", async () => {
-    // Narrow fake at the navigator.gpu seam: createWebGpuHost requests the
+    // Narrow fake at the navigator.gpu seam: createGameHost requests the
     // device itself, so teardown must destroy the renderer's buffers, unconfigure
     // the context, and then destroy the device that host created.
     const harness = createFakeDevice();
@@ -2440,7 +2440,7 @@ describe("createWebGpuHost teardown destruction", () => {
       .mockImplementation(((type: string) =>
         type === "webgpu" ? fakeContext : null) as never);
     try {
-      const host = await createWebGpuHost({
+      const host = await createGameHost({
         getState: () => createTestGameState(),
         getUi: () => createUiState(),
         getCamera: () => null,
@@ -2487,8 +2487,8 @@ describe("createWebGpuHost teardown destruction", () => {
   });
 });
 
-describe("createWebGpuHost gpu bootstrap", () => {
-  const noopContext: WebGpuHostContext = {
+describe("createGameHost gpu bootstrap", () => {
+  const noopContext: GameHostContext = {
     getState: () => createTestGameState(),
     getUi: () => createUiState(),
     getCamera: () => null,
@@ -2507,7 +2507,7 @@ describe("createWebGpuHost gpu bootstrap", () => {
 
   it("rejects when navigator.gpu is unavailable", async () => {
     vi.stubGlobal("navigator", {});
-    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+    await expect(createGameHost(noopContext)).rejects.toThrow(
       "WebGPU is unavailable in this browser",
     );
   });
@@ -2516,7 +2516,7 @@ describe("createWebGpuHost gpu bootstrap", () => {
     vi.stubGlobal("navigator", {
       gpu: { requestAdapter: async () => null },
     });
-    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+    await expect(createGameHost(noopContext)).rejects.toThrow(
       "WebGPU adapter unavailable",
     );
   });
@@ -2537,7 +2537,7 @@ describe("createWebGpuHost gpu bootstrap", () => {
 
     // The factory rejects without a host, so the caller can never destroy
     // the device — the factory must release it itself.
-    await expect(createWebGpuHost(noopContext)).rejects.toThrow(
+    await expect(createGameHost(noopContext)).rejects.toThrow(
       "atlas decode failed",
     );
     expect(harness.deviceDestroyed).toBe(true);

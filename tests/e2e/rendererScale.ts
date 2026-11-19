@@ -1,8 +1,8 @@
 import type { GameState } from "../../src/domain/types";
 import {
-  createWebGpuHostWithRenderer,
-  type WebGpuHostContext,
-} from "../../src/runtime/createWebGpuHost";
+  createGameHostWithRenderer,
+  type GameHostContext,
+} from "../../src/runtime/createGameHost";
 import {
   createWebGpuRenderer,
   VEHICLE_INSTANCE_FLOATS,
@@ -102,7 +102,7 @@ const recordingRenderer: WebGpuRenderer = {
     return lastStats;
   },
 };
-const benchContext: WebGpuHostContext = {
+const benchContext: GameHostContext = {
   getState: () => {
     if (state === null) throw new Error("benchmark state is unavailable");
     return state;
@@ -123,7 +123,7 @@ const benchContext: WebGpuHostContext = {
     throw error;
   },
 };
-const gameHost = createWebGpuHostWithRenderer(benchContext, recordingRenderer);
+const gameHost = createGameHostWithRenderer(benchContext, recordingRenderer);
 
 // GameHost.render() coalesces by design — it schedules one rAF and returns,
 // so back-to-back calls in one task time only the coalescing guard, never a
