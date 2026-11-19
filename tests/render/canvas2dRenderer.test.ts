@@ -618,6 +618,47 @@ describe("createCanvas2dRenderer", () => {
     });
   });
 
+  it("draws sprites at full alpha after translucent solids", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 200;
+    canvas.height = 100;
+    const renderer = createCanvas2dRenderer(makeImages());
+    renderer.configure(canvas);
+
+    // The GPU sprite shader composites at full alpha: a solid stage ending
+    // at alpha 0.5 must not dim sprites (alpha 0 would erase them).
+    const stats = renderer.render({
+      solids: [
+        solid("dynamic", [0, 1, 0, 0.5], [
+          [
+            [-1, -1],
+            [1, -1],
+            [1, 1],
+          ],
+        ]),
+      ],
+      sprites: spriteRow([0, 0], 0, 12, 12, [1, 1], 0, [0.5, -0.5]),
+      vehicles: [],
+    });
+
+    const context = contexts[0]!;
+    const draws = context.ops.filter(
+      (op): op is Extract<RecordedOp, { op: "drawImage" }> =>
+        op.op === "drawImage",
+    );
+    expect(draws).toHaveLength(1);
+    expect(draws[0]!.state.globalAlpha).toBe(1);
+    expect(draws[0]!.state.ctm).toEqual([50, 0, 0, 25, 100, 50]);
+    expect(stats).toEqual({
+      solidBatches: 1,
+      solidVertices: 18,
+      spriteInstances: 1,
+      spriteDraws: 1,
+      vehicleInstances: 0,
+      vehicleDraws: 0,
+    });
+  });
+
   it("throws on invalid sprite layers instead of silently omitting objects", () => {
     const canvas = document.createElement("canvas");
     canvas.width = 200;
@@ -823,7 +864,15 @@ describe("createCanvas2dRenderer", () => {
     expect(readOps).toHaveLength(1);
     expect(readOps[0]).toMatchObject({ x: 0, y: 0, width: 200, height: 100 });
     expect(captured!.pixels).toBe(readOps[0]!.data);
-    expect(damaged.ops.indexOf(clearOps[1]!)).toBeLessThan(
+    // Recompute the clears after capture: the capture's own render must
+    // paint onto the game canvas before the readback. (Filtering before
+    // capture yields one op whose [1] is undefined and vacuously passes.)
+    const captureClears = damaged.ops.filter(
+      (op): op is Extract<RecordedOp, { op: "fillRect" }> =>
+        op.op === "fillRect",
+    );
+    expect(captureClears).toHaveLength(2);
+    expect(damaged.ops.indexOf(captureClears[1]!)).toBeLessThan(
       damaged.ops.indexOf(readOps[0]!),
     );
 
