@@ -9,7 +9,7 @@ import type { UiState } from "../../ui/uiState";
 import { tileCenter, tileSize } from "../boardTransform";
 import { colors } from "../colors";
 import { pointAndTangentAt } from "../pathGeometry";
-import { VEHICLE_INSTANCE_FLOATS } from "./renderer";
+import { VEHICLE_INSTANCE_FLOATS } from "../gameplayRenderer";
 import { parseColor, withAlpha, type Rgba } from "./primitives";
 import {
   corridorsFor,

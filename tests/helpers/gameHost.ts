@@ -5,7 +5,7 @@ import type {
   GameHostContext,
 } from "../../src/runtime/createGameHost";
 import { createGameHostWithRenderer } from "../../src/runtime/createGameHost";
-import type { WebGpuRenderer } from "../../src/render/webgpu/renderer";
+import type { GameplayRenderer } from "../../src/render/gameplayRenderer";
 
 /**
  * Async fake host injected through `CreateGameRuntimeOptions.createHost` so
@@ -56,10 +56,11 @@ export function lastFakeHost(): FakeGameHost | undefined {
   return created.at(-1);
 }
 
-/** No-op renderer so the real WebGPU host logic runs in Node/jsdom without
+/** No-op renderer so the real host logic runs in Node/jsdom without
  *  navigator.gpu: `configure` never touches the canvas, nothing reaches GPU. */
-export function createNoopWebGpuRenderer(): WebGpuRenderer {
+export function createNoopWebGpuRenderer(): GameplayRenderer {
   return {
+    kind: "webgpu",
     lost: new Promise(() => {}),
     configure: () => {},
     unconfigure: () => {},

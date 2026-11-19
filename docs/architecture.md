@@ -60,7 +60,7 @@ Three models, three jobs. The Rust `GameSnapshot` is the durable/core authority 
 - It applies local-only UI intents such as tool changes, overlays, selection, and UI reset.
 - It dispatches gameplay intents and ticks to the selected host backend.
 - It publishes runtime snapshots for the Svelte shell.
-- It mounts the GPU display host (`createWebGpuHost`) and keeps rendering tied to runtime-owned state through an internal `sceneRevision` that bumps once per structural (scene-carrying) update.
+- It mounts the display host (`createGameHost`) and keeps rendering tied to runtime-owned state through an internal `sceneRevision` that bumps once per structural (scene-carrying) update.
 
 Browser builds call the `WasmGameEngine` wrapper generated from `crates/caelum-wasm`; Tauri builds invoke managed commands in `src-tauri` that hold the same `caelum-core::GameEngine`. These are the active production host paths, not planned adapters. TypeScript gameplay code is limited to UI/read-only helpers and host adapters; new gameplay logic belongs in the Rust crate.
 
@@ -376,12 +376,12 @@ Svelte consumes derived runtime snapshots and never becomes a second source of t
 Rust remains the gameplay authority; the HPA-544 `PresentationUpdate` wire is unchanged by rendering. Ownership:
 
 - `createGameRuntime()` owns orchestration plus the internal `sceneRevision` (bumped once per scene-carrying update) that keys the host's world-space batch caches.
-- `createWebGpuHost` (`src/runtime/createWebGpuHost.ts`) owns the GPU surface, pointer/keyboard input wiring, resize handling, the `requestAnimationFrame` loop with ≤10 Hz one-in-flight tick admission (250 ms wall-delta clamp), and fatal device-loss forwarding to the shell error path.
+- `createGameHost` (`src/runtime/createGameHost.ts`) owns the canvas surface, pointer/keyboard input wiring, resize handling, the `requestAnimationFrame` loop with ≤10 Hz one-in-flight tick admission (250 ms wall-delta clamp), and fatal device-loss forwarding to the shell error path. The renderer behind it is chosen once at startup through the renderer-neutral `GameplayRenderer` contract (`src/render/gameplayRenderer.ts`); today that is the WebGPU renderer, and HPA-1144 adds a limited Canvas2D fallback for WebGPU-unavailable environments.
 - `src/render/webgpu/` modules own geometric presentation: painter-order solid batches, the single instanced textured-sprite draw for shipped map art (one `texture_2d_array` atlas uploaded at startup, premultiplied-alpha blending, painter stage `solids → sprites → overSprites → vehicles → overVehicles`), the single instanced vehicle draw, vehicle interpolation between observed snapshots, and viewport culling before encode/upload. `boardTransform.ts` keeps the shared tile↔pixel mapping (`tileSize = 32`) and the camera math.
 - The runtime owns one display host for its whole life. Canvas unmount (New City / City Library screen switches) only detaches input and unconfigures the canvas context; GPU resources survive and the remounted canvas reuses them. Terminal teardown (`runtime.dispose()` on App unmount, or fatal `failBackend` / shell-error termination) calls `gameHost.destroy()` to destroy the renderer, atlas, and device.
 - The map camera (`{ zoom, center }`, or `null` for the fitted whole-map view) is local view state on `RuntimeSnapshot.camera`. It is never saved or sent to Rust, survives UI resets, Escape, and sandbox reset (same map size), and returns to `null` when a city is created or loaded. The host owns camera input because it knows the board's CSS size: wheel zoom anchored at the cursor, middle-drag or Space+drag pan under every tool, and plain left-drag pan past 4 px under click tools. Buttons and keys (arrows, `+`/`-`, `0`) go through `RuntimeController.adjustCamera`. The GPU transform, pointer mapping, and DOM text overlay all call `getBoardTransform(board, map, camera)`, and vehicle culling uses the visible world rectangle.
 - Svelte owns HUD, panels, and the DOM map-text overlay (`mapTextOverlay.ts`), which render from runtime snapshots.
-- Canvas2D gameplay rendering is gone: `render/canvas.ts` and the per-concern Canvas renderers were deleted with their tests after both the Chromium and Tauri/WKWebView gates passed.
+- Canvas2D gameplay rendering was deleted by HPA-640: `render/canvas.ts` and the per-concern Canvas renderers were removed with their tests after both the Chromium and Tauri/WKWebView gates passed. HPA-1144 introduces a new, limited Canvas2D fallback behind the shared `GameplayRenderer` contract: it is selected once at startup, only when WebGPU capability/setup is unavailable, while unexpected WebGPU device loss after startup stays terminal.
 
 - `GameCanvas.svelte` provides the board host element; `createGameRuntime()` attaches the real WebGPU `<canvas>` to it.
 
@@ -399,7 +399,7 @@ Host bootstrap failures stay in the shell layer, while gameplay validation remai
 1. Svelte components emit user intents to the runtime.
 2. The runtime applies local UI intents directly and sends gameplay intents to the host backend.
 3. The Rust `GameEngine` advances city growth, transit movement, and trips, projecting each result into a `PresentationUpdate`.
-4. The WebGPU host renders the committed presentation state from runtime-owned batches.
+4. The display host renders the committed presentation state from runtime-owned batches.
 5. Svelte rerenders from the latest runtime snapshot.
 
 The host-owned `requestAnimationFrame` loop admits simulation ticks to the backend at ≤10 per second while unpaused (one tick in flight, wall-delta clamped) and interpolates vehicle presentation between observed snapshots; the load-bearing standalone Bevy ECS population

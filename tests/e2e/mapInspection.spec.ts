@@ -8,7 +8,7 @@ import {
 import {
   VEHICLE_INSTANCE_FLOATS,
   VEHICLE_LANE_OFFSET_PX,
-} from "../../src/render/webgpu/renderer";
+} from "../../src/render/gameplayRenderer";
 import { encodeVehicleInstances } from "../../src/render/webgpu/vehicleInstances";
 import type { Point } from "../../src/domain/types";
 import type { RuntimeSnapshot } from "../../src/runtime/types";

@@ -33,13 +33,13 @@ import {
 import { pickMapTarget } from "../render/webgpu/pickMapTarget";
 import type { MapPick } from "../ui/mapPick";
 import {
-  createWebGpuRenderer,
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
-  type WebGpuCapturedFrame,
-  type WebGpuRenderFrame,
-  type WebGpuRenderer,
-} from "../render/webgpu/renderer";
+  type CapturedFrame,
+  type GameplayRenderer,
+  type RenderFrame,
+} from "../render/gameplayRenderer";
+import { createWebGpuRenderer } from "../render/webgpu/renderer";
 
 /** Tools that drive placement via a press-drag gesture rather than a click. */
 const DRAG_TOOLS = new Set<Tool>(["road", "track", "remove", "area"]);
@@ -58,7 +58,7 @@ const WHEEL_ZOOM_PER_PX = 0.0015;
 const PINCH_ZOOM_PER_PX = 0.01;
 
 /**
- * Callbacks the WebGPU host uses to read runtime state and forward DOM events
+ * Callbacks the gameplay host uses to read runtime state and forward DOM events
  * back into the controller. `onTick` may return the tick's promise so the
  * host can keep its one-in-flight admission gate; a void return is treated as
  * resolving immediately.
@@ -87,6 +87,12 @@ export interface GameHostContext {
   onFatalError: (error: unknown) => void;
 }
 
+/** The one display host around the renderer chosen once at startup. The
+ *  former full Canvas2D gameplay renderer was deleted by HPA-640; HPA-1144
+ *  adds a new, limited Canvas2D fallback that startup selection picks only
+ *  when WebGPU capability/setup is unavailable (until that checkpoint the
+ *  production factory below is WebGPU-only). Input, camera, batching, the
+ *  rAF loop, tick admission, and lifecycle are identical for both. */
 export interface GameHost {
   mount(host: HTMLElement): () => void;
   render(): void;
@@ -105,7 +111,7 @@ export interface GameHost {
    *  presentation never reaches the compositor; e2e pixel oracles use this
    *  instead of canvas-side readbacks. Returns null while no canvas is
    *  mounted. */
-  captureFrame(): Promise<WebGpuCapturedFrame | null>;
+  captureFrame(): Promise<CapturedFrame | null>;
   /** Terminal teardown: detaches any mount and destroys the renderer's GPU
    *  resources (and the device when the host created it). Canvas unmount must
    *  NOT destroy these — the runtime owns one host for its whole life and
@@ -142,11 +148,12 @@ interface ClipTransform {
 
 /**
  * Builds the host around an existing renderer. Tests inject a narrow fake
- * renderer here; production passes the real WebGPU renderer.
+ * renderer here; production passes the real WebGPU renderer until the
+ * HPA-1144 startup selection adds the Canvas2D fallback.
  */
 export function createGameHostWithRenderer(
   ctx: GameHostContext,
-  renderer: WebGpuRenderer,
+  renderer: GameplayRenderer,
   /** The GPU device the caller created for `renderer`. `destroy()` destroys
    *  it after the renderer; tests injecting a fake renderer omit it. */
   device?: GPUDevice,
@@ -241,8 +248,11 @@ export function createGameHostWithRenderer(
   } | null = null;
 
   // Unexpected device loss is terminal: one loud fatal error, no recreation,
-  // no Canvas fallback. A deliberate destroy() loss is ignored.
-  void renderer.lost.then((info) => {
+  // no hot swap — only the startup capability selection (HPA-1144) may pick
+  // Canvas2D, and only when WebGPU setup fails before the first frame. A
+  // deliberate destroy() loss is ignored. Renderers without a loss signal
+  // (Canvas2D) never fire this path.
+  void renderer.lost?.then((info) => {
     if (info.reason === "destroyed") return;
     ctx.onFatalError(
       new Error(
@@ -437,7 +447,7 @@ export function createGameHostWithRenderer(
     nowMs: number,
     tileCssPx: number,
   ): {
-    frame: WebGpuRenderFrame;
+    frame: RenderFrame;
     vehicleIds: string[];
     positions: Float32Array<ArrayBuffer>;
     state: GameState;
@@ -534,7 +544,7 @@ export function createGameHostWithRenderer(
     }
   };
 
-  const captureFrame = (): Promise<WebGpuCapturedFrame | null> => {
+  const captureFrame = (): Promise<CapturedFrame | null> => {
     if (destroyed || canvas === null) {
       return Promise.resolve(null);
     }
@@ -1308,9 +1318,7 @@ export function createGameHostWithRenderer(
  * Production host factory: creates the GPU device before returning so the
  * runtime's public `mountCanvas(host): () => void` contract stays synchronous.
  */
-export async function createGameHost(
-  ctx: GameHostContext,
-): Promise<GameHost> {
+export async function createGameHost(ctx: GameHostContext): Promise<GameHost> {
   if (navigator.gpu === undefined) {
     throw new Error("WebGPU is unavailable in this browser");
   }

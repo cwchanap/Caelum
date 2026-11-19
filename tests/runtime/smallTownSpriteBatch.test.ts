@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import type { GameState, Tile } from "../../src/domain/types";
 import { buildMapBatch } from "../../src/render/webgpu/mapBatch";
-import { SPRITE_INSTANCE_FLOATS } from "../../src/render/webgpu/renderer";
+import { SPRITE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
 import {
   SPRITE_ATLAS_HEIGHT,
   SPRITE_ATLAS_WIDTH,

@@ -27,7 +27,7 @@ import type {
   RoadMutation,
   SandboxResetError,
 } from "./backend/types";
-import type { WebGpuCapturedFrame } from "../render/webgpu/renderer";
+import type { CapturedFrame } from "../render/gameplayRenderer";
 import type { MapPick } from "../ui/mapPick";
 import type { Camera, CameraAction } from "../render/boardTransform";
 import type {
@@ -380,9 +380,9 @@ export interface RuntimeController {
  */
 export interface RuntimeTestSeam {
   debugSetBudget: (budget: number) => RuntimeCommandResult;
-  /** Renders the current frame into an offscreen WebGPU target and reads the
-   *  pixels back (RGBA8, device pixels). e2e pixel oracles use this instead of
-   *  canvas-side readbacks, which never resolve under software-Vulkan CI
-   *  compositors. Returns null when no GPU canvas is mounted. */
-  debugCaptureFrame: () => Promise<WebGpuCapturedFrame | null>;
+  /** Renders the current frame into the display renderer's offscreen target
+   *  and reads the pixels back (RGBA8, device pixels). e2e pixel oracles use
+   *  this instead of canvas-side readbacks, which never resolve under
+   *  software-Vulkan CI compositors. Returns null when no canvas is mounted. */
+  debugCaptureFrame: () => Promise<CapturedFrame | null>;
 }

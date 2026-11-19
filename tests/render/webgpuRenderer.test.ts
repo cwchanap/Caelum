@@ -1,12 +1,12 @@
 import { describe, expect, it } from "vitest";
 import { SOLID_VERTEX_FLOATS } from "../../src/render/webgpu/primitives";
+import { createWebGpuRenderer } from "../../src/render/webgpu/renderer";
 import {
-  createWebGpuRenderer,
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
   VEHICLE_LANE_OFFSET_PX,
-  type WebGpuRenderFrame,
-} from "../../src/render/webgpu/renderer";
+  type RenderFrame,
+} from "../../src/render/gameplayRenderer";
 import {
   VEHICLE_HALF_LENGTH,
   VEHICLE_HALF_WIDTH,
@@ -88,7 +88,7 @@ function pipelineWithInstanceStride(
   return pipeline!;
 }
 
-describe("WebGpuRenderer", () => {
+describe("createWebGpuRenderer", () => {
   it("rejects unparseable canvas contexts and unconfigured renders", () => {
     const { device } = createFakeDevice();
     const renderer = createWebGpuRenderer(device, "bgra8unorm");
@@ -413,7 +413,7 @@ describe("WebGpuRenderer", () => {
     const { canvas } = createFakeCanvas();
     renderer.configure(canvas);
 
-    const frame = (vertices: Float32Array<ArrayBuffer>): WebGpuRenderFrame => ({
+    const frame = (vertices: Float32Array<ArrayBuffer>): RenderFrame => ({
       solids: [{ role: "structural", vertices }],
       vehicles: [],
     });
@@ -452,11 +452,11 @@ describe("WebGpuRenderer", () => {
       role,
       vertices: solidVertices(n),
     });
-    const revisionA: WebGpuRenderFrame = {
+    const revisionA: RenderFrame = {
       solids: [solid("structural", 2), solid("route", 3)],
       vehicles: [],
     };
-    const revisionB: WebGpuRenderFrame = {
+    const revisionB: RenderFrame = {
       // "New scene revision": different geometry content, same sizes/roles.
       solids: [solid("structural", 2), solid("route", 3)],
       vehicles: [],
@@ -470,7 +470,7 @@ describe("WebGpuRenderer", () => {
     expect(buffers.every((buffer) => !buffer.destroyed)).toBe(true);
 
     // Each role's writes land in one stable buffer across revisions.
-    const roleBuffers = (frame: WebGpuRenderFrame) =>
+    const roleBuffers = (frame: RenderFrame) =>
       frame.solids.map(
         (batch) =>
           writes.find((write) => write.data === batch.vertices)!.buffer,
@@ -582,7 +582,7 @@ describe("WebGpuRenderer", () => {
     const renderer = createWebGpuRenderer(device, "bgra8unorm");
     renderer.configure(createFakeCanvas().canvas);
 
-    const frame: WebGpuRenderFrame = {
+    const frame: RenderFrame = {
       solids: [],
       sprites: { instances: spriteInstances(1) },
       vehicles: [],
@@ -722,7 +722,7 @@ describe("WebGpuRenderer", () => {
     renderer.resize(2, 2);
     harness.onMapRead = () => {};
 
-    const frame: WebGpuRenderFrame = {
+    const frame: RenderFrame = {
       solids: [{ role: "structural", vertices: solidVertices(1) }],
       sprites: { instances: spriteInstances(1) },
       vehicles: [],
@@ -882,7 +882,7 @@ describe("WebGpuRenderer", () => {
       sceneRevision: number,
       vehicleData: number[],
     ): {
-      frame: WebGpuRenderFrame;
+      frame: RenderFrame;
       route: ReturnType<typeof buildTransitBatch>;
       overlay: ReturnType<typeof buildOverlayRanges>;
       structural: Float32Array<ArrayBuffer>;
