@@ -1,10 +1,31 @@
+import { existsSync } from "node:fs";
 import { defineConfig, devices } from "@playwright/test";
+
+// The app tsconfig pins `types` to browser-oriented sets (no @types/node);
+// this ambient declaration is the only Node API the config needs.
+declare module "node:fs" {
+  export function existsSync(path: string): boolean;
+}
 
 declare const process: {
   platform: string;
   arch: string;
   env: Record<string, string | undefined>;
 };
+
+// Selection order for the arm64 Linux Vulkan ICD: an explicit
+// caller-supplied ICD list wins untouched; the host lavapipe ICD is used
+// only when actually provisioned; otherwise the loader's normal discovery
+// (system ICDs) applies.
+export function resolveArm64VulkanEnv(
+  env: Record<string, string | undefined>,
+  icdExists: (path: string) => boolean,
+): Record<string, string | undefined> | undefined {
+  if (env.VK_ICD_FILENAMES || env.VK_DRIVER_FILES) return undefined;
+  const hostIcd = "/opt/lavapipe24/lvp.json";
+  if (!icdExists(hostIcd)) return undefined;
+  return { ...env, VK_ICD_FILENAMES: hostIcd };
+}
 
 // Headless Chromium hides the WebGPU adapter without this flag;
 // proven by tests/e2e/webgpuProbe.spec.ts. Not performance evidence.
@@ -27,20 +48,19 @@ if (process.platform === "linux") {
     // mid-suite ("A valid external Instance reference no longer exists").
     // --use-vulkan=swiftshader dlopens the bundled ICD directly, so it cannot
     // be redirected; bind ANGLE and Dawn to a WSI-capable system lavapipe ICD
-    // via the loader instead. Provision (see task-4 report, 2026-11-19):
-    // build mesa >= 25.3 with -Dvulkan-drivers=swrast and install it to
-    // /opt/lavapipe24; the launch env below points the Vulkan loader at
-    // its ICD (this host ships no system loader ICDs). x86_64 CI keeps
-    // the bundled SwiftShader path below, unchanged.
+    // via the loader instead. resolveArm64VulkanEnv keeps an explicit
+    // caller-supplied ICD (VK_ICD_FILENAMES / VK_DRIVER_FILES) untouched, adds
+    // this host's lavapipe ICD only when provisioned (build mesa >= 25.3 with
+    // -Dvulkan-drivers=swrast, install to /opt/lavapipe24 — see task-4 report,
+    // 2026-11-19), and otherwise leaves the loader's normal discovery (system
+    // ICDs) in place. x86_64 CI keeps the bundled SwiftShader path below,
+    // unchanged.
     webGpuArgs.push(
       "--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
       "--use-angle=vulkan",
       "--disable-vulkan-surface",
     );
-    webGpuEnv = {
-      ...process.env,
-      VK_ICD_FILENAMES: "/opt/lavapipe24/lvp.json",
-    };
+    webGpuEnv = resolveArm64VulkanEnv(process.env, existsSync);
   } else {
     webGpuArgs.push(
       "--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
