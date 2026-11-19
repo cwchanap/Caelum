@@ -1,10 +1,15 @@
 import { defineConfig, devices } from "@playwright/test";
 
-declare const process: { platform: string; arch: string };
+declare const process: {
+  platform: string;
+  arch: string;
+  env: Record<string, string | undefined>;
+};
 
 // Headless Chromium hides the WebGPU adapter without this flag;
 // proven by tests/e2e/webgpuProbe.spec.ts. Not performance evidence.
 const webGpuArgs = ["--enable-unsafe-webgpu"];
+let webGpuEnv: Record<string, string | undefined> | undefined;
 if (process.platform === "linux") {
   // Linux CI runners have no GPU, and headless Linux Chromium never
   // presents WebGPU canvas frames — canvas-side readbacks (toDataURL,
@@ -23,14 +28,19 @@ if (process.platform === "linux") {
     // --use-vulkan=swiftshader dlopens the bundled ICD directly, so it cannot
     // be redirected; bind ANGLE and Dawn to a WSI-capable system lavapipe ICD
     // via the loader instead. Provision (see task-4 report, 2026-11-19):
-    // build mesa >= 25.3 with -Dvulkan-drivers=swrast, install to
-    // /opt/lavapipe24, and export VK_ICD_FILENAMES=/opt/lavapipe24/lvp.json.
-    // x86_64 CI keeps the bundled SwiftShader path below, unchanged.
+    // build mesa >= 25.3 with -Dvulkan-drivers=swrast and install it to
+    // /opt/lavapipe24; the launch env below points the Vulkan loader at
+    // its ICD (this host ships no system loader ICDs). x86_64 CI keeps
+    // the bundled SwiftShader path below, unchanged.
     webGpuArgs.push(
       "--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
       "--use-angle=vulkan",
       "--disable-vulkan-surface",
     );
+    webGpuEnv = {
+      ...process.env,
+      VK_ICD_FILENAMES: "/opt/lavapipe24/lvp.json",
+    };
   } else {
     webGpuArgs.push(
       "--enable-features=Vulkan,DefaultANGLEVulkan,VulkanFromANGLE",
@@ -62,7 +72,7 @@ export default defineConfig({
       use: {
         ...devices["Desktop Chrome"],
         viewport: { width: 1280, height: 800 },
-        launchOptions: { args: webGpuArgs },
+        launchOptions: { args: webGpuArgs, env: webGpuEnv },
         // Headed on Linux (see webGpuArgs): WebGPU canvas presentation
         // requires a real display surface there.
         headless: process.platform !== "linux",
