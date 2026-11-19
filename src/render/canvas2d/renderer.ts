@@ -46,8 +46,10 @@ const VEHICLE_RIM_COLOR = rgbString(1, 1, 1);
  * A backing-store resize resets all Canvas2D context state, so every
  * render restores identity transform, `globalAlpha = 1`,
  * `imageSmoothingEnabled = true` and `imageSmoothingQuality = "high"` at
- * the top of the frame and again after the sprite and vehicle loops, whose
- * per-item transforms and alphas must not leak into later stages.
+ * the top of the frame, after the solid stages (whose trailing run alpha
+ * must not dim the sprites), and again after the sprite and vehicle
+ * loops, whose per-item transforms and alphas must not leak into later
+ * stages.
  */
 export function createCanvas2dRenderer(
   images: readonly HTMLImageElement[],
@@ -140,6 +142,9 @@ export function createCanvas2dRenderer(
 
     const solids = drawSolids(frame.solids, halfWidth, halfHeight);
 
+    // drawSolids leaves globalAlpha at its last run's alpha; the GPU sprite
+    // shader composites sprites at full alpha regardless of solid colors.
+    ctx.globalAlpha = 1;
     let spriteInstances = 0;
     let spriteDraws = 0;
     const spriteFloats = frame.sprites?.instances.length ?? 0;
