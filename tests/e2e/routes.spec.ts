@@ -11,11 +11,10 @@ import {
   rebuildRoadTile,
   removeMapTile,
   runtimeSnapshot,
-  sampleTilePixels,
   selectTool,
   settleLayout,
-  type PixelProbe,
 } from "./helpers";
+import { expectRoadsideStopAnchors } from "./stopAnchors";
 
 const TURN_ROUTE_STOPS = [
   { x: 7, y: 3 },
@@ -42,9 +41,6 @@ const OCCLUSION_ROUTE_STOPS = [
 ] as const;
 const OCCLUSION_COVERED_STOP = { x: 21, y: 5 } as const;
 const PRIMARY_ROAD_TILE = { x: 8, y: 4 } as const;
-// The WebGPU stop-marker white fill (radius-7 disc with a route-colored rim).
-const stopMarkerRgb = [255, 255, 255] as const;
-const busMarkerRgb = [224, 79, 57] as const;
 const ALTERNATE_ROAD_TILE = { x: 8, y: 6 } as const;
 // The default Crossroads' built-in west arm: y=8 is westbound, y=9 eastbound,
 // and the x=0 two-way cap joins them. Stops sit on opposite sides of the arm.
@@ -63,114 +59,6 @@ function roadMovements(leg: RouteLegPath): MovementKind[] {
   return leg.currentPath?.kind === "road"
     ? leg.currentPath.steps.map((step) => step.movement)
     : [];
-}
-
-async function expectRoadsideStopAnchors(
-  page: import("@playwright/test").Page,
-  positions: readonly { x: number; y: number }[],
-): Promise<void> {
-  await expect
-    .poll(async () => {
-      const snapshot = await runtimeSnapshot(page);
-      return positions.map((position) => {
-        const stop = snapshot.state.transit.stops.find(
-          (candidate) =>
-            candidate.status === "present" &&
-            candidate.position.x === position.x &&
-            candidate.position.y === position.y,
-        );
-        const anchorTile = snapshot.state.map.tiles.find(
-          (tile) => tile.x === stop?.position.x && tile.y === stop?.position.y,
-        );
-        const accessTile = snapshot.state.map.tiles.find(
-          (tile) =>
-            tile.x === stop?.roadAccess?.roadPoint.x &&
-            tile.y === stop?.roadAccess?.roadPoint.y,
-        );
-        return {
-          position: stop?.position ?? null,
-          anchorKind: anchorTile?.kind ?? null,
-          accessKind: accessTile?.kind ?? null,
-        };
-      });
-    })
-    .toEqual(
-      positions.map((position) => ({
-        position,
-        anchorKind: "empty",
-        accessKind: "road",
-      })),
-    );
-
-  const snapshot = await runtimeSnapshot(page);
-  const anchors = positions.map((position) => {
-    const stop = snapshot.state.transit.stops.find(
-      (candidate) =>
-        candidate.status === "present" &&
-        candidate.position.x === position.x &&
-        candidate.position.y === position.y,
-    );
-    if (stop?.roadAccess === undefined) {
-      throw new Error(
-        `Missing road access for stop at ${position.x},${position.y}`,
-      );
-    }
-    return {
-      passenger: stop.position,
-      road: stop.roadAccess.roadPoint,
-    };
-  });
-
-  // The WebGPU canvas presents flat-colored geometry. Probe eight world-pixel
-  // points around each stop marker's tile center: four inside the white fill
-  // (±2px diagonals) and four on the route-colored rim (±6px cardinals) of the
-  // radius-7 disc. A road-access tile can only carry the thinner (5px)
-  // route-line stroke, which never reproduces that fill-plus-rim signature.
-  const inset = 2;
-  const rim = 6;
-  const offsets = [
-    { dx: -inset, dy: -inset },
-    { dx: inset, dy: -inset },
-    { dx: -inset, dy: inset },
-    { dx: inset, dy: inset },
-    { dx: -rim, dy: 0 },
-    { dx: rim, dy: 0 },
-    { dx: 0, dy: -rim },
-    { dx: 0, dy: rim },
-  ];
-  const probes: PixelProbe[] = anchors.flatMap(({ passenger, road }) =>
-    [passenger, road].flatMap((tile) =>
-      offsets.map((offset) => ({ tile, ...offset })),
-    ),
-  );
-  await expect
-    .poll(async () => {
-      const samples = await sampleTilePixels(page, probes);
-      const near = (
-        sample: [number, number, number] | null,
-        rgb: readonly [number, number, number] | number[],
-      ) =>
-        sample !== null &&
-        Math.abs(sample[0] - rgb[0]) <= 8 &&
-        Math.abs(sample[1] - rgb[1]) <= 8 &&
-        Math.abs(sample[2] - rgb[2]) <= 8;
-      const markerBlobAt = (index: number) =>
-        samples
-          .slice(index, index + 4)
-          .every((sample) => near(sample, stopMarkerRgb)) &&
-        samples
-          .slice(index + 4, index + offsets.length)
-          .every((sample) => near(sample, busMarkerRgb));
-      return {
-        passengerMarkers: anchors.every((_, anchorIndex) =>
-          markerBlobAt(anchorIndex * offsets.length * 2),
-        ),
-        roadMarkers: anchors.some((_, anchorIndex) =>
-          markerBlobAt(anchorIndex * offsets.length * 2 + offsets.length),
-        ),
-      };
-    })
-    .toEqual({ passengerMarkers: true, roadMarkers: false });
 }
 
 async function waitForRoutePreview(
