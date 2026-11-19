@@ -2,114 +2,90 @@
 
 **Ticket:** https://linear.app/cwchanap/issue/HPA-1144/add-canvas2d-gameplay-fallback-when-webgpu-is-unavailable  
 **Design:** [Canvas2D fallback design](../specs/2026-11-18-hpa-1144-canvas2d-fallback-design.md)  
-**Target:** `main`; baseline checked 2026-11-18 (`b734e719`).  
-**PR policy:** **One ticket, one PR.** Implement this plan as additional commits to the **existing draft PR on this branch**, then mark that PR ready for review. Do not create a separate code PR or split tests into another PR.
+**Review:** [PR #85 design review](https://github.com/cwchanap/Caelum/pull/85) (2026-11-18).  
+**Delivery:** **Exactly one PR for this ticket: PR #85.** This is a draft planning commit. Add the implementation, tests, browser MCP end-to-end evidence and screenshots to **the same branch and PR**, not a separate implementation PR.
 
-## Scope and integration rules
+## Scope and invariants
 
-Only change the presentation-host/renderer surface and its TypeScript/browser tests. Keep Rust gameplay, backend, saves, HUD/map text, controls, camera semantics, and the 10 Hz tick admission unchanged. Canvas2D is a best-effort compatibility path, not a new game renderer architecture or performance-targeted scale path. No new artwork or sound effects; the shipped 15 WebP sprites are reused.
+Keep WebGPU preferred; Canvas2D is selected only when WebGPU startup capability/setup is unavailable. Never hide asset errors, GPU pipeline bugs or other runtime failures; unexpected WebGPU device loss remains fatal. One shared frame/host, game engine, tick loop, mouse/drag/picking/camera code, Svelte shell and persistence. No second map renderer/tessellation system, new package, art/SFX, or 5k-vehicle Canvas2D target.
 
-## Implementation checkpoints (all on this PR)
+### Checkpoint 1 — Mechanical rename and small shared type seam
 
-### 1. Extract the minimal shared frame/renderer contract
+- Rename `src/runtime/createWebGpuHost.ts` → `src/runtime/createGameHost.ts`, `WebGpuHostContext` → `GameHostContext`, `createWebGpuHostWithRenderer` → `createGameHostWithRenderer`, and replace the production factory with `createGameHost`. One **mechanical commit on this PR**; update all direct runtime, test helper, benchmark and E2E imports without aliases.
+- Add `src/render/gameplayRenderer.ts` for only the shared `RenderFrame`/batch/stats/RGBA capture types, `GameplayRenderer` methods, `kind: "webgpu" | "canvas2d"`, and optional `lost` promise. Move `SPRITE_INSTANCE_FLOATS = 10`, `VEHICLE_INSTANCE_FLOATS = 11`, `VEHICLE_LANE_OFFSET_PX = 8`, and `VEHICLE_RIM_PX = 1.5` here. Import those constants from both concrete renderers and current batch builders; reference the new rim constant in WGSL.
+- Keep `buildFrame()`, resize, camera, input, 10 Hz tick admission, rAF interpolation, remount, pointer mapping, and device-loss handling in the **single existing host**. Subscribe to `renderer.lost` only when present. Set `data-renderer` on each newly mounted gameplay canvas.
+- In this same task's implementation commits, update `CLAUDE.md` (the old-host names and "Canvas2D gameplay rendering is deleted" statement), `docs/architecture.md` (runtime/display host and the distinction between the removed old Canvas renderer and new limited fallback), and stale host comments. This is necessary documentation for a breaking in-repo rename—not a separate task/PR.
 
-**Change**
-- Move the frame, solid/vehicle/sprite-batch, captured RGBA frame, and renderer stats/method types from `src/render/webgpu/renderer.ts` into `src/render/gameplayRenderer.ts` with renderer-neutral names.
-- Keep `lost?: Promise<...>` optional; only WebGPU actually exposes the loss promise. Keep WebGPU-only GPU device/format/texture details in `src/render/webgpu/renderer.ts`.
-- Rename `src/runtime/createWebGpuHost.ts` → `src/runtime/createGameHost.ts`, `WebGpuHostContext` → `GameHostContext`, and `createWebGpuHostWithRenderer` → `createGameHostWithRenderer`. Update imports in `src/runtime/createGameRuntime.ts`, `src/runtime/types.ts`, `tests/helpers/gameHost.ts`, `tests/render/webGpuHost.test.ts`, `tests/e2e/rendererScale.ts`, and related tests. No backward-compatible re-exports.
-- Keep `GameHost` lifecycle and `buildFrame()` in one place; subscribe to device loss only when the selected renderer supplies it.
+**Acceptance:** existing GPU renderer, host/camera/picking/rAF and tests compile with the neutral contract; no behavioral change from the rename alone.
 
-**Prove**
-- Existing fake renderer/host tests still exercise all pointer/camera/tick/resize/remount paths.
-- Existing GPU renderer unit tests and Rust/WASM game-runtime behavior still compile and pass.
-- No renderer-specific types leak into `RuntimeController` except the existing neutral capture shape.
+### Checkpoint 2 — One validated sprite load and narrow startup selection
 
-### 2. Share sprite decoding/validation without copying the asset catalog
+- Export `loadSpriteImages()` from `src/render/webgpu/spriteAtlas.ts`, reusing `SPRITE_LAYER_SOURCES` and `decodeSpriteImage`. Return the 15 layer-indexed original images/source dimensions. The existing GPU atlas uploader takes these already decoded images; Canvas2D uses exactly the same table. No copied asset map or extra decode pass.
+- Decode **before** and **outside** the fallback catch so damaged images remain a startup error. Then probe `navigator.gpu` and `getContext("webgpu")` on a **disposable canvas**, attempt adapter/device/format setup in a narrowly scoped catch, and choose Canvas2D only for these setup failures. Destroy an acquired device when capability setup fails. Leave sprite-upload/pipeline/renderer creation **outside that catch**, cleanup and rethrow its unexpected errors.
+- Construct the existing host around the chosen concrete renderer. The real game canvas is created only on `mount()`, preserving the context-sticky invariant. Canvas2D context unavailable at mount throws clearly through the existing fatal shell path; don't add a recursive fallback or dedicated exhaustive test.
 
-**Change**
-- In `src/render/webgpu/spriteAtlas.ts`, expose one validated layer-indexed image-loading function (including source rectangle/dimensions) using the existing ordered layer table and `decodeSpriteImage` checks.
-- Make `createSpriteAtlasTexture` use that function; let the Canvas2D renderer consume the same returned layers. Decode once per chosen renderer, not per frame.
-- Ensure invalid image decode or unexpected dimensions throws with the existing asset-identifying message; this exception is *outside* startup fallback catches.
+**Acceptance (focused factory tests, not a giant matrix):**
+- [ ] Successful WebGPU startup yields `data-renderer="webgpu"`.
+- [ ] Missing API/context or null/rejected adapter/device (parameterized where appropriate) yields `canvas2d`.
+- [ ] Device acquired then capability setup fails ⇒ `device.destroy()` and Canvas2D.
+- [ ] Invalid asset decoding ⇒ terminal error, **not** Canvas2D; genuine pipeline bugs remain terminal.
+- [ ] Mid-session device loss still reports fatal; deliberate destroy is ignored.
 
-**Prove**
-- Existing layer order, 15 sprites, expected native dimensions, and GPU atlas/mipmap tests pass.
-- A bad image fails startup rather than silently swapping renderers or showing a partial blank map.
+Use existing `createFakeDevice` / `createFakeCanvas` helpers in `tests/helpers/fakeWebGpu.ts`. No extra renderer factory abstraction.
 
-### 3. Add the small Canvas2D renderer and pixel tests
+### Checkpoint 3 — Minimal seam-safe Canvas2D painter
 
-**Change**
-- Create `src/render/canvas2d/renderer.ts` implementing the shared methods.
-- Render clip-space solid triangles in original order, sprites from layer/image source rects with y-down world rotation and transparency, and vehicles as rotated bodies with existing 8-world-pixel lane offset and white 1.5-world-pixel edge.
-- Preserve painter order: `solids → sprites → overSprites → vehicles → overVehicles`; copy vertex/instance data only as needed for painting.
-- Use device-pixel width/height from the shared host; reuse high-quality image smoothing. Provide deterministic offscreen `captureFrame(frame)` via `getImageData` returning RGBA8 and `null` if not mounted. Keep `configure/unconfigure/destroy` idempotent and small.
-- No second tessellator, no GPU shader rewrite, no render scheduler in this file, no new dependency.
+Add `src/render/canvas2d/renderer.ts` implementing `GameplayRenderer`, with no new dependency or its own scheduling.
 
-**Prove**
-- Unit tests with a real or recording 2D context verify colored triangles/alpha/order, all sprite layer selection and source cropping, a non-square rotated building, three trees, vehicle body/edge/offset, empty frame, DPR/resize, snapshot pixels, and teardown/remount.
-- Pixel assertions tolerate Canvas2D vs WebGPU anti-aliasing differences; they must not tolerate missing sprites, wrong orientation, or displaced vehicles.
+- At **every render**, restore identity transform, `imageSmoothingEnabled=true`, `imageSmoothingQuality="high"`, then clear/fill `colors.empty`. The host's `canvas.width/height` reset makes a configure-only smoothing setting incorrect.
+- Clip-to-device-pixel project each existing solid triangle; **batch each consecutive same-RGBA run** into a single nonzero fill path with consistent triangle winding. Preserve batch/stage order and alpha (cracks/radial spokes/double-alpha are bugs).
+- Draw each validated sprite source rectangle via a y-down rotated/scaled `drawImage`; verify non-square 90° footprints and transparent insets. No new atlas, per-tile drawing code or duplicate URL list.
+- Draw rotated vehicles with the shared 8-world-px lane offset and 1.5-world-px white rim as an **even-odd outer-minus-inner ring**, then a nonoverlapping colored inner body. Apply the same instance alpha to each region (no washed-out double-blending).
+- `captureFrame(frame)` calls the **same** `render(frame)` on the configured visible 2D canvas and reads its backing store with `getImageData` into the shared row-tight RGBA shape. No offscreen capture surface. Return `null` while unconfigured; unconfigure/remount and destroy are small/idempotent.
+- Keep the required order `solids → sprites → overSprites → vehicles → overVehicles`; no static bitmap cache unless the benchmark in Checkpoint 5 identifies a real problem.
 
-### 4. Select renderer once in the existing bootstrap path
+**Acceptance:** one recording-2D-context unit test asserts same-color fill run count/order, correct alpha/color, rotated rectangular sprite `drawImage` crop/transform, vehicle rim/body transforms and source instance data; one host/renderer lifecycle test covers configure, resize/DPR reset, remount, render/capture and teardown. jsdom lacks native Canvas2D raster output, so **pixel correctness belongs in Playwright**. Do not add a `canvas` test package or tests for every sprite/layer/tree permutation.
 
-**Change**
-- Have production `createGameHost` probe WebGPU on a disposable canvas and attempt adapter/device/format setup. Use Canvas2D for absent API, unavailable context, null/rejected adapter and rejected device/format setup.
-- Release an acquired device on a failed setup. Keep sprite decode, pipeline bugs, and unrelated runtime errors **outside** the fallback handler. If 2D context creation fails, expose the terminal error as today.
-- Construct the normal shared host with the chosen renderer. On every `mount()`, set `data-renderer="webgpu|canvas2d"` on the same `canvas[data-runtime-canvas=true]` used by existing E2E and pointer selectors. The choice survives City Library → city → library remount.
-- Keep unexpected post-boot WebGPU device loss terminal; deliberate device destruction during `destroy()` remains ignored. Do not modify `src/main.ts` error routing except if required for clear diagnostics.
+### Checkpoint 4 — Focused real-browser E2E, existing pixel oracles, MCP visual evidence
 
-**Prove**
-- Focused async factory tests cover the full capability matrix and cleanup. A supported failure creates a playable 2D host; an invalid asset and a Canvas2D failure raise explicit errors.
-- Existing WebGPU success/loss and no-extra-ticks tests stay green.
+- Add `tests/e2e/canvasFallback.spec.ts`: before navigation, use `page.addInitScript` to hide `navigator.gpu` (not a production force flag). With **real browser/WASM gameplay**, use existing `createDefaultCity` helpers; assert `canvas[data-renderer="canvas2d"]`, no Shell Error, nonblank capture pixels; build **one** structure and assert the Rust-backed state changes; run a City Library → gameplay remount and viewport resize and recapture. Add a road-quad diagonal pixel probe for visible seams/alpha. Avoid rerunning the whole input, route, camera and overlays suite.
+- Run the **existing** `mapSprites.spec.ts` rotated large-house footprint + transparent-inset known-color oracle on the forced fallback path (parameterize its single general test or share the helper); keep its mip-filter calibration WebGPU-only.
+- Reuse `expectRoadsideStopAnchors` from `tests/e2e/routes.spec.ts` by extracting the existing known-color probe into a test helper, then call it once under fallback for a roadside stop. Keep the existing full routes suite on WebGPU; don't clone it.
+- Perform the **same minimal fallback browser E2E once through browser automation MCP** on Chromium/one platform. It must assert renderer selection, real gameplay mutation, remount and resize, rather than being only screenshots. Capture **one Fit and one zoomed fallback screenshot** (no ticket UI mockup), automatically inspect screenshot framing and HUD/map labels, and attach evidence to PR #85. Use `debugCaptureFrame()` known-color and diagonal probes as the objective pixel visual check. **Do not** gate on WebGPU-vs-Canvas2D pixel-diff snapshots. The Playwright scenario is repeatable CI regression coverage; MCP is the task's recorded acceptance execution, **not a CI service dependency**. No human acceptance.
 
-### 5. Add real browser/WASM end-to-end and screenshot evidence
+**Acceptance:** Chromium/real WASM passes the small new forced-fallback smoke and reused sprite/stop pixel oracles; unchanged WebGPU E2E suite passes. Screenshot evidence shows nonblank Fit/zoom map, aligned DOM HUD, correctly cropped sprites, stop markers, and no road-quad seams. One platform is sufficient, with no platform-specific changes.
 
-**Change**
-- Add `tests/e2e/canvasFallback.spec.ts` using existing `createDefaultCity`, `runtimeSnapshot`, `settleLayout`, map coordinate and pixel-capture helpers. Use `page.addInitScript` **before navigation** to set `navigator.gpu` unavailable; do not introduce a production `forceRenderer` feature flag.
-- Complete a real WASM gameplay slice: create/load city; select and hover a road/building/stop; make a building/road edit (or demolish); create a route with service; verify moving vehicle/changed state; turn on Data overlay; zoom, pan, Fit and resize; navigate out to City Library and back. Assert no Shell Error and `data-renderer="canvas2d"` throughout. Existing normal Chromium/WebGPU E2E remains in the suite.
-- Run the **MCP browser E2E** on the same Chromium browser/platform as the repo's Playwright suite (one platform is sufficient; no platform-specific renderer behavior is introduced).
-- With no mockup attached for this fallback task, have the browser MCP save two **Canvas2D** screenshots/captured RGBA frames: **Fit** and **zoomed with route + sprites + vehicle + overlay**. Capture equivalent **WebGPU** frames with the same deterministic fixture, viewport, game state and camera. Use `debugCaptureFrame` for map content on Linux (canvas presentation may be black under software-Vulkan), plus full-screen screenshots for DOM HUD/map-label alignment. Record automated comparisons/inspection for sprite presence/alpha, frame order, visible stops, vehicle placement and UI alignment, allowing minor filter/antialias differences.
-- Store screenshots/captures in test artifacts or the PR evidence; do **not** commit generated screenshot binaries unless the repo's existing testing pattern requires it. No manual approval gate.
+### Checkpoint 5 — Measure once, regression, and close out PR
 
-**Prove**
-- Automated MCP-driven browser run has real state assertions and passes both map views, interactions, camera/resize, library remount and nonblank pixel capture.
-- A normal WebGPU browser run still declares `data-renderer="webgpu"`.
-- Pixel/sample assertions prove source cropping/rotations, translucent overlays, and device-pixel capture orientation.
+- Add **one Canvas2D 200-visible-vehicle row** to the existing `tests/e2e/rendererScale.ts` benchmark harness (e.g., a renderer query selector), using the real shared host and scene. Preserve the existing 200/5,000 WebGPU rows. Record Canvas2D **median/p95 CPU frame time** in PR evidence with **no artificial threshold**.
+- If Canvas2D on a Large scene is clearly unusable, evaluate a **single** cached static-layer bitmap in `canvas2d/renderer.ts` based on observed numbers; otherwise do not add complexity. Keep any justified fix on **this same PR**.
+- Run `bun run check`, `bun run lint`, `bun run test:unit`, `bun run test:e2e`, and existing CI. The real WASM E2E supplies backend-through-browser coverage; no Rust simulation changes are expected.
+- Include final MCP run evidence + Fit/zoom screenshot visual check, performance row, and test summary in **PR #85**. Mark ready for review only after the implementation and acceptance results are complete.
 
-### 6. Regression/finish within the same PR
+## Risks and limits
 
-**Run**
-- `bun run check`
-- `bun run lint`
-- `bun run test:unit`
-- `bun run test:e2e` (Chromium/WebGPU plus forced fallback)
-- Existing CI checks. Since Rust gameplay is untouched, do not add new Rust tests unless a surprising backend change becomes necessary; if that occurs, include a Rust-backed end-to-end test in this same PR.
-
-**Review**
-- Verify no forked game loop, no duplicated map/domain drawing, no host lifecycle leak, and no dependency/art additions.
-- Attach MCP E2E + automated screenshot evidence to this same draft PR and only then mark it ready for review.
-
-## End-to-end acceptance checklist
-
-- [ ] **Default:** WebGPU-capable Chromium runs the real game with `data-renderer="webgpu"`; current WebGPU tests pass.
-- [ ] **Fallback:** missing GPU API, probe context failure, null/rejected adapter and device/setup failures all choose Canvas2D. A forced-no-WebGPU real WASM game boots without Shell Error.
-- [ ] **Failure boundaries:** missing/invalid sprite content and Canvas2D creation failure produce clear terminal errors; no silent fallback on unrelated code bugs. Acquired GPU resources are cleaned up.
-- [ ] **Gameplay E2E through MCP:** create/load city, selection, construction/demolition, route service and moving vehicle, data overlay, camera zoom/pan/Fit, resize, City Library and remount all work and mutate game state correctly, on one supported platform.
-- [ ] **Visual acceptance through MCP:** automatically capture and inspect Fit and zoomed scenes on Canvas2D and equivalent WebGPU frames; verify map nonblank, correct sprite/vehicle rotation and placement, alpha/painter order, stops/roads, overlays and HUD/text alignment. No mockup exists for HPA-1144, so use screenshot-based evidence; no human acceptance gate.
-- [ ] **Lifecycle:** one rAF loop, same 10 Hz tick throttle, clean resize/DPR/remount/frame capture; GPU loss remains terminal.
-- [ ] **Boundaries:** no Rust simulation/persistence changes, additional rendering dependency, new art/SFX, second engine/tessellation, or 5k-vehicle Canvas2D performance target.
-- [ ] **Quality:** typecheck, lint, unit, browser E2E and CI green; screenshots/capture artifacts included in PR evidence.
-
-## Files likely touched
-
-| Area | Expected files |
+| Risk | Mitigation / decision |
 | --- | --- |
-| Shared contract | `src/render/gameplayRenderer.ts` (new) |
-| Shared host/selection | `src/runtime/createWebGpuHost.ts` → `src/runtime/createGameHost.ts`, `src/runtime/createGameRuntime.ts`, `src/runtime/types.ts` |
-| Existing GPU | `src/render/webgpu/renderer.ts`, `src/render/webgpu/spriteAtlas.ts` |
-| Fallback renderer | `src/render/canvas2d/renderer.ts` (new) |
-| Unit/host | `tests/render/webGpuHost.test.ts` (rename if useful), new `tests/render/canvas2dRenderer.test.ts`, existing GPU/asset tests, `tests/helpers/gameHost.ts` |
-| Browser/E2E | new `tests/e2e/canvasFallback.spec.ts`, existing helpers/renderer benchmark typing |
-| Docs | This plan and its design file |
+| Triangle antialias seams/double alpha | Same-color run paths, normalized winding, real-browser diagonal/known-color probes |
+| CPU cost on Large maps | Real 200-vehicle measurement; postpone bitmap cache until justified |
+| DPR/context-state reset | Reapply smoothing and identity every draw; resize/remount browser coverage |
+| Dimmed vehicle outline changes color | Even-odd disjoint ring/body at one instance alpha |
+| Different Canvas2D and GPU filtering | Known-color oracle and screenshot inspection, no brittle cross-backend diff |
+| Tauri/WebView variants may differ | Shared code, one Chromium platform acceptance; do not claim native validation that did not run |
 
-## Avoid
+## End-to-end definition of done (no human gate)
 
-Do not split the implementation into another PR, build a renderer plugin framework, add a new renderer feature switch for production, restore the obsolete Canvas2D gameplay source, change game rules, or create a second art/SFX task. No art or SFX work is required.
+- [ ] WebGPU stays default, and documented missing capability/setup cases select Canvas2D; fatal error boundaries and device cleanup are proven.
+- [ ] Browser/WASM fallback smoke has **real gameplay state change**, correct canvas selection, remount/resize and nonblank map.
+- [ ] Existing rotated-building/transparent-inset and roadside-marker pixel oracles also pass with fallback, plus seam/opacity sample.
+- [ ] Browser **MCP** executes that same smoke on one platform and captures **Fit + zoomed screenshots**; automated visual assertions cover frame content and HUD alignment, with no mockup dependency.
+- [ ] Existing WebGPU tests, host lifecycle and loss semantics remain correct; unit tests use a recording context rather than a new raster library.
+- [ ] Canvas2D 200-vehicle benchmark row recorded; no made-up performance threshold or premature cache.
+- [ ] `CLAUDE.md`, `docs/architecture.md`, and host comments describe both the old renderer deletion and the new fallback accurately.
+- [ ] Typecheck, lint, unit, browser E2E and CI green. **Implementation + tests + evidence all within PR #85**, no new art/SFX.
+
+## Expected files
+
+`src/render/gameplayRenderer.ts` (new); rename `src/runtime/createWebGpuHost.ts` → `createGameHost.ts`; adjust `src/runtime/createGameRuntime.ts`, `src/runtime/types.ts`, `src/render/webgpu/renderer.ts`, `src/render/webgpu/vehicleInstances.ts`, `src/render/webgpu/spriteAtlas.ts`; add `src/render/canvas2d/renderer.ts`; update host/GPU test imports and recording-context tests; `tests/e2e/canvasFallback.spec.ts`, reuse `tests/e2e/mapSprites.spec.ts` and `routes.spec.ts` known-color helpers; augment the existing scale harness; update `CLAUDE.md`, `docs/architecture.md`, and stale comments.
+
+**Explicit non-goals:** WebGL2/PixiJS, hot GPU-loss switching, a second game renderer/domain geometry subsystem, 5k-vehicle Canvas2D parity, native multi-platform E2E matrix, screenshot diffs against GPU, compatibility aliases, new art/SFX, or a second PR.
