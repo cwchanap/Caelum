@@ -1,8 +1,10 @@
 import type { GameState } from "../../src/domain/types";
 import {
   createGameHostWithRenderer,
+  type GameHost,
   type GameHostContext,
 } from "../../src/runtime/createGameHost";
+import { createCanvas2dRenderer } from "../../src/render/canvas2d/renderer";
 import { createWebGpuRenderer } from "../../src/render/webgpu/renderer";
 import {
   VEHICLE_INSTANCE_FLOATS,
@@ -15,15 +17,29 @@ import {
   loadSpriteImages,
 } from "../../src/render/webgpu/spriteAtlas";
 import { createUiState } from "../../src/ui/uiState";
-import { buildRenderScaleState } from "../helpers/renderScaleState";
+import {
+  buildRenderScaleState,
+  type RenderScaleMapSize,
+} from "../helpers/renderScaleState";
 
 const WARMUP_FRAMES = 30;
 
+export type BenchRenderer = "webgpu" | "canvas2d";
+
+export interface BenchRunConfig {
+  renderer: BenchRenderer;
+  mapSize: RenderScaleMapSize;
+  vehicleCount: 200 | 5000;
+}
+
 export interface RendererScaleResult {
+  renderer: BenchRenderer;
+  mapSize: RenderScaleMapSize;
   vehicleCount: number;
   frames: number;
   presentedVehicles: number;
   encodedInstances: number;
+  /** GPU bytes of the vehicle instance upload; always 0 for Canvas2D. */
   vehicleUploadBytes: number;
   solidDraws: number;
   spriteInstances: number;
@@ -31,7 +47,8 @@ export interface RendererScaleResult {
   vehicleDraws: number;
   medianCpuMs: number;
   p95CpuMs: number;
-  /** The GPU queue finished all submitted benchmark frames without error. */
+  /** The GPU queue finished all submitted benchmark frames without error;
+   *  always false for Canvas2D — there is no GPU queue to wait on. */
   queueCompleted: boolean;
 }
 
@@ -39,7 +56,7 @@ declare global {
   interface Window {
     __caelumRendererScale: {
       run: (
-        vehicleCount: 200 | 5000,
+        config: BenchRunConfig,
         frames?: number,
       ) => Promise<RendererScaleResult>;
     };
@@ -68,17 +85,20 @@ function median(samples: number[]): number {
     : (sorted[middle - 1] + sorted[middle]) / 2;
 }
 
-// Production render path: the real WebGPU host (rAF frame drawing, batch
-// caches, vehicle interpolation/encode) over the real renderer, driven one
-// render() per delivered frame. No runtime/backend orchestration — the
-// benchmark measures render cost, not app boot. The renderer gets the real
-// sprite atlas: the host's frames always carry scene sprites, so a two-
-// argument renderer would throw on every frame. The renderer is wrapped only
-// to record the last frame's encode stats.
+// Production render path: the real shared host (rAF frame drawing, batch
+// caches, vehicle interpolation/encode) over the real renderer chosen per
+// run, driven one render() per delivered frame. No runtime/backend
+// orchestration — the benchmark measures render cost, not app boot. Both
+// renderers get the real sprite atlas: the host's frames always carry scene
+// sprites, so a two-argument renderer would throw on every frame. Each
+// renderer is wrapped only to record the last frame's stats.
 let state: GameState | null = null;
+let stateMapSize: RenderScaleMapSize = "small";
 let sceneRevision = 0;
 const ui = createUiState();
 
+// The WebGPU rows still require a working adapter/device; the Canvas2D row
+// needs only the decoded sprite images.
 if (navigator.gpu === undefined) {
   throw new Error("WebGPU is unavailable in this browser");
 }
@@ -90,7 +110,15 @@ const device = await adapter.requestDevice();
 const format = navigator.gpu.getPreferredCanvasFormat();
 const spriteImages = await loadSpriteImages();
 const spriteTexture = createSpriteAtlasTexture(device, spriteImages);
-const renderer = createWebGpuRenderer(device, format, spriteTexture);
+const renderers: Record<BenchRenderer, GameplayRenderer> = {
+  webgpu: createWebGpuRenderer(device, format, spriteTexture),
+  canvas2d: createCanvas2dRenderer(spriteImages),
+};
+const benchDevices: Record<BenchRenderer, GPUDevice | null> = {
+  webgpu: device,
+  canvas2d: null,
+};
+
 let lastStats: RenderStats = {
   solidBatches: 0,
   solidVertices: 0,
@@ -99,13 +127,14 @@ let lastStats: RenderStats = {
   vehicleInstances: 0,
   vehicleDraws: 0,
 };
-const recordingRenderer: GameplayRenderer = {
+const recordingOf = (renderer: GameplayRenderer): GameplayRenderer => ({
   ...renderer,
   render: (frame: RenderFrame) => {
     lastStats = renderer.render(frame);
     return lastStats;
   },
-};
+});
+
 const benchContext: GameHostContext = {
   getState: () => {
     if (state === null) throw new Error("benchmark state is unavailable");
@@ -127,7 +156,33 @@ const benchContext: GameHostContext = {
     throw error;
   },
 };
-const gameHost = createGameHostWithRenderer(benchContext, recordingRenderer);
+
+/** One mounted rig per renderer kind: mount() replaces the canvas inside the
+ *  bench host element, so switching renderers swaps the whole surface. */
+interface Rig {
+  gameHost: GameHost;
+  device: GPUDevice | null;
+  unmount: (() => void) | null;
+}
+const rigs = new Map<BenchRenderer, Rig>();
+function rigFor(rendererKind: BenchRenderer): Rig {
+  let rig = rigs.get(rendererKind);
+  if (rig === undefined) {
+    rig = {
+      gameHost: createGameHostWithRenderer(
+        benchContext,
+        recordingOf(renderers[rendererKind]),
+        benchDevices[rendererKind] ?? undefined,
+      ),
+      device: benchDevices[rendererKind],
+      unmount: null,
+    };
+    rigs.set(rendererKind, rig);
+  }
+  return rig;
+}
+let activeKind: BenchRenderer = "webgpu";
+let activeRig = rigFor("webgpu");
 
 // GameHost.render() coalesces by design — it schedules one rAF and returns,
 // so back-to-back calls in one task time only the coalescing guard, never a
@@ -147,44 +202,67 @@ const nextDeliveredFrame = (): Promise<void> =>
     realRequestAnimationFrame(() => resolve());
   });
 
+// Mount reads getState().map while sizing the canvas, so the fixture must
+// exist before the first mount (and every renderer switch remount).
 state = buildRenderScaleState(200);
 sceneRevision = 1;
-gameHost.mount(host);
+activeRig.unmount = activeRig.gameHost.mount(host);
 
 window.__caelumRendererScale = {
   async run(
-    vehicleCount: 200 | 5000,
+    config: BenchRunConfig,
     frames = 120,
   ): Promise<RendererScaleResult> {
-    if (state === null || state.transit.vehicles.length !== vehicleCount) {
-      state = buildRenderScaleState(vehicleCount);
+    if (config.renderer !== activeKind) {
+      activeRig.unmount?.();
+      activeRig = rigFor(config.renderer);
+      activeRig.unmount = activeRig.gameHost.mount(host);
+      activeKind = config.renderer;
+    }
+    if (
+      state === null ||
+      stateMapSize !== config.mapSize ||
+      state.transit.vehicles.length !== config.vehicleCount
+    ) {
+      state = buildRenderScaleState(config.vehicleCount, {
+        mapSize: config.mapSize,
+      });
+      stateMapSize = config.mapSize;
       sceneRevision += 1;
     }
     for (let index = 0; index < WARMUP_FRAMES; index += 1) {
-      gameHost.render();
+      activeRig.gameHost.render();
       await nextDeliveredFrame();
     }
     const samples: number[] = [];
     for (let index = 0; index < frames; index += 1) {
-      gameHost.render();
+      activeRig.gameHost.render();
       await nextDeliveredFrame();
       samples.push(lastFrameCpuMs);
     }
-    await device.queue.onSubmittedWorkDone();
+    // GPU-only wait, guarded by device presence: Canvas2D has no queue and
+    // never claims queue completion or GPU upload bytes.
+    if (activeRig.device !== null) {
+      await activeRig.device.queue.onSubmittedWorkDone();
+    }
     return {
-      vehicleCount,
+      renderer: config.renderer,
+      mapSize: config.mapSize,
+      vehicleCount: config.vehicleCount,
       frames,
       presentedVehicles: state.transit.vehicles.length,
       encodedInstances: lastStats.vehicleInstances,
       vehicleUploadBytes:
-        lastStats.vehicleInstances * VEHICLE_INSTANCE_FLOATS * 4,
+        activeRig.device !== null
+          ? lastStats.vehicleInstances * VEHICLE_INSTANCE_FLOATS * 4
+          : 0,
       solidDraws: lastStats.solidBatches,
       spriteInstances: lastStats.spriteInstances,
       spriteDraws: lastStats.spriteDraws,
       vehicleDraws: lastStats.vehicleDraws,
       medianCpuMs: median(samples),
       p95CpuMs: percentile(samples, 0.95),
-      queueCompleted: true,
+      queueCompleted: activeRig.device !== null,
     };
   },
 };

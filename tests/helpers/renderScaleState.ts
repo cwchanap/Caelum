@@ -1,4 +1,4 @@
-import type { GameState } from "../../src/domain/types";
+import type { GameState, Point } from "../../src/domain/types";
 import {
   addTestBusRoute,
   addTestBusStop,
@@ -6,9 +6,11 @@ import {
   addTestMetroStation,
   assignTestVehicle,
   createTestGameState,
+  createTestMap,
   placeTestBuilding,
 } from "./gameState";
 import { pointsOnRow, withAreas, withRoads, withTracks } from "./mapFixtures";
+import { MAP_SIZES } from "../../src/scenario/sandbox";
 
 const ROAD_ROW = pointsOnRow(4, 2, 12);
 const TRACK_ROW = pointsOnRow(9, 3, 13);
@@ -21,6 +23,45 @@ const STATION_TILES = [
   { x: 4, y: 9 },
   { x: 12, y: 9 },
 ];
+
+export type RenderScaleMapSize = "small" | "large";
+
+export interface RenderScaleOptions {
+  mapSize?: RenderScaleMapSize;
+}
+
+/** Deterministic large-board road grid: four verticals crossing three
+ *  horizontals, forming city blocks across the 84x54 map. Transit keeps its
+ *  own small backbone row (ROAD_ROW), so these carry no stops and stay
+ *  intentionally disconnected from it. */
+const GRID_VERTICAL_XS = [20, 40, 60, 81];
+const GRID_HORIZONTAL_YS = [20, 36, 52];
+
+function largeGridRoadPoints(): Point[] {
+  const points: Point[] = [];
+  for (const x of GRID_VERTICAL_XS) {
+    for (let y = 2; y <= 52; y += 1) points.push({ x, y });
+  }
+  for (const y of GRID_HORIZONTAL_YS) {
+    for (let x = 2; x <= 81; x += 1) points.push({ x, y });
+  }
+  return points;
+}
+
+/** Small houses on the block edge above each horizontal grid road, stepping
+ *  every 8 tiles and skipping vertical-road columns (footprints are 2 wide). */
+function largeGridHouseOrigins(): Point[] {
+  const origins: Point[] = [];
+  for (const y of GRID_HORIZONTAL_YS) {
+    for (let x = 5; x <= 78; x += 8) {
+      if (GRID_VERTICAL_XS.some((road) => road === x || road === x + 1)) {
+        continue;
+      }
+      origins.push({ x, y: y - 1 });
+    }
+  }
+  return origins;
+}
 
 /** Spread the synthetic fleet along its authored paths so the fixture
  *  exercises per-vehicle path sampling instead of stacking every vehicle at
@@ -103,8 +144,22 @@ function withPresentationRows(state: GameState): GameState {
  * transit fleet of exactly `vehicleCount` vehicles composed from repeated
  * transit rows. This is a render stress proxy — no Rust simulation actors are
  * created.
+ *
+ * With `{ mapSize: "large" }` the same transit backbone sits on the full
+ * 84x54 large board plus a deterministic road grid and block-edge houses, so
+ * the thousands of remaining empty tiles render as deterministic hash-placed
+ * trees — quantifying the large map's structural rendering cost.
  */
-export function buildRenderScaleState(vehicleCount: number): GameState {
+export function buildRenderScaleState(
+  vehicleCount: number,
+  options: RenderScaleOptions = {},
+): GameState {
+  return options.mapSize === "large"
+    ? buildLargeFixture(vehicleCount)
+    : buildSmallFixture(vehicleCount);
+}
+
+function buildSmallFixture(vehicleCount: number): GameState {
   let state = withAreas(
     createTestGameState(),
     "residential",
@@ -129,6 +184,55 @@ export function buildRenderScaleState(vehicleCount: number): GameState {
   state = placeTestBuilding(state, "busTerminal", { x: 16, y: 4 }, 90);
   state = placeTestBuilding(state, "smallHouse", { x: 5, y: 2 }, 0);
   state = placeTestBuilding(state, "smallHouse", { x: 8, y: 2 }, 0);
+  state = withPresentationRows(state);
+  return withScaledFleet(state, vehicleCount);
+}
+
+function buildLargeFixture(vehicleCount: number): GameState {
+  const base = createTestGameState({
+    budget: 1_000_000,
+    rules: {
+      economyPreset: "standard",
+      sandbox: {
+        templateId: "crossroads",
+        mapSize: "large",
+        startingCapital: 120_000,
+        demandMultiplier: 1,
+      },
+    },
+  });
+  let state = withAreas(
+    {
+      ...base,
+      map: createTestMap(MAP_SIZES.large.width, MAP_SIZES.large.height),
+    },
+    "residential",
+    pointsOnRow(2, 4, 11),
+  );
+  // One withRoads call over the union so shared tiles keep reciprocal
+  // connections across backbone and grid roads.
+  state = withRoads(state, [...ROAD_ROW, ...largeGridRoadPoints()]);
+  state = withTracks(state, TRACK_ROW);
+  for (const tile of BUS_STOP_TILES) {
+    state = addTestBusStop(state, tile);
+  }
+  for (const tile of STATION_TILES) {
+    state = addTestMetroStation(state, tile);
+  }
+  state = addTestBusRoute(
+    state,
+    state.transit.stops.map((stop) => stop.id),
+  );
+  state = addTestMetroLine(
+    state,
+    state.transit.stations.map((station) => station.id),
+  );
+  state = placeTestBuilding(state, "busTerminal", { x: 16, y: 4 }, 90);
+  state = placeTestBuilding(state, "smallHouse", { x: 5, y: 2 }, 0);
+  state = placeTestBuilding(state, "smallHouse", { x: 8, y: 2 }, 0);
+  for (const origin of largeGridHouseOrigins()) {
+    state = placeTestBuilding(state, "smallHouse", origin, 0);
+  }
   state = withPresentationRows(state);
   return withScaledFleet(state, vehicleCount);
 }

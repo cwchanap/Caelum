@@ -48,6 +48,12 @@ function createEmptyMap(
   return { width, height, tiles, roadStructures: [] };
 }
 
+/** Test-only rectangular board for renderer/scale fixtures that must exceed
+ *  the Small sandbox default (e.g. the 84x54 large render-scale fixture). */
+export function createTestMap(width: number, height: number): GameMap {
+  return createEmptyMap(width, height);
+}
+
 /** Shared defaults for derived service metrics in runtime/selector tests. */
 export function createTestServiceMetrics(
   overrides: Partial<ServiceMetrics> = {},
