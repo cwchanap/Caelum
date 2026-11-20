@@ -606,13 +606,13 @@ describe("createCanvas2dRenderer", () => {
       context.ops.indexOf(tree!),
     );
 
-    // Two sprite instances in one draw; the one overSprites triangle fills
+    // One drawImage per sprite instance; the one overSprites triangle fills
     // as its own run.
     expect(stats).toEqual({
       solidBatches: 1,
       solidVertices: 18,
       spriteInstances: 2,
-      spriteDraws: 1,
+      spriteDraws: 2,
       vehicleInstances: 0,
       vehicleDraws: 0,
     });
@@ -829,12 +829,16 @@ describe("createCanvas2dRenderer", () => {
     expect(renderer.kind).toBe("canvas2d");
     renderer.configure(canvasA);
 
-    // Simulate the context damage a backing-store resize leaves behind.
+    // Simulate the context damage a backing-store resize leaves behind,
+    // and change the canvas size without reconfiguring: the renderer must
+    // read the backing-store dims per frame, not cache them at configure().
     const damaged = contexts[0]!;
     damaged.setTransform(2, 0, 0, 3, 5, 7);
     damaged.globalAlpha = 0.5;
     damaged.imageSmoothingEnabled = false;
     damaged.imageSmoothingQuality = "low";
+    canvasA.width = 240;
+    canvasA.height = 120;
 
     const stats = renderer.render(EMPTY_FRAME);
     expect(stats).toEqual({
@@ -850,6 +854,12 @@ describe("createCanvas2dRenderer", () => {
         op.op === "fillRect",
     );
     expect(clearOps).toHaveLength(1);
+    expect(clearOps[0]).toMatchObject({
+      x: 0,
+      y: 0,
+      width: 240,
+      height: 120,
+    });
     expect(clearOps[0]!.state.ctm).toEqual([1, 0, 0, 1, 0, 0]);
     expect(clearOps[0]!.state.globalAlpha).toBe(1);
     expect(clearOps[0]!.state.imageSmoothingEnabled).toBe(true);
@@ -859,14 +869,14 @@ describe("createCanvas2dRenderer", () => {
     // row-tight, in that order — no offscreen canvas.
     const captured = await renderer.captureFrame(EMPTY_FRAME);
     expect(captured).not.toBeNull();
-    expect(captured!.width).toBe(200);
-    expect(captured!.height).toBe(100);
+    expect(captured!.width).toBe(240);
+    expect(captured!.height).toBe(120);
     const readOps = damaged.ops.filter(
       (op): op is Extract<RecordedOp, { op: "getImageData" }> =>
         op.op === "getImageData",
     );
     expect(readOps).toHaveLength(1);
-    expect(readOps[0]).toMatchObject({ x: 0, y: 0, width: 200, height: 100 });
+    expect(readOps[0]).toMatchObject({ x: 0, y: 0, width: 240, height: 120 });
     expect(captured!.pixels).toBe(readOps[0]!.data);
     // Recompute the clears after capture: the capture's own render must
     // paint onto the game canvas before the readback. (Filtering before

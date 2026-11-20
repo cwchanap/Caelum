@@ -522,7 +522,12 @@ export function createWebGpuRenderer(
       return stats;
     },
     async captureFrame(frame: RenderFrame): Promise<CapturedFrame | null> {
-      if (quadBuffer === null || pixelWidth === 0 || pixelHeight === 0) {
+      if (
+        context === null ||
+        quadBuffer === null ||
+        pixelWidth === 0 ||
+        pixelHeight === 0
+      ) {
         return null;
       }
       const width = pixelWidth;

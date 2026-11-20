@@ -82,13 +82,10 @@ export function createCanvas2dRenderer(
         const b = vertices[i + 4]!;
         const a = vertices[i + 5]!;
         ctx.beginPath();
-        while (
-          i < vertices.length &&
-          vertices[i + 2] === r &&
-          vertices[i + 3] === g &&
-          vertices[i + 4] === b &&
-          vertices[i + 5] === a
-        ) {
+        // Consume the first triangle unconditionally: a NaN color channel
+        // never equals itself, so testing before consuming would stall the
+        // outer loop forever.
+        do {
           const x1 = (vertices[i]! + 1) * halfWidth;
           const y1 = (1 - vertices[i + 1]!) * halfHeight;
           let x2 = (vertices[i + 6]! + 1) * halfWidth;
@@ -107,7 +104,13 @@ export function createCanvas2dRenderer(
           ctx.lineTo(x3, y3);
           ctx.closePath();
           i += 18;
-        }
+        } while (
+          i < vertices.length &&
+          vertices[i + 2] === r &&
+          vertices[i + 3] === g &&
+          vertices[i + 4] === b &&
+          vertices[i + 5] === a
+        );
         ctx.globalAlpha = a;
         ctx.fillStyle = rgbString(r, g, b);
         ctx.fill();
@@ -186,8 +189,8 @@ export function createCanvas2dRenderer(
           hx * 2,
           hy * 2,
         );
+        spriteDraws += 1;
       }
-      spriteDraws = 1;
     }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
@@ -231,6 +234,7 @@ export function createCanvas2dRenderer(
           }
           ctx.fillStyle = VEHICLE_RIM_COLOR;
           ctx.fill("evenodd");
+          vehicleDraws += 1;
           if (hasInterior) {
             ctx.beginPath();
             ctx.rect(rim - hx, rim - hy, (hx - rim) * 2, (hy - rim) * 2);
@@ -240,10 +244,10 @@ export function createCanvas2dRenderer(
               instances[i + 7]!,
             );
             ctx.fill();
+            vehicleDraws += 1;
           }
         }
       }
-      vehicleDraws = 1;
     }
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
