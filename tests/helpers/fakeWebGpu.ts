@@ -89,6 +89,10 @@ export interface FakeHarness {
   /** Invoked inside mapAsync so a test can stage the buffer's mapped bytes
    *  before the renderer reads them. */
   onMapRead?: (buffer: FakeBuffer) => void;
+  /** Optional validation error returned by the next popErrorScope() call. */
+  nextValidationError?: { message: string } | null;
+  /** Optional callback run during popErrorScope() (e.g. to simulate async loss). */
+  onPopErrorScope?: () => void;
   device: GPUDevice;
   /** True once the host teardown destroyed the device it created. */
   deviceDestroyed: boolean;
@@ -138,8 +142,19 @@ export function createFakeDevice(): FakeHarness {
     harness.buffers.push(buffer);
     return buffer;
   };
+  const errorScopes: string[] = [];
   const device = {
     lost,
+    pushErrorScope(filter: string) {
+      errorScopes.push(filter);
+    },
+    async popErrorScope() {
+      errorScopes.pop();
+      harness.onPopErrorScope?.();
+      const error = harness.nextValidationError ?? null;
+      harness.nextValidationError = null;
+      return error;
+    },
     createBuffer: makeBuffer,
     destroy() {
       harness.deviceDestroyed = true;

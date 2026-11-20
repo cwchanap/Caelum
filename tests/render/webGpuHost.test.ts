@@ -162,7 +162,7 @@ afterEach(() => {
 });
 
 interface FakeRenderer {
-  kind: "webgpu";
+  kind: "webgpu" | "canvas2d";
   lost: Promise<{ reason?: string; message: string }>;
   resolveLost(info: { reason?: string; message: string }): void;
   configure: Mock;
@@ -174,7 +174,9 @@ interface FakeRenderer {
   frames: RenderFrame[];
 }
 
-function createFakeRenderer(): FakeRenderer {
+function createFakeRenderer(
+  kind: "webgpu" | "canvas2d" = "webgpu",
+): FakeRenderer {
   let resolveLost: (info: {
     reason?: string;
     message: string;
@@ -184,7 +186,7 @@ function createFakeRenderer(): FakeRenderer {
   });
   const frames: RenderFrame[] = [];
   return {
-    kind: "webgpu",
+    kind,
     lost,
     resolveLost,
     configure: vi.fn(),
@@ -248,6 +250,7 @@ function createFixture(options?: {
   ui?: Partial<UiState>;
   camera?: Camera;
   onDragStartResult?: boolean;
+  rendererKind?: "webgpu" | "canvas2d";
 }): Fixture {
   let state = options?.state ?? createTestGameState();
   let ui = { ...createUiState(), ...options?.ui };
@@ -273,7 +276,7 @@ function createFixture(options?: {
     }),
   };
 
-  const renderer = createFakeRenderer();
+  const renderer = createFakeRenderer(options?.rendererKind);
 
   const ctx: GameHostContext = {
     getState: () => state,
@@ -1013,7 +1016,7 @@ describe("createGameHost lifecycle", () => {
     expect(callbacks.onTileClick).toHaveBeenCalledTimes(1);
   });
 
-  it("pointercancel mid-drag commits a mouse stroke and aborts other pointers", () => {
+  it("pointercancel mid-drag commits a mouse stroke at the last tracked tile and aborts other pointers", () => {
     const { canvas, callbacks, setUi } = createFixture({
       ui: { activeTool: "road" },
     });
@@ -1025,15 +1028,15 @@ describe("createGameHost lifecycle", () => {
     setUi({
       drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
     });
+    // Chromium can send pointercancel with (0, 0) coordinates; the host must
+    // commit at the last tracked tile rather than snapping the stroke to (0, 0).
     dispatchPointer(canvas, "pointercancel", {
-      ...center({ x: 5, y: 0 }),
+      clientX: 0,
+      clientY: 0,
       pointerId: 7,
       pointerType: "mouse",
     });
-    // The cancel snaps the gesture to its own last position (like pointerup)
-    // rather than committing the stale tracked tile — a cancel that outruns
-    // queued moves must not truncate the stroke mid-way.
-    expect(callbacks.onDragCurrent).toHaveBeenCalledWith({ x: 5, y: 0 });
+    expect(callbacks.onDragCurrent).not.toHaveBeenCalled();
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
     expect(callbacks.onDragCancel).not.toHaveBeenCalled();
 
@@ -1941,6 +1944,30 @@ describe("createGameHost map target picking", () => {
     );
   });
 
+  it("updates pick targets across a visible Canvas2D capture", async () => {
+    const fx = createFixture({
+      state: createTestGameState(),
+      ui: { activeTool: "inspect" },
+      rendererKind: "canvas2d",
+    });
+    fx.fireFrame(0);
+
+    fx.setState(stateWithVehicleForFrame());
+    await fx.host.captureFrame();
+
+    fx.canvas.dispatchEvent(
+      new MouseEvent("click", {
+        clientX: 80,
+        clientY: 80 + HUD_INSET.top,
+        bubbles: true,
+      }),
+    );
+    expect(fx.callbacks.onTileClick).toHaveBeenCalledWith(
+      { x: 2, y: 2 },
+      { vehicleId: "vehicle-001", lineId: "route-001" },
+    );
+  });
+
   it("clears pick targets on detach so a remount starts empty", () => {
     const fx = createFixture({
       state: stateWithVehicleForFrame(),
@@ -2060,6 +2087,22 @@ describe("createGameHost device loss", () => {
     await flushMicrotasks();
 
     expect(callbacks.onFatalError).not.toHaveBeenCalled();
+  });
+
+  it("forwards render errors to onFatalError and stops the animation loop", () => {
+    const fx = createFixture({ state: runningState() });
+    const renderError = new Error("render pass failed");
+    fx.renderer.render.mockImplementation(() => {
+      throw renderError;
+    });
+
+    fx.host.start();
+    fx.fireFrame(16);
+
+    expect(fx.callbacks.onFatalError).toHaveBeenCalledTimes(1);
+    expect(fx.callbacks.onFatalError).toHaveBeenCalledWith(renderError);
+    expect(fx.host.isRunning()).toBe(false);
+    expect(fx.rafCount()).toBe(0);
   });
 });
 
@@ -2535,18 +2578,31 @@ describe("createGameHost startup capability selection", () => {
     vi.unstubAllGlobals();
   });
 
-  /** Fake GPUCanvasContext recording configure/unconfigure order, with
-   *  throw injection for each probe-failure mode. */
+  /** Fake GPUCanvasContext recording configure/getCurrentTexture/unconfigure order,
+   *  with throw injection for each probe-failure mode. */
   function createFakeGpuContext(options?: {
     configureThrows?: Error;
+    getCurrentTextureThrows?: Error;
     unconfigureThrows?: Error;
-  }): { calls: string[]; configure: Mock; unconfigure: Mock } {
+  }): {
+    calls: string[];
+    configure: Mock;
+    getCurrentTexture: Mock;
+    unconfigure: Mock;
+  } {
     const calls: string[] = [];
     return {
       calls,
       configure: vi.fn((descriptor: GPUCanvasConfiguration) => {
         calls.push(`configure ${descriptor.alphaMode}`);
         if (options?.configureThrows) throw options.configureThrows;
+      }),
+      getCurrentTexture: vi.fn(() => {
+        calls.push("getCurrentTexture");
+        if (options?.getCurrentTextureThrows) {
+          throw options.getCurrentTextureThrows;
+        }
+        return { createView: () => ({}) };
       }),
       unconfigure: vi.fn(() => {
         calls.push("unconfigure");
@@ -2638,7 +2694,12 @@ describe("createGameHost startup capability selection", () => {
     const probeCanvas = webgpuCalls[0]!.canvas;
     expect(probeCanvas.width).toBe(16);
     expect(probeCanvas.height).toBe(16);
-    expect(gpuContext.calls).toEqual(["configure opaque", "unconfigure"]);
+    expect(gpuContext.calls).toEqual([
+      "configure opaque",
+      "getCurrentTexture",
+      "unconfigure",
+    ]);
+    expect(harness.passes).toHaveLength(1);
     expect(gpuContext.configure).toHaveBeenCalledWith({
       device: harness.device,
       format: "bgra8unorm",
@@ -2822,6 +2883,88 @@ describe("createGameHost startup capability selection", () => {
       },
     },
     {
+      name: "the acquired device is already lost",
+      deviceAcquired: true,
+      stub: (harness) => {
+        harness.resolveLost({ reason: "unknown", message: "already lost" });
+        const nav = stubNavigatorGpu(harness);
+        const gpu = createFakeGpuContext();
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual([]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
+    },
+    {
+      name: "the probe context getCurrentTexture throws",
+      deviceAcquired: true,
+      stub: (harness) => {
+        const nav = stubNavigatorGpu(harness);
+        const gpu = createFakeGpuContext({
+          getCurrentTextureThrows: new Error("surface unavailable"),
+        });
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual(["configure opaque", "getCurrentTexture"]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
+    },
+    {
+      name: "the probe clear pass fails validation",
+      deviceAcquired: true,
+      stub: (harness) => {
+        harness.nextValidationError = { message: "invalid surface texture" };
+        const nav = stubNavigatorGpu(harness);
+        const gpu = createFakeGpuContext();
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual(["configure opaque", "getCurrentTexture"]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
+    },
+    {
+      name: "the device is lost during the probe clear pass",
+      deviceAcquired: true,
+      stub: (harness) => {
+        harness.onPopErrorScope = () => {
+          harness.resolveLost({
+            reason: "unknown",
+            message: "lost on clear pass",
+          });
+        };
+        const nav = stubNavigatorGpu(harness);
+        const gpu = createFakeGpuContext();
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual(["configure opaque", "getCurrentTexture"]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
+    },
+    {
       name: "the probe context cannot unconfigure",
       deviceAcquired: true,
       stub: (harness) => {
@@ -2837,7 +2980,11 @@ describe("createGameHost startup capability selection", () => {
       },
       reached: ({ nav, gpu, contextCalls }) => {
         expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
-        expect(gpu!.calls).toEqual(["configure opaque", "unconfigure"]);
+        expect(gpu!.calls).toEqual([
+          "configure opaque",
+          "getCurrentTexture",
+          "unconfigure",
+        ]);
         expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
       },
     },

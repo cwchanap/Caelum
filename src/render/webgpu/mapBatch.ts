@@ -569,12 +569,19 @@ export function buildMapBatch(
   const tileOwners = occupiedTileOwners(state);
   const tileByKey = new Map(state.map.tiles.map((tile) => [keyOf(tile), tile]));
 
+  const roadTiles: Tile[] = [];
   for (const tile of state.map.tiles) {
-    fillTileRect(
-      g,
-      tile,
-      tileFillColor(state.map, tile, islandKeys, tileOwners),
-    );
+    const color = tileFillColor(state.map, tile, islandKeys, tileOwners);
+    if (color === ROAD_FILL) {
+      roadTiles.push(tile);
+    } else {
+      fillTileRect(g, tile, color);
+    }
+  }
+  // Emit all opaque road tiles consecutively so Canvas2D fills connected
+  // roads in one path instead of leaving AA seams across row-major runs.
+  for (const tile of roadTiles) {
+    fillTileRect(g, tile, ROAD_FILL);
   }
 
   if (gridMode !== "hidden") {

@@ -151,7 +151,7 @@ export async function loadSpriteImages(): Promise<readonly HTMLImageElement[]> {
 /**
  * Uploads the already-decoded, dimension-validated images from
  * `loadSpriteImages()` into a single layered `texture_2d_array`: one
- * transparent 576x384 layer per sprite, five CPU mips generated through one
+ * transparent 576x384 layer per sprite, eight CPU mips generated through one
  * fixed-size 2D canvas (never resized — resizing resets image smoothing).
  * Each mip uploads only its source-sized top-left crop; the rest of every
  * layer stays transparent. Synchronous: decoding happened in

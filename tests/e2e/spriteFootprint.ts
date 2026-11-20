@@ -68,8 +68,14 @@ export function shadowedGrassRgb(tile: {
  */
 export async function expectRotatedLargeHouseFootprint(
   page: Page,
+  expectedRenderer: "webgpu" | "canvas2d" = "webgpu",
 ): Promise<void> {
-  await createDefaultCity(page, "Sprite Pixel Smoke", "smallTown");
+  await createDefaultCity(
+    page,
+    "Sprite Pixel Smoke",
+    "smallTown",
+    expectedRenderer,
+  );
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
 
   // largeHouse is a residential building, so paint the residential lot it

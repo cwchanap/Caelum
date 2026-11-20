@@ -85,6 +85,7 @@ export async function createDefaultCity(
   page: Page,
   name = "E2E City",
   templateId: SandboxTemplateId = "crossroads",
+  expectedRenderer: "webgpu" | "canvas2d" = "webgpu",
 ): Promise<void> {
   await page.goto("/");
   const newCityScreen = page.getByTestId("new-city-screen");
@@ -100,6 +101,9 @@ export async function createDefaultCity(
   await page.getByRole("radio", { name: TEMPLATE_LABELS[templateId] }).check();
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  await expect(
+    page.locator("canvas[data-runtime-canvas='true']"),
+  ).toHaveAttribute("data-renderer", expectedRenderer);
 }
 
 export async function openCommandDestination(

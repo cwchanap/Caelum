@@ -20,10 +20,14 @@ export interface WebGpuDeviceLoss {
  *  host's string cache keys. */
 export type BatchRole = "structural" | "route" | "dynamic";
 
-/** Solid (non-instanced) triangle batch: interleaved x,y,r,g,b,a vertices. */
+/** Solid (non-instanced) triangle batch: interleaved x,y,r,g,b,a vertices.
+ *  Optional `shapeTriangleCounts` preserves source shape boundaries so the
+ *  Canvas2D fallback merges triangles within one shape while compositing
+ *  separate translucent shapes independently. */
 export interface SolidBatch {
   role: BatchRole;
   vertices: Float32Array<ArrayBuffer>;
+  shapeTriangleCounts?: Uint32Array<ArrayBuffer>;
 }
 
 /** Instanced vehicle batch. Instance layout: clip origin (x, y), world angle,

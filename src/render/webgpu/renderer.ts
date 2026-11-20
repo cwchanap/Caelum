@@ -32,6 +32,11 @@ const MAP_READ_MODE = 0x0001;
 // copyTextureToBuffer requires each row padded to a 256-byte multiple.
 const COPY_BYTES_PER_ROW_ALIGNMENT = 256;
 
+/** Formats a shared TypeScript number as an unrounded WGSL float literal. */
+function wgslFloat(value: number): string {
+  return Number.isInteger(value) ? `${value}.0` : String(value);
+}
+
 const SOLID_SHADER = /* wgsl */ `
 struct VertexOutput {
   @builtin(position) position: vec4f,
@@ -81,7 +86,7 @@ fn vsMain(
   // perpendicular off the path centerline, decoupled from the half-width.
   let local = vec2f(
     corner.x * (extents.x * 2.0),
-    corner.y * (extents.y * 2.0) - ${VEHICLE_LANE_OFFSET_PX.toFixed(1)},
+    corner.y * (extents.y * 2.0) - ${wgslFloat(VEHICLE_LANE_OFFSET_PX)},
   );
   let rotated = vec2f(
     local.x * cos - local.y * sin,
@@ -105,7 +110,7 @@ fn fsMain(output: VertexOutput) -> @location(0) vec4f {
     output.extents.x - abs(output.quad.x),
     output.extents.y - abs(output.quad.y),
   );
-  if (edge < ${VEHICLE_RIM_PX.toFixed(1)}) {
+  if (edge < ${wgslFloat(VEHICLE_RIM_PX)}) {
     return vec4f(1.0, 1.0, 1.0, output.color.a);
   }
   return output.color;
