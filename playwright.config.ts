@@ -17,7 +17,7 @@ declare const process: {
 // caller-supplied ICD list wins untouched; the host lavapipe ICD is used
 // only when actually provisioned; otherwise the loader's normal discovery
 // (system ICDs) applies.
-export function resolveArm64VulkanEnv(
+function resolveArm64VulkanEnv(
   env: Record<string, string | undefined>,
   icdExists: (path: string) => boolean,
 ): Record<string, string | undefined> | undefined {
@@ -51,8 +51,8 @@ if (process.platform === "linux") {
     // via the loader instead. resolveArm64VulkanEnv keeps an explicit
     // caller-supplied ICD (VK_ICD_FILENAMES / VK_DRIVER_FILES) untouched, adds
     // this host's lavapipe ICD only when provisioned (build mesa >= 25.3 with
-    // -Dvulkan-drivers=swrast, install to /opt/lavapipe24 — see task-4 report,
-    // 2026-11-19), and otherwise leaves the loader's normal discovery (system
+    // -Dvulkan-drivers=swrast and install the resulting lvp.json at
+    // /opt/lavapipe24), and otherwise leaves the loader's normal discovery (system
     // ICDs) in place. x86_64 CI keeps the bundled SwiftShader path below,
     // unchanged.
     webGpuArgs.push(
