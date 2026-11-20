@@ -1170,6 +1170,17 @@ export function createGameHostWithRenderer(
       if (ctx.getUi().drag !== null) {
         if (dragPointerId === null || event.pointerId === dragPointerId) {
           if (event.pointerType === "mouse") {
+            // Snap the gesture to the cancel's last position — the same
+            // treatment pointerup gets — so a cancel that outruns queued
+            // moves does not commit a stale, short stroke (headed CI fires
+            // these mid-drag).
+            const point =
+              pointerTarget(
+                event.clientX,
+                event.clientY,
+                dragMapping ?? undefined,
+              )?.tile ?? null;
+            ctx.onDragCurrent(point);
             ctx.onDragCommit();
           } else {
             ctx.onDragCancel();

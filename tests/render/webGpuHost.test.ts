@@ -1026,10 +1026,14 @@ describe("createGameHost lifecycle", () => {
       drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 3, y: 0 } },
     });
     dispatchPointer(canvas, "pointercancel", {
-      ...center({ x: 3, y: 0 }),
+      ...center({ x: 5, y: 0 }),
       pointerId: 7,
       pointerType: "mouse",
     });
+    // The cancel snaps the gesture to its own last position (like pointerup)
+    // rather than committing the stale tracked tile — a cancel that outruns
+    // queued moves must not truncate the stroke mid-way.
+    expect(callbacks.onDragCurrent).toHaveBeenCalledWith({ x: 5, y: 0 });
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
     expect(callbacks.onDragCancel).not.toHaveBeenCalled();
 
