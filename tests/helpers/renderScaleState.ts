@@ -145,73 +145,41 @@ function withPresentationRows(state: GameState): GameState {
  * transit rows. This is a render stress proxy — no Rust simulation actors are
  * created.
  *
- * With `{ mapSize: "large" }` the same transit backbone sits on the full
- * 84x54 large board plus a deterministic road grid and block-edge houses, so
- * the thousands of remaining empty tiles render as deterministic hash-placed
- * trees — quantifying the large map's structural rendering cost.
+ * With `{ mapSize: "large" }` that single construction path builds the same
+ * transit backbone on the full 84x54 large board plus a deterministic road
+ * grid and block-edge houses, so the thousands of remaining empty tiles render
+ * as deterministic hash-placed trees — quantifying the large map's structural
+ * rendering cost.
  */
 export function buildRenderScaleState(
   vehicleCount: number,
   options: RenderScaleOptions = {},
 ): GameState {
-  return options.mapSize === "large"
-    ? buildLargeFixture(vehicleCount)
-    : buildSmallFixture(vehicleCount);
-}
-
-function buildSmallFixture(vehicleCount: number): GameState {
-  let state = withAreas(
-    createTestGameState(),
-    "residential",
-    pointsOnRow(2, 4, 11),
-  );
-  state = withRoads(state, ROAD_ROW);
-  state = withTracks(state, TRACK_ROW);
-  for (const tile of BUS_STOP_TILES) {
-    state = addTestBusStop(state, tile);
-  }
-  for (const tile of STATION_TILES) {
-    state = addTestMetroStation(state, tile);
-  }
-  state = addTestBusRoute(
-    state,
-    state.transit.stops.map((stop) => stop.id),
-  );
-  state = addTestMetroLine(
-    state,
-    state.transit.stations.map((station) => station.id),
-  );
-  state = placeTestBuilding(state, "busTerminal", { x: 16, y: 4 }, 90);
-  state = placeTestBuilding(state, "smallHouse", { x: 5, y: 2 }, 0);
-  state = placeTestBuilding(state, "smallHouse", { x: 8, y: 2 }, 0);
-  state = withPresentationRows(state);
-  return withScaledFleet(state, vehicleCount);
-}
-
-function buildLargeFixture(vehicleCount: number): GameState {
-  const base = createTestGameState({
-    budget: 1_000_000,
-    rules: {
-      economyPreset: "standard",
-      sandbox: {
-        templateId: "crossroads",
-        mapSize: "large",
-        startingCapital: 120_000,
-        demandMultiplier: 1,
-      },
-    },
-  });
-  let state = withAreas(
-    {
-      ...base,
-      map: createTestMap(MAP_SIZES.large.width, MAP_SIZES.large.height),
-    },
-    "residential",
-    pointsOnRow(2, 4, 11),
-  );
+  const large = options.mapSize === "large";
+  const base = large
+    ? {
+        ...createTestGameState({
+          budget: 1_000_000,
+          rules: {
+            economyPreset: "standard",
+            sandbox: {
+              templateId: "crossroads",
+              mapSize: "large",
+              startingCapital: 120_000,
+              demandMultiplier: 1,
+            },
+          },
+        }),
+        map: createTestMap(MAP_SIZES.large.width, MAP_SIZES.large.height),
+      }
+    : createTestGameState();
+  let state = withAreas(base, "residential", pointsOnRow(2, 4, 11));
   // One withRoads call over the union so shared tiles keep reciprocal
   // connections across backbone and grid roads.
-  state = withRoads(state, [...ROAD_ROW, ...largeGridRoadPoints()]);
+  state = withRoads(
+    state,
+    large ? [...ROAD_ROW, ...largeGridRoadPoints()] : ROAD_ROW,
+  );
   state = withTracks(state, TRACK_ROW);
   for (const tile of BUS_STOP_TILES) {
     state = addTestBusStop(state, tile);
@@ -230,8 +198,10 @@ function buildLargeFixture(vehicleCount: number): GameState {
   state = placeTestBuilding(state, "busTerminal", { x: 16, y: 4 }, 90);
   state = placeTestBuilding(state, "smallHouse", { x: 5, y: 2 }, 0);
   state = placeTestBuilding(state, "smallHouse", { x: 8, y: 2 }, 0);
-  for (const origin of largeGridHouseOrigins()) {
-    state = placeTestBuilding(state, "smallHouse", origin, 0);
+  if (large) {
+    for (const origin of largeGridHouseOrigins()) {
+      state = placeTestBuilding(state, "smallHouse", origin, 0);
+    }
   }
   state = withPresentationRows(state);
   return withScaledFleet(state, vehicleCount);
