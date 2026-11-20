@@ -80,8 +80,10 @@ export interface GameplayRenderer {
   unconfigure(): void;
   resize(width: number, height: number): void;
   render(frame: RenderFrame): RenderStats;
-  /** Renders `frame` into an offscreen target at the resize() pixel size and
-   *  reads it back to CPU pixels. Returns null while unconfigured. */
+  /** Renders `frame` and reads the result back to CPU pixels at the canvas
+   *  backing-store size: WebGPU draws into an offscreen target at the
+   *  resize() pixel size; Canvas2D draws into the mounted canvas and reads
+   *  it back. Returns null while unconfigured. */
   captureFrame(frame: RenderFrame): Promise<CapturedFrame | null>;
   destroy(): void;
 }

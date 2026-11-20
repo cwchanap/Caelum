@@ -203,9 +203,52 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
     { x: 9, y: 11 },
   ]);
 
-  // City Library round trip: save, leave through the library, come back.
-  // The canvas unmounts and remounts on the same host; the fallback renderer
-  // must survive the remount with the saved city restored.
+  // Same-document remount round trip: New City → Cancel swaps the shell
+  // screens, detaching the gameplay canvas and remounting a replacement
+  // canvas on the SAME runtime instance and its already-selected fallback
+  // renderer (createGameRuntime runs once per document — no reload). Mark
+  // the live runtime and the outgoing canvas first; the marks must survive.
+  const remounted = page.locator("canvas[data-runtime-canvas='true']");
+  await page.evaluate(() => {
+    const runtime = (
+      window as unknown as { __caelumRuntime?: { remountProbe?: string } }
+    ).__caelumRuntime;
+    if (runtime === undefined) {
+      throw new Error("__caelumRuntime is unavailable");
+    }
+    runtime.remountProbe = "same-document";
+    const outgoing = document.querySelector(
+      "canvas[data-runtime-canvas='true']",
+    );
+    if (outgoing === null) throw new Error("no mounted gameplay canvas");
+    outgoing.setAttribute("data-remount-probe", "outgoing");
+  });
+  await openCommandDestination(page, "city");
+  await page
+    .getByTestId("panel-city")
+    .getByRole("button", { name: "New City" })
+    .click();
+  const newCity = page.getByTestId("new-city-screen");
+  await expect(newCity).toBeVisible();
+  await newCity.getByRole("button", { name: "Cancel" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+
+  // The mounted canvas is a replacement element, still the Canvas2D
+  // fallback, on the same runtime instance — and it genuinely renders: the
+  // road stroke reads back through real pixels, not a reload.
+  await expect(remounted).not.toHaveAttribute("data-remount-probe", "outgoing");
+  await expect(remounted).toHaveAttribute("data-renderer", "canvas2d");
+  const remountProbe = await page.evaluate(
+    () =>
+      (window as unknown as { __caelumRuntime?: { remountProbe?: string } })
+        .__caelumRuntime?.remountProbe,
+  );
+  expect(remountProbe).toBe("same-document");
+  await expectNonblankCapture(page);
+  await expectRoadFillAtProbes(page);
+
+  // Reload persistence check: save, leave through the City Library, come
+  // back in a fresh document; the fallback renderer and saved city return.
   await openCommandDestination(page, "city");
   const cityPanel = page.getByTestId("panel-city");
   await cityPanel.getByRole("button", { name: "Save Now" }).click();
@@ -222,8 +265,8 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
     .click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
 
-  const remounted = page.locator("canvas[data-runtime-canvas='true']");
-  await expect(remounted).toHaveAttribute("data-renderer", "canvas2d");
+  const restored = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(restored).toHaveAttribute("data-renderer", "canvas2d");
   await expect
     .poll(async () => roadTileKinds(page), { timeout: 15_000 })
     .toEqual(["road", "road", "road", "road", "road"]);
@@ -234,7 +277,7 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
   // the new size.
   await page.setViewportSize({ width: 1100, height: 720 });
   await settleLayout(page);
-  await expect(remounted).toHaveAttribute("data-renderer", "canvas2d");
+  await expect(restored).toHaveAttribute("data-renderer", "canvas2d");
   await expectNonblankCapture(page);
   await expectRoadFillAtProbes(page);
 });

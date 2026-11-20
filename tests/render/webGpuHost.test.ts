@@ -6,6 +6,7 @@ import {
   it,
   vi,
   type Mock,
+  type MockInstance,
 } from "vitest";
 import type {
   GameMap,
@@ -2513,10 +2514,21 @@ describe("createGameHost startup capability selection", () => {
     onFatalError: () => {},
   };
 
+  // The getContext spy must not outlive its test: vi.clearAllMocks() clears
+  // recorded calls but keeps mockImplementation, so a leaked spy would fake
+  // later capability failures and break individual isolation (jsdom's real
+  // getContext("2d") returns null).
+  let contextSpy: MockInstance | undefined;
   beforeEach(() => {
     // Calls accumulate per mock across the file; each selection test asserts
     // on its own factory run only.
     vi.clearAllMocks();
+    contextSpy = undefined;
+  });
+  afterEach(() => {
+    contextSpy?.mockRestore();
+    contextSpy = undefined;
+    vi.unstubAllGlobals();
   });
 
   /** Fake GPUCanvasContext recording configure/unconfigure order, with
@@ -2548,14 +2560,14 @@ describe("createGameHost startup capability selection", () => {
     gpuContext: unknown,
   ): Array<{ canvas: HTMLCanvasElement; type: string }> {
     const calls: Array<{ canvas: HTMLCanvasElement; type: string }> = [];
-    vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockImplementation(
-      function (this: HTMLCanvasElement, type: string) {
+    contextSpy = vi
+      .spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockImplementation(function (this: HTMLCanvasElement, type: string) {
         calls.push({ canvas: this, type });
         if (type === "webgpu") return gpuContext;
         if (type === "2d") return { canvas: this };
         return null;
-      } as never,
-    );
+      } as never);
     return calls;
   }
 
@@ -2568,7 +2580,11 @@ describe("createGameHost startup capability selection", () => {
       deviceThrows?: Error;
       formatThrows?: Error;
     },
-  ): { requestAdapter: Mock; requestDevice: Mock } {
+  ): {
+    requestAdapter: Mock;
+    requestDevice: Mock;
+    getPreferredCanvasFormat: Mock;
+  } {
     const requestDevice = vi.fn(async () => {
       if (options?.deviceThrows) throw options.deviceThrows;
       return harness.device;
@@ -2577,16 +2593,14 @@ describe("createGameHost startup capability selection", () => {
       if (options?.adapter instanceof Error) throw options.adapter;
       return options?.adapter === null ? null : { requestDevice };
     });
-    vi.stubGlobal("navigator", {
-      gpu: {
-        requestAdapter,
-        getPreferredCanvasFormat: () => {
-          if (options?.formatThrows) throw options.formatThrows;
-          return "bgra8unorm";
-        },
-      },
+    const getPreferredCanvasFormat = vi.fn(() => {
+      if (options?.formatThrows) throw options.formatThrows;
+      return "bgra8unorm";
     });
-    return { requestAdapter, requestDevice };
+    vi.stubGlobal("navigator", {
+      gpu: { requestAdapter, requestDevice, getPreferredCanvasFormat },
+    });
+    return { requestAdapter, requestDevice, getPreferredCanvasFormat };
   }
 
   /** Runs the production factory and mounts its host; returns the mounted
@@ -2663,90 +2677,185 @@ describe("createGameHost startup capability selection", () => {
     expect(harness.deviceDestroyed).toBe(true);
   });
 
+  /** Stubs one failure mode and returns its boundary mocks so each test can
+   *  prove the injected failure was actually reached at the API boundary it
+   *  names — a fallback that happens earlier must not pass silently. */
+  type FailureStubs = {
+    nav?: ReturnType<typeof stubNavigatorGpu>;
+    contextCalls?: ReturnType<typeof stubCanvasGetContext>;
+    gpu?: ReturnType<typeof createFakeGpuContext>;
+  };
+
   /** Every startup capability failure the fallback must absorb: the factory
    *  resolves with a Canvas2D host and never touches the GPU asset path. */
   const capabilityFailureCases: Array<{
     name: string;
     /** Whether the probe acquired the fake device before failing. */
     deviceAcquired: boolean;
-    stub: (harness: FakeHarness) => void;
+    stub: (harness: FakeHarness) => FailureStubs;
+    /** Asserts the failure was reached at its intended API boundary. */
+    reached: (stubs: FailureStubs) => void;
   }> = [
     {
       name: "navigator.gpu is absent",
       deviceAcquired: false,
-      stub: () => vi.stubGlobal("navigator", {}),
+      stub: (_harness) => {
+        const contextCalls = stubCanvasGetContext(createFakeGpuContext());
+        vi.stubGlobal("navigator", {});
+        return { contextCalls };
+      },
+      reached: ({ contextCalls }) => {
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(0);
+      },
     },
     {
       name: "the adapter request returns null",
       deviceAcquired: false,
-      stub: (harness) => stubNavigatorGpu(harness, { adapter: null }),
+      stub: (harness) => {
+        const nav = stubNavigatorGpu(harness, { adapter: null });
+        return {
+          nav,
+          contextCalls: stubCanvasGetContext(createFakeGpuContext()),
+        };
+      },
+      reached: ({ nav, contextCalls }) => {
+        expect(nav!.requestAdapter).toHaveBeenCalledTimes(1);
+        expect(nav!.requestDevice).not.toHaveBeenCalled();
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
     },
     {
       name: "the adapter request rejects",
       deviceAcquired: false,
-      stub: (harness) =>
-        stubNavigatorGpu(harness, { adapter: new Error("adapter refused") }),
+      stub: (harness) => {
+        const nav = stubNavigatorGpu(harness, {
+          adapter: new Error("adapter refused"),
+        });
+        return {
+          nav,
+          contextCalls: stubCanvasGetContext(createFakeGpuContext()),
+        };
+      },
+      reached: ({ nav, contextCalls }) => {
+        expect(nav!.requestAdapter).toHaveBeenCalledTimes(1);
+        expect(nav!.requestDevice).not.toHaveBeenCalled();
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
     },
     {
       name: "the device request rejects",
       deviceAcquired: false,
-      stub: (harness) =>
-        stubNavigatorGpu(harness, {
+      stub: (harness) => {
+        const nav = stubNavigatorGpu(harness, {
           deviceThrows: new Error("device refused"),
-        }),
+        });
+        return {
+          nav,
+          contextCalls: stubCanvasGetContext(createFakeGpuContext()),
+        };
+      },
+      reached: ({ nav, contextCalls }) => {
+        expect(nav!.requestAdapter).toHaveBeenCalledTimes(1);
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(nav!.getPreferredCanvasFormat).not.toHaveBeenCalled();
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+      },
     },
     {
       name: "the probe canvas has no webgpu context",
       deviceAcquired: false,
       stub: (harness) => {
-        stubNavigatorGpu(harness);
-        stubCanvasGetContext(null);
+        const nav = stubNavigatorGpu(harness);
+        const contextCalls = stubCanvasGetContext(null);
+        return { nav, contextCalls };
+      },
+      reached: ({ nav, contextCalls }) => {
+        // The probe asked exactly once for a webgpu context and never got
+        // as far as an adapter request.
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
+        expect(nav!.requestAdapter).not.toHaveBeenCalled();
       },
     },
     {
       name: "the preferred canvas format is unavailable",
       deviceAcquired: true,
       stub: (harness) => {
-        stubNavigatorGpu(harness, {
+        const nav = stubNavigatorGpu(harness, {
           formatThrows: new Error("no preferred format"),
         });
-        stubCanvasGetContext(createFakeGpuContext());
+        const gpu = createFakeGpuContext();
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(nav!.getPreferredCanvasFormat).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual([]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
       },
     },
     {
       name: "the probe context cannot configure",
       deviceAcquired: true,
       stub: (harness) => {
-        stubNavigatorGpu(harness);
-        stubCanvasGetContext(
-          createFakeGpuContext({
-            configureThrows: new Error("swapchain setup failed"),
-          }),
-        );
+        const nav = stubNavigatorGpu(harness);
+        const gpu = createFakeGpuContext({
+          configureThrows: new Error("swapchain setup failed"),
+        });
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual(["configure opaque"]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
       },
     },
     {
       name: "the probe context cannot unconfigure",
       deviceAcquired: true,
       stub: (harness) => {
-        stubNavigatorGpu(harness);
-        stubCanvasGetContext(
-          createFakeGpuContext({
-            unconfigureThrows: new Error("unconfigure failed"),
-          }),
-        );
+        const nav = stubNavigatorGpu(harness);
+        const gpu = createFakeGpuContext({
+          unconfigureThrows: new Error("unconfigure failed"),
+        });
+        return {
+          nav,
+          gpu,
+          contextCalls: stubCanvasGetContext(gpu),
+        };
+      },
+      reached: ({ nav, gpu, contextCalls }) => {
+        expect(nav!.requestDevice).toHaveBeenCalledTimes(1);
+        expect(gpu!.calls).toEqual(["configure opaque", "unconfigure"]);
+        expect(navWebGpuContextCalls(contextCalls!)).toHaveLength(1);
       },
     },
   ];
 
+  /** The probe canvas's single "webgpu" getContext call (never the mounted
+   *  "2d" one), so boundary assertions can't be confused by fallback reads. */
+  function navWebGpuContextCalls(
+    contextCalls: NonNullable<FailureStubs["contextCalls"]>,
+  ): FailureStubs["contextCalls"] {
+    return contextCalls.filter((call) => call.type === "webgpu");
+  }
+
   it.each(capabilityFailureCases)(
     "falls back to Canvas2D when $name",
-    async ({ stub }) => {
+    async ({ stub, reached }) => {
       const harness = createFakeDevice();
-      stub(harness);
+      const failureStubs = stub(harness);
 
       // Capability failure is a renderer choice, never a factory rejection.
       const { canvas, detach } = await mountProductionHost();
+      reached(failureStubs);
       expect(canvas.dataset.renderer).toBe("canvas2d");
       expect(canvas.dataset.runtimeCanvas).toBe("true");
       detach();

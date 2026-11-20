@@ -8525,11 +8525,12 @@ describe("default game host", () => {
   it("rejects construction when the production host cannot start in Node", async () => {
     // No createHost seam: the runtime falls back to the production
     // createGameHost. It selects the Canvas2D fallback when WebGPU is
-    // unavailable, but in Node neither renderer can start (no Image, no
-    // canvas), so construction rejects — while a fake seam would construct
-    // happily, proving this exercises the production default.
-    await expect(
-      createGameRuntime({ backend: backendSpy() }),
-    ).rejects.toThrow();
+    // unavailable, but in Node neither renderer can start — sprite decoding
+    // hits the missing Image global first — so construction rejects with
+    // exactly that failure, while a fake seam would construct happily,
+    // proving this exercises the production default.
+    await expect(createGameRuntime({ backend: backendSpy() })).rejects.toThrow(
+      "Image is not defined",
+    );
   });
 });

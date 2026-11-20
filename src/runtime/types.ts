@@ -380,9 +380,10 @@ export interface RuntimeController {
  */
 export interface RuntimeTestSeam {
   debugSetBudget: (budget: number) => RuntimeCommandResult;
-  /** Renders the current frame into the display renderer's offscreen target
-   *  and reads the pixels back (RGBA8, device pixels). e2e pixel oracles use
-   *  this instead of canvas-side readbacks, which never resolve under
-   *  software-Vulkan CI compositors. Returns null when no canvas is mounted. */
+  /** Renders the current frame through the display renderer and reads the
+   *  pixels back (RGBA8, device pixels): WebGPU into its offscreen target,
+   *  Canvas2D from the mounted canvas. e2e pixel oracles use this instead
+   *  of canvas-side readbacks, which never resolve under software-Vulkan CI
+   *  compositors. Returns null when no canvas is mounted. */
   debugCaptureFrame: () => Promise<CapturedFrame | null>;
 }
