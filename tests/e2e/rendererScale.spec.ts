@@ -50,17 +50,21 @@ test("records WebGPU and Canvas2D renderer scale rows", async ({ page }) => {
     expect(result.presentedVehicles).toBe(result.vehicleCount);
     expect(result.encodedInstances).toBe(result.vehicleCount);
     // The real-host frames always carry scene sprites (the fixtures place a
-    // bus terminal and houses), so the textured pass must have drawn once.
+    // bus terminal and houses), so the textured pass must have drawn.
     expect(result.spriteInstances).toBeGreaterThan(0);
-    expect(result.spriteDraws).toBe(1);
-    expect(result.vehicleDraws).toBe(1);
     expect(result.medianCpuMs).toBeGreaterThan(0);
     expect(result.p95CpuMs).toBeGreaterThanOrEqual(result.medianCpuMs);
     if (result.renderer === "webgpu") {
+      expect(result.spriteDraws).toBe(1);
+      expect(result.vehicleDraws).toBe(1);
       expect(result.mapSize).toBe("small");
       expect(result.vehicleUploadBytes).toBe(result.encodedInstances * 11 * 4);
       expect(result.queueCompleted).toBe(true);
     } else {
+      // Canvas2D counts the ops it issues: one drawImage per sprite
+      // instance and a rim + body fill per vehicle.
+      expect(result.spriteDraws).toBe(result.spriteInstances);
+      expect(result.vehicleDraws).toBe(2 * result.presentedVehicles);
       // Canvas2D has no GPU queue: it must not claim queue completion or
       // nonzero GPU-upload bytes.
       expect(result.vehicleUploadBytes).toBe(0);

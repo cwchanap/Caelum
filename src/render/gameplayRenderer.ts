@@ -52,6 +52,9 @@ export interface RenderFrame {
   overVehicles?: readonly SolidBatch[];
 }
 
+/** Draw-call counts the renderer issued for the frame: WebGPU queue
+ *  submissions vs Canvas2D fill/drawImage ops. Sprite/vehicle counts are
+ *  per-instance ops under Canvas2D but single instanced draws under WebGPU. */
 export interface RenderStats {
   solidBatches: number;
   solidVertices: number;

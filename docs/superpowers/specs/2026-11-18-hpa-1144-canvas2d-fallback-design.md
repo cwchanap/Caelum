@@ -6,7 +6,7 @@
 
 ## Outcome and constraints
 
-At present, unavailable WebGPU at startup makes `createWebGpuHost()` reject and the browser show a Shell Error. Caelum should run its existing Rust-backed gameplay and Svelte UI in browsers/WebViews that have Canvas2D but not WebGPU. This can also benefit desktop Tauri/WebView environments where WebGPU is unavailable; **Chromium coverage does not prove every native WebView combination**.
+Before this change, unavailable WebGPU at startup made `createWebGpuHost()` reject and the browser show a Shell Error. Caelum should run its existing Rust-backed gameplay and Svelte UI in browsers/WebViews that have Canvas2D but not WebGPU. This can also benefit desktop Tauri/WebView environments where WebGPU is unavailable; **Chromium coverage does not prove every native WebView combination**.
 
 WebGPU remains the preferred high-throughput renderer. Select a Canvas2D fallback **once at startup**, only for WebGPU API/context/adapter/device/format capability/setup failures. An unexpected WebGPU device loss **after** startup remains terminal. Invalid sprite assets, GPU pipeline bugs and unrelated app errors are terminal—not swallowed by the fallback.
 
@@ -14,7 +14,7 @@ Keep **one** host, the same render-frame builder, the same runtime/backend, and 
 
 ## Current source of truth
 
-- `src/runtime/createWebGpuHost.ts`: `GameHost` lifecycle, `buildFrame()` (roughly lines 436–520), map world-to-clip projection, rAF display, 10 Hz one-in-flight ticks, pointer/drag/zoom/resize, capture, remount and device-loss forwarding.
+- `src/runtime/createGameHost.ts`: `GameHost` lifecycle, `buildFrame()` (roughly lines 436–520), map world-to-clip projection, rAF display, 10 Hz one-in-flight ticks, pointer/drag/zoom/resize, capture, remount and device-loss forwarding. (Written against the design-baseline name `createWebGpuHost.ts`; the host was renamed during implementation.)
 - `src/render/webgpu/mapBatch.ts`, `transitBatch.ts`, `overlayBatch.ts`, `vehicleInstances.ts`: already build world-space triangles and vehicle/sprite instances. **Keep them** and project once in the shared host.
 - `src/render/webgpu/renderer.ts`: existing ordered `solids → sprites → overSprites → vehicles → overVehicles` frame and WebGPU shaders, capture, GPU resource management.
 - `src/render/webgpu/spriteAtlas.ts`: ordered 15 tree/building URLs, source dimensions, validated `Image.decode()`. Bus stops and metro stations are still procedural triangles.
