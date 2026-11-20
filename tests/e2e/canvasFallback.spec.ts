@@ -7,6 +7,7 @@ import {
   runtimeSnapshot,
   sampleTilePixels,
   selectBuildLeaf,
+  selectTool,
   settleLayout,
   type PixelProbe,
 } from "./helpers";
@@ -90,17 +91,13 @@ async function expectNonblankCapture(page: Page): Promise<void> {
   expect(differsFromClear, "capture contains non-clear pixels").toBe(true);
 }
 
-// The road tile fill quad is triangles a-b-c then b-d-c (rect in
-// primitives.ts), so its two triangles share the top-right → bottom-left
-// diagonal. Points on that shared edge must read the exact road fill: with
-// seam-safe same-RGBA run filling the diagonal is path interior, while
-// per-triangle Canvas2D antialiasing dips below full coverage at the device
-// pixels the diagonal crosses (which ones depends on the fit transform, so
-// the probe sweeps the whole diagonal densely — one capture covers all
-// points). The sweep skips |dy| ≤ 3 (centerline band ±2 plus AA margin);
-// the remaining points clear the centerline, curbs and tile-boundary grid
-// lines by ≥ 1.2 world px. The last probe sits off the diagonal as an
-// interior control.
+// The horizontal road stroke spans x = 6..10 at y = 12, and a vertical spur
+// adds (8, 13) so the seam probes test BOTH:
+// 1. the shared quad diagonal inside (8, 12), and
+// 2. the shared horizontal boundary (dy = +16) between vertically adjacent
+//    road tiles (8, 12) and (8, 13), which row-major emission used to split
+//    into separate fills and leak light-green clear color at fractional zoom.
+// Both sweeps skip |dx| <= 3 / |dy| <= 3 (centerline band +-2 plus AA margin).
 const SEAM_PROBES: PixelProbe[] = [];
 for (let t = 0.16; t <= 0.8401; t += 0.01) {
   const dy = 32 * t - 16;
@@ -109,6 +106,15 @@ for (let t = 0.16; t <= 0.8401; t += 0.01) {
     tile: { x: 8, y: STROKE_Y },
     dx: -dy,
     dy,
+  });
+}
+for (let t = 0.16; t <= 0.8401; t += 0.02) {
+  const dx = 32 * t - 16;
+  if (Math.abs(dx) <= 3) continue;
+  SEAM_PROBES.push({
+    tile: { x: 8, y: STROKE_Y },
+    dx,
+    dy: 16,
   });
 }
 SEAM_PROBES.push({ tile: { x: 8, y: STROKE_Y }, dx: 6.4, dy: 6.4 });
@@ -132,7 +138,7 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
 }) => {
   test.setTimeout(120_000);
   await hideWebGpu(page);
-  await createDefaultCity(page, "Fallback Smoke", "blankGrid");
+  await createDefaultCity(page, "Fallback Smoke", "blankGrid", "canvas2d");
 
   // Startup selection picked the Canvas2D fallback and the shell is healthy.
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
@@ -150,15 +156,31 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
     { x: 6, y: STROKE_Y },
     { x: 10, y: STROKE_Y },
   );
+  await dragMapTiles(
+    page,
+    canvas,
+    { x: 8, y: STROKE_Y },
+    { x: 8, y: STROKE_Y + 1 },
+  );
   await expect
     .poll(async () => roadTileKinds(page), { timeout: 15_000 })
     .toEqual(["road", "road", "road", "road", "road"]);
+  await expect
+    .poll(
+      async () =>
+        (await runtimeSnapshot(page)).state.map.tiles.find(
+          (tile) => tile.x === 8 && tile.y === STROKE_Y + 1,
+        )?.kind ?? null,
+      { timeout: 15_000 },
+    )
+    .toBe("road");
   const after = await runtimeSnapshot(page);
   expect(after.state.budget).toBeLessThan(before.state.budget);
 
-  // The captured fallback frame is nonblank and the road fill reads exactly —
-  // including on the shared quad diagonal, where per-triangle antialiasing
-  // would show a seam.
+  // Switch to Select so the build grid hides, then verify the captured
+  // fallback frame is nonblank and the road fill reads exactly — both on the
+  // shared quad diagonal and across the vertically adjacent road boundary.
+  await selectTool(page, "select");
   await expectNonblankCapture(page);
   await expectRoadFillAtProbes(page);
 
@@ -244,6 +266,7 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
         .__caelumRuntime?.remountProbe,
   );
   expect(remountProbe).toBe("same-document");
+  await selectTool(page, "select");
   await expectNonblankCapture(page);
   await expectRoadFillAtProbes(page);
 
@@ -289,7 +312,7 @@ test("reused rotated largeHouse footprint oracle passes on the Canvas2D fallback
   // The renderer-neutral oracle from mapSprites.spec.ts: opaque terracotta
   // inside every occupied tile center, pure grass outside every rotated
   // footprint edge, transparent sprite insets over shadowed ground.
-  await expectRotatedLargeHouseFootprint(page);
+  await expectRotatedLargeHouseFootprint(page, "canvas2d");
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
   await expect(canvas).toHaveAttribute("data-renderer", "canvas2d");
   await expect(page.locator(".shell-error")).toHaveCount(0);

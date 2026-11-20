@@ -60,9 +60,11 @@ export function createCanvas2dRenderer(
   let canvas: HTMLCanvasElement | null = null;
   let context: CanvasRenderingContext2D | null = null;
 
-  /** Fills each stage's solid batches as consecutive same-RGBA triangle
-   *  runs (one beginPath/fill per run) with normalized winding. Returns
-   *  the run count and consumed vertex floats for RenderStats. */
+  /** Fills each stage's solid batches with normalized winding: triangles
+   *  within one shape always merge into one path (no internal seams), while
+   *  consecutive shapes merge only when their RGBA is identical and fully
+   *  opaque (so overlapping translucent shapes composite and darken). Returns
+   *  the fill run count and consumed vertex floats for RenderStats. */
   const drawSolids = (
     batches: readonly SolidBatch[],
     halfWidth: number,
@@ -71,51 +73,80 @@ export function createCanvas2dRenderer(
     const ctx = context!;
     let runs = 0;
     let floats = 0;
+    const appendTriangle = (
+      vertices: Float32Array<ArrayBuffer>,
+      offset: number,
+    ): void => {
+      const x1 = (vertices[offset]! + 1) * halfWidth;
+      const y1 = (1 - vertices[offset + 1]!) * halfHeight;
+      let x2 = (vertices[offset + 6]! + 1) * halfWidth;
+      let y2 = (1 - vertices[offset + 7]!) * halfHeight;
+      let x3 = (vertices[offset + 12]! + 1) * halfWidth;
+      let y3 = (1 - vertices[offset + 13]!) * halfHeight;
+      // Normalize winding so one path can union triangles without
+      // opposite-winding overlap cancelling under nonzero fill.
+      const area = (x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1);
+      if (area < 0) {
+        [x2, x3] = [x3, x2];
+        [y2, y3] = [y3, y2];
+      }
+      ctx.moveTo(x1, y1);
+      ctx.lineTo(x2, y2);
+      ctx.lineTo(x3, y3);
+      ctx.closePath();
+    };
     for (const batch of batches) {
       const vertices = batch.vertices;
       if (vertices.length === 0) continue;
       floats += vertices.length;
-      let i = 0;
-      while (i < vertices.length) {
-        const r = vertices[i + 2]!;
-        const g = vertices[i + 3]!;
-        const b = vertices[i + 4]!;
-        const a = vertices[i + 5]!;
-        ctx.beginPath();
-        // Consume the first triangle unconditionally: a NaN color channel
-        // never equals itself, so testing before consuming would stall the
-        // outer loop forever.
-        do {
-          const x1 = (vertices[i]! + 1) * halfWidth;
-          const y1 = (1 - vertices[i + 1]!) * halfHeight;
-          let x2 = (vertices[i + 6]! + 1) * halfWidth;
-          let y2 = (1 - vertices[i + 7]!) * halfHeight;
-          let x3 = (vertices[i + 12]! + 1) * halfWidth;
-          let y3 = (1 - vertices[i + 13]!) * halfHeight;
-          // Normalize winding so one path can union same-color triangles
-          // without opposite-winding overlap cancelling under nonzero fill.
-          const area = (x2 - x1) * (y3 - y1) - (x3 - x1) * (y2 - y1);
-          if (area < 0) {
-            [x2, x3] = [x3, x2];
-            [y2, y3] = [y3, y2];
-          }
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
-          ctx.lineTo(x3, y3);
-          ctx.closePath();
-          i += 18;
-        } while (
-          i < vertices.length &&
-          vertices[i + 2] === r &&
-          vertices[i + 3] === g &&
-          vertices[i + 4] === b &&
-          vertices[i + 5] === a
-        );
-        ctx.globalAlpha = a;
-        ctx.fillStyle = rgbString(r, g, b);
+      const shapeCounts = batch.shapeTriangleCounts;
+      const totalTriangles = vertices.length / 18;
+      let triIndex = 0;
+      let shapeIndex = 0;
+      let activeColor: { r: number; g: number; b: number; a: number } | null =
+        null;
+      const flushRun = (): void => {
+        if (activeColor === null) return;
+        ctx.globalAlpha = activeColor.a;
+        ctx.fillStyle = rgbString(activeColor.r, activeColor.g, activeColor.b);
         ctx.fill();
         runs += 1;
+        activeColor = null;
+      };
+      while (triIndex < totalTriangles) {
+        const shapeTriangles =
+          shapeCounts !== undefined && shapeIndex < shapeCounts.length
+            ? Math.max(1, shapeCounts[shapeIndex++]!)
+            : 1;
+        const shapeEnd = Math.min(totalTriangles, triIndex + shapeTriangles);
+        const firstOffset = triIndex * 18;
+        const r = vertices[firstOffset + 2]!;
+        const g = vertices[firstOffset + 3]!;
+        const b = vertices[firstOffset + 4]!;
+        const a = vertices[firstOffset + 5]!;
+        // Merge across shapes only when fully opaque with identical RGBA;
+        // translucent shapes fill one path per shape so overlaps darken.
+        const canMergeWithActive =
+          activeColor !== null &&
+          a === 1 &&
+          activeColor.a === 1 &&
+          activeColor.r === r &&
+          activeColor.g === g &&
+          activeColor.b === b;
+        if (!canMergeWithActive) {
+          flushRun();
+          ctx.beginPath();
+          activeColor = { r, g, b, a };
+        }
+        while (triIndex < shapeEnd) {
+          appendTriangle(vertices, triIndex * 18);
+          triIndex += 1;
+        }
+        if (a !== 1) {
+          flushRun();
+        }
       }
+      flushRun();
     }
     return { runs, floats };
   };

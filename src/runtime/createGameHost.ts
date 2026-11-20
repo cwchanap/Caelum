@@ -14,7 +14,10 @@ import {
   type Camera,
   type CameraAction,
 } from "../render/boardTransform";
-import { SOLID_VERTEX_FLOATS } from "../render/webgpu/primitives";
+import {
+  SOLID_VERTEX_FLOATS,
+  shapeTriangleCountsOf,
+} from "../render/webgpu/primitives";
 import {
   type GridMode,
   buildMapBatch,
@@ -109,11 +112,11 @@ export interface GameHost {
   cameraForAction(action: CameraAction): Camera | null | undefined;
   /** Apply a button/key camera action against the current board size. */
   adjustCamera(action: CameraAction): void;
-  /** Rebuilds the current frame and reads its pixels back from an offscreen
-   *  render target. Deterministic under software Vulkan, where canvas
-   *  presentation never reaches the compositor; e2e pixel oracles use this
-   *  instead of canvas-side readbacks. Returns null while no canvas is
-   *  mounted. */
+  /** Rebuilds the current frame and reads its pixels back (WebGPU draws into
+   *  an offscreen target because canvas presentation never reaches the
+   *  compositor under software Vulkan; Canvas2D draws onto the mounted
+   *  canvas and reads it back). e2e pixel oracles use this instead of
+   *  canvas-side readbacks. Returns null while no canvas is mounted. */
   captureFrame(): Promise<CapturedFrame | null>;
   /** Terminal teardown: detaches any mount and destroys the renderer's GPU
    *  resources (and the device when the host created it). Canvas unmount must
@@ -477,40 +480,29 @@ export function createGameHostWithRenderer(
       ),
     });
     const projectedVehicles = transformInstances(instances);
+    const solidBatch = (
+      role: "structural" | "route" | "dynamic",
+      vertices: Float32Array<ArrayBuffer>,
+    ) => ({
+      role,
+      vertices: transformVertices(vertices),
+      shapeTriangleCounts: shapeTriangleCountsOf(vertices),
+    });
     return {
       frame: {
         // Painter stages: structural solids, then the one textured sprite
         // draw, then route/draft overlays, vehicles, and route handles.
-        solids: [
-          {
-            role: "structural",
-            vertices: transformVertices(scene.vertices),
-          },
-        ],
+        solids: [solidBatch("structural", scene.vertices)],
         sprites: {
           instances: transformSpriteInstances(scene.sprites),
         },
         overSprites: [
-          {
-            role: "dynamic",
-            vertices: transformVertices(overlays.underRoutes),
-          },
-          {
-            role: "route",
-            vertices: transformVertices(routeVertices(latest, ui, revision)),
-          },
-          {
-            role: "dynamic",
-            vertices: transformVertices(overlays.routeDraft),
-          },
+          solidBatch("dynamic", overlays.underRoutes),
+          solidBatch("route", routeVertices(latest, ui, revision)),
+          solidBatch("dynamic", overlays.routeDraft),
         ],
         vehicles: [{ instances: projectedVehicles }],
-        overVehicles: [
-          {
-            role: "dynamic",
-            vertices: transformVertices(overlays.overVehicles),
-          },
-        ],
+        overVehicles: [solidBatch("dynamic", overlays.overVehicles)],
       },
       vehicleIds,
       positions: instances,
@@ -519,13 +511,10 @@ export function createGameHostWithRenderer(
     };
   };
 
-  const drawFrame = (nowMs: number): void => {
-    if (canvas === null) {
-      return;
-    }
-    const board = syncSize(canvas);
-    const built = buildFrame(nowMs, board.scale * tileSize);
-    renderer.render(built.frame);
+  const recordDrawnTargets = (
+    built: ReturnType<typeof buildFrame>,
+    board: BoardTransform,
+  ): void => {
     const previousTransform = drawnTargets?.transform;
     drawnTargets = {
       vehicleIds: built.vehicleIds,
@@ -547,6 +536,22 @@ export function createGameHostWithRenderer(
     }
   };
 
+  const drawFrame = (nowMs: number): void => {
+    if (canvas === null || destroyed) {
+      return;
+    }
+    try {
+      const board = syncSize(canvas);
+      const built = buildFrame(nowMs, board.scale * tileSize);
+      renderer.render(built.frame);
+      recordDrawnTargets(built, board);
+    } catch (error) {
+      running = false;
+      cancelPendingFrame();
+      ctx.onFatalError(error);
+    }
+  };
+
   const captureFrame = (): Promise<CapturedFrame | null> => {
     if (destroyed || canvas === null) {
       return Promise.resolve(null);
@@ -554,9 +559,14 @@ export function createGameHostWithRenderer(
     // Same sizing/transform prep as drawFrame so the capture is in the same
     // device-pixel space as the presented canvas.
     const board = syncSize(canvas);
-    return renderer.captureFrame(
-      buildFrame(performance.now(), board.scale * tileSize).frame,
-    );
+    const built = buildFrame(performance.now(), board.scale * tileSize);
+    const captured = renderer.captureFrame(built.frame);
+    if (renderer.kind === "canvas2d") {
+      // Canvas2D draws directly onto the visible mounted canvas, so update
+      // click/pick targets to match what is now on screen.
+      recordDrawnTargets(built, board);
+    }
+    return captured;
   };
 
   const cancelPendingFrame = (): void => {
@@ -1170,17 +1180,9 @@ export function createGameHostWithRenderer(
       if (ctx.getUi().drag !== null) {
         if (dragPointerId === null || event.pointerId === dragPointerId) {
           if (event.pointerType === "mouse") {
-            // Snap the gesture to the cancel's last position — the same
-            // treatment pointerup gets — so a cancel that outruns queued
-            // moves does not commit a stale, short stroke (headed CI fires
-            // these mid-drag).
-            const point =
-              pointerTarget(
-                event.clientX,
-                event.clientY,
-                dragMapping ?? undefined,
-              )?.tile ?? null;
-            ctx.onDragCurrent(point);
+            // Commit at the last tracked tile rather than pointercancel's
+            // coordinates — browsers can dispatch pointercancel at (0, 0),
+            // which would stretch a stroke or demolish box to the corner.
             ctx.onDragCommit();
           } else {
             ctx.onDragCancel();
@@ -1333,17 +1335,22 @@ export function createGameHostWithRenderer(
  * One-shot startup WebGPU capability probe (HPA-1144): checks `navigator.gpu`,
  * requests the "webgpu" context on a disposable 16×16 canvas (so requesting
  * WebGPU cannot poison the real gameplay canvas's 2D mode), then the adapter,
- * device and preferred format, and finally configures and unconfigures the
- * probe context so swapchain-setup failures surface before the first frame.
- * Returns the acquired device and format, or null on any capability failure —
- * with the owned device already destroyed. Deliberately narrow: sprite-asset,
- * atlas-upload and pipeline errors stay fatal outside this probe.
+ * device and preferred format, confirms the device is not already lost, and
+ * inside a validation error scope configures the probe context, acquires the
+ * current texture, submits one clear pass, checks the error scope and
+ * `device.lost`, and unconfigures the probe context so swapchain/surface-setup
+ * failures surface before the first frame. Returns the acquired device and
+ * format, or null on any capability failure — with any acquired device already
+ * destroyed. Deliberately narrow: sprite-asset, atlas-upload and pipeline
+ * errors stay fatal outside this probe.
  */
 async function probeWebGpuCapability(): Promise<{
   device: GPUDevice;
   format: GPUTextureFormat;
 } | null> {
   let device: GPUDevice | null = null;
+  const isDeviceLost = async (candidate: GPUDevice): Promise<boolean> =>
+    (await Promise.race([candidate.lost, Promise.resolve(null)])) !== null;
   try {
     if (navigator.gpu === undefined) {
       return null;
@@ -1360,8 +1367,31 @@ async function probeWebGpuCapability(): Promise<{
       return null;
     }
     device = await adapter.requestDevice();
+    if (await isDeviceLost(device)) {
+      device.destroy();
+      return null;
+    }
     const format = navigator.gpu.getPreferredCanvasFormat();
+    device.pushErrorScope("validation");
     probeContext.configure({ device, format, alphaMode: "opaque" });
+    const encoder = device.createCommandEncoder();
+    const pass = encoder.beginRenderPass({
+      colorAttachments: [
+        {
+          view: probeContext.getCurrentTexture().createView(),
+          clearValue: { r: 0, g: 0, b: 0, a: 1 },
+          loadOp: "clear",
+          storeOp: "store",
+        },
+      ],
+    });
+    pass.end();
+    device.queue.submit([encoder.finish()]);
+    const validationError = await device.popErrorScope();
+    if (validationError !== null || (await isDeviceLost(device))) {
+      device.destroy();
+      return null;
+    }
     probeContext.unconfigure();
     return { device, format };
   } catch {

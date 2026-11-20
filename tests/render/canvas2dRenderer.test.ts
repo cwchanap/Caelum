@@ -11,6 +11,10 @@ import {
   type VehicleBatch,
 } from "../../src/render/gameplayRenderer";
 import {
+  SolidGeometry,
+  shapeTriangleCountsOf,
+} from "../../src/render/webgpu/primitives";
+import {
   BUILDING_SPRITE_LAYERS,
   BUILDING_SPRITE_URLS,
   SPRITE_LAYER_COUNT,
@@ -917,5 +921,41 @@ describe("createCanvas2dRenderer", () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
     const renderer = createCanvas2dRenderer(makeImages());
     expect(() => renderer.configure(canvas)).toThrow(/2d context/);
+  });
+
+  it("merges within each translucent shape while filling separate translucent shapes independently", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 200;
+    canvas.height = 100;
+    const renderer = createCanvas2dRenderer(makeImages());
+    renderer.configure(canvas);
+
+    // Two overlapping translucent coverage squares (2 triangles each) and two
+    // consecutive opaque squares (2 triangles each): the translucent shapes
+    // each keep their two triangles in one path (no diagonal seam) and fill
+    // separately (so overlaps darken), while opaque shapes merge across shapes.
+    const translucent = [0.16, 0.4, 0.7, 0.18] as const;
+    const geometry = new SolidGeometry()
+      .rect(0, 0, 64, 64, translucent)
+      .rect(32, 0, 64, 64, translucent)
+      .rect(0, 64, 32, 32, RED)
+      .rect(32, 64, 32, 32, RED);
+    const vertices = geometry.toFloat32Array();
+    const shapeTriangleCounts = shapeTriangleCountsOf(vertices);
+    expect(shapeTriangleCounts).toEqual(new Uint32Array([2, 2, 2, 2]));
+
+    renderer.render({
+      solids: [{ role: "dynamic", vertices, shapeTriangleCounts }],
+      vehicles: [],
+    });
+
+    const solidFills = fills([contexts[0]!]);
+    expect(solidFills).toHaveLength(3);
+    expect(solidFills[0]!.subpaths).toHaveLength(2);
+    expect(solidFills[0]!.state.globalAlpha).toBeCloseTo(0.18, 6);
+    expect(solidFills[1]!.subpaths).toHaveLength(2);
+    expect(solidFills[1]!.state.globalAlpha).toBeCloseTo(0.18, 6);
+    expect(solidFills[2]!.subpaths).toHaveLength(4);
+    expect(solidFills[2]!.state.globalAlpha).toBe(1);
   });
 });

@@ -321,7 +321,7 @@ describe("runtime canvas pointer wiring", () => {
     expect(tileKind(runtime, 1, 0)).toBe("road");
   });
 
-  it("commits an in-flight mouse drag on pointercancel and releases capture", async () => {
+  it("commits an in-flight mouse drag at the last tracked tile on pointercancel and releases capture", async () => {
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
     const { runtime, canvas } = await mount();
@@ -335,17 +335,20 @@ describe("runtime canvas pointer wiring", () => {
       ...center({ x: 3, y: 0 }),
       pointerId: 5,
     });
-    // A mouse pointercancel is a browser-side interruption (window focus
-    // loss, OS steal), not a user abort — the previewed stroke commits.
+    // Chromium can send pointercancel at (0, 0) (no coordinates); committing
+    // must keep the last tracked tile (3, 0) rather than stretching to (0, 0).
     dispatch(canvas, "pointercancel", {
-      ...center({ x: 3, y: 0 }),
+      clientX: 0,
+      clientY: 0,
       pointerId: 5,
       pointerType: "mouse",
     });
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     await flushRuntime();
+    expect(tileKind(runtime, 0, 0)).toBe("empty");
     expect(tileKind(runtime, 1, 0)).toBe("road");
+    expect(tileKind(runtime, 3, 0)).toBe("road");
     expect(releaseCapture.mock.calls).toContainEqual([5]);
   });
 

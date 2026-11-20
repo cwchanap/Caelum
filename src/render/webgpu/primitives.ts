@@ -4,6 +4,20 @@ import { measureGeometry, progressAtDistance } from "../routeGeometry";
 
 /** Interleaved solid vertex layout: x, y, r, g, b, a. */
 export const SOLID_VERTEX_FLOATS = 6;
+const SOLID_TRIANGLE_FLOATS = SOLID_VERTEX_FLOATS * 3;
+
+const shapeCountsByBuffer = new WeakMap<
+  Float32Array,
+  Uint32Array<ArrayBuffer>
+>();
+
+/** Returns the per-shape triangle counts recorded by `SolidGeometry` for
+ *  `vertices`, or `undefined` for raw vertex buffers without shape metadata. */
+export function shapeTriangleCountsOf(
+  vertices: Float32Array,
+): Uint32Array<ArrayBuffer> | undefined {
+  return shapeCountsByBuffer.get(vertices);
+}
 
 export type Rgba = readonly [number, number, number, number];
 
@@ -87,16 +101,29 @@ export function parseColor(css: string): Rgba {
  */
 export class SolidGeometry {
   private readonly vertices: number[] = [];
+  private readonly shapeTriangles: number[] = [];
+
+  private recordShape(emit: () => void): this {
+    const startFloats = this.vertices.length;
+    emit();
+    const addedTriangles =
+      (this.vertices.length - startFloats) / SOLID_TRIANGLE_FLOATS;
+    if (addedTriangles > 0) {
+      this.shapeTriangles.push(addedTriangles);
+    }
+    return this;
+  }
 
   rect(x: number, y: number, width: number, height: number, color: Rgba): this {
-    this.pushQuad(
-      { x, y },
-      { x: x + width, y },
-      { x, y: y + height },
-      { x: x + width, y: y + height },
-      color,
-    );
-    return this;
+    return this.recordShape(() => {
+      this.pushQuad(
+        { x, y },
+        { x: x + width, y },
+        { x, y: y + height },
+        { x: x + width, y: y + height },
+        color,
+      );
+    });
   }
 
   thickLine(
@@ -105,8 +132,9 @@ export class SolidGeometry {
     width: number,
     color: Rgba,
   ): this {
-    this.pushSegment(from, to, width, color);
-    return this;
+    return this.recordShape(() => {
+      this.pushSegment(from, to, width, color);
+    });
   }
 
   dashedLine(
@@ -117,36 +145,37 @@ export class SolidGeometry {
     gapLength: number,
     color: Rgba,
   ): this {
-    const length = Math.hypot(to.x - from.x, to.y - from.y);
-    const direction = {
-      x: (to.x - from.x) / length,
-      y: (to.y - from.y) / length,
-    };
-    let distance = 0;
-    let drawing = true;
-    while (distance < length - 1e-6) {
-      const step = Math.min(
-        drawing ? dashLength : gapLength,
-        length - distance,
-      );
-      if (drawing) {
-        this.pushSegment(
-          {
-            x: from.x + direction.x * distance,
-            y: from.y + direction.y * distance,
-          },
-          {
-            x: from.x + direction.x * (distance + step),
-            y: from.y + direction.y * (distance + step),
-          },
-          width,
-          color,
+    return this.recordShape(() => {
+      const length = Math.hypot(to.x - from.x, to.y - from.y);
+      const direction = {
+        x: (to.x - from.x) / length,
+        y: (to.y - from.y) / length,
+      };
+      let distance = 0;
+      let drawing = true;
+      while (distance < length - 1e-6) {
+        const step = Math.min(
+          drawing ? dashLength : gapLength,
+          length - distance,
         );
+        if (drawing) {
+          this.pushSegment(
+            {
+              x: from.x + direction.x * distance,
+              y: from.y + direction.y * distance,
+            },
+            {
+              x: from.x + direction.x * (distance + step),
+              y: from.y + direction.y * (distance + step),
+            },
+            width,
+            color,
+          );
+        }
+        distance += step;
+        drawing = !drawing;
       }
-      distance += step;
-      drawing = !drawing;
-    }
-    return this;
+    });
   }
 
   /** Fills one triangle (canvas-style arrowheads). */
@@ -156,8 +185,9 @@ export class SolidGeometry {
     c: TripPosition,
     color: Rgba,
   ): this {
-    this.pushTriangle(a, b, c, color);
-    return this;
+    return this.recordShape(() => {
+      this.pushTriangle(a, b, c, color);
+    });
   }
 
   circle(
@@ -166,23 +196,24 @@ export class SolidGeometry {
     color: Rgba,
     segments = 24,
   ): this {
-    for (let index = 0; index < segments; index += 1) {
-      const startAngle = (index / segments) * Math.PI * 2;
-      const endAngle = ((index + 1) / segments) * Math.PI * 2;
-      this.pushTriangle(
-        center,
-        {
-          x: center.x + Math.cos(startAngle) * radius,
-          y: center.y + Math.sin(startAngle) * radius,
-        },
-        {
-          x: center.x + Math.cos(endAngle) * radius,
-          y: center.y + Math.sin(endAngle) * radius,
-        },
-        color,
-      );
-    }
-    return this;
+    return this.recordShape(() => {
+      for (let index = 0; index < segments; index += 1) {
+        const startAngle = (index / segments) * Math.PI * 2;
+        const endAngle = ((index + 1) / segments) * Math.PI * 2;
+        this.pushTriangle(
+          center,
+          {
+            x: center.x + Math.cos(startAngle) * radius,
+            y: center.y + Math.sin(startAngle) * radius,
+          },
+          {
+            x: center.x + Math.cos(endAngle) * radius,
+            y: center.y + Math.sin(endAngle) * radius,
+          },
+          color,
+        );
+      }
+    });
   }
 
   ring(
@@ -192,31 +223,32 @@ export class SolidGeometry {
     color: Rgba,
     segments = 24,
   ): this {
-    const inner = radius - thickness;
-    for (let index = 0; index < segments; index += 1) {
-      const startAngle = (index / segments) * Math.PI * 2;
-      const endAngle = ((index + 1) / segments) * Math.PI * 2;
-      this.pushQuad(
-        {
-          x: center.x + Math.cos(startAngle) * inner,
-          y: center.y + Math.sin(startAngle) * inner,
-        },
-        {
-          x: center.x + Math.cos(endAngle) * inner,
-          y: center.y + Math.sin(endAngle) * inner,
-        },
-        {
-          x: center.x + Math.cos(startAngle) * radius,
-          y: center.y + Math.sin(startAngle) * radius,
-        },
-        {
-          x: center.x + Math.cos(endAngle) * radius,
-          y: center.y + Math.sin(endAngle) * radius,
-        },
-        color,
-      );
-    }
-    return this;
+    return this.recordShape(() => {
+      const inner = radius - thickness;
+      for (let index = 0; index < segments; index += 1) {
+        const startAngle = (index / segments) * Math.PI * 2;
+        const endAngle = ((index + 1) / segments) * Math.PI * 2;
+        this.pushQuad(
+          {
+            x: center.x + Math.cos(startAngle) * inner,
+            y: center.y + Math.sin(startAngle) * inner,
+          },
+          {
+            x: center.x + Math.cos(endAngle) * inner,
+            y: center.y + Math.sin(endAngle) * inner,
+          },
+          {
+            x: center.x + Math.cos(startAngle) * radius,
+            y: center.y + Math.sin(startAngle) * radius,
+          },
+          {
+            x: center.x + Math.cos(endAngle) * radius,
+            y: center.y + Math.sin(endAngle) * radius,
+          },
+          color,
+        );
+      }
+    });
   }
 
   arrow(
@@ -225,32 +257,33 @@ export class SolidGeometry {
     width: number,
     color: Rgba,
   ): this {
-    const length = Math.hypot(tip.x - tail.x, tip.y - tail.y);
-    const direction = {
-      x: (tip.x - tail.x) / length,
-      y: (tip.y - tail.y) / length,
-    };
-    const headLength = width * 3;
-    const headHalfWidth = width * 2;
-    const base = {
-      x: tip.x - direction.x * headLength,
-      y: tip.y - direction.y * headLength,
-    };
-    this.pushSegment(tail, base, width, color);
-    const normal = { x: -direction.y, y: direction.x };
-    this.pushTriangle(
-      {
-        x: base.x + normal.x * headHalfWidth,
-        y: base.y + normal.y * headHalfWidth,
-      },
-      tip,
-      {
-        x: base.x - normal.x * headHalfWidth,
-        y: base.y - normal.y * headHalfWidth,
-      },
-      color,
-    );
-    return this;
+    return this.recordShape(() => {
+      const length = Math.hypot(tip.x - tail.x, tip.y - tail.y);
+      const direction = {
+        x: (tip.x - tail.x) / length,
+        y: (tip.y - tail.y) / length,
+      };
+      const headLength = width * 3;
+      const headHalfWidth = width * 2;
+      const base = {
+        x: tip.x - direction.x * headLength,
+        y: tip.y - direction.y * headLength,
+      };
+      this.pushSegment(tail, base, width, color);
+      const normal = { x: -direction.y, y: direction.x };
+      this.pushTriangle(
+        {
+          x: base.x + normal.x * headHalfWidth,
+          y: base.y + normal.y * headHalfWidth,
+        },
+        tip,
+        {
+          x: base.x - normal.x * headHalfWidth,
+          y: base.y - normal.y * headHalfWidth,
+        },
+        color,
+      );
+    });
   }
 
   cross(
@@ -259,20 +292,21 @@ export class SolidGeometry {
     thickness: number,
     color: Rgba,
   ): this {
-    const half = size / 2;
-    this.pushSegment(
-      { x: center.x - half, y: center.y },
-      { x: center.x + half, y: center.y },
-      thickness,
-      color,
-    );
-    this.pushSegment(
-      { x: center.x, y: center.y - half },
-      { x: center.x, y: center.y + half },
-      thickness,
-      color,
-    );
-    return this;
+    return this.recordShape(() => {
+      const half = size / 2;
+      this.pushSegment(
+        { x: center.x - half, y: center.y },
+        { x: center.x + half, y: center.y },
+        thickness,
+        color,
+      );
+      this.pushSegment(
+        { x: center.x, y: center.y - half },
+        { x: center.x, y: center.y + half },
+        thickness,
+        color,
+      );
+    });
   }
 
   curve(
@@ -281,19 +315,20 @@ export class SolidGeometry {
     color: Rgba,
     segments = 24,
   ): this {
-    const half = width / 2;
-    for (let index = 0; index < segments; index += 1) {
-      const start = pointAndTangentAt(geometry, index / segments);
-      const end = pointAndTangentAt(geometry, (index + 1) / segments);
-      this.pushQuad(
-        offsetByNormal(start, -half),
-        offsetByNormal(end, -half),
-        offsetByNormal(start, half),
-        offsetByNormal(end, half),
-        color,
-      );
-    }
-    return this;
+    return this.recordShape(() => {
+      const half = width / 2;
+      for (let index = 0; index < segments; index += 1) {
+        const start = pointAndTangentAt(geometry, index / segments);
+        const end = pointAndTangentAt(geometry, (index + 1) / segments);
+        this.pushQuad(
+          offsetByNormal(start, -half),
+          offsetByNormal(end, -half),
+          offsetByNormal(start, half),
+          offsetByNormal(end, half),
+          color,
+        );
+      }
+    });
   }
 
   /** Dashes along a sampled curve — the batch equivalent of canvas
@@ -307,32 +342,39 @@ export class SolidGeometry {
     gapLength: number,
     color: Rgba,
   ): this {
-    const measured = measureGeometry(geometry);
-    const pointAtLength = (distance: number): TripPosition =>
-      pointAndTangentAt(geometry, progressAtDistance(measured, distance)).point;
-    let distance = 0;
-    let drawing = true;
-    while (distance < measured.length - 1e-6) {
-      const end = Math.min(
-        distance + (drawing ? dashLength : gapLength),
-        measured.length,
-      );
-      if (drawing) {
-        this.pushSegment(
-          pointAtLength(distance),
-          pointAtLength(end),
-          width,
-          color,
+    return this.recordShape(() => {
+      const measured = measureGeometry(geometry);
+      const pointAtLength = (distance: number): TripPosition =>
+        pointAndTangentAt(geometry, progressAtDistance(measured, distance))
+          .point;
+      let distance = 0;
+      let drawing = true;
+      while (distance < measured.length - 1e-6) {
+        const end = Math.min(
+          distance + (drawing ? dashLength : gapLength),
+          measured.length,
         );
+        if (drawing) {
+          this.pushSegment(
+            pointAtLength(distance),
+            pointAtLength(end),
+            width,
+            color,
+          );
+        }
+        distance = end;
+        drawing = !drawing;
       }
-      distance = end;
-      drawing = !drawing;
-    }
-    return this;
+    });
   }
 
   toFloat32Array(): Float32Array<ArrayBuffer> {
-    return new Float32Array(this.vertices);
+    const out = new Float32Array(this.vertices) as Float32Array<ArrayBuffer>;
+    shapeCountsByBuffer.set(
+      out,
+      new Uint32Array(this.shapeTriangles) as Uint32Array<ArrayBuffer>,
+    );
+    return out;
   }
 
   private pushSegment(
