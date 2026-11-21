@@ -215,6 +215,47 @@ for (const viewport of desktopViewports) {
       })
       .toBe("road");
 
+    // Switching destinations with the dock open must also keep the map
+    // still at Fit: the tile keeps its viewport position through each
+    // switch, and render and hit-test still agree afterwards.
+    const fitSwitchBefore = await mapTileViewportPoint(canvas, stableTile);
+    await openCommandDestination(page, "lines");
+    const fitLinesPoint = await mapTileViewportPoint(canvas, stableTile);
+    expect(
+      fitLinesPoint.x,
+      "dock switch to Lines: tile keeps viewport x",
+    ).toBeCloseTo(fitSwitchBefore.x, 0);
+    expect(
+      fitLinesPoint.y,
+      "dock switch to Lines: tile keeps viewport y",
+    ).toBeCloseTo(fitSwitchBefore.y, 0);
+    await openCommandDestination(page, "data");
+    const fitDataPoint = await mapTileViewportPoint(canvas, stableTile);
+    expect(
+      fitDataPoint.x,
+      "dock switch to Data: tile keeps viewport x",
+    ).toBeCloseTo(fitSwitchBefore.x, 0);
+    expect(
+      fitDataPoint.y,
+      "dock switch to Data: tile keeps viewport y",
+    ).toBeCloseTo(fitSwitchBefore.y, 0);
+    await openCommandDestination(page, "build");
+    const fitBackPoint = await mapTileViewportPoint(canvas, stableTile);
+    expect(
+      fitBackPoint.x,
+      "dock switch back to Build: tile keeps viewport x",
+    ).toBeCloseTo(fitSwitchBefore.x, 0);
+    expect(
+      fitBackPoint.y,
+      "dock switch back to Build: tile keeps viewport y",
+    ).toBeCloseTo(fitSwitchBefore.y, 0);
+    await expect
+      .poll(async () => {
+        await hoverMapTile(canvas, stableTile);
+        return (await runtimeSnapshot(page)).ui.hoverTile;
+      })
+      .toEqual(stableTile);
+
     await page.getByRole("button", { name: "Close Build" }).click();
     await expect(dock).toHaveCount(0);
     await expect
@@ -242,6 +283,33 @@ for (const viewport of desktopViewports) {
       zoomedBefore.y,
       0,
     );
+    await expect
+      .poll(async () => {
+        await hoverMapTile(canvas, zoomedTile);
+        return (await runtimeSnapshot(page)).ui.hoverTile;
+      })
+      .toEqual(zoomedTile);
+    // A destination switch keeps the zoomed view still too.
+    await openCommandDestination(page, "lines");
+    const zoomedLinesPoint = await mapTileViewportPoint(canvas, zoomedTile);
+    expect(
+      zoomedLinesPoint.x,
+      "zoomed dock switch: tile keeps viewport x",
+    ).toBeCloseTo(zoomedBefore.x, 0);
+    expect(
+      zoomedLinesPoint.y,
+      "zoomed dock switch: tile keeps viewport y",
+    ).toBeCloseTo(zoomedBefore.y, 0);
+    await openCommandDestination(page, "build");
+    const zoomedBackPoint = await mapTileViewportPoint(canvas, zoomedTile);
+    expect(
+      zoomedBackPoint.x,
+      "zoomed dock switch back: tile keeps viewport x",
+    ).toBeCloseTo(zoomedBefore.x, 0);
+    expect(
+      zoomedBackPoint.y,
+      "zoomed dock switch back: tile keeps viewport y",
+    ).toBeCloseTo(zoomedBefore.y, 0);
     await expect
       .poll(async () => {
         await hoverMapTile(canvas, zoomedTile);

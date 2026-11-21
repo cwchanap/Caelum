@@ -7,6 +7,8 @@ import {
   createDefaultCity,
   debugSetBudget,
   dragMapTiles,
+  hoverMapTile,
+  mapTileViewportPoint,
   openCommandDestination,
   rebuildRoadTile,
   removeMapTile,
@@ -407,6 +409,148 @@ test("proves route drafting can reach a stop beneath the Lines panel", async ({
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await expect(page.getByTestId("route-waypoint-0")).toBeVisible();
   await expect(page.getByTestId("route-waypoint-1")).toBeVisible();
+});
+
+const ROUTE_PATH_DOCK_STOPS = [
+  { x: 3, y: 3 },
+  { x: 11, y: 3 },
+] as const;
+
+test("a route-path click that opens Lines keeps the map still at Fit and zoomed", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Route Path Dock", "blankGrid");
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  const dock = page.getByTestId("workspace-dock");
+  await expect(canvas).toBeVisible();
+
+  // Pausing up front keeps every later commit intent-driven and parks the
+  // deployed fleet at its spawn cursor for the whole test. A restored city
+  // may already be paused, so only click when the Pause label is showing.
+  const pause = page.getByRole("button", { name: "Pause", exact: true });
+  if (await pause.isVisible()) await pause.click();
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).state.paused)
+    .toBe(true);
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 20, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of ROUTE_PATH_DOCK_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of ROUTE_PATH_DOCK_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: /^Save & run/ }).click();
+  await expect
+    .poll(async () => {
+      const route = (await runtimeSnapshot(page)).state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      );
+      return route?.vehicleIds.length ?? 0;
+    })
+    .toBeGreaterThan(0);
+  await page.getByRole("button", { name: "Close Lines" }).click();
+  await expect(dock).toHaveCount(0);
+  await settleLayout(page);
+
+  // Pick a route-path tile no parked bus occupies or is driving into, so
+  // the Inspect click resolves the line rather than a vehicle.
+  const snapshot = await runtimeSnapshot(page);
+  const route = snapshot.state.transit.routes.find(
+    (candidate) => candidate.id === "route-001",
+  );
+  if (route === undefined) {
+    throw new Error("Committed route is missing from the runtime snapshot");
+  }
+  const taken = new Set<string>();
+  for (const vehicle of snapshot.state.transit.vehicles) {
+    const steps: readonly { position: { x: number; y: number } }[] | undefined =
+      route.legs[vehicle.itineraryIndex % route.legs.length]?.currentPath
+        ?.steps;
+    if (steps === undefined) continue;
+    for (const index of [vehicle.pathStepIndex, vehicle.pathStepIndex + 1]) {
+      const step = steps[index];
+      if (step !== undefined) {
+        taken.add(`${step.position.x},${step.position.y}`);
+      }
+    }
+  }
+  const pathPositions: { x: number; y: number }[] = [];
+  for (const leg of route.legs) {
+    for (const step of leg.currentPath?.steps ?? []) {
+      pathPositions.push(step.position);
+    }
+  }
+  const pathTile = pathPositions.find(
+    (position) =>
+      position.x >= 5 &&
+      position.x <= 10 &&
+      !taken.has(`${position.x},${position.y}`),
+  );
+  if (pathTile === undefined) {
+    throw new Error("No vehicle-free route-path tile between the stops");
+  }
+  await selectTool(page, "select");
+
+  // At Fit, clicking the route path opens the Lines dock and the map keeps
+  // its rendered position through the dock opening.
+  const fitBefore = await mapTileViewportPoint(canvas, pathTile);
+  await clickMapTile(canvas, pathTile);
+  await expect(dock).toBeVisible();
+  await expect(page.getByTestId("panel-lines")).toBeVisible();
+  // The camera rebases when the resize is observed; wait for the drawn box
+  // to settle so the measurement is not taken mid-resize.
+  await settleLayout(page);
+  const fitAfter = await mapTileViewportPoint(canvas, pathTile);
+  expect(fitAfter.x, "route-path dock open: tile keeps viewport x").toBeCloseTo(
+    fitBefore.x,
+    0,
+  );
+  expect(fitAfter.y, "route-path dock open: tile keeps viewport y").toBeCloseTo(
+    fitBefore.y,
+    0,
+  );
+  await expect
+    .poll(async () => {
+      await hoverMapTile(canvas, pathTile);
+      return (await runtimeSnapshot(page)).ui.hoverTile;
+    })
+    .toEqual(pathTile);
+
+  // Zoomed, the same route-path click must keep the view still too.
+  await page.getByRole("button", { name: "Close Lines" }).click();
+  await expect(dock).toHaveCount(0);
+  await settleLayout(page);
+  await page.getByTestId("map-zoom-in").click();
+  await page.getByTestId("map-zoom-in").click();
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).camera?.zoom ?? 1)
+    .toBeGreaterThan(1);
+  const zoomedBefore = await mapTileViewportPoint(canvas, pathTile);
+  await clickMapTile(canvas, pathTile);
+  await expect(page.getByTestId("panel-lines")).toBeVisible();
+  await settleLayout(page);
+  const zoomedAfter = await mapTileViewportPoint(canvas, pathTile);
+  expect(
+    zoomedAfter.x,
+    "zoomed route-path dock open: tile keeps viewport x",
+  ).toBeCloseTo(zoomedBefore.x, 0);
+  expect(
+    zoomedAfter.y,
+    "zoomed route-path dock open: tile keeps viewport y",
+  ).toBeCloseTo(zoomedBefore.y, 0);
+  await expect
+    .poll(async () => {
+      await hoverMapTile(canvas, pathTile);
+      return (await runtimeSnapshot(page)).ui.hoverTile;
+    })
+    .toEqual(pathTile);
 });
 
 test("undoes and redoes a roadside route draft while preview is pending", async ({

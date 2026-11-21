@@ -1192,6 +1192,59 @@ describe("createGameHost lifecycle", () => {
     expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
   });
 
+  it("rejects a zero-size window-resize observation so later restoration rebases", () => {
+    const domRect = (width: number, height: number) =>
+      ({
+        width,
+        height,
+        left: 0,
+        top: 0,
+        right: width,
+        bottom: height,
+        x: 0,
+        y: 0,
+        toJSON: () => ({}),
+      }) as DOMRect;
+    const { container, canvas, renderer, fireFrame, callbacks } =
+      createFixture();
+    fireFrame(0);
+
+    // A positive fallback resize rebases and pins the backing store.
+    container.getBoundingClientRect = vi.fn(() => domRect(400, 300));
+    globalThis.window?.dispatchEvent(new Event("resize"));
+    fireFrame(16);
+    expect(canvas.width).toBe(400);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+    const first = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
+
+    // A temporarily hidden host reports a 0×0 content box: the observation
+    // must be rejected before it zeroes the size cache, rebases against an
+    // empty board, or renders.
+    container.getBoundingClientRect = vi.fn(() => domRect(0, 0));
+    globalThis.window?.dispatchEvent(new Event("resize"));
+    fireFrame(32);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+    expect(canvas.width).toBe(400);
+    expect(canvas.height).toBe(300);
+    expect(renderer.resize).toHaveBeenLastCalledWith(400, 300);
+
+    // Restoration at a different size still rebases from the last positive
+    // reference, so the map keeps its rendered pixels instead of jumping.
+    container.getBoundingClientRect = vi.fn(() => domRect(600, 400));
+    globalThis.window?.dispatchEvent(new Event("resize"));
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(2);
+    const restored = callbacks.onCameraChange.mock.calls[1]![0] as Camera;
+    const map = createTestGameState().map;
+    const before = getBoardTransform({ width: 400, height: 300 }, map, first);
+    const after = getBoardTransform({ width: 600, height: 400 }, map, restored);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+    expect(after.offsetX).toBeCloseTo(before.offsetX, 6);
+    expect(after.offsetY).toBeCloseTo(before.offsetY, 6);
+    fireFrame(48);
+    expect(canvas.width).toBe(600);
+    expect(canvas.height).toBe(400);
+  });
+
   it("falls back to the layout box until the ResizeObserver entry arrives", () => {
     // With ResizeObserver present the mount render runs before the first
     // entry: syncSize must still size the backing store via the layout read.

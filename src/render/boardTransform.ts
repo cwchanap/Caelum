@@ -314,6 +314,25 @@ export function zoomCameraAt(
   return fittedAsNull(clampCamera(board, map, moved));
 }
 
+/** Ordinary clamp bounds for one axis, widened to include a passive center:
+ *  the first drag cannot snap it, yet panning can never escape past it. */
+function boundedAxisClamp(
+  center: number,
+  passive: number,
+  half: number,
+  mapTiles: number,
+): number {
+  let lo = half;
+  let hi = mapTiles - half;
+  if (2 * half >= mapTiles) {
+    lo = hi = mapTiles / 2;
+  }
+  return Math.min(
+    Math.max(center, Math.min(lo, passive)),
+    Math.max(hi, passive),
+  );
+}
+
 /** Drag the map by a CSS-pixel delta (content follows the pointer). */
 export function panCamera(
   board: BoardSize,
@@ -329,18 +348,47 @@ export function panCamera(
   }
   if (current.retained === true) {
     // Sub-fit: the whole map is visible, so panning would only move it — a
-    // no-op. Above fit the view moves freely: clamping could snap a passive
-    // off-range center on the first drag event.
-    return current.zoom <= 1
-      ? camera
-      : {
-          retained: true,
-          zoom: current.zoom,
-          center: {
-            x: current.center.x - dx / tilePx,
-            y: current.center.y - dy / tilePx,
-          },
-        };
+    // no-op.
+    if (current.zoom <= 1) {
+      return camera;
+    }
+    // Above fit the passive placement leads: the first drag must not snap an
+    // off-range passive center, yet panning can never push the view further
+    // out than passive layout left it (the map cannot leave the board).
+    const moved = {
+      zoom: current.zoom,
+      center: {
+        x: current.center.x - dx / tilePx,
+        y: current.center.y - dy / tilePx,
+      },
+    };
+    const safe = safeRect(board);
+    const bounded = {
+      ...moved,
+      center: {
+        x: boundedAxisClamp(
+          moved.center.x,
+          current.center.x,
+          safe.width / (2 * tilePx),
+          map.width,
+        ),
+        y: boundedAxisClamp(
+          moved.center.y,
+          current.center.y,
+          safe.height / (2 * tilePx),
+          map.height,
+        ),
+      },
+    };
+    // Once the ordinary clamp is identity, ordinary clamped navigation
+    // resumes; otherwise the view stays passive rather than snapping.
+    const clamped = clampCamera(board, map, bounded);
+    const same = (a: number, b: number) => Math.abs(a - b) <= 1e-9;
+    return same(clamped.zoom, bounded.zoom) &&
+      same(clamped.center.x, bounded.center.x) &&
+      same(clamped.center.y, bounded.center.y)
+      ? fittedAsNull(clamped)
+      : { ...bounded, retained: true };
   }
   return fittedAsNull(
     clampCamera(board, map, {
