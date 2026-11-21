@@ -116,6 +116,11 @@ for (const viewport of desktopViewports) {
     // A road tool stays armed when the Build workspace opens, so a map click
     // beside the dock proves the clickable area reaches the right map column.
     await selectBuildLeaf(page, "roads", "road-twoWay");
+    // HPA-977: opening the dock must not move the map, even at default Fit.
+    // Record where a map tile and the map corner sit before the resize.
+    const stableTile = { x: 10, y: 9 };
+    const tilePointBefore = await mapTileViewportPoint(canvas, stableTile);
+    const mapCornerBefore = await mapWorldViewportPoint(canvas, { x: 0, y: 0 });
     await openCommandDestination(page, "build");
     await expect(dock).toBeVisible();
     const dockLeft = (await dock.boundingBox())!.x;
@@ -141,7 +146,35 @@ for (const viewport of desktopViewports) {
       "dock stays inside the viewport",
     ).toBeLessThanOrEqual(viewport.width + 1);
     expect(openCanvas!.width).toBeLessThan(closedCanvas!.width - 1);
-    await expectMapFitsCanvas("dock open");
+    // Passive resize preserves the rendered scale and offsets: the tile and
+    // the map's top-left corner keep their exact viewport positions.
+    const tilePointAfter = await mapTileViewportPoint(canvas, stableTile);
+    expect(
+      tilePointAfter.x,
+      "dock open: stable tile keeps its viewport x",
+    ).toBeCloseTo(tilePointBefore.x, 0);
+    expect(
+      tilePointAfter.y,
+      "dock open: stable tile keeps its viewport y",
+    ).toBeCloseTo(tilePointBefore.y, 0);
+    const mapCornerAfter = await mapWorldViewportPoint(canvas, { x: 0, y: 0 });
+    expect(
+      mapCornerAfter.x,
+      "dock open: map corner keeps its viewport x",
+    ).toBeCloseTo(mapCornerBefore.x, 0);
+    expect(
+      mapCornerAfter.y,
+      "dock open: map corner keeps its viewport y",
+    ).toBeCloseTo(mapCornerBefore.y, 0);
+    // Render and hit-test agree: the tile under a resting in-stage cursor is
+    // unchanged by the resize. Each poll attempt re-hovers from the live
+    // transform, healing a hover that raced the resize publish.
+    await expect
+      .poll(async () => {
+        await hoverMapTile(canvas, stableTile);
+        return (await runtimeSnapshot(page)).ui.hoverTile;
+      })
+      .toEqual(stableTile);
 
     await page.getByTestId("map-zoom-in").click();
     await expect
@@ -154,9 +187,11 @@ for (const viewport of desktopViewports) {
     await expectMapFitsCanvas("fit with dock open");
 
     const rightMostColumn = { x: map.width - 1, y: 9 };
-    await hoverMapTile(canvas, rightMostColumn);
     await expect
-      .poll(async () => (await runtimeSnapshot(page)).ui.hoverTile)
+      .poll(async () => {
+        await hoverMapTile(canvas, rightMostColumn);
+        return (await runtimeSnapshot(page)).ui.hoverTile;
+      })
       .toEqual(rightMostColumn);
     const overlay = page.getByTestId("map-text-overlay");
     const badge = overlay.locator('.map-text-item[data-kind="cursorBadge"]');
@@ -188,6 +223,47 @@ for (const viewport of desktopViewports) {
       )
       .toBeLessThanOrEqual(1);
     await expectMapFitsCanvas("dock closed again");
+
+    // A zoomed view survives the dock round trip without moving either.
+    await page.getByTestId("map-zoom-in").click();
+    await page.getByTestId("map-zoom-in").click();
+    await expect
+      .poll(async () => (await runtimeSnapshot(page)).camera?.zoom ?? 1)
+      .toBeGreaterThan(1);
+    const zoomedTile = { x: 14, y: 9 };
+    const zoomedBefore = await mapTileViewportPoint(canvas, zoomedTile);
+    await openCommandDestination(page, "build");
+    const zoomedOpen = await mapTileViewportPoint(canvas, zoomedTile);
+    expect(zoomedOpen.x, "zoomed dock open: tile keeps viewport x").toBeCloseTo(
+      zoomedBefore.x,
+      0,
+    );
+    expect(zoomedOpen.y, "zoomed dock open: tile keeps viewport y").toBeCloseTo(
+      zoomedBefore.y,
+      0,
+    );
+    await expect
+      .poll(async () => {
+        await hoverMapTile(canvas, zoomedTile);
+        return (await runtimeSnapshot(page)).ui.hoverTile;
+      })
+      .toEqual(zoomedTile);
+    await page.getByRole("button", { name: "Close Build" }).click();
+    await expect(dock).toHaveCount(0);
+    await expect
+      .poll(async () =>
+        Math.abs(((await canvas.boundingBox())?.width ?? 0) - viewport.width),
+      )
+      .toBeLessThanOrEqual(1);
+    const zoomedClosed = await mapTileViewportPoint(canvas, zoomedTile);
+    expect(
+      zoomedClosed.x,
+      "zoomed dock close: tile keeps viewport x",
+    ).toBeCloseTo(zoomedBefore.x, 0);
+    expect(
+      zoomedClosed.y,
+      "zoomed dock close: tile keeps viewport y",
+    ).toBeCloseTo(zoomedBefore.y, 0);
   });
 }
 
@@ -310,17 +386,42 @@ for (const viewport of shelfBandViewports) {
     }
 
     const preservedCamera = (await runtimeSnapshot(page)).camera;
+    // HPA-977 passive resize: dock transitions rebase the camera to preserve
+    // the drawn pixels, so the camera object legitimately changes while the
+    // view's center point keeps its exact viewport position.
+    const anchorWorld = {
+      x: preservedCamera!.center.x * tileSize,
+      y: preservedCamera!.center.y * tileSize,
+    };
+    const anchorBefore = await mapWorldViewportPoint(canvas, anchorWorld);
     await page.getByRole("button", { name: "Close Build" }).click();
     await expect(dock).toHaveCount(0);
     await expect
-      .poll(async () => (await runtimeSnapshot(page)).camera)
-      .toEqual(preservedCamera);
+      .poll(async () =>
+        Math.abs(((await canvas.boundingBox())?.width ?? 0) - viewport.width),
+      )
+      .toBeLessThanOrEqual(1);
+    const anchorAfterClose = await mapWorldViewportPoint(canvas, anchorWorld);
+    expect(
+      anchorAfterClose.x,
+      "dock close keeps the view's viewport x",
+    ).toBeCloseTo(anchorBefore.x, 0);
+    expect(
+      anchorAfterClose.y,
+      "dock close keeps the view's viewport y",
+    ).toBeCloseTo(anchorBefore.y, 0);
 
     await openCommandDestination(page, "build");
     await expect(dock).toBeVisible();
-    await expect
-      .poll(async () => (await runtimeSnapshot(page)).camera)
-      .toEqual(preservedCamera);
+    const anchorAfterReopen = await mapWorldViewportPoint(canvas, anchorWorld);
+    expect(
+      anchorAfterReopen.x,
+      "dock reopen keeps the view's viewport x",
+    ).toBeCloseTo(anchorBefore.x, 0);
+    expect(
+      anchorAfterReopen.y,
+      "dock reopen keeps the view's viewport y",
+    ).toBeCloseTo(anchorBefore.y, 0);
     await expectShelfInSafeBand("reopened");
   });
 }

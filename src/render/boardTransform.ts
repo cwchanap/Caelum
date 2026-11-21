@@ -29,11 +29,14 @@ type MapSize = Pick<GameMap, "width" | "height">;
  * Local map view: never persisted and never sent to Rust. `zoom` multiplies
  * the fit-to-safe-viewport scale (1 shows the whole map); `center` is the
  * world point, in tiles, drawn at the middle of the safe viewport. `null`
- * everywhere means "fit".
+ * everywhere means "fit". `retained` marks a passive layout result (dock or
+ * window resize): the rendered pixels are authoritative, so clamping is
+ * bypassed until navigation or an explicit Fit takes over.
  */
 export interface Camera {
   zoom: number;
   center: { x: number; y: number };
+  retained?: boolean;
 }
 
 /** A camera change requested from outside the board (buttons, keys). `pan`
@@ -191,6 +194,11 @@ function resolvedCamera(
   map: MapSize,
   camera: Camera | null,
 ): Camera {
+  if (camera?.retained === true) {
+    // Passive layout preserved actual pixels; clamping would snap them (a
+    // letterboxed fit or a zoom below 1 cannot survive clampCamera).
+    return camera;
+  }
   return clampCamera(
     board,
     map,
@@ -202,6 +210,46 @@ function resolvedCamera(
  *  fitted view: report it as `null`. */
 function fittedAsNull(camera: Camera): Camera | null {
   return camera.zoom <= 1 ? null : camera;
+}
+
+/**
+ * Passive resize (dock open/close, window resize): compute the camera that
+ * redraws the same CSS scale and offsets on the new board, so the map never
+ * moves under a layout change — even from the default Fit, where clamping
+ * would recenter a letterboxed view. No pointer anchor is involved. Returns
+ * `null` when the preserved pixels already are the new board's canonical Fit
+ * (e.g. an exact dock round trip), so the ordinary fitted view resumes.
+ */
+export function rebaseCameraForResize(
+  oldBoard: BoardSize,
+  newBoard: BoardSize,
+  map: MapSize,
+  camera: Camera | null,
+): Camera | null {
+  const previous = getBoardTransform(oldBoard, map, camera);
+  const fit = fitScale(newBoard, map);
+  if (!(previous.scale > 0) || !(fit > 0)) {
+    return camera;
+  }
+  const safe = safeRect(newBoard);
+  const tilePx = previous.scale * tileSize;
+  const rebased: Camera = {
+    retained: true,
+    zoom: previous.scale / fit,
+    center: {
+      x: (safe.x + safe.width / 2 - previous.offsetX) / tilePx,
+      y: (safe.y + safe.height / 2 - previous.offsetY) / tilePx,
+    },
+  };
+  const canonical = getBoardTransform(newBoard, map, null);
+  const actual = getBoardTransform(newBoard, map, rebased);
+  const close = (a: number, b: number) =>
+    Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
+  return close(actual.scale, canonical.scale) &&
+    close(actual.offsetX, canonical.offsetX) &&
+    close(actual.offsetY, canonical.offsetY)
+    ? null
+    : rebased;
 }
 
 /** Zoom by `factor`, keeping the world point under `anchor` (board CSS px)
@@ -219,25 +267,51 @@ export function zoomCameraAt(
   if (!(before > 0)) {
     return camera;
   }
+  // A retained view showing the whole map cannot shrink usefully: Zoom Out
+  // would only re-center it, so it stays where passive layout put it.
+  if (current.retained === true && current.zoom <= 1 && factor < 1) {
+    return camera;
+  }
   const safe = safeRect(board);
   const middleX = safe.x + safe.width / 2;
   const middleY = safe.y + safe.height / 2;
   const worldX = current.center.x + (anchor.x - middleX) / before;
   const worldY = current.center.y + (anchor.y - middleY) / before;
+  // A retained sub-fit view must never snap larger toward Fit.
+  const floor = current.retained === true ? Math.min(1, current.zoom) : 1;
   const zoom = Math.min(
-    Math.max(current.zoom * factor, 1),
+    Math.max(current.zoom * factor, floor),
     maxZoom(board, map),
   );
   const after = fit * zoom * tileSize;
-  return fittedAsNull(
-    clampCamera(board, map, {
-      zoom,
-      center: {
-        x: worldX - (anchor.x - middleX) / after,
-        y: worldY - (anchor.y - middleY) / after,
-      },
-    }),
-  );
+  const moved = {
+    zoom,
+    center: {
+      x: worldX - (anchor.x - middleX) / after,
+      y: worldY - (anchor.y - middleY) / after,
+    },
+  };
+  if (current.retained === true) {
+    // Still below fit: stay passive on the actually rendered pixels.
+    if (zoom < 1) {
+      return { ...moved, retained: true };
+    }
+    // The floor landing is exactly the fitted view.
+    if (zoom === 1) {
+      return null;
+    }
+    // Hand control back to ordinary clamped navigation only when the clamp
+    // would not move the view; otherwise the passive view stays passive
+    // rather than snapping (explicit Fit always reframes deliberately).
+    const clamped = clampCamera(board, map, moved);
+    const same = (a: number, b: number) => Math.abs(a - b) <= 1e-9;
+    return same(clamped.zoom, moved.zoom) &&
+      same(clamped.center.x, moved.center.x) &&
+      same(clamped.center.y, moved.center.y)
+      ? fittedAsNull(clamped)
+      : { ...moved, retained: true };
+  }
+  return fittedAsNull(clampCamera(board, map, moved));
 }
 
 /** Drag the map by a CSS-pixel delta (content follows the pointer). */
@@ -252,6 +326,21 @@ export function panCamera(
   const tilePx = fitScale(board, map) * current.zoom * tileSize;
   if (!(tilePx > 0)) {
     return camera;
+  }
+  if (current.retained === true) {
+    // Sub-fit: the whole map is visible, so panning would only move it — a
+    // no-op. Above fit the view moves freely: clamping could snap a passive
+    // off-range center on the first drag event.
+    return current.zoom <= 1
+      ? camera
+      : {
+          retained: true,
+          zoom: current.zoom,
+          center: {
+            x: current.center.x - dx / tilePx,
+            y: current.center.y - dy / tilePx,
+          },
+        };
   }
   return fittedAsNull(
     clampCamera(board, map, {

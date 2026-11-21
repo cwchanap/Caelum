@@ -385,6 +385,13 @@ test("proves route drafting can reach a stop beneath the Lines panel", async ({
   await openCommandDestination(page, "lines");
   await page.getByRole("button", { name: "New Bus" }).click();
   await expect(page.getByTestId("command-panel")).toBeVisible();
+  // HPA-977 passive resize keeps the drawn map where it was, so the dock now
+  // covers the covered stop's viewport position. An explicit Fit reframes the
+  // whole map into the docked stage, exposing it for drafting again.
+  await page.getByTestId("map-zoom-fit").click();
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).camera)
+    .toBeNull();
 
   const waypointCount = async () =>
     (await runtimeSnapshot(page)).ui.routeDraft?.waypointIds.length ?? 0;
