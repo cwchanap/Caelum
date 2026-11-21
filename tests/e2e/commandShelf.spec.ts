@@ -9,6 +9,7 @@ import {
   dragMapTiles,
   drainGameplayQueue,
   hoverMapTile,
+  mapBoardScale,
   mapTileViewportPoint,
   mapWorldViewportPoint,
   openCommandDestination,
@@ -219,6 +220,7 @@ for (const viewport of desktopViewports) {
     // still at Fit: the tile keeps its viewport position through each
     // switch, and render and hit-test still agree afterwards.
     const fitSwitchBefore = await mapTileViewportPoint(canvas, stableTile);
+    const fitSwitchScaleBefore = await mapBoardScale(canvas);
     await openCommandDestination(page, "lines");
     const fitLinesPoint = await mapTileViewportPoint(canvas, stableTile);
     expect(
@@ -229,6 +231,10 @@ for (const viewport of desktopViewports) {
       fitLinesPoint.y,
       "dock switch to Lines: tile keeps viewport y",
     ).toBeCloseTo(fitSwitchBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "dock switch to Lines keeps the drawn CSS scale",
+    ).toBeCloseTo(fitSwitchScaleBefore, 6);
     await openCommandDestination(page, "data");
     const fitDataPoint = await mapTileViewportPoint(canvas, stableTile);
     expect(
@@ -239,6 +245,10 @@ for (const viewport of desktopViewports) {
       fitDataPoint.y,
       "dock switch to Data: tile keeps viewport y",
     ).toBeCloseTo(fitSwitchBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "dock switch to Data keeps the drawn CSS scale",
+    ).toBeCloseTo(fitSwitchScaleBefore, 6);
     await openCommandDestination(page, "build");
     const fitBackPoint = await mapTileViewportPoint(canvas, stableTile);
     expect(
@@ -249,6 +259,10 @@ for (const viewport of desktopViewports) {
       fitBackPoint.y,
       "dock switch back to Build: tile keeps viewport y",
     ).toBeCloseTo(fitSwitchBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "dock switch back to Build keeps the drawn CSS scale",
+    ).toBeCloseTo(fitSwitchScaleBefore, 6);
     await expect
       .poll(async () => {
         await hoverMapTile(canvas, stableTile);
@@ -273,6 +287,7 @@ for (const viewport of desktopViewports) {
       .toBeGreaterThan(1);
     const zoomedTile = { x: 14, y: 9 };
     const zoomedBefore = await mapTileViewportPoint(canvas, zoomedTile);
+    const zoomedScaleBefore = await mapBoardScale(canvas);
     await openCommandDestination(page, "build");
     const zoomedOpen = await mapTileViewportPoint(canvas, zoomedTile);
     expect(zoomedOpen.x, "zoomed dock open: tile keeps viewport x").toBeCloseTo(
@@ -283,6 +298,10 @@ for (const viewport of desktopViewports) {
       zoomedBefore.y,
       0,
     );
+    expect(
+      await mapBoardScale(canvas),
+      "zoomed dock open keeps the drawn CSS scale",
+    ).toBeCloseTo(zoomedScaleBefore, 6);
     await expect
       .poll(async () => {
         await hoverMapTile(canvas, zoomedTile);
@@ -300,6 +319,10 @@ for (const viewport of desktopViewports) {
       zoomedLinesPoint.y,
       "zoomed dock switch: tile keeps viewport y",
     ).toBeCloseTo(zoomedBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "zoomed dock switch keeps the drawn CSS scale",
+    ).toBeCloseTo(zoomedScaleBefore, 6);
     await openCommandDestination(page, "build");
     const zoomedBackPoint = await mapTileViewportPoint(canvas, zoomedTile);
     expect(
@@ -310,6 +333,10 @@ for (const viewport of desktopViewports) {
       zoomedBackPoint.y,
       "zoomed dock switch back: tile keeps viewport y",
     ).toBeCloseTo(zoomedBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "zoomed dock switch back keeps the drawn CSS scale",
+    ).toBeCloseTo(zoomedScaleBefore, 6);
     await expect
       .poll(async () => {
         await hoverMapTile(canvas, zoomedTile);
@@ -332,6 +359,10 @@ for (const viewport of desktopViewports) {
       zoomedClosed.y,
       "zoomed dock close: tile keeps viewport y",
     ).toBeCloseTo(zoomedBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "zoomed dock close keeps the drawn CSS scale",
+    ).toBeCloseTo(zoomedScaleBefore, 6);
   });
 }
 
@@ -462,6 +493,7 @@ for (const viewport of shelfBandViewports) {
       y: preservedCamera!.center.y * tileSize,
     };
     const anchorBefore = await mapWorldViewportPoint(canvas, anchorWorld);
+    const anchorScaleBefore = await mapBoardScale(canvas);
     await page.getByRole("button", { name: "Close Build" }).click();
     await expect(dock).toHaveCount(0);
     await expect
@@ -478,6 +510,10 @@ for (const viewport of shelfBandViewports) {
       anchorAfterClose.y,
       "dock close keeps the view's viewport y",
     ).toBeCloseTo(anchorBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "dock close keeps the drawn CSS scale",
+    ).toBeCloseTo(anchorScaleBefore, 6);
 
     await openCommandDestination(page, "build");
     await expect(dock).toBeVisible();
@@ -490,6 +526,10 @@ for (const viewport of shelfBandViewports) {
       anchorAfterReopen.y,
       "dock reopen keeps the view's viewport y",
     ).toBeCloseTo(anchorBefore.y, 0);
+    expect(
+      await mapBoardScale(canvas),
+      "dock reopen keeps the drawn CSS scale",
+    ).toBeCloseTo(anchorScaleBefore, 6);
     await expectShelfInSafeBand("reopened");
   });
 }

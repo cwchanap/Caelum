@@ -8,6 +8,7 @@ import {
   debugSetBudget,
   dragMapTiles,
   hoverMapTile,
+  mapBoardScale,
   mapTileViewportPoint,
   openCommandDestination,
   rebuildRoadTile,
@@ -501,6 +502,7 @@ test("a route-path click that opens Lines keeps the map still at Fit and zoomed"
   // At Fit, clicking the route path opens the Lines dock and the map keeps
   // its rendered position through the dock opening.
   const fitBefore = await mapTileViewportPoint(canvas, pathTile);
+  const fitScaleBefore = await mapBoardScale(canvas);
   await clickMapTile(canvas, pathTile);
   await expect(dock).toBeVisible();
   await expect(page.getByTestId("panel-lines")).toBeVisible();
@@ -516,6 +518,10 @@ test("a route-path click that opens Lines keeps the map still at Fit and zoomed"
     fitBefore.y,
     0,
   );
+  expect(
+    await mapBoardScale(canvas),
+    "route-path dock open keeps the drawn CSS scale",
+  ).toBeCloseTo(fitScaleBefore, 6);
   await expect
     .poll(async () => {
       await hoverMapTile(canvas, pathTile);
@@ -533,6 +539,7 @@ test("a route-path click that opens Lines keeps the map still at Fit and zoomed"
     .poll(async () => (await runtimeSnapshot(page)).camera?.zoom ?? 1)
     .toBeGreaterThan(1);
   const zoomedBefore = await mapTileViewportPoint(canvas, pathTile);
+  const zoomedScaleBefore = await mapBoardScale(canvas);
   await clickMapTile(canvas, pathTile);
   await expect(page.getByTestId("panel-lines")).toBeVisible();
   await settleLayout(page);
@@ -545,6 +552,10 @@ test("a route-path click that opens Lines keeps the map still at Fit and zoomed"
     zoomedAfter.y,
     "zoomed route-path dock open: tile keeps viewport y",
   ).toBeCloseTo(zoomedBefore.y, 0);
+  expect(
+    await mapBoardScale(canvas),
+    "zoomed route-path dock open keeps the drawn CSS scale",
+  ).toBeCloseTo(zoomedScaleBefore, 6);
   await expect
     .poll(async () => {
       await hoverMapTile(canvas, pathTile);
