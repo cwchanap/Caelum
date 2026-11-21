@@ -203,7 +203,7 @@ describe("LinesPanel line workspace", () => {
           source: "edit",
           title: "Editing Harbour Bus",
           color: routes[0].color,
-          initialFleetCost: null,
+          initialFleet: null,
         }),
         routes,
       }),
@@ -305,7 +305,7 @@ describe("LinesPanel line workspace", () => {
     const draft = createDraftView({
       source: "edit",
       title: "Editing Harbour Bus",
-      initialFleetCost: null,
+      initialFleet: null,
     });
     const { rerender } = render(LinesPanel, {
       props: panelProps({ routeDraft: draft }),
@@ -346,7 +346,7 @@ describe("LinesPanel line workspace", () => {
     const draft = createDraftView({
       source: "edit",
       title: "Editing Harbour Bus",
-      initialFleetCost: null,
+      initialFleet: null,
     });
     await rerender(panelProps({ routeDraft: draft, routes }));
     await rerender(panelProps({ routes }));

@@ -360,7 +360,15 @@ function routePreview(
             code: "disconnectedLeg",
             context: { affectedRouteIds: [] },
           },
-    initialFleetCost: status === "connected" ? 16_000 : null,
+    initialFleet:
+      status === "connected"
+        ? {
+            vehicles: 2,
+            targetHeadwaySeconds: 600,
+            cost: 16_000,
+            estimatedDailyOperatingCost: 800,
+          }
+        : null,
   };
 }
 
@@ -5309,7 +5317,7 @@ describe("route creation and management", () => {
           affectedRouteIds: ["route-001"],
         },
       },
-      initialFleetCost: null,
+      initialFleet: null,
     });
     await flushPromises();
 
@@ -5836,7 +5844,7 @@ describe("route creation and management", () => {
       async previewRoute(request) {
         return {
           ...routePreview(request.generation, request.waypointIds),
-          initialFleetCost: null,
+          initialFleet: null,
         };
       },
     };
@@ -5899,7 +5907,7 @@ describe("route creation and management", () => {
       async previewRoute(request) {
         return {
           ...routePreview(request.generation, request.waypointIds),
-          initialFleetCost: null,
+          initialFleet: null,
         };
       },
     };
@@ -6153,11 +6161,82 @@ describe("route creation and management", () => {
     expect(published.at(-1)?.shell.actionFeedback?.message).toBe(
       "Saved without fleet: Needs $800; only $0 is available.",
     );
+    // No intermediate alert: the untagged insufficient-budget message must
+    // never reach any published snapshot — the deployment result is tagged
+    // before its single publish.
+    for (const publishedSnapshot of published) {
+      const message = publishedSnapshot.shell.actionFeedback?.message;
+      if (message !== undefined && message !== null) {
+        expect(message.startsWith("Saved without fleet")).toBe(true);
+      }
+    }
     expect(row).toMatchObject({
       status: { primary: "noFleet" },
       service: { targetHeadwaySeconds: 600, assignedFleet: 0 },
     });
     expect(row.service.requiredFleet).not.toBeNull();
+  });
+
+  it("suppresses a deployment rejection the editor already warned about", async () => {
+    const base = backendSpy(routeSnapshot());
+    const quoted = {
+      vehicles: 3,
+      targetHeadwaySeconds: 600,
+      cost: 1_000_000,
+      estimatedDailyOperatingCost: 1_200,
+    };
+    let deployAttempts = 0;
+    const backend: BackendSpy = {
+      ...base,
+      async previewRoute(request) {
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          initialFleet: quoted,
+        };
+      },
+      async dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          deployAttempts += 1;
+          return {
+            update: createPresentationUpdate(base.snapshotInternal(), false),
+            applied: false,
+            rejection: {
+              code: "insufficientBudget",
+              context: {
+                requiredBudget: quoted.cost,
+                availableBudget: 120_000,
+                affectedRouteIds: [intent.lineId],
+              },
+            },
+          };
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    const published: RuntimeSnapshot[] = [];
+    runtime.subscribe((snapshot) => published.push(snapshot));
+    const saved = await runtime.saveRouteDraft();
+
+    // Save still creates the line and still attempts the authoritative
+    // deployment; only the expected feedback is suppressed.
+    expect(deployAttempts).toBe(1);
+    expect(saved.ui.routeDraft).toBeNull();
+    expect(saved.ui.selectedRouteId).toBe("route-001");
+    expect(saved.rejection).toBeNull();
+    expect(saved.shell.actionFeedback).toBeNull();
+    for (const publishedSnapshot of published) {
+      expect(publishedSnapshot.rejection?.code).not.toBe("insufficientBudget");
+      expect(publishedSnapshot.shell.actionFeedback?.source).not.toBe(
+        "rejection",
+      );
+    }
+    const route = saved.state.transit.routes.find(
+      (candidate) => candidate.id === "route-001",
+    );
+    expect(route?.vehicleIds).toEqual([]);
   });
 
   it("routes Save through the selected service pattern", async () => {
@@ -6232,7 +6311,7 @@ describe("route creation and management", () => {
       async previewRoute(request) {
         return {
           ...routePreview(request.generation, request.waypointIds),
-          initialFleetCost: null,
+          initialFleet: null,
         };
       },
     };

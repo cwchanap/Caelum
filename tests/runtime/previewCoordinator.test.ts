@@ -68,7 +68,7 @@ function routeResponse(generation: number): RoutePreviewResponse {
     missingWaypointIds: [],
     warnings: [],
     rejection: null,
-    initialFleetCost: null,
+    initialFleet: null,
   };
 }
 

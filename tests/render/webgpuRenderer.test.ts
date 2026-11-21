@@ -869,7 +869,7 @@ describe("createWebGpuRenderer", () => {
             missingWaypointIds: [],
             warnings: [],
             rejection: null,
-            initialFleetCost: null,
+            initialFleet: null,
           },
         },
         ...overrides,

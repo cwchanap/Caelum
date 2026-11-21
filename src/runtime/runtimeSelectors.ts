@@ -21,12 +21,14 @@ import {
   warningMessage,
 } from "./rejectionMessages";
 import type { UiState } from "../ui/uiState";
+import type { RouteDraft } from "../ui/routeDraft";
 import { roadMutationForUi, roadMutationIsPrefix } from "./roadMutations";
 import type {
   ShellCommandState,
   ShellInspectorState,
   ShellPlatform,
   RouteFailureRow,
+  RouteEditorInitialFleetView,
   RouteEditorView,
   RouteServiceStatus,
   RoadMutationPreviewView,
@@ -48,6 +50,45 @@ const budgetFormat = new Intl.NumberFormat("en-US");
 
 export function formatBudget(budget: number): string {
   return `$${budgetFormat.format(budget)}`;
+}
+
+/**
+ * Whether the quoted first-fleet price exceeds the current Standard-mode
+ * budget. Creative quotes are informational and never warn. Pure; shared by
+ * the editor view and the Save-click deployment suppression.
+ */
+export function initialFleetShortfall(
+  state: GameState,
+  quotedCost: number,
+): boolean {
+  return state.rules.economyPreset === "standard" && state.budget < quotedCost;
+}
+
+function selectInitialFleetView(
+  state: GameState,
+  draft: RouteDraft,
+): RouteEditorInitialFleetView | null {
+  if (
+    draft.source.kind !== "create" ||
+    draft.preview === null ||
+    draft.preview.generation !== draft.generation ||
+    draft.preview.initialFleet === null
+  ) {
+    return null;
+  }
+  const { vehicles, targetHeadwaySeconds, cost, estimatedDailyOperatingCost } =
+    draft.preview.initialFleet;
+  const shortfall = initialFleetShortfall(state, cost);
+  return {
+    vehicles,
+    targetHeadwaySeconds,
+    cost,
+    estimatedDailyOperatingCost,
+    shortfall,
+    shortfallReason: shortfall
+      ? `Needs ${formatBudget(cost)}; only ${formatBudget(state.budget)} is available.`
+      : null,
+  };
 }
 
 function formatSnapshotClock(state: GameState): string {
@@ -527,12 +568,7 @@ export function selectRouteEditorView(
     canUndo: ui.routeDraftHistory.past.length > 0,
     canRedo: ui.routeDraftHistory.future.length > 0,
     notice: ui.routeDraftNotice,
-    initialFleetCost:
-      draft.source.kind === "create" &&
-      draft.preview !== null &&
-      draft.preview.generation === draft.generation
-        ? draft.preview.initialFleetCost
-        : null,
+    initialFleet: selectInitialFleetView(state, draft),
   };
 }
 
