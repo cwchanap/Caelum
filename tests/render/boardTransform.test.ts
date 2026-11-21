@@ -8,10 +8,13 @@ import {
   HUD_INSET,
   maxZoom,
   panCamera,
+  rebaseCameraForResize,
   syncCanvasSize,
   tileSize,
   visibleWorldRect,
+  ZOOM_STEP,
   zoomCameraAt,
+  type Camera,
 } from "../../src/render/boardTransform";
 import { createTestGameState } from "../helpers/gameState";
 
@@ -302,5 +305,181 @@ describe("camera", () => {
         point,
       }),
     ).toBeNull();
+  });
+});
+
+describe("passive dock resize", () => {
+  const map = { width: 84, height: 54 };
+  const full = { width: 1280, height: 800 };
+  const docked = { width: 800, height: 800 };
+
+  /** Rendered CSS scale and offsets a board+camera pair draws with. */
+  function rendered(
+    board: { width: number; height: number },
+    camera: Camera | null,
+  ) {
+    const t = getBoardTransform(board, map, camera);
+    return { scale: t.scale, offsetX: t.offsetX, offsetY: t.offsetY };
+  }
+
+  function expectSameRender(
+    a: ReturnType<typeof rendered>,
+    b: ReturnType<typeof rendered>,
+  ) {
+    expect(a.scale).toBeCloseTo(b.scale, 9);
+    expect(a.offsetX).toBeCloseTo(b.offsetX, 6);
+    expect(a.offsetY).toBeCloseTo(b.offsetY, 6);
+  }
+
+  it("a zoomed view keeps its rendered scale and offsets across dock open and close", () => {
+    const zoomed = zoomCameraAt(full, map, null, 3, { x: 900, y: 300 });
+    expect(zoomed).not.toBeNull();
+    const before = rendered(full, zoomed);
+
+    const opened = rebaseCameraForResize(full, docked, map, zoomed);
+    expect(opened?.retained).toBe(true);
+    expectSameRender(rendered(docked, opened), before);
+
+    const closed = rebaseCameraForResize(docked, full, map, opened);
+    expect(closed?.retained).toBe(true);
+    expectSameRender(rendered(full, closed), before);
+  });
+
+  it("a default Fit dock round trip keeps visible map points and coalesces back to Fit", () => {
+    const opened = rebaseCameraForResize(full, docked, map, null);
+    expect(opened).not.toBeNull();
+    expect(opened?.retained).toBe(true);
+
+    // A map point that was visible before the dock opened keeps its exact
+    // rendered position (scale and offsets are preserved).
+    const world = { x: 12 * tileSize, y: 14 * tileSize };
+    const before = getBoardTransform(full, map, null);
+    const after = getBoardTransform(docked, map, opened);
+    expect(after.offsetX + world.x * after.scale).toBeCloseTo(
+      before.offsetX + world.x * before.scale,
+      6,
+    );
+    expect(after.offsetY + world.y * after.scale).toBeCloseTo(
+      before.offsetY + world.y * before.scale,
+      6,
+    );
+
+    // Closing restores the canonical Fit exactly, so the camera clears.
+    expect(rebaseCameraForResize(docked, full, map, opened)).toBeNull();
+    expect(rebaseCameraForResize(full, full, map, null)).toBeNull();
+  });
+
+  it("closing the dock after a docked Fit keeps the smaller scale and margins", () => {
+    const dockedFit = rendered(docked, null);
+    const closed = rebaseCameraForResize(docked, full, map, null);
+    expect(closed?.retained).toBe(true);
+    expect(closed!.zoom).toBeLessThan(1);
+
+    // The map renders smaller than the full-board fit, un-clamped, exactly
+    // where the docked stage drew it.
+    const after = rendered(full, closed);
+    expectSameRender(after, dockedFit);
+    expect(after.scale).toBeLessThan(fitScale(full, map));
+  });
+
+  it("a retained sub-fit view ignores pan and Zoom Out and anchors Zoom In without a jump", () => {
+    const retained = rebaseCameraForResize(docked, full, map, null)!;
+    expect(retained.zoom).toBeLessThan(1);
+
+    expect(panCamera(full, map, retained, 50, 50)).toBe(retained);
+    expect(
+      applyCameraAction(full, map, retained, { kind: "pan", x: 1, y: 0 }),
+    ).toBe(retained);
+    expect(
+      zoomCameraAt(full, map, retained, 1 / ZOOM_STEP, { x: 100, y: 200 }),
+    ).toBe(retained);
+    expect(applyCameraAction(full, map, retained, { kind: "zoomOut" })).toBe(
+      retained,
+    );
+
+    // A tiny wheel zoom-in keeps the world point under the cursor fixed and
+    // stays retained below fit.
+    const anchor = { x: 300, y: 300 };
+    const before = getBoardTransform(full, map, retained);
+    const worldUnder = {
+      x: (anchor.x - before.offsetX) / before.scale,
+      y: (anchor.y - before.offsetY) / before.scale,
+    };
+    const wheeled = zoomCameraAt(full, map, retained, 1.01, anchor);
+    expect(wheeled?.retained).toBe(true);
+    const wheeledRender = getBoardTransform(full, map, wheeled);
+    expect(
+      wheeledRender.offsetX + worldUnder.x * wheeledRender.scale,
+    ).toBeCloseTo(anchor.x, 6);
+    expect(
+      wheeledRender.offsetY + worldUnder.y * wheeledRender.scale,
+    ).toBeCloseTo(anchor.y, 6);
+  });
+
+  it("small Zoom In steps stay retained below fit without jumping", () => {
+    // A much narrower dock leaves the closed view far below fit.
+    const narrow = { width: 600, height: 800 };
+    const start = rebaseCameraForResize(narrow, full, map, null)!;
+    expect(start.zoom).toBeLessThan(0.8);
+
+    // Each small step stays passive below fit and keeps the world point
+    // under the safe midpoint fixed.
+    const anchor = { x: 640, y: 392 };
+    const before = getBoardTransform(full, map, start);
+    const worldUnder = {
+      x: (anchor.x - before.offsetX) / before.scale,
+      y: (anchor.y - before.offsetY) / before.scale,
+    };
+    let camera: Camera | null = start;
+    for (let step = 0; step < 2; step += 1) {
+      camera = zoomCameraAt(full, map, camera, ZOOM_STEP, anchor);
+      expect(camera?.retained).toBe(true);
+      expect(camera!.zoom).toBeLessThan(1);
+      const t = getBoardTransform(full, map, camera);
+      expect(t.offsetX + worldUnder.x * t.scale).toBeCloseTo(anchor.x, 6);
+      expect(t.offsetY + worldUnder.y * t.scale).toBeCloseTo(anchor.y, 6);
+    }
+  });
+
+  it("zooming in from a passive view never snaps and resumes ordinary navigation", () => {
+    const letterboxed = rebaseCameraForResize(full, docked, map, null)!;
+    const anchor = { x: 400, y: 392 };
+    const before = getBoardTransform(docked, map, letterboxed);
+    const worldUnder = {
+      x: (anchor.x - before.offsetX) / before.scale,
+      y: (anchor.y - before.offsetY) / before.scale,
+    };
+
+    let camera: Camera | null = letterboxed;
+    for (let step = 0; step < 6; step += 1) {
+      camera = zoomCameraAt(docked, map, camera, ZOOM_STEP, anchor);
+      // The drawn point under the anchor never jumps, passive or not.
+      const t = getBoardTransform(docked, map, camera);
+      expect(t.offsetX + worldUnder.x * t.scale).toBeCloseTo(anchor.x, 6);
+      expect(t.offsetY + worldUnder.y * t.scale).toBeCloseTo(anchor.y, 6);
+      if (camera?.retained !== true) break;
+    }
+    // Once zoomed past fit with the view inside the ordinary clamp range,
+    // the passive flag hands control back to clamped navigation.
+    expect(camera?.retained).toBeFalsy();
+    expect(camera!.zoom).toBeGreaterThan(1);
+  });
+
+  it("a tiny wheel Zoom Out on a letterboxed retained view never snaps larger", () => {
+    const letterboxed = rebaseCameraForResize(full, docked, map, null)!;
+    expect(letterboxed.zoom).toBeGreaterThan(1);
+
+    const anchor = { x: 400, y: 392 };
+    const before = getBoardTransform(docked, map, letterboxed);
+    const worldUnder = {
+      x: (anchor.x - before.offsetX) / before.scale,
+      y: (anchor.y - before.offsetY) / before.scale,
+    };
+    const wheeled = zoomCameraAt(docked, map, letterboxed, 0.99, anchor);
+    // Not snapped up toward Fit, and the drawn point stays under the cursor.
+    expect(wheeled!.zoom).toBeCloseTo(letterboxed.zoom * 0.99, 9);
+    const after = getBoardTransform(docked, map, wheeled);
+    expect(after.offsetX + worldUnder.x * after.scale).toBeCloseTo(anchor.x, 6);
+    expect(after.offsetY + worldUnder.y * after.scale).toBeCloseTo(anchor.y, 6);
   });
 });

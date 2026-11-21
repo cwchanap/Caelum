@@ -6,6 +6,7 @@ import {
   canvasToWorld,
   getBoardTransform,
   panCamera,
+  rebaseCameraForResize,
   syncCanvasSize,
   tileSize,
   visibleWorldRect,
@@ -365,6 +366,32 @@ export function createGameHostWithRenderer(
     };
     renderer.resize(pixelWidth, pixelHeight);
     return board;
+  };
+
+  /** Passive dock/window resizes must not move the map: rebase the camera so
+   *  the drawn scale and offsets survive the new board size. The boardCss
+   *  dimensions update here synchronously so a second observer batch before
+   *  the next frame rebases against the latest size instead of double-rebasing
+   *  against stale ones. The first mount (nothing drawn yet) and equal sizes
+   *  are skipped. */
+  const rebaseForResize = (nextWidth: number, nextHeight: number): void => {
+    if (!(boardCssWidth > 0 && boardCssHeight > 0)) {
+      return;
+    }
+    if (nextWidth === boardCssWidth && nextHeight === boardCssHeight) {
+      return;
+    }
+    const rebased = rebaseCameraForResize(
+      { width: boardCssWidth, height: boardCssHeight },
+      { width: nextWidth, height: nextHeight },
+      ctx.getState().map,
+      ctx.getCamera(),
+    );
+    boardCssWidth = nextWidth;
+    boardCssHeight = nextHeight;
+    if (rebased !== ctx.getCamera()) {
+      ctx.onCameraChange(rebased);
+    }
   };
 
   const transformVertices = (
@@ -1211,6 +1238,7 @@ export function createGameHostWithRenderer(
         observedCssHeight = rect.height;
         hasObservedSize = true;
       }
+      rebaseForResize(observedCssWidth, observedCssHeight);
       render();
     };
 
@@ -1229,6 +1257,7 @@ export function createGameHostWithRenderer(
         observedCssWidth = entry.contentRect.width;
         observedCssHeight = entry.contentRect.height;
         hasObservedSize = true;
+        rebaseForResize(observedCssWidth, observedCssHeight);
         render();
       });
       // Observe the board host, not the canvas: `applyCanvasPixelSize`
@@ -1286,6 +1315,10 @@ export function createGameHostWithRenderer(
       hasObservedSize = false;
       observedCssWidth = 0;
       observedCssHeight = 0;
+      // A newly mounted city must not rebase its fresh camera against the
+      // previous city's rendered size.
+      boardCssWidth = 0;
+      boardCssHeight = 0;
 
       canvas.removeEventListener("click", handleClick);
       canvas.removeEventListener("wheel", handleWheel);

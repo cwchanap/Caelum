@@ -33,6 +33,7 @@ import {
   VEHICLE_HALF_WIDTH,
 } from "../../src/render/webgpu/vehicleInstances";
 import {
+  getBoardTransform,
   HUD_INSET,
   tileSize,
   type Camera,
@@ -1140,7 +1141,8 @@ describe("createGameHost lifecycle", () => {
   });
 
   it("window resize updates the backing store when no ResizeObserver exists", () => {
-    const { container, canvas, renderer, fireFrame } = createFixture();
+    const { container, canvas, renderer, fireFrame, callbacks } =
+      createFixture();
     fireFrame(0);
 
     // jsdom ships no ResizeObserver, so mount seeds the size from the board
@@ -1167,6 +1169,27 @@ describe("createGameHost lifecycle", () => {
     expect(canvas.width).toBe(400);
     expect(canvas.height).toBe(300);
     expect(renderer.resize).toHaveBeenCalledWith(400, 300);
+
+    // The fallback resize also rebases the camera so the map keeps its
+    // rendered scale and offsets instead of snapping to the new Fit.
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+    const rebased = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
+    expect(rebased.retained).toBe(true);
+    const map = createTestGameState().map;
+    const previous = {
+      width: map.width * tileSize,
+      height: map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom,
+    };
+    const before = getBoardTransform(previous, map, null);
+    const after = getBoardTransform({ width: 400, height: 300 }, map, rebased);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+    expect(after.offsetX).toBeCloseTo(before.offsetX, 6);
+    expect(after.offsetY).toBeCloseTo(before.offsetY, 6);
+
+    // An equal-size resize is skipped.
+    globalThis.window?.dispatchEvent(new Event("resize"));
+    fireFrame(32);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
   });
 
   it("falls back to the layout box until the ResizeObserver entry arrives", () => {
@@ -1336,6 +1359,92 @@ describe("createGameHost lifecycle", () => {
     renderer.captureFrame.mockClear();
     await expect(host.captureFrame()).resolves.toBeNull();
     expect(renderer.captureFrame).not.toHaveBeenCalled();
+  });
+});
+
+describe("createGameHost passive resize camera", () => {
+  /** jsdom ships no ResizeObserver; install a fake whose batch callback the
+   *  test drives directly. */
+  function withFakeResizeObserver() {
+    let roCallback: ((entries: unknown[]) => void) | null = null;
+    class FakeResizeObserver {
+      constructor(callback: (entries: unknown[]) => void) {
+        roCallback = callback;
+      }
+      observe = vi.fn();
+      disconnect = vi.fn();
+    }
+    vi.stubGlobal("ResizeObserver", FakeResizeObserver);
+    return {
+      fire: (entries: unknown[]) => roCallback?.(entries),
+      restore: () => vi.unstubAllGlobals(),
+    };
+  }
+
+  it("does not rebase on the first mount or an equal-size batch", () => {
+    const fake = withFakeResizeObserver();
+    const { container, callbacks, fireFrame } = createFixture();
+    fireFrame(0);
+    callbacks.onCameraChange.mockClear();
+
+    // The first observer batch reports the size the mount already rendered;
+    // an equal-size batch after draws is equally a no-op.
+    const box = container.getBoundingClientRect();
+    fake.fire([{ contentRect: { width: box.width, height: box.height } }]);
+    fake.fire([{ contentRect: { width: box.width, height: box.height } }]);
+
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+    fake.restore();
+  });
+
+  it("rebases each resize against the latest rendered size without double-rebasing", () => {
+    const fake = withFakeResizeObserver();
+    const { callbacks, fireFrame, getState } = createFixture();
+    fireFrame(0);
+    const map = getState().map;
+
+    fake.fire([{ contentRect: { width: 400, height: 300 } }]);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+    const first = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
+    expect(first.retained).toBe(true);
+
+    // A second batch before the next frame must rebase from the first size
+    // (boardCss dimensions update synchronously), not from the stale mount
+    // size, so the drawn pixels survive both resizes.
+    fake.fire([{ contentRect: { width: 360, height: 280 } }]);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(2);
+    const second = callbacks.onCameraChange.mock.calls[1]![0] as Camera;
+
+    const t1 = getBoardTransform({ width: 400, height: 300 }, map, first);
+    const t2 = getBoardTransform({ width: 360, height: 280 }, map, second);
+    expect(t2.scale).toBeCloseTo(t1.scale, 9);
+    expect(t2.offsetX).toBeCloseTo(t1.offsetX, 6);
+    expect(t2.offsetY).toBeCloseTo(t1.offsetY, 6);
+    fake.restore();
+  });
+
+  it("a fresh mount cannot rebase its camera against the previous city's size", () => {
+    const fake = withFakeResizeObserver();
+    const { host, callbacks, cleanup, fireFrame } = createFixture();
+    fireFrame(0);
+    fake.fire([{ contentRect: { width: 400, height: 300 } }]);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+
+    // Detach resets the rendered-size cache along with the observed sizes,
+    // so a newly mounted city starts from its own freshly measured board.
+    cleanup();
+    callbacks.onCameraChange(null);
+    callbacks.onCameraChange.mockClear();
+
+    const second = document.createElement("div");
+    document.body.appendChild(second);
+    host.mount(second);
+    fireFrame(16);
+    const box = second.getBoundingClientRect();
+    fake.fire([{ contentRect: { width: box.width, height: box.height } }]);
+
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+    fake.restore();
   });
 });
 
@@ -2322,6 +2431,13 @@ describe("createGameHost grid mode scene caching", () => {
     fx.fireFrame(66);
     expect(callsForState(state)).toBe(3);
 
+    // Passive resize preserves the drawn tile size, so the grid band stays
+    // put; a retained sub-fit camera (smaller drawn tiles) crosses to faint.
+    fx.callbacks.onCameraChange({
+      zoom: 0.5,
+      center: { x: 14, y: 9 },
+      retained: true,
+    });
     fx.setUi({ selectedBuilding: "smallHouse" });
     fx.fireFrame(83);
     expect(callsForState(state)).toBe(4);
@@ -2335,7 +2451,7 @@ describe("createGameHost grid mode scene caching", () => {
     fx.host.stop();
   });
 
-  it("retessellates once when the board shrinks across the faint band", () => {
+  it("retessellates once per grid-band crossing, not per camera publish", () => {
     const fx = createFixture({
       state: unpaused(createTestGameState()),
       ui: { activeTool: "road" },
@@ -2361,9 +2477,12 @@ describe("createGameHost grid mode scene caching", () => {
         }) as DOMRect,
     );
     globalThis.window?.dispatchEvent(new Event("resize"));
+    // The passive rebase preserves the drawn tile size, so the resize alone
+    // crosses no band and retessellates nothing.
     fx.fireFrame(33);
-    expect(callsForState(state)).toBe(2);
+    expect(callsForState(state)).toBe(1);
 
+    // A camera change that crosses the faint band retessellates exactly once.
     fx.callbacks.onCameraChange({ zoom: 1.2, center: { x: 14, y: 9 } });
     fx.fireFrame(50);
     expect(callsForState(state)).toBe(2);
