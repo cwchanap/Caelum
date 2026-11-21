@@ -465,6 +465,40 @@ describe("passive dock resize", () => {
     expect(camera!.zoom).toBeGreaterThan(1);
   });
 
+  it("a retained zoomed pan stays bounded and resumes ordinary clamped navigation", () => {
+    // A zoomed dock open leaves a passive above-fit view; an endless drag
+    // must stop at the ordinary map boundary instead of pushing the whole
+    // map off the board.
+    const zoomed = zoomCameraAt(full, map, null, 3, { x: 900, y: 300 })!;
+    const opened = rebaseCameraForResize(full, docked, map, zoomed)!;
+    expect(opened.retained).toBe(true);
+    const dragged = panCamera(docked, map, opened, -1e6, -1e6)!;
+    expect(dragged).toEqual(clampCamera(docked, map, dragged));
+    const drawn = getBoardTransform(docked, map, dragged);
+    expect(drawn.offsetX).toBeLessThan(docked.width);
+    expect(drawn.offsetX + drawn.width).toBeGreaterThan(0);
+    expect(drawn.offsetY).toBeLessThan(docked.height);
+    expect(drawn.offsetY + drawn.height).toBeGreaterThan(0);
+
+    // Closing the dock on a corner-anchored zoom can park a passive center
+    // outside the ordinary range. Panning further out is blocked at the
+    // passive placement; panning back re-enters ordinary clamped navigation.
+    const corner = zoomCameraAt(docked, map, null, 3, { x: 650, y: 392 })!;
+    const offRange = rebaseCameraForResize(docked, full, map, corner)!;
+    expect(offRange.retained).toBe(true);
+    const ordinary = clampCamera(full, map, offRange);
+    expect(ordinary.zoom).toBeCloseTo(offRange.zoom, 9);
+    expect(ordinary.center).not.toEqual(offRange.center);
+
+    const outward = panCamera(full, map, offRange, -400, 0)!;
+    expect(outward.center.x).toBe(offRange.center.x);
+    expect(outward.retained).toBe(true);
+
+    const backIn = panCamera(full, map, offRange, 1e6, 0)!;
+    expect(backIn.retained).toBeFalsy();
+    expect(backIn).toEqual(clampCamera(full, map, backIn));
+  });
+
   it("a tiny wheel Zoom Out on a letterboxed retained view never snaps larger", () => {
     const letterboxed = rebaseCameraForResize(full, docked, map, null)!;
     expect(letterboxed.zoom).toBeGreaterThan(1);

@@ -1231,12 +1231,20 @@ export function createGameHostWithRenderer(
       // thrash. `applyCanvasPixelSize` pins the canvas to fixed pixel
       // dimensions after the first paint, so read the board host's content
       // box on every resize to keep the backing store, board transform, and
-      // pointer mapping in sync.
+      // pointer mapping in sync. A hidden host reports a 0×0 box: reject it
+      // like the observer branch does, so the last positive size reference
+      // survives until restoration and can still rebase the map.
       if (surfaceHost !== null) {
         const rect = surfaceHost.getBoundingClientRect();
+        if (!(rect.width > 0 && rect.height > 0)) {
+          return;
+        }
         observedCssWidth = rect.width;
         observedCssHeight = rect.height;
         hasObservedSize = true;
+      }
+      if (!(observedCssWidth > 0 && observedCssHeight > 0)) {
+        return;
       }
       rebaseForResize(observedCssWidth, observedCssHeight);
       render();
