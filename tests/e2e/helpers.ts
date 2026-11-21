@@ -253,6 +253,18 @@ export async function mapWorldViewportPoint(
   };
 }
 
+/** The absolute CSS scale the map is drawn with right now (the scale in the
+ *  board transform the renderer uses for the current canvas box). A single
+ *  map point can stay put under an anchored zoom, so position checks prove
+ *  scale stability only alongside this. */
+export async function mapBoardScale(canvas: Locator): Promise<number> {
+  const box = await canvas.boundingBox();
+  if (box === null) {
+    throw new Error("Game canvas does not have a visible bounding box");
+  }
+  return (await boardTransform(canvas.page(), box)).scale;
+}
+
 /**
  * Click the centre of the given map tile on the runtime canvas. The `position`
  * is element-relative (Playwright `click`), so it does not include the canvas's
