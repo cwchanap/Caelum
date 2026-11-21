@@ -225,7 +225,7 @@ test("create, manage, and delete a bus route", async ({ page }) => {
 
   await waitForRoutePreview(page, 2);
   const fleetQuote = (await runtimeSnapshot(page)).ui.routeDraft?.preview
-    ?.initialFleetCost;
+    ?.initialFleet?.cost;
   expect(fleetQuote).toBeGreaterThan(0);
   const saveAndRun = page.getByRole("button", {
     name: `Save & run · ${formatBudget(fleetQuote!)}`,

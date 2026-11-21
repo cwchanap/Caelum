@@ -1,4 +1,5 @@
 <script lang="ts">
+  import { formatMinutes } from "../../../format";
   import { formatBudget } from "../../../runtime/runtimeSelectors";
   import type {
     RouteDraft,
@@ -39,13 +40,18 @@
   } = $props();
 
   const hasSelection = $derived(editor.selectedIndex !== null);
-  const canMoveUp = $derived(
-    editor.selectedIndex !== null && editor.selectedIndex > 0,
-  );
-  const canMoveDown = $derived(
-    editor.selectedIndex !== null &&
-      editor.selectedIndex < editor.waypoints.length - 1,
-  );
+
+  // Row actions select their row first, then reuse the runtime's synchronous
+  // selected-waypoint move/remove; selection-only changes do not restart the
+  // preview.
+  const rowMove = (index: number, delta: -1 | 1): void => {
+    onSelectWaypoint(index, editor.interaction);
+    onMove(delta);
+  };
+  const rowRemove = (index: number): void => {
+    onSelectWaypoint(index, editor.interaction);
+    onRemove();
+  };
 </script>
 
 <div class="route-editor" data-testid="route-draft">
@@ -56,9 +62,9 @@
     {/if}
   </header>
 
-  <fieldset class="route-pattern">
+  <fieldset class="route-pattern route-pattern--segmented">
     <legend>Service pattern</legend>
-    <label>
+    <label class:checked={editor.pattern === "loop"}>
       <input
         type="radio"
         name="route-pattern"
@@ -68,7 +74,7 @@
       />
       Loop
     </label>
-    <label>
+    <label class:checked={editor.pattern === "shuttle"}>
       <input
         type="radio"
         name="route-pattern"
@@ -85,9 +91,10 @@
   {:else}
     <ol class="route-waypoints" style:--route-color={color}>
       {#each editor.waypoints as waypoint (waypoint.index)}
-        <li>
+        <li class:active={waypoint.selected}>
           <button
             type="button"
+            class="route-waypoint-row"
             class:active={waypoint.selected}
             class:missing={waypoint.status === "missing"}
             data-testid={`route-waypoint-${waypoint.index}`}
@@ -97,62 +104,71 @@
             <span class="route-waypoint-number">{waypoint.index + 1}</span>
             <span>{waypoint.label}</span>
           </button>
+          <span class="route-waypoint-actions">
+            <button
+              type="button"
+              aria-label="Move up"
+              data-testid={`route-waypoint-move-up-${waypoint.index}`}
+              disabled={waypoint.index === 0}
+              onclick={() => rowMove(waypoint.index, -1)}>↑</button
+            >
+            <button
+              type="button"
+              aria-label="Move down"
+              data-testid={`route-waypoint-move-down-${waypoint.index}`}
+              disabled={waypoint.index === editor.waypoints.length - 1}
+              onclick={() => rowMove(waypoint.index, 1)}>↓</button
+            >
+            <button
+              type="button"
+              aria-label="Remove"
+              data-testid={`route-waypoint-remove-${waypoint.index}`}
+              onclick={() => rowRemove(waypoint.index)}>✕</button
+            >
+          </span>
         </li>
       {/each}
     </ol>
   {/if}
 
-  <div class="route-draft-toolbar">
-    <div class="route-toolbar-group" role="group" aria-label="Map click action">
-      <button
-        type="button"
-        class:active={editor.interaction === "append"}
-        aria-pressed={editor.interaction === "append"}
-        onclick={() => onSelectWaypoint(null, "append")}>Append</button
-      >
-      <button
-        type="button"
-        class:active={editor.interaction === "replace"}
-        aria-pressed={editor.interaction === "replace"}
-        disabled={!hasSelection}
-        onclick={() => onSelectWaypoint(editor.selectedIndex, "replace")}
-        >Replace</button
-      >
-      <button
-        type="button"
-        class:active={editor.interaction === "insertAfter"}
-        aria-pressed={editor.interaction === "insertAfter"}
-        disabled={!hasSelection}
-        onclick={() => onSelectWaypoint(editor.selectedIndex, "insertAfter")}
-        >Insert after</button
-      >
-    </div>
-
-    <div class="route-toolbar-group" role="group" aria-label="Waypoint order">
-      <button type="button" disabled={!canMoveUp} onclick={() => onMove(-1)}
-        >Move up</button
-      >
-      <button type="button" disabled={!canMoveDown} onclick={() => onMove(1)}
-        >Move down</button
-      >
-      <button
-        type="button"
-        disabled={editor.waypoints.length < 2}
-        onclick={onReverse}>Reverse</button
-      >
-      <button type="button" disabled={!hasSelection} onclick={onRemove}
-        >Remove</button
-      >
-    </div>
-
-    <div class="route-toolbar-group" role="group" aria-label="Draft history">
-      <button type="button" disabled={!editor.canUndo} onclick={onUndo}
-        >Undo</button
-      >
-      <button type="button" disabled={!editor.canRedo} onclick={onRedo}
-        >Redo</button
-      >
-    </div>
+  <div
+    class="route-draft-toolbar"
+    role="toolbar"
+    aria-label="Route drafting tools"
+  >
+    <button
+      type="button"
+      class:active={editor.interaction === "append"}
+      aria-pressed={editor.interaction === "append"}
+      onclick={() => onSelectWaypoint(null, "append")}>Append</button
+    >
+    <button
+      type="button"
+      class:active={editor.interaction === "replace"}
+      aria-pressed={editor.interaction === "replace"}
+      disabled={!hasSelection}
+      onclick={() => onSelectWaypoint(editor.selectedIndex, "replace")}
+      >Replace</button
+    >
+    <button
+      type="button"
+      class:active={editor.interaction === "insertAfter"}
+      aria-pressed={editor.interaction === "insertAfter"}
+      disabled={!hasSelection}
+      onclick={() => onSelectWaypoint(editor.selectedIndex, "insertAfter")}
+      >Insert after</button
+    >
+    <button
+      type="button"
+      disabled={editor.waypoints.length < 2}
+      onclick={onReverse}>Reverse</button
+    >
+    <button type="button" disabled={!editor.canUndo} onclick={onUndo}
+      >Undo</button
+    >
+    <button type="button" disabled={!editor.canRedo} onclick={onRedo}
+      >Redo</button
+    >
   </div>
 
   <p
@@ -197,19 +213,57 @@
     </ul>
   {/if}
 
+  {#if editor.source === "create" && editor.initialFleet !== null}
+    <dl class="route-after-save" data-testid="route-after-save">
+      <div class="route-after-save-row">
+        <dt>Fleet</dt>
+        <dd data-testid="route-after-save-fleet">
+          {editor.initialFleet.shortfall
+            ? "None yet"
+            : `${editor.initialFleet.vehicles} vehicles`}
+        </dd>
+      </div>
+      <div class="route-after-save-row">
+        <dt>Target</dt>
+        <dd data-testid="route-after-save-target">
+          Every {formatMinutes(editor.initialFleet.targetHeadwaySeconds)}
+        </dd>
+      </div>
+      <div class="route-after-save-row">
+        <dt>Running cost</dt>
+        <dd data-testid="route-after-save-running">
+          {editor.initialFleet.shortfall
+            ? "$0/day"
+            : `${formatBudget(editor.initialFleet.estimatedDailyOperatingCost)}/day`}
+        </dd>
+      </div>
+    </dl>
+    {#if editor.initialFleet.shortfall}
+      <p class="route-shortfall" data-testid="route-shortfall-reason">
+        {editor.initialFleet.shortfallReason}
+        Save the line now, replenish your budget, then deploy its fleet from the Lines
+        panel.
+      </p>
+    {/if}
+  {/if}
+
   <div class="route-editor-actions">
     <button
       type="button"
       class="route-save"
+      class:route-save--deferred={editor.source === "create" &&
+        editor.initialFleet?.shortfall}
       disabled={editor.previewPending || !editor.canSave}
       onclick={onSave}
       >{editor.previewPending
         ? "Checking route…"
-        : editor.source === "create"
-          ? editor.initialFleetCost !== null
-            ? `Save & run · ${formatBudget(editor.initialFleetCost)}`
-            : "Save & run"
-          : "Save route"}</button
+        : editor.source === "edit"
+          ? "Save route"
+          : editor.initialFleet !== null && editor.initialFleet.shortfall
+            ? "Save without fleet"
+            : editor.initialFleet !== null
+              ? `Save & run · ${formatBudget(editor.initialFleet.cost)}`
+              : "Save & run"}</button
     >
     <button type="button" class="route-cancel" onclick={onCancel}>Cancel</button
     >

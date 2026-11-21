@@ -143,6 +143,18 @@ export interface RouteEditorWaypointView {
   selected: boolean;
 }
 
+/** "After saving" summary for new drafts, quoted by Rust before committing. */
+export interface RouteEditorInitialFleetView {
+  vehicles: number;
+  targetHeadwaySeconds: number;
+  cost: number;
+  estimatedDailyOperatingCost: number;
+  /** Standard-only: the current budget is below the quoted fleet price. */
+  shortfall: boolean;
+  /** Inline reason when `shortfall`: needs/available phrasing. */
+  shortfallReason: string | null;
+}
+
 export interface RouteEditorView {
   source: "create" | "edit";
   title: string;
@@ -162,7 +174,7 @@ export interface RouteEditorView {
   canUndo: boolean;
   canRedo: boolean;
   notice: RouteDraftNotice | null;
-  initialFleetCost: number | null;
+  initialFleet: RouteEditorInitialFleetView | null;
 }
 
 export interface RouteServiceStatus {

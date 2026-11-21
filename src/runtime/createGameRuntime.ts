@@ -58,7 +58,7 @@ import {
 } from "./createGameHost";
 import type { Camera } from "../render/boardTransform";
 import { createPreviewCoordinator } from "./previewCoordinator";
-import { selectShellState } from "./runtimeSelectors";
+import { initialFleetShortfall, selectShellState } from "./runtimeSelectors";
 import { createSerializedQueue } from "./serializedQueue";
 import { applyPresentationUpdate } from "./presentationView";
 import { createWorkingSaveRuntime } from "./workingSaveRuntime";
@@ -1017,7 +1017,14 @@ export async function createGameRuntime(
     };
     const isCreate = draft.source.kind === "create";
     const mode = draft.mode;
-    const deploy = isCreate && draft.preview.initialFleetCost !== null;
+    const quotedInitialFleet = draft.preview.initialFleet;
+    const deploy = isCreate && quotedInitialFleet !== null;
+    // Save-click-local: whether the editor already showed the Standard-mode
+    // shortfall before this click. Drives the deployment feedback suppression
+    // inside deployCreatedLine; Rust still re-authorizes at execution.
+    const knownFleetShortage =
+      quotedInitialFleet !== null &&
+      initialFleetShortfall(state, quotedInitialFleet.cost);
     const tokenKey = `${token.instanceId}:${token.generation}:${token.source}`;
     if (activeRouteSaveTokens.has(tokenKey)) {
       return getSnapshot();
@@ -1083,26 +1090,42 @@ export async function createGameRuntime(
           if (!deploy || !isCreate || createdRouteId === null) {
             return saved;
           }
-          const previousRejection = rejection;
-          const deployed = await dispatchNow({
+          const deployIntent: GameIntent = {
             type: "deployInitialFleet",
             lineId: createdRouteId,
-          });
+          };
+          const previousRejection = rejection;
+          // dispatchNow publishes before returning, which would flash the
+          // deployment rejection as a transient `role="alert"`. Apply its
+          // rejection semantics and the Save-local suppression BEFORE the
+          // single commitDispatchResult publish below.
+          const result = await backend.dispatch(deployIntent);
+          backendError = null;
           if (
-            rejection !== previousRejection &&
-            rejection === deployed.rejection &&
-            rejection?.code === "insufficientBudget"
+            result.rejection !== null ||
+            (result.applied && ui.routeDraft === null)
           ) {
-            rejection = {
-              ...rejection,
-              context: {
-                ...rejection.context,
-                savedWithoutFleet: true,
-              },
-            };
-            return publish();
+            rejection = result.rejection;
           }
-          return deployed;
+          if (result.rejection?.code === "insufficientBudget") {
+            if (knownFleetShortage) {
+              // The editor warned before Save; keep the previous feedback and
+              // let the Lines card carry the no-fleet recovery path.
+              rejection = previousRejection;
+            } else {
+              // The budget changed only after click: tag the late shortage
+              // before publication so the toast reads as recovery guidance,
+              // not a surprise failure.
+              rejection = {
+                ...result.rejection,
+                context: {
+                  ...result.rejection.context,
+                  savedWithoutFleet: true,
+                },
+              };
+            }
+          }
+          return commitDispatchResult(result, saved.ui, deployIntent);
         };
         const current = ui.routeDraft;
         const tokenIsCurrent = isCurrent(current);

@@ -41,7 +41,7 @@ export function normalizeRoutePreviewResponse(
     ...response,
     legs: response.legs.map(normalizeRouteLegPath),
     rejection: normalizeGameplayRejection(response.rejection),
-    initialFleetCost: response.initialFleetCost ?? null,
+    initialFleet: response.initialFleet ?? null,
   };
 }
 

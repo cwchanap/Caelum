@@ -7,6 +7,7 @@ import type {
   RouteLegPath,
 } from "../../src/domain/types";
 import {
+  initialFleetShortfall,
   selectRouteFailures,
   selectShellState,
 } from "../../src/runtime/runtimeSelectors";
@@ -540,7 +541,7 @@ describe("route selectors", () => {
       missingWaypointIds: [],
       warnings: [],
       rejection: null,
-      initialFleetCost: null,
+      initialFleet: null,
     };
   }
 
@@ -855,6 +856,133 @@ describe("route selectors", () => {
     const draft = selectShellState(state, ui).routeDraft;
     expect(draft?.canSave).toBe(true);
     expect(draft?.previewMessage).toBe("Connected");
+  });
+
+  it("flags a Standard budget below the quoted fleet price", () => {
+    const state = { ...twoStops(), budget: 15_999 };
+    expect(initialFleetShortfall(state, 16_000)).toBe(true);
+  });
+
+  it("passes affordable and exactly-priced Standard budgets", () => {
+    const state = { ...twoStops(), budget: 16_000 };
+    expect(initialFleetShortfall(state, 16_000)).toBe(false);
+    expect(initialFleetShortfall({ ...state, budget: 20_000 }, 16_000)).toBe(
+      false,
+    );
+  });
+
+  it("never flags Creative nominal prices", () => {
+    const state = twoStops();
+    const creative = {
+      ...state,
+      budget: 0,
+      rules: { ...state.rules, economyPreset: "creative" as const },
+    };
+    expect(initialFleetShortfall(creative, 16_000)).toBe(false);
+  });
+
+  it("projects the quoted initial fleet into new-draft editor views", () => {
+    const state = { ...twoStops(), budget: 12_000 };
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"], true),
+        preview: {
+          ...routePreview(["stop-001", "stop-002"]),
+          initialFleet: {
+            vehicles: 2,
+            targetHeadwaySeconds: 600,
+            cost: 16_000,
+            estimatedDailyOperatingCost: 800,
+          },
+        },
+      },
+    };
+
+    expect(selectShellState(state, ui).routeDraft?.initialFleet).toEqual({
+      vehicles: 2,
+      targetHeadwaySeconds: 600,
+      cost: 16_000,
+      estimatedDailyOperatingCost: 800,
+      shortfall: true,
+      shortfallReason: "Needs $16,000; only $12,000 is available.",
+    });
+  });
+
+  it("shows an affordable quote without a shortfall reason", () => {
+    const state = { ...twoStops(), budget: 120_000 };
+    const ui = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"], true),
+        preview: {
+          ...routePreview(["stop-001", "stop-002"]),
+          initialFleet: {
+            vehicles: 2,
+            targetHeadwaySeconds: 600,
+            cost: 16_000,
+            estimatedDailyOperatingCost: 800,
+          },
+        },
+      },
+    };
+
+    expect(selectShellState(state, ui).routeDraft?.initialFleet).toEqual({
+      vehicles: 2,
+      targetHeadwaySeconds: 600,
+      cost: 16_000,
+      estimatedDailyOperatingCost: 800,
+      shortfall: false,
+      shortfallReason: null,
+    });
+  });
+
+  it("hides the initial-fleet view from edits and stale previews", () => {
+    const state = { ...twoStops(), budget: 12_000 };
+    const quotedPreview = {
+      ...routePreview(["stop-001", "stop-002"]),
+      initialFleet: {
+        vehicles: 2,
+        targetHeadwaySeconds: 600,
+        cost: 16_000,
+        estimatedDailyOperatingCost: 800,
+      },
+    };
+
+    const editUi = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...editDraft(
+          {
+            routeId: "route-001",
+            expectedRevision: 0,
+            mode: "bus",
+            pattern: "loop",
+            waypointIds: ["stop-001", "stop-002"],
+          },
+          1,
+        ),
+        generation: 1,
+        preview: quotedPreview,
+      },
+    };
+    expect(selectShellState(state, editUi).routeDraft?.initialFleet).toBeNull();
+
+    const staleUi = {
+      ...createUiState(),
+      activeTool: "busRoute" as const,
+      routeDraft: {
+        ...busDraft(["stop-001", "stop-002"], true),
+        generation: 2,
+        preview: quotedPreview,
+      },
+    };
+    expect(
+      selectShellState(state, staleUi).routeDraft?.initialFleet,
+    ).toBeNull();
   });
 
   it("offers Reload after a stale edit rejection", () => {
@@ -1760,7 +1888,7 @@ describe("route selectors", () => {
       missingWaypointIds: ["stop-999"],
       warnings: [],
       rejection: previewRejection,
-      initialFleetCost: null,
+      initialFleet: null,
     };
     const ui = {
       ...createUiState(),

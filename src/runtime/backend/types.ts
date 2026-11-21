@@ -339,6 +339,14 @@ export interface GameplayWarning {
   context: GameplayRejection["context"];
 }
 
+/** Pre-save first-fleet quote for a new draft; estimates, not post-save actuals. */
+export interface InitialFleetPreview {
+  vehicles: number;
+  targetHeadwaySeconds: number;
+  cost: number;
+  estimatedDailyOperatingCost: number;
+}
+
 export interface RoutePreviewResponse {
   generation: number;
   legs: RouteLegPath[];
@@ -347,7 +355,7 @@ export interface RoutePreviewResponse {
   missingWaypointIds: string[];
   warnings: GameplayWarning[];
   rejection: GameplayRejection | null;
-  initialFleetCost: number | null;
+  initialFleet: InitialFleetPreview | null;
 }
 
 export interface RoadMutationPreviewRequest {

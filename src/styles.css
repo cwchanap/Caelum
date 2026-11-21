@@ -1048,8 +1048,6 @@ body {
 }
 
 .route-pattern {
-  display: flex;
-  gap: 12px;
   margin: 10px 0;
   padding: 0;
   border: 0;
@@ -1062,6 +1060,52 @@ body {
   width: 100%;
   margin-bottom: 4px;
   color: var(--ink-mid);
+}
+
+/* Segmented control over the native radio group: the inputs stay focusable
+ * and arrow-key navigable, only their dots are visually hidden. */
+.route-pattern--segmented {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  border: 1px solid var(--line);
+}
+
+.route-pattern--segmented label {
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-height: 30px;
+  color: var(--ink-mid);
+  font-family: var(--font-display);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.route-pattern--segmented label + label {
+  border-left: 1px solid var(--line);
+}
+
+.route-pattern--segmented label.checked {
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--ink);
+  box-shadow: inset 0 -2px 0 var(--accent);
+}
+
+.route-pattern--segmented label:has(input:focus-visible) {
+  outline: 1px solid var(--accent);
+  outline-offset: -1px;
+}
+
+.route-pattern--segmented input {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+  border: 0;
 }
 
 /* Waypoint rail: numbered dots share one vertical line. The dot takes the
@@ -1081,6 +1125,9 @@ body {
 
 .route-waypoints li {
   position: relative;
+  display: flex;
+  align-items: center;
+  gap: 4px;
 }
 
 .route-waypoints li::before {
@@ -1116,12 +1163,6 @@ body {
 .route-draft-toolbar {
   padding-top: 8px;
   border-top: 1px solid var(--line);
-}
-
-.route-toolbar-group {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px;
 }
 
 .route-editor button,
@@ -1164,8 +1205,9 @@ body {
 
 /* Rail rows override the generic editor button chrome: the dot carries the
  * state, the row is a transparent hit target on the shared connector line. */
-.route-waypoints button {
-  width: 100%;
+.route-waypoints .route-waypoint-row {
+  flex: 1;
+  width: auto;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -1179,19 +1221,55 @@ body {
   cursor: pointer;
 }
 
-.route-waypoints button:hover:not(:disabled) {
+.route-waypoints .route-waypoint-row:hover:not(:disabled) {
   background: color-mix(in srgb, var(--route-color) 6%, transparent);
   color: var(--ink);
 }
 
-.route-waypoints button.active {
+.route-waypoints .route-waypoint-row.active {
   border-left: 0;
   background: color-mix(in srgb, var(--route-color) 9%, transparent);
   color: var(--ink);
 }
 
-.route-waypoints button.missing {
+.route-waypoints .route-waypoint-row.missing {
   color: var(--danger);
+}
+
+/* Per-row move/remove micro-buttons sit beside the selectable row. */
+.route-waypoint-actions {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  flex: none;
+  gap: 2px;
+}
+
+.route-waypoint-actions button {
+  display: grid;
+  min-width: 18px;
+  min-height: 18px;
+  place-items: center;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 0;
+  background: var(--surface);
+  color: var(--ink-mid);
+  font-family: var(--font-body);
+  font-size: 9px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.route-waypoint-actions button:hover:not(:disabled) {
+  border-color: var(--accent);
+  color: var(--ink);
+}
+
+.route-waypoint-actions button:disabled {
+  cursor: not-allowed;
+  border-color: color-mix(in srgb, var(--ink-mid) 20%, transparent);
+  color: color-mix(in srgb, var(--ink-mid) 55%, transparent);
 }
 
 .route-waypoint-number {
@@ -1229,6 +1307,48 @@ body {
 .route-preview--broken,
 .route-preview--rejected {
   color: var(--danger);
+}
+
+/* Pre-save "After saving" quote for new drafts; estimates only. */
+.route-after-save {
+  display: grid;
+  gap: 4px;
+  margin: 10px 0 0;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  background: color-mix(in srgb, var(--accent) 4%, transparent);
+}
+
+.route-after-save-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.route-after-save dt {
+  color: var(--ink-mid);
+  font-family: var(--font-body);
+  font-size: 10px;
+}
+
+.route-after-save dd {
+  margin: 0;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.route-shortfall {
+  margin: 6px 0 0;
+  color: var(--danger);
+  font-family: var(--font-body);
+  font-size: 10px;
+}
+
+.route-save--deferred {
+  border-left: 2px solid var(--warning);
 }
 
 .route-preview-warnings {

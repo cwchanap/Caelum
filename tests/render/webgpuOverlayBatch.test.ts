@@ -1465,7 +1465,7 @@ describe("buildOverlayRanges route draft", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleetCost: null,
+          initialFleet: null,
         },
       },
     };

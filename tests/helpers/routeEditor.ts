@@ -1,5 +1,15 @@
 import type { RouteEditorView } from "../../src/runtime/types";
 
+/** Affordable two-vehicle bus quote matching the Rust preview DTO. */
+export const FLEET_QUOTE: NonNullable<RouteEditorView["initialFleet"]> = {
+  vehicles: 2,
+  targetHeadwaySeconds: 600,
+  cost: 16_000,
+  estimatedDailyOperatingCost: 800,
+  shortfall: false,
+  shortfallReason: null,
+};
+
 /**
  * Shared `RouteEditorView` fixture for route-editor/lines-panel UI tests.
  * Defaults to a connected two-waypoint bus draft in "create" mode; pass
@@ -43,7 +53,7 @@ export function createDraftView(
     canRedo: false,
     notice: null,
     failures: [],
-    initialFleetCost: 16_000,
+    initialFleet: FLEET_QUOTE,
     ...overrides,
   };
 }

@@ -1099,7 +1099,7 @@ describe("buildTransitBatch draft stroke", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleetCost: null,
+          initialFleet: null,
         },
       },
     };
@@ -1132,7 +1132,7 @@ describe("buildTransitBatch draft stroke", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleetCost: null,
+          initialFleet: null,
         },
       },
     };
@@ -1162,7 +1162,7 @@ describe("buildTransitBatch draft stroke", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleetCost: null,
+          initialFleet: null,
         },
       },
     };
@@ -1202,7 +1202,7 @@ describe("buildTransitBatch draft stroke", () => {
       missingWaypointIds: [],
       warnings: [],
       rejection: null,
-      initialFleetCost: null,
+      initialFleet: null,
     };
 
     // A new draft has no corridor slot: drawn centered on the corridor.
@@ -1259,7 +1259,7 @@ describe("buildTransitBatch scope", () => {
           missingWaypointIds: [],
           warnings: [],
           rejection: null,
-          initialFleetCost: null,
+          initialFleet: null,
         },
       },
     };
