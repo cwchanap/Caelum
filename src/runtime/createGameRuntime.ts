@@ -1125,7 +1125,11 @@ export async function createGameRuntime(
               };
             }
           }
-          return commitDispatchResult(result, saved.ui, deployIntent);
+          // dispatchNow semantics: resolve the UI at completion, not the UI
+          // captured before the await — a replacement draft opened (or
+          // cancelled) while the deployment was pending must survive this
+          // commit instead of being discarded or resurrected by the saved UI.
+          return commitDispatchResult(result, ui, deployIntent);
         };
         const current = ui.routeDraft;
         const tokenIsCurrent = isCurrent(current);
