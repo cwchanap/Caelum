@@ -682,7 +682,7 @@ fn route_preview_returns_typed_validation_with_generation() {
         });
         assert_eq!(response.generation, generation);
         assert_eq!(response.rejection.expect("typed rejection").code, code);
-        assert!(response.initial_fleet_cost.is_none());
+        assert!(response.initial_fleet.is_none());
     }
 }
 
@@ -703,7 +703,13 @@ fn metro_preview_quotes_initial_fleet_with_zero_budget() {
             .iter()
             .all(|leg| leg.status == RouteLegStatus::Connected));
         assert!(response.rejection.is_none(), "{response:?}");
-        assert_eq!(response.initial_fleet_cost, Some(METRO_COST));
+        assert_eq!(
+            response
+                .initial_fleet
+                .expect("a valid metro draft publishes an initial fleet")
+                .cost,
+            METRO_COST
+        );
     }
 }
 
@@ -823,7 +829,7 @@ fn new_draft_preview_quotes_the_fleet_the_same_state_purchase_charges() {
     let preview = engine.preview_route(valid_route_preview(70));
     assert!(preview.rejection.is_none(), "{preview:?}");
     let quote = preview
-        .initial_fleet_cost
+        .initial_fleet
         .expect("a valid new draft publishes an initial-fleet quote");
 
     let before_budget = engine.snapshot().budget;
@@ -838,10 +844,26 @@ fn new_draft_preview_quotes_the_fleet_the_same_state_purchase_charges() {
     });
     assert!(deployed.applied, "{deployed:?}");
 
-    let fleet = engine.snapshot().transit.routes[0].vehicle_ids.len();
+    let route = &engine.snapshot().transit.routes[0];
+    let fleet = route.vehicle_ids.len();
+    let metrics = route
+        .service_metrics
+        .as_ref()
+        .expect("a deployed route publishes service metrics");
     assert!(fleet >= 2, "fixture should require multiple buses: {fleet}");
-    assert_eq!(quote, fleet as i32 * BUS_COST);
-    assert_eq!(engine.snapshot().budget, before_budget - quote);
+    assert_eq!(quote.vehicles, fleet);
+    assert_eq!(quote.cost, fleet as i32 * BUS_COST);
+    assert_eq!(engine.snapshot().budget, before_budget - quote.cost);
+    // Default target and projected daily cost match the actual service the
+    // deployment starts, not a parallel estimate.
+    assert_eq!(
+        quote.target_headway_seconds,
+        route.target_headway_seconds.expect("deployed route target")
+    );
+    assert_eq!(
+        quote.estimated_daily_operating_cost,
+        metrics.daily_operating_cost
+    );
 }
 
 #[test]
@@ -858,7 +880,7 @@ fn edit_preview_carries_no_initial_fleet_quote() {
     });
 
     assert!(preview.rejection.is_none(), "{preview:?}");
-    assert!(preview.initial_fleet_cost.is_none());
+    assert!(preview.initial_fleet.is_none());
 }
 
 #[test]
