@@ -809,6 +809,70 @@ async function createCityWithEconomy(
   ).toBeVisible();
 }
 
+test("operates the route editor with the keyboard", async ({ page }) => {
+  await createDefaultCity(page, "Keyboard Drafting");
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of DRAFT_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expectRoadsideStopAnchors(page, DRAFT_ROUTE_STOPS);
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of DRAFT_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await waitForRoutePreview(page, DRAFT_ROUTE_STOPS.length);
+
+  // Actual native radio-group arrow navigation on the segmented control:
+  // the focused radio moves selection and fires the pattern change.
+  const loop = page.getByRole("radio", { name: "Loop" });
+  const shuttle = page.getByRole("radio", { name: "Shuttle" });
+  await loop.focus();
+  await expect(loop).toBeFocused();
+  await page.keyboard.press("ArrowRight");
+  await expect(shuttle).toBeChecked();
+  await expect(loop).not.toBeChecked();
+  expect((await runtimeSnapshot(page)).ui.routeDraft?.pattern).toBe("shuttle");
+  await page.keyboard.press("ArrowLeft");
+  await expect(loop).toBeChecked();
+  expect((await runtimeSnapshot(page)).ui.routeDraft?.pattern).toBe("loop");
+
+  // Save is keyboard-operable through the ordinary focused-button path.
+  const save = page.getByRole("button", { name: /^Save & run/ });
+  await save.focus();
+  await page.keyboard.press("Enter");
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+
+  // Escape cancels an edit draft exactly like the Cancel button.
+  await page.getByRole("button", { name: "Edit route Bus 1" }).click();
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("route-draft")).toHaveCount(0);
+
+  // Draft undo/redo keyboard shortcuts keep working on a fresh draft.
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of DRAFT_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await waitForRoutePreview(page, DRAFT_ROUTE_STOPS.length);
+  const mac = (await page.evaluate(() => navigator.platform)).includes("Mac");
+  const undoShortcut = mac ? "Meta+Z" : "Control+Z";
+  // Shift must precede Z: Playwright presses chord keys in order, so
+  // "Control+Z+Shift" would fire the Z keydown before Shift is held and
+  // repeat the undo instead of redoing.
+  const redoShortcut = mac ? "Meta+Shift+Z" : "Control+Shift+Z";
+  await page.keyboard.press(undoShortcut);
+  await waitForRoutePreview(page, 1);
+  await page.keyboard.press(redoShortcut);
+  await waitForRoutePreview(page, DRAFT_ROUTE_STOPS.length);
+});
+
 test("warns before save when the fleet is unaffordable and recovers without fleet", async ({
   page,
 }) => {
@@ -845,7 +909,8 @@ test("warns before save when the fleet is unaffordable and recovers without flee
     saved.routes.find((route) => route.id === "route-001")?.vehicleIds ?? [],
   ).toEqual([]);
 
-  // An unexpected (post-save) shortage still surfaces the fallback toast.
+  // An ordinary (non-save-path) shortage on a later manual Deploy surfaces
+  // the plain rejection toast; the save-path fallback has its own test below.
   await debugSetBudget(page, 0);
   await page.getByTestId("route-deploy-route-001").click();
   await expect(page.getByTestId("action-feedback")).toContainText(
@@ -853,6 +918,67 @@ test("warns before save when the fleet is unaffordable and recovers without flee
   );
 
   // Replenish the budget and deploy the fleet through the Lines card.
+  await debugSetBudget(page, 200_000);
+  await page.getByTestId("route-deploy-route-001").click();
+  await expect
+    .poll(
+      async () =>
+        (await readRuntimeTransit(page)).routes.find(
+          (route) => route.id === "route-001",
+        )?.vehicleIds.length ?? 0,
+    )
+    .toBeGreaterThan(0);
+});
+
+test("tags a save-path late shortage when the budget drains before deployment", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Late Shortage Save");
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+
+  const quote = await draftTwoStopBusRoute(page);
+
+  // Deterministic lateness on the real Save → create → deployment path: the
+  // Save click reads the budget synchronously (still full, no known
+  // shortage) while the serialized save authorizes the deployment against
+  // the live budget afterwards. The budget change and the save enqueue on
+  // the same FIFO gameplay queue, so issuing both in one browser turn
+  // guarantees the deployment executes against the drained budget — no
+  // timing race.
+  await page.evaluate(() => {
+    const runtime = (
+      window as unknown as {
+        __caelumRuntime?: {
+          debugSetBudget?: (budget: number) => Promise<unknown>;
+          saveRouteDraft?: () => Promise<unknown>;
+        };
+      }
+    ).__caelumRuntime;
+    if (
+      runtime?.debugSetBudget === undefined ||
+      runtime.saveRouteDraft === undefined
+    ) {
+      throw new Error(
+        "debugSetBudget/saveRouteDraft unavailable on window.__caelumRuntime",
+      );
+    }
+    void runtime.debugSetBudget(0);
+    void runtime.saveRouteDraft();
+  });
+
+  // The save created the line, its deployment hit the drained budget, and
+  // the shortage is tagged as the savedWithoutFleet recovery fallback.
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await expect(page.getByTestId("action-feedback")).toContainText(
+    `Saved without fleet: Needs ${formatBudget(quote)}; only $0 is available.`,
+  );
+  const lateSaved = await readRuntimeTransit(page);
+  expect(
+    lateSaved.routes.find((route) => route.id === "route-001")?.vehicleIds ??
+      [],
+  ).toEqual([]);
+
+  // Replenish the budget and deploy the fleet from the Lines card.
   await debugSetBudget(page, 200_000);
   await page.getByTestId("route-deploy-route-001").click();
   await expect

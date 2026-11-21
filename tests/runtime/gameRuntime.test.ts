@@ -6239,6 +6239,60 @@ describe("route creation and management", () => {
     expect(route?.vehicleIds).toEqual([]);
   });
 
+  it("commits a deferred deployment with the UI current at completion", async () => {
+    const base = backendSpy(routeSnapshot());
+    const deferredDeploys: Array<(result: GameplayUpdateResult) => void> = [];
+    let deployPending = false;
+    const backend: BackendSpy = {
+      ...base,
+      dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          // Hold the deployment open so the test can mutate the draft while
+          // it is pending — the completion must not restore the UI captured
+          // before this await.
+          deployPending = true;
+          return new Promise<GameplayUpdateResult>((resolve) => {
+            deferredDeploys.push(resolve);
+          });
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    const saving = runtime.saveRouteDraft();
+    for (let i = 0; i < 100 && !deployPending; i += 1) {
+      await flushPromises();
+    }
+    expect(deployPending).toBe(true);
+
+    // While the deployment is pending, the player opens a replacement draft.
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    await flushPromises();
+    const replacement = runtime.getSnapshot().ui.routeDraft;
+    expect(replacement).not.toBeNull();
+
+    // The deployment completes later and must commit with the UI current at
+    // completion: the replacement draft survives and the fleet lands.
+    const deployResult = await base.dispatch({
+      type: "deployInitialFleet",
+      lineId: "route-001",
+    });
+    deferredDeploys[0]?.(deployResult);
+    const final = await saving;
+
+    expect(final.ui.routeDraft?.instanceId).toBe(replacement?.instanceId);
+    expect(final.ui.routeDraft?.waypointIds).toEqual(replacement?.waypointIds);
+    expect(
+      final.state.transit.routes.find(
+        (candidate) => candidate.id === "route-001",
+      )?.vehicleIds,
+    ).toHaveLength(2);
+  });
+
   it("routes Save through the selected service pattern", async () => {
     const backend = connectedRouteBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);
