@@ -57,6 +57,19 @@ pub struct GameplayWarning {
     pub context: RejectionContext,
 }
 
+/// Pre-save quote for a new draft's first fleet: the count Rust would deploy,
+/// its default target headway, the nominal purchase price and the projected
+/// daily operating cost. Estimates only; the selected Lines card shows actuals
+/// after Save.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct InitialFleetPreview {
+    pub vehicles: usize,
+    pub target_headway_seconds: u32,
+    pub cost: i32,
+    pub estimated_daily_operating_cost: i32,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RoutePreviewResponse {
@@ -67,8 +80,9 @@ pub struct RoutePreviewResponse {
     pub missing_waypoint_ids: Vec<String>,
     pub warnings: Vec<GameplayWarning>,
     pub rejection: Option<GameplayRejection>,
-    /// Nominal price, including in Creative, rather than the amount deducted.
-    pub initial_fleet_cost: Option<i32>,
+    /// Nominal first-fleet quote, including in Creative, rather than the
+    /// amount deducted.
+    pub initial_fleet: Option<InitialFleetPreview>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -136,7 +150,7 @@ pub fn preview_route(
         missing_waypoint_ids,
         warnings: Vec::new(),
         rejection: None,
-        initial_fleet_cost: None,
+        initial_fleet: None,
     };
 
     let existing = match existing_route(snapshot, &request) {
@@ -231,16 +245,16 @@ pub fn preview_route(
         .filter_map(|leg| leg.estimated_seconds)
         .sum();
     response.turn_summary = summarize_turns(&response.legs);
-    response.initial_fleet_cost = new_draft_initial_fleet_cost(snapshot, &request, &response);
+    response.initial_fleet = new_draft_initial_fleet(snapshot, &request, &response);
 
     response
 }
 
-fn new_draft_initial_fleet_cost(
+fn new_draft_initial_fleet(
     snapshot: &GameSnapshot,
     request: &RoutePreviewRequest,
     response: &RoutePreviewResponse,
-) -> Option<i32> {
+) -> Option<InitialFleetPreview> {
     if request.route_id.is_some() || response.rejection.is_some() {
         return None;
     }
@@ -250,12 +264,20 @@ fn new_draft_initial_fleet_cost(
         crate::traffic::RoadFlow::new()
     };
     let round_trip_seconds = round_trip_seconds(&response.legs, request.mode, &flow)?;
-    initial_fleet(
+    let (vehicles, cost) = initial_fleet(
         round_trip_seconds,
         request.mode,
         DEFAULT_TARGET_HEADWAY_SECONDS,
-    )
-    .map(|(_required, cost)| cost)
+    )?;
+    Some(InitialFleetPreview {
+        vehicles,
+        target_headway_seconds: DEFAULT_TARGET_HEADWAY_SECONDS,
+        cost,
+        estimated_daily_operating_cost: crate::operating_cost::fleet_daily_operating_cost(
+            request.mode,
+            vehicles,
+        ),
+    })
 }
 
 pub fn preview_road_mutation(
