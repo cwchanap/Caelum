@@ -1097,15 +1097,16 @@ body {
 }
 
 .route-pattern--segmented input {
+  /* Invisible but stretched over the whole segment: the radio itself stays
+   * the click/keyboard target (screen readers and Playwright's check() hit
+   * the native input, not just its label). */
   position: absolute;
-  width: 1px;
-  height: 1px;
-  margin: -1px;
-  padding: 0;
-  overflow: hidden;
-  clip-path: inset(50%);
-  white-space: nowrap;
-  border: 0;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
 }
 
 /* Waypoint rail: numbered dots share one vertical line. The dot takes the

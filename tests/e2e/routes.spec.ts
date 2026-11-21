@@ -218,10 +218,7 @@ test("create, manage, and delete a bus route", async ({ page }) => {
   }
   await expect(page.getByTestId("route-draft")).toBeVisible();
   await page.getByTestId("route-waypoint-1").click();
-  await page
-    .getByTestId("route-draft")
-    .getByRole("button", { name: "Remove" })
-    .click();
+  await page.getByTestId("route-waypoint-remove-1").click();
 
   await waitForRoutePreview(page, 2);
   const fleetQuote = (await runtimeSnapshot(page)).ui.routeDraft?.preview
@@ -720,6 +717,18 @@ test("finishing a bus route starts its initial fleet", async ({ page }) => {
   }
   await openCommandDestination(page, "lines");
   await expect(page.getByTestId("route-draft")).toBeVisible();
+  await waitForRoutePreview(page, SIMPLE_ROUTE_STOPS.length);
+
+  // An affordable Standard draft quotes the whole pre-save fleet picture.
+  await expect(page.getByTestId("route-after-save-fleet")).toHaveText(
+    /\d+ vehicles/,
+  );
+  await expect(page.getByTestId("route-after-save-running")).toHaveText(
+    /\$[\d,]+\/day/,
+  );
+  await expect(
+    page.getByRole("button", { name: /^Save & run · \$/ }),
+  ).toBeVisible();
   await page.getByRole("button", { name: /^Save & run/ }).click();
 
   // Save & run commits the route before the initial fleet dispatch. Poll the
@@ -745,6 +754,153 @@ test("finishing a bus route starts its initial fleet", async ({ page }) => {
   expect(transit.vehicles.every((vehicle) => vehicle.mode === "bus")).toBe(
     true,
   );
+});
+
+async function draftTwoStopBusRoute(
+  page: import("@playwright/test").Page,
+): Promise<number> {
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of DRAFT_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expectRoadsideStopAnchors(page, DRAFT_ROUTE_STOPS);
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of DRAFT_ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await waitForRoutePreview(page, DRAFT_ROUTE_STOPS.length);
+  const quote = (await runtimeSnapshot(page)).ui.routeDraft?.preview
+    ?.initialFleet?.cost;
+  if (quote === undefined || quote === null || quote <= 0) {
+    throw new Error("Rust did not quote an initial fleet for the draft");
+  }
+  return quote;
+}
+
+async function createCityWithEconomy(
+  page: import("@playwright/test").Page,
+  name: string,
+  economyLabel: "Standard" | "Creative",
+): Promise<void> {
+  await page.goto("/");
+  const newCityScreen = page.getByTestId("new-city-screen");
+  const libraryNewCityButton = page
+    .getByTestId("city-library-screen")
+    .getByRole("button", { name: "New City", exact: true });
+  await expect(newCityScreen.or(libraryNewCityButton)).toBeVisible();
+  if (await libraryNewCityButton.isVisible()) {
+    await libraryNewCityButton.click();
+  }
+  await expect(newCityScreen).toBeVisible();
+  await page.getByLabel("City name").fill(name);
+  await page
+    .getByRole("radio", { name: new RegExp(`^${economyLabel}`) })
+    .check();
+  await page.getByRole("radio", { name: "Crossroads" }).check();
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  await expect(
+    page.locator("canvas[data-runtime-canvas='true']"),
+  ).toBeVisible();
+}
+
+test("warns before save when the fleet is unaffordable and recovers without fleet", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Low Money Lines");
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+
+  const quote = await draftTwoStopBusRoute(page);
+
+  // Undercut the quoted fleet price before any click: the editor must show
+  // the low-money summary and the Save-without-fleet affordance first.
+  await debugSetBudget(page, quote - 1);
+  await expect(page.getByTestId("route-after-save-fleet")).toHaveText(
+    "None yet",
+  );
+  await expect(page.getByTestId("route-after-save-running")).toHaveText(
+    "$0/day",
+  );
+  await expect(page.getByTestId("route-shortfall-reason")).toContainText(
+    `Needs ${formatBudget(quote)}`,
+  );
+  await expect(
+    page.getByRole("button", { name: "Save without fleet" }),
+  ).toBeVisible();
+
+  await page.getByRole("button", { name: "Save without fleet" }).click();
+
+  // The line exists, is selected, and has no fleet — without a redundant
+  // toast repeating the warning the editor already showed.
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await expect(page.getByTestId("action-feedback")).toHaveCount(0);
+  await expect(page.getByText("Saved without fleet")).toHaveCount(0);
+  const saved = await readRuntimeTransit(page);
+  expect(
+    saved.routes.find((route) => route.id === "route-001")?.vehicleIds ?? [],
+  ).toEqual([]);
+
+  // An unexpected (post-save) shortage still surfaces the fallback toast.
+  await debugSetBudget(page, 0);
+  await page.getByTestId("route-deploy-route-001").click();
+  await expect(page.getByTestId("action-feedback")).toContainText(
+    /Needs .+; only \$0 is available\./,
+  );
+
+  // Replenish the budget and deploy the fleet through the Lines card.
+  await debugSetBudget(page, 200_000);
+  await page.getByTestId("route-deploy-route-001").click();
+  await expect
+    .poll(
+      async () =>
+        (await readRuntimeTransit(page)).routes.find(
+          (route) => route.id === "route-001",
+        )?.vehicleIds.length ?? 0,
+    )
+    .toBeGreaterThan(0);
+});
+
+test("creative sandbox prices the fleet nominally and never warns", async ({
+  page,
+}) => {
+  await createCityWithEconomy(page, "Creative Lines", "Creative");
+  await expect(page.getByTestId("game-shell")).toBeVisible();
+
+  await debugSetBudget(page, 0);
+  const quote = await draftTwoStopBusRoute(page);
+
+  // Creative shows the nominal projection even at zero budget: no shortfall,
+  // no Save-without-fleet relabel.
+  await expect(page.getByTestId("route-after-save-fleet")).toHaveText(
+    /\d+ vehicles/,
+  );
+  await expect(page.getByTestId("route-after-save-running")).toHaveText(
+    /\$[\d,]+\/day/,
+  );
+  await expect(page.getByTestId("route-shortfall-reason")).toHaveCount(0);
+  await expect(
+    page.getByRole("button", { name: `Save & run · ${formatBudget(quote)}` }),
+  ).toBeVisible();
+
+  await page
+    .getByRole("button", { name: `Save & run · ${formatBudget(quote)}` })
+    .click();
+
+  await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await expect(page.getByTestId("action-feedback")).toHaveCount(0);
+  await expect
+    .poll(
+      async () =>
+        (await readRuntimeTransit(page)).routes.find(
+          (route) => route.id === "route-001",
+        )?.vehicleIds.length ?? 0,
+    )
+    .toBeGreaterThan(0);
 });
 
 test("starts a bus service and recovers fleet after a route edit", async ({
