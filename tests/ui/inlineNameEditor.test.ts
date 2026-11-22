@@ -179,6 +179,32 @@ describe("InlineNameEditor", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
+  it("drops a held submission when the user edits again, and lands only a fresh explicit submission", async () => {
+    const { onCommit, rerender, input } = await openEditor();
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    await rerender({ disabled: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    // The user refocuses the still-open input and revises the name; the
+    // deferred submission must not fire for the abandoned draft.
+    await fireEvent.input(input, { target: { value: "Harbour Express II" } });
+    await rerender({ disabled: false });
+
+    expect(onCommit).not.toHaveBeenCalled();
+    const still = screen.getByTestId(
+      "route-name-route-bus-001",
+    ) as HTMLInputElement;
+    expect(still).toBe(input);
+    expect(still).toHaveValue("Harbour Express II");
+
+    // The revised name lands only through another explicit submission.
+    await fireEvent.keyDown(still, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith("Harbour Express II");
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
   it("lets Escape cancel a submission that was held while busy", async () => {
     const { onCommit, rerender, input } = await openEditor();
 
