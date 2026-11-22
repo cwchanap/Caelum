@@ -160,12 +160,21 @@
     return count === 1 ? "bus" : "buses";
   }
 
-  // The live achieved interval while Rust projects one; otherwise the target
-  // stands in as the achievable estimate. No TypeScript service math.
-  function intervalSeconds(route: ShellRouteListState[number]): number | null {
-    return (
-      route.service.nominalHeadwaySeconds ?? route.service.targetHeadwaySeconds
-    );
+  // Live interval while Rust projects one. A valid undeployed route marks
+  // its target as the "~" estimate; a broken path has no derivable interval
+  // (Rust withholds service metrics), so the value stays unavailable.
+  // No TypeScript service math.
+  function intervalLabel(route: ShellRouteListState[number]): string {
+    if (route.service.nominalHeadwaySeconds !== null) {
+      return formatMinutes(route.service.nominalHeadwaySeconds);
+    }
+    if (
+      route.status.primary === "broken" ||
+      route.service.targetHeadwaySeconds === null
+    ) {
+      return formatMinutes(null);
+    }
+    return `~${formatMinutes(route.service.targetHeadwaySeconds)}`;
   }
 
   $effect(() => {
@@ -347,7 +356,7 @@
                   <div class="route-service-row">
                     <span class="route-service-label">Every</span>
                     <span class="route-service-value"
-                      >{formatMinutes(intervalSeconds(route))}</span
+                      >{intervalLabel(route)}</span
                     >
                   </div>
                   <div class="route-service-row">

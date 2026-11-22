@@ -1904,10 +1904,24 @@ test("reroutes when possible, then preserves a dotted last-valid leg until repai
   await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
     "Broken",
   );
+  // No service interval is derivable while broken: the card keeps the value
+  // unavailable instead of showing the route's target as if achieved.
+  await expect(
+    page
+      .getByTestId(`route-service-${broken.id}`)
+      .getByText("Every")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText("—");
   await rebuildRoadTile(page, canvas, ALTERNATE_ROAD_TILE);
   await openCommandDestination(page, "lines");
   // Restoring the alternate road leaves the already-running service in place.
   await expect(page.getByTestId("route-status-" + broken.id)).toHaveText(
     "Running",
   );
+  await expect(
+    page
+      .getByTestId(`route-service-${broken.id}`)
+      .getByText("Every")
+      .locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(/^\d+\.\d min$/);
 });
