@@ -13,6 +13,10 @@
   let draft = $state("");
   let inputElement: HTMLInputElement | null = $state(null);
   let pendingCommit = $state(false);
+  // The value a held submission was captured for; if `value` moves
+  // underneath (busy load/deletion swapping the edited entity), the held
+  // submission is dropped instead of landing on the replacement.
+  let heldForValue = $state("");
 
   // Focus the freshly mounted editor; reading inputElement keeps the effect
   // tied to the input actually being in the DOM.
@@ -21,9 +25,17 @@
   });
 
   // A submission attempted while the parent is busy (e.g. an autosave) is
-  // held, not discarded; land it once the parent goes idle again.
+  // held, not discarded; land it once the parent goes idle again — unless
+  // the user edited the draft again or the value changed under the editor,
+  // in which case the next explicit submission decides.
   $effect(() => {
-    if (!disabled && pendingCommit) commit();
+    if (!disabled && pendingCommit) {
+      if (value !== heldForValue) {
+        pendingCommit = false;
+        return;
+      }
+      commit();
+    }
   });
 
   function activate(): void {
@@ -38,6 +50,7 @@
     // Keep the editor and draft open while busy and defer the submission.
     if (disabled) {
       pendingCommit = true;
+      heldForValue = value;
       return;
     }
     pendingCommit = false;
@@ -66,6 +79,9 @@
     class="inline-name-input"
     data-testid={testId}
     aria-label={label}
+    oninput={() => {
+      pendingCommit = false;
+    }}
     onkeydown={(event) => {
       if (event.key === "Escape") {
         cancel(event as KeyboardEvent & { currentTarget: HTMLInputElement });

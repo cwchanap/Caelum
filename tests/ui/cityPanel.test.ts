@@ -295,4 +295,31 @@ describe("CityPanel", () => {
       screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
     ).toBeNull();
   });
+
+  it("does not land a held rename on another city that becomes active", async () => {
+    const { onRename, rerender } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await rerender({ busy: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    // A load or deletion completing under the held editor swaps the active
+    // city; the rename captured for Harbour Loop must not be applied to the
+    // new active city's id.
+    await rerender({ busy: false, activeCity: inactiveCity });
+
+    expect(onRename).not.toHaveBeenCalled();
+    const still = screen.getByTestId("active-city-name") as HTMLInputElement;
+    expect(still).toBe(input);
+    expect(still).toHaveValue("Harbour Reef");
+
+    // A fresh explicit submission targets the now-current active city.
+    await fireEvent.keyDown(still, { key: "Enter" });
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(onRename).toHaveBeenCalledWith("city-2", "Harbour Reef");
+  });
 });
