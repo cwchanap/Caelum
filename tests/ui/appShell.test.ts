@@ -2112,7 +2112,7 @@ describe("App command shell", () => {
     expect(unserved).toBeVisible();
 
     await fireEvent.click(unserved);
-    expect(overlays.getByRole("button", { name: "Coverage" })).toHaveAttribute(
+    expect(overlays.getByRole("button", { name: /^Coverage/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -2123,7 +2123,7 @@ describe("App command shell", () => {
 
     // Metric clicks only select: clicking again never clears the overlay.
     await fireEvent.click(unserved);
-    expect(overlays.getByRole("button", { name: "Coverage" })).toHaveAttribute(
+    expect(overlays.getByRole("button", { name: /^Coverage/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -2132,7 +2132,7 @@ describe("App command shell", () => {
     ).toBeVisible();
 
     await fireEvent.click(avgWait);
-    expect(overlays.getByRole("button", { name: "Crowding" })).toHaveAttribute(
+    expect(overlays.getByRole("button", { name: /^Crowding/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -2143,7 +2143,7 @@ describe("App command shell", () => {
     ).toBeVisible();
 
     await fireEvent.click(avgWait);
-    expect(overlays.getByRole("button", { name: "Crowding" })).toHaveAttribute(
+    expect(overlays.getByRole("button", { name: /^Crowding/ })).toHaveAttribute(
       "aria-pressed",
       "true",
     );
@@ -2161,7 +2161,7 @@ describe("App command shell", () => {
     await fireEvent.click(
       within(screen.getByRole("group", { name: "Overlays" })).getByRole(
         "button",
-        { name: "Crowding" },
+        { name: /^Crowding/ },
       ),
     );
     expect(screen.queryByTestId("overlay-legend")).toBeNull();
@@ -2192,9 +2192,12 @@ describe("App command shell", () => {
     const { runtime } = createRuntimeHarness();
     render(App, { props: { runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
+    // The header spans the editable name; the dock row repeats it read-only.
     expect(
-      within(screen.getByTestId("command-panel")).getByText("Harbour City"),
-    ).toBeVisible();
+      within(screen.getByTestId("command-panel")).getByTestId(
+        "active-city-name",
+      ),
+    ).toHaveTextContent("Harbour City");
     await fireEvent.click(screen.getByTestId("command-destination-lines"));
     await fireEvent.click(screen.getByRole("button", { name: "New Bus" }));
     expect(runtime.setTool).toHaveBeenCalledWith("busRoute");
@@ -2241,10 +2244,13 @@ describe("App command shell", () => {
 
     vi.mocked(runtime.setTool).mockClear();
     await fireEvent.click(screen.getByTestId("command-destination-city"));
-    await fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Rename Harbour City" }),
-      { key: "d" },
+    // The dock's active row name is read-only; open the header rename editor.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour City" }),
     );
+    await fireEvent.keyDown(screen.getByTestId("active-city-name"), {
+      key: "d",
+    });
     expect(runtime.setTool).not.toHaveBeenCalled();
   });
 
@@ -2274,10 +2280,13 @@ describe("App command shell", () => {
 
     vi.mocked(runtime.adjustCamera).mockClear();
     await fireEvent.click(screen.getByTestId("command-destination-city"));
-    await fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Rename Harbour City" }),
-      { key: "0" },
+    // The dock's active row name is read-only; open the header rename editor.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour City" }),
     );
+    await fireEvent.keyDown(screen.getByTestId("active-city-name"), {
+      key: "0",
+    });
     expect(runtime.adjustCamera).not.toHaveBeenCalled();
   });
 
@@ -2377,10 +2386,14 @@ describe("App command shell", () => {
     render(App, { props: { runtime } });
 
     await fireEvent.click(screen.getByTestId("command-destination-city"));
-    await fireEvent.keyDown(
-      screen.getByRole("textbox", { name: "Rename Harbour City" }),
-      { key: "z", ctrlKey: true },
+    // The dock's active row name is read-only; open the header rename editor.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour City" }),
     );
+    await fireEvent.keyDown(screen.getByTestId("active-city-name"), {
+      key: "z",
+      ctrlKey: true,
+    });
 
     const editable = document.createElement("div");
     editable.contentEditable = "true";

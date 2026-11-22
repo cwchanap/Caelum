@@ -824,10 +824,16 @@ for (const viewport of desktopViewports) {
     await expectZoomControlsClear();
 
     await openCommandDestination(page, "data");
-    await page
-      .getByTestId("panel-data")
+    const dataPanel = page.getByTestId("panel-data");
+    // Overlay tiles carry their meaning text straight from the catalog.
+    await expect(
+      dataPanel.getByText(
+        "Darker red means more private-car traffic on this road.",
+      ),
+    ).toBeVisible();
+    await dataPanel
       .getByRole("group", { name: "Overlays" })
-      .getByRole("button", { name: "Traffic", exact: true })
+      .getByRole("button", { name: /^Traffic/ })
       .click();
     await expect(
       page.getByTestId("command-destination-data").locator(".chip"),

@@ -255,6 +255,45 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   await expect(rowBPanel).toHaveCount(0);
 });
 
+test("renames the active city from the City dock and deletes it with two clicks", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Dock Rename City");
+  await openCommandDestination(page, "city");
+  await expect(page.getByTestId("active-city-name")).toHaveText(
+    "Dock Rename City",
+  );
+
+  // The header pencil is the only active-city rename control in the dock.
+  await page
+    .getByTestId("panel-city")
+    .getByRole("button", { name: "Rename Dock Rename City" })
+    .click();
+  const renameInput = page.getByTestId("active-city-name");
+  await expect(renameInput).toBeFocused();
+  await renameInput.fill("Renamed From Dock");
+  await renameInput.press("Enter");
+  await expect(page.getByTestId("active-city-name")).toHaveText(
+    "Renamed From Dock",
+  );
+
+  // The active row in Your cities is a read-only Playing row whose Delete
+  // stays available: it is the only in-game path to remove the last city.
+  const playingRow = page
+    .locator("[data-testid^='city-row-']")
+    .filter({ hasText: "Playing" });
+  await expect(playingRow).toHaveCount(1);
+  await expect(playingRow.locator("input")).toHaveCount(0);
+  const deleteActive = playingRow.getByRole("button", { name: "Delete" });
+  await deleteActive.click();
+  await expect(deleteActive).toHaveText("Delete?");
+  await deleteActive.click();
+
+  // Deleting the final active city lands back on New City.
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await expect(page.getByTestId("panel-city")).toHaveCount(0);
+});
+
 test("autosaves a paused city through reload and skips a clean city", async ({
   page,
   context,

@@ -20,7 +20,7 @@
 
 <div class="hud-panel" data-testid="panel-data">
   <section class="panel-section overlay-section">
-    <h3 class="section-head"><span class="num">04</span> Data</h3>
+    <h3 class="section-head">Overlays</h3>
     <div class="overlays" role="group" aria-label="Overlays">
       {#each OVERLAY_IDS as overlay (overlay)}
         <button
@@ -31,7 +31,9 @@
           onclick={() =>
             onSetOverlay(activeOverlay === overlay ? null : overlay)}
         >
-          {OVERLAY_CATALOG[overlay].label}
+          <span class="overlay-name">{OVERLAY_CATALOG[overlay].label}</span>
+          <span class="overlay-desc">{OVERLAY_CATALOG[overlay].legendText}</span
+          >
         </button>
       {/each}
     </div>
@@ -41,7 +43,7 @@
   </section>
 
   <section class="panel-section metrics-section" aria-label="Metrics">
-    <h3 class="section-head"><span class="num">05</span> Metrics</h3>
+    <h3 class="section-head">Metrics</h3>
     <div class="metrics-row">
       {#each METRIC_LINKS as link (link.key)}
         <button

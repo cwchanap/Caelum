@@ -19,7 +19,7 @@ const CITIES = [
   },
 ] satisfies CitySummary[];
 
-function renderList(busy = false, dirty = false) {
+function renderList(busy = false, dirty = false, activeNameReadOnly = false) {
   const onLoad = vi.fn();
   const onRename = vi.fn();
   const onDelete = vi.fn();
@@ -29,6 +29,7 @@ function renderList(busy = false, dirty = false) {
       activeCityId: "city-new",
       busy,
       dirty,
+      activeNameReadOnly,
       onLoad,
       onRename,
       onDelete,
@@ -188,6 +189,57 @@ describe("CityList", () => {
     expect(
       screen.getByRole("button", { name: "Load Harbour City" }),
     ).toBeDisabled();
+  });
+
+  describe("with activeNameReadOnly (the City dock)", () => {
+    it("keeps the active row name read-only and labels it Playing", () => {
+      renderList(false, false, true);
+
+      const activeRow = screen.getByTestId("city-row-city-new");
+      const rowName = within(activeRow).getByTestId("city-name-city-new");
+      expect(rowName).toHaveTextContent("Maple Junction");
+      expect(within(activeRow).queryByRole("textbox")).toBeNull();
+      expect(within(activeRow).getByText("Playing")).toBeVisible();
+      expect(within(activeRow).queryByText("Active")).toBeNull();
+
+      // Inactive rows keep the editable input, Load and Delete controls.
+      const inactiveRow = screen.getByTestId("city-row-city-old");
+      expect(
+        within(inactiveRow).getByRole("textbox", {
+          name: "Rename Harbour City",
+        }),
+      ).toBeVisible();
+      expect(
+        within(inactiveRow).getByRole("button", { name: "Load Harbour City" }),
+      ).toBeVisible();
+    });
+
+    it("retains two-click Delete on the read-only active row", async () => {
+      const { onDelete } = renderList(false, false, true);
+
+      const del = within(screen.getByTestId("city-row-city-new")).getByRole(
+        "button",
+        { name: "Delete" },
+      );
+      await fireEvent.click(del);
+      expect(del).toHaveTextContent("Delete?");
+      expect(onDelete).not.toHaveBeenCalled();
+      await fireEvent.click(del);
+      expect(onDelete).toHaveBeenCalledWith("city-new");
+    });
+
+    it("keeps the read-only name and Delete available while busy only disables Delete", () => {
+      renderList(true, false, true);
+
+      const activeRow = screen.getByTestId("city-row-city-new");
+      // The read-only name is plain text, not a disabled control.
+      expect(
+        within(activeRow).getByTestId("city-name-city-new"),
+      ).toHaveTextContent("Maple Junction");
+      expect(
+        within(activeRow).getByRole("button", { name: "Delete" }),
+      ).toBeDisabled();
+    });
   });
 });
 

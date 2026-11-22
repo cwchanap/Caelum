@@ -2,6 +2,7 @@
   import type { CitySummary } from "../../../persistence/citySaveStore";
   import type { ShellCityState } from "../../../runtime/types";
   import CityList from "../../city/CityList.svelte";
+  import InlineNameEditor from "../../city/InlineNameEditor.svelte";
 
   interface Props {
     shell: ShellCityState;
@@ -38,8 +39,16 @@
 
 <div class="hud-panel" data-testid="panel-city">
   <section class="panel-section city-section">
-    <h3 class="section-head"><span class="num">04</span> City</h3>
-    <h2 data-testid="active-city-name">{activeCity.name}</h2>
+    <h3 class="section-head">City</h3>
+    <h2 class="city-title">
+      <InlineNameEditor
+        value={activeCity.name}
+        label={`Rename ${activeCity.name}`}
+        disabled={busy}
+        testId="active-city-name"
+        onCommit={(name) => onRename(activeCity.id, name)}
+      />
+    </h2>
     <p class="brief-id">{shell.title}</p>
 
     <div
@@ -107,6 +116,7 @@
           activeCityId={activeCity.id}
           {busy}
           {dirty}
+          activeNameReadOnly
           {onLoad}
           {onRename}
           {onDelete}
