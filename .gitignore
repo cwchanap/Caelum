@@ -16,5 +16,8 @@ playwright-report/
 # browser always ships Rust core logic matching the PR.
 src/generated/caelum_wasm/
 
-# Generated HPA-1144 Canvas2D verification screenshots
-/docs/superpowers/assets/2026-11-18-hpa-1144-canvas2d-fallback-*.png
+# Put raw verification output (screenshots, traces and logs) here.
+/verification-output/
+
+# Legacy capture naming under docs assets; keep concept art addable.
+/docs/superpowers/assets/*-canvas2d-fallback-*.png
