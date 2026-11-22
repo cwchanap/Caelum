@@ -388,7 +388,9 @@ describe("LinesPanel line workspace", () => {
     const service = within(card).getByTestId("route-service-route-bus-001");
     expect(serviceValue(service, "Fleet")).toBe("0");
     expect(serviceValue(service, "Daily cost")).toBe("$400");
-    expect(serviceValue(service, "Every")).toBe("6.0 min");
+    // The undeployed target estimate is marked as approximate, distinct
+    // from a live operating interval.
+    expect(serviceValue(service, "Every")).toBe("~6.0 min");
     // Deployment estimates and actions stay in the zero-fleet setup block.
     expect(serviceValue(service, "Recommended")).toBe("3 buses");
     expect(serviceValue(service, "Est. deploy cost")).toBe("$150,000");
@@ -502,7 +504,7 @@ describe("LinesPanel line workspace", () => {
     expect(screen.getByText("No fleet")).toBeVisible();
     const service = screen.getByTestId("route-service-route-bus-001");
     expect(service).toHaveTextContent("Target");
-    expect(service).toHaveTextContent("6.0 min");
+    expect(serviceValue(service, "Every")).toBe("~6.0 min");
     expect(service).toHaveTextContent("Recommended");
     expect(service).toHaveTextContent("3 buses");
     expect(service).toHaveTextContent("Est. daily cost");
@@ -707,6 +709,45 @@ describe("LinesPanel line workspace", () => {
       expect(service).toHaveTextContent("$0");
       expect(service).not.toHaveTextContent("Est. daily cost");
     }
+  });
+
+  it("keeps the service interval unavailable for a broken route instead of its target", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-001",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "broken", pausedAfterRepair: false },
+          // Rust withholds service metrics while no cycle is derivable; the
+          // card mirrors that projection. The target stays in its editor.
+          service: {
+            targetHeadwaySeconds: 360,
+            roundTripSeconds: null,
+            assignedFleet: 1,
+            requiredFleet: null,
+            estimatedDeploymentCost: null,
+            dailyOperatingCost: 0,
+            estimatedDailyOperatingCost: null,
+            nextVehicleCost: null,
+            nominalHeadwaySeconds: null,
+            waitingAtRiskCount: 0,
+            longestWaitSeconds: null,
+            canRetireVehicle: false,
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    const service = screen.getByTestId("route-service-route-bus-001");
+    expect(serviceValue(service, "Every")).toBe("—");
   });
 
   it("shows the live interval, one target editor, and Fleet stepper after deployment", async () => {
