@@ -72,6 +72,46 @@ function renderedBodyCenter(sample: { point: Point; angle: number }): Point {
   };
 }
 
+/** Geometry proof that the Inspector arrow actually renders: probe the
+ * painted triangle interior (an 8px-border CSS triangle offset up to 15px
+ * past the card edge) with elementFromPoint. The probe sits strictly outside
+ * the card's border box, so only an unclipped pseudo-element can satisfy it;
+ * overflow clipping on the card would yield the canvas underneath instead. */
+async function probedArrowHit(
+  page: Page,
+): Promise<{ side: string; hit: string }> {
+  return page.evaluate(() => {
+    const card = document.querySelector<HTMLElement>(
+      '[data-testid="panel-inspect"]',
+    );
+    if (card === null) {
+      throw new Error("inspector card is not mounted");
+    }
+    const side = card.getAttribute("data-side");
+    if (side === null || side === "") {
+      throw new Error("card carries no arrow side");
+    }
+    const rect = card.getBoundingClientRect();
+    const centerX = rect.left + rect.width / 2;
+    const centerY = rect.top + rect.height / 2;
+    // 3px into the painted triangle, always past the card border box.
+    const probe =
+      side === "left"
+        ? { x: rect.left - 3, y: centerY }
+        : side === "right"
+          ? { x: rect.right + 3, y: centerY }
+          : { x: centerX, y: rect.bottom + 3 };
+    const hit = document.elementFromPoint(probe.x, probe.y);
+    return {
+      side,
+      hit:
+        hit === card
+          ? "card"
+          : (hit?.getAttribute("data-testid") ?? hit?.tagName ?? "none"),
+    };
+  });
+}
+
 async function nextFrame(page: Page): Promise<void> {
   await page.evaluate(
     () =>
@@ -350,22 +390,32 @@ test("scrolls an overflowing anchored Inspector instead of zooming the map", asy
 
   const inspector = page.getByTestId("panel-inspect");
   await expect(inspector.getByText("Office Tower")).toBeVisible();
-  const overflow = await inspector.evaluate((element) => ({
+  // The inner region owns the overflow; the card itself stays non-clipping
+  // so the arrow placed outside its edge can render.
+  const scrollRegion = inspector.locator(".inspection-scroll");
+  const overflow = await scrollRegion.evaluate((element) => ({
     clientHeight: element.clientHeight,
     scrollHeight: element.scrollHeight,
     scrollTop: element.scrollTop,
   }));
   expect(overflow.scrollHeight).toBeGreaterThan(overflow.clientHeight);
   expect(overflow.scrollTop).toBe(0);
+  const cardScroll = await inspector.evaluate((element) => ({
+    clientHeight: element.clientHeight,
+    scrollHeight: element.scrollHeight,
+  }));
+  expect(cardScroll.scrollHeight).toBe(cardScroll.clientHeight);
 
   const box = (await inspector.boundingBox())!;
   await page.mouse.move(box.x + box.width / 2, box.y + 12);
   await page.mouse.wheel(0, 160);
   await expect
-    .poll(async () => inspector.evaluate((element) => element.scrollTop))
+    .poll(async () => scrollRegion.evaluate((element) => element.scrollTop))
     .toBeGreaterThan(0);
   expect((await runtimeSnapshot(page)).camera).toBeNull();
   await expect(inspector).toBeVisible();
+  // Scrolled and clamped, the arrow still renders outside the card edge.
+  await expect.poll(async () => (await probedArrowHit(page)).hit).toBe("card");
 });
 
 test("inspects a stop, building and vacant zoned land, then dismisses", async ({
@@ -477,6 +527,19 @@ test("inspects a stop, building and vacant zoned land, then dismisses", async ({
     "aria-label",
     /Queue \d+\/\d+/,
   );
+  // The arrow must actually render past the card edge, not merely exist in
+  // CSS: probe the painted triangle with elementFromPoint. Overflow would
+  // clip it, so the hit lands on the canvas underneath instead of the card.
+  const arrow = await probedArrowHit(page);
+  expect(arrow.hit).toBe("card");
+  const clip = await inspector.evaluate((element) => ({
+    cardOverflowY: getComputedStyle(element).overflowY,
+    regionOverflowY: getComputedStyle(
+      element.querySelector(".inspection-scroll")!,
+    ).overflowY,
+  }));
+  expect(clip.cardOverflowY).toBe("visible");
+  expect(clip.regionOverflowY).toBe("auto");
   await inspector.getByTestId(`open-service-${route.id}`).click();
   await expect(page.getByTestId("command-panel")).toHaveAttribute(
     "data-command-panel",

@@ -1963,11 +1963,21 @@ body {
   min-height: 44px;
 }
 
+/* The card itself never scrolls: any non-visible overflow would also clip
+ * horizontally and cut off the arrow pseudo-element placed outside its
+ * edge. Scrolling lives on .inspection-scroll inside. */
 .inspection-card {
   position: absolute;
   z-index: 33;
+  display: flex;
+  flex-direction: column;
   width: min(360px, calc(100% - 32px));
   max-height: calc(100% - var(--hud-top) - var(--hud-bottom) - 24px);
+}
+
+.inspection-scroll {
+  flex: 1 1 auto;
+  min-height: 0;
   overflow-y: auto;
 }
 

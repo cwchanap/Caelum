@@ -422,6 +422,21 @@ describe("InspectPanel visibility and placement", () => {
     }
   });
 
+  it("keeps scrolling on an inner region so the card itself never clips the arrow", () => {
+    renderPanel(transitInspector());
+    const card = screen.getByTestId("panel-inspect");
+    const scrollRegion = card.querySelector(".inspection-scroll");
+    expect(scrollRegion).not.toBeNull();
+    // All card content — header, queue bar and sections — lives inside the
+    // scroll region; the non-scrolling card carries only the placement and
+    // the arrow pseudo-element outside its edge.
+    expect(scrollRegion).toContainElement(screen.getByTestId("inspect-title"));
+    expect(scrollRegion).toContainElement(
+      screen.getByTestId("inspect-queue-bar"),
+    );
+    expect(scrollRegion).toContainElement(screen.getByTestId("platform-panel"));
+  });
+
   it("stays hidden when card dimensions are not measured yet", () => {
     render(InspectPanel, {
       props: {
