@@ -940,8 +940,9 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
     })
     .toBeGreaterThan(0);
   const routeName = page.getByTestId(`route-name-${routeId}`);
-  await expect(routeName).toHaveValue(created!.name);
-  await routeName.fill("Harbour Shuttle");
+  await expect(routeName).toHaveText(created!.name);
+  await page.getByRole("button", { name: `Rename ${created!.name}` }).click();
+  await page.getByTestId(`route-name-${routeId}`).fill("Harbour Shuttle");
   await page.keyboard.press("Enter");
   const differentColor = created!.color === "#2867b2" ? "#2e9e5b" : "#2867b2";
   await page.getByTestId(`route-color-${routeId}-${differentColor}`).click();
@@ -968,10 +969,13 @@ test("completes a Lines lifecycle while the destination stays pinned", async ({
   await expect(page.getByTestId("route-draft")).toHaveCount(0);
   await expect(page.getByTestId("lines-list")).toBeFocused();
 
+  await page.getByRole("button", { name: "Rename Harbour Shuttle" }).click();
   const renamed = page.getByTestId(`route-name-${routeId}`);
   await renamed.fill("Temporary Name");
   await renamed.press("Escape");
-  await expect(renamed).toHaveValue("Harbour Shuttle");
+  await expect(page.getByTestId(`route-name-${routeId}`)).toHaveText(
+    "Harbour Shuttle",
+  );
   await expect(page.getByTestId("panel-lines")).toBeVisible();
 
   await page.keyboard.press("Escape");

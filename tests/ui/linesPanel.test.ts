@@ -131,13 +131,13 @@ describe("LinesPanel line workspace", () => {
 
     expect(screen.getByRole("button", { name: "New Bus" })).toBeVisible();
     expect(screen.getByRole("button", { name: "New Metro" })).toBeVisible();
-    expect(screen.getByTestId("route-name-route-bus-001")).toHaveValue(
+    expect(screen.getByTestId("route-name-route-bus-001")).toHaveTextContent(
       "Harbour Bus",
     );
     expect(screen.getByText("Bus")).toBeVisible();
     expect(screen.getByText("3 stops")).toBeVisible();
     expect(screen.getByText("Running")).toBeVisible();
-    expect(screen.getByTestId("route-name-line-metro-001")).toHaveValue(
+    expect(screen.getByTestId("route-name-line-metro-001")).toHaveTextContent(
       "North Metro",
     );
     expect(screen.getByText("Metro")).toBeVisible();
@@ -158,7 +158,9 @@ describe("LinesPanel line workspace", () => {
         name: "Focus North Station to Harbour Station",
       }),
     ).toBeVisible();
-    expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /Delete route/ }),
+    ).toHaveLength(2);
 
     await fireEvent.click(screen.getByRole("button", { name: "New Bus" }));
     expect(props.onSetTool).toHaveBeenCalledWith("busRoute");
@@ -243,7 +245,10 @@ describe("LinesPanel line workspace", () => {
       within(card).getByRole("button", { name: "Select Harbour Bus" }),
     ).toHaveAttribute("aria-pressed", "true");
     const service = within(card).getByTestId("route-service-route-bus-001");
-    expect(serviceValue(service, "Target")).toBe("6.0 min");
+    expect(serviceValue(service, "Every")).toBe("5.8 min");
+    expect(within(card).getByTestId("route-headway-route-bus-001")).toHaveValue(
+      6,
+    );
     expect(serviceValue(service, "Fleet")).toBe("2");
     expect(serviceValue(service, "Daily cost")).toBe("$800");
 
@@ -383,7 +388,7 @@ describe("LinesPanel line workspace", () => {
     const service = within(card).getByTestId("route-service-route-bus-001");
     expect(serviceValue(service, "Fleet")).toBe("0");
     expect(serviceValue(service, "Daily cost")).toBe("$400");
-    expect(serviceValue(service, "Target")).toBe("6.0 min");
+    expect(serviceValue(service, "Every")).toBe("6.0 min");
     // Deployment estimates and actions stay in the zero-fleet setup block.
     expect(serviceValue(service, "Recommended")).toBe("3 buses");
     expect(serviceValue(service, "Est. deploy cost")).toBe("$150,000");
@@ -398,8 +403,11 @@ describe("LinesPanel line workspace", () => {
   it("commits a route rename once when Enter is followed by blur", async () => {
     const props = panelProps();
     render(LinesPanel, { props });
-    const input = screen.getByTestId("route-name-route-bus-001");
 
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Bus" }),
+    );
+    const input = screen.getByTestId("route-name-route-bus-001");
     await fireEvent.input(input, { target: { value: "Harbour Express" } });
     await fireEvent.keyDown(input, { key: "Enter" });
     await fireEvent.blur(input);
@@ -411,9 +419,13 @@ describe("LinesPanel line workspace", () => {
     );
   });
 
-  it("restores the canonical name and contains Escape in the route input", async () => {
+  it("restores the canonical name and contains Escape in the route editor", async () => {
     const props = panelProps();
     render(LinesPanel, { props });
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Bus" }),
+    );
     const input = screen.getByTestId("route-name-route-bus-001");
     const parentEscape = vi.fn();
     window.addEventListener("keydown", parentEscape);
@@ -421,10 +433,12 @@ describe("LinesPanel line workspace", () => {
     await fireEvent.input(input, { target: { value: "Unsaved name" } });
     await fireEvent.keyDown(input, { key: "Escape" });
 
-    expect(input).toHaveValue("Harbour Bus");
     expect(props.onRenameRoute).not.toHaveBeenCalled();
     expect(parentEscape).not.toHaveBeenCalled();
-    expect(document.activeElement).not.toBe(input);
+    expect(screen.getByTestId("route-name-route-bus-001")).toHaveTextContent(
+      "Harbour Bus",
+    );
+    expect(screen.queryByRole("textbox")).toBeNull();
     window.removeEventListener("keydown", parentEscape);
   });
 
@@ -434,7 +448,7 @@ describe("LinesPanel line workspace", () => {
     const del = screen.getByTestId("route-delete-route-bus-001");
 
     await fireEvent.click(del);
-    expect(del).toHaveTextContent("Delete?");
+    expect(del).toHaveClass("route-delete--armed");
     expect(props.onDeleteRoute).not.toHaveBeenCalled();
     await fireEvent.click(del);
     expect(props.onDeleteRoute).toHaveBeenCalledTimes(1);
@@ -695,7 +709,7 @@ describe("LinesPanel line workspace", () => {
     }
   });
 
-  it("shows Target with editor, Estimated interval, separate Fleet/Recommended, and Daily cost after deployment", async () => {
+  it("shows the live interval, one target editor, and Fleet stepper after deployment", async () => {
     const props = panelProps({
       routes: [
         {
@@ -746,8 +760,7 @@ describe("LinesPanel line workspace", () => {
     render(LinesPanel, { props });
 
     const service = screen.getByTestId("route-service-route-bus-002");
-    expect(serviceValue(service, "Target")).toBe("6.0 min");
-    expect(serviceValue(service, "Estimated interval")).toBe("5.8 min");
+    expect(serviceValue(service, "Every")).toBe("5.8 min");
     expect(serviceValue(service, "Fleet")).toBe("2");
     expect(serviceValue(service, "Recommended")).toBe("3 buses");
     expect(serviceValue(service, "Daily cost")).toBe("$800");
@@ -771,7 +784,7 @@ describe("LinesPanel line workspace", () => {
     expect(screen.queryByRole("button", { name: /Deploy/ })).toBeNull();
 
     const metroService = screen.getByTestId("route-service-line-metro-001");
-    expect(serviceValue(metroService, "Estimated interval")).toBe("5.0 min");
+    expect(serviceValue(metroService, "Every")).toBe("5.0 min");
     expect(serviceValue(metroService, "Fleet")).toBe("2");
     expect(serviceValue(metroService, "Recommended")).toBe("2 trains");
     expect(serviceValue(metroService, "Daily cost")).toBe("$0");
@@ -884,7 +897,7 @@ describe("LinesPanel line workspace", () => {
     expect(serviceValue(service, "Longest wait")).toBeNull();
     expect(
       screen.getByTestId("route-add-vehicle-route-bus-above-rec"),
-    ).toBeVisible();
+    ).toBeEnabled();
   });
 
   it("offers a Rust-priced bus top-up and dispatches it once", async () => {
@@ -1093,7 +1106,7 @@ describe("LinesPanel line workspace", () => {
     expect(props.onAddServiceVehicle).toHaveBeenCalledWith("route-bus-b");
   });
 
-  it("hides retire when canRetireVehicle is false even with multiple vehicles", () => {
+  it("disables retire when canRetireVehicle is false even with multiple vehicles", async () => {
     const props = panelProps({
       routes: [
         {
@@ -1121,15 +1134,18 @@ describe("LinesPanel line workspace", () => {
     });
     render(LinesPanel, { props });
 
+    const retire = screen.getByTestId(
+      "route-retire-vehicle-route-bus-no-retire",
+    );
+    expect(retire).toBeDisabled();
+    // A disabled stepper button cannot dispatch its service action.
+    await fireEvent.click(retire);
+    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
     expect(
-      screen.queryByTestId("route-retire-vehicle-route-bus-no-retire"),
-    ).toBeNull();
-    expect(
-      screen.queryByRole("button", {
+      screen.getByRole("button", {
         name: "Retire bus on Harbour Bus · no refund",
       }),
-    ).toBeNull();
-    expect(props.onRetireServiceVehicle).not.toHaveBeenCalled();
+    ).toBeDisabled();
   });
 
   it("labels Metro retire as a train", () => {
@@ -1168,7 +1184,7 @@ describe("LinesPanel line workspace", () => {
     ).toBeVisible();
   });
 
-  it("hides the top-up when Rust provides no offer regardless of fleet values", () => {
+  it("disables the top-up when Rust provides no offer regardless of fleet values", async () => {
     const props = panelProps({
       routes: [
         {
@@ -1203,11 +1219,12 @@ describe("LinesPanel line workspace", () => {
     const health = screen.getByTestId("route-health-route-bus-no-offer");
     expect(health).toHaveTextContent("1 rider at risk");
     expect(health).not.toHaveTextContent("recover");
-    expect(
-      screen.queryByTestId("route-add-vehicle-route-bus-no-offer"),
-    ).toBeNull();
-    expect(serviceValue(service, "Fleet")).toBe("2");
+    const add = screen.getByTestId("route-add-vehicle-route-bus-no-offer");
+    expect(add).toBeDisabled();
+    // A disabled stepper button cannot dispatch its service action.
+    await fireEvent.click(add);
     expect(props.onAddServiceVehicle).not.toHaveBeenCalled();
+    expect(serviceValue(service, "Fleet")).toBe("2");
   });
 
   it("focuses the Lines list without scrolling after a draft is canceled", async () => {

@@ -10,6 +10,7 @@
   import { formatMinutes } from "../../../format";
   import { formatBudget } from "../../../runtime/runtimeSelectors";
   import { ROUTE_COLOR_PALETTE } from "../../../ui/routePalette";
+  import InlineNameEditor from "../../city/InlineNameEditor.svelte";
   import RouteEditor from "./RouteEditor.svelte";
 
   type RouteTool = Extract<Tool, "busRoute" | "metroLine">;
@@ -83,7 +84,6 @@
   }: Props = $props();
 
   let pendingDeleteId = $state<string | null>(null);
-  let routeNameDrafts = $state<Record<string, string>>({});
   let headwayMinuteDrafts = $state<Record<string, string>>({});
   let listRegion: HTMLElement | null = $state(null);
   let previousDraftActive = $state<boolean | null>(null);
@@ -91,35 +91,6 @@
 
   // Rust stores target_headway_seconds as u32; minutes * 60 must not overflow it.
   const MAX_HEADWAY_MINUTES = Math.floor(0xffff_ffff / 60);
-
-  function routeNameFor(routeId: string, canonical: string): string {
-    return routeNameDrafts[routeId] ?? canonical;
-  }
-
-  function handleRouteNameInput(
-    routeId: string,
-    event: Event & { currentTarget: HTMLInputElement },
-  ): void {
-    routeNameDrafts[routeId] = event.currentTarget.value;
-  }
-
-  function commitRouteName(routeId: string, value: string): void {
-    if (!(routeId in routeNameDrafts)) return;
-    delete routeNameDrafts[routeId];
-    onRenameRoute(routeId, value);
-  }
-
-  function cancelRouteName(
-    routeId: string,
-    canonical: string,
-    event: KeyboardEvent & { currentTarget: HTMLInputElement },
-  ): void {
-    delete routeNameDrafts[routeId];
-    event.currentTarget.value = canonical;
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.blur();
-  }
 
   function handleDeleteClick(routeId: string): void {
     if (pendingDeleteId === routeId) {
@@ -166,9 +137,35 @@
       : primary[0].toUpperCase() + primary.slice(1);
   }
 
+  function vehicleNoun(mode: "bus" | "metro"): string {
+    return mode === "metro" ? "train" : "bus";
+  }
+
+  // jsdom/fireEvent can dispatch clicks at disabled buttons, so the Rust
+  // authorization gates are enforced here as well as in the runtime latch.
+  function addVehicle(route: ShellRouteListState[number]): void {
+    if (route.service.nextVehicleCost === null) return;
+    if (pendingServiceActions[route.id] === true) return;
+    void onAddServiceVehicle(route.id);
+  }
+
+  function retireVehicle(route: ShellRouteListState[number]): void {
+    if (!route.service.canRetireVehicle) return;
+    if (pendingServiceActions[route.id] === true) return;
+    void onRetireServiceVehicle(route.id);
+  }
+
   function fleetNoun(mode: "bus" | "metro", count: number): string {
     if (mode === "metro") return count === 1 ? "train" : "trains";
     return count === 1 ? "bus" : "buses";
+  }
+
+  // The live achieved interval while Rust projects one; otherwise the target
+  // stands in as the achievable estimate. No TypeScript service math.
+  function intervalSeconds(route: ShellRouteListState[number]): number | null {
+    return (
+      route.service.nominalHeadwaySeconds ?? route.service.targetHeadwaySeconds
+    );
   }
 
   $effect(() => {
@@ -294,34 +291,14 @@
                     >
                     <span class="route-stops">{route.stopCount} stops</span>
                   </button>
-                  <input
-                    type="text"
-                    class="route-name route-input"
-                    data-testid={`route-name-${route.id}`}
-                    value={routeNameFor(route.id, route.name)}
-                    aria-label={`Rename ${route.name}`}
-                    oninput={(event) =>
-                      handleRouteNameInput(
-                        route.id,
-                        event as Event & { currentTarget: HTMLInputElement },
-                      )}
-                    onblur={(event) =>
-                      commitRouteName(route.id, event.currentTarget.value)}
-                    onkeydown={(event) => {
-                      if (event.key === "Escape") {
-                        cancelRouteName(
-                          route.id,
-                          route.name,
-                          event as KeyboardEvent & {
-                            currentTarget: HTMLInputElement;
-                          },
-                        );
-                      } else if (event.key === "Enter") {
-                        commitRouteName(route.id, event.currentTarget.value);
-                        event.currentTarget.blur();
-                      }
-                    }}
-                  />
+                  <div class="route-name-chip">
+                    <InlineNameEditor
+                      value={route.name}
+                      label={`Rename ${route.name}`}
+                      testId={`route-name-${route.id}`}
+                      onCommit={(name) => onRenameRoute(route.id, name)}
+                    />
+                  </div>
                 </div>
                 <div
                   class="route-service-status"
@@ -368,12 +345,13 @@
                   data-testid={`route-service-${route.id}`}
                 >
                   <div class="route-service-row">
-                    <span class="route-service-label">Target</span>
+                    <span class="route-service-label">Every</span>
                     <span class="route-service-value"
-                      >{formatMinutes(route.service.targetHeadwaySeconds)}</span
+                      >{formatMinutes(intervalSeconds(route))}</span
                     >
                   </div>
                   <div class="route-service-row">
+                    <span class="route-service-label">Target</span>
                     <input
                       type="number"
                       min="1"
@@ -406,9 +384,31 @@
                   </div>
                   <div class="route-service-row">
                     <span class="route-service-label">Fleet</span>
-                    <span class="route-service-value"
+                    <button
+                      type="button"
+                      class="route-step-btn"
+                      data-testid={`route-retire-vehicle-${route.id}`}
+                      disabled={!route.service.canRetireVehicle ||
+                        pendingServiceActions[route.id] === true}
+                      aria-label={`Retire ${vehicleNoun(route.mode)} on ${route.name} · no refund`}
+                      onclick={() => retireVehicle(route)}
+                    >
+                      −
+                    </button>
+                    <span class="route-service-value route-fleet-count"
                       >{route.service.assignedFleet}</span
                     >
+                    <button
+                      type="button"
+                      class="route-step-btn"
+                      data-testid={`route-add-vehicle-${route.id}`}
+                      disabled={route.service.nextVehicleCost === null ||
+                        pendingServiceActions[route.id] === true}
+                      aria-label={`Add ${vehicleNoun(route.mode)} on ${route.name}${route.service.nextVehicleCost === null ? "" : ` · ${formatBudget(route.service.nextVehicleCost)}`}`}
+                      onclick={() => addVehicle(route)}
+                    >
+                      +
+                    </button>
                   </div>
                   <div class="route-service-row">
                     <span class="route-service-label">Daily cost</span>
@@ -461,15 +461,6 @@
                       </button>
                     {/if}
                   {:else}
-                    <div class="route-service-row">
-                      <span class="route-service-label">Estimated interval</span
-                      >
-                      <span class="route-service-value"
-                        >{formatMinutes(
-                          route.service.nominalHeadwaySeconds,
-                        )}</span
-                      >
-                    </div>
                     <div class="route-service-row">
                       <span class="route-service-label">Recommended</span>
                       <span class="route-service-value"
@@ -530,34 +521,10 @@
                     </ul>
                   {/if}
                 {/if}
-                {#if route.service.nextVehicleCost !== null}
-                  <button
-                    type="button"
-                    class="route-toggle"
-                    data-testid={`route-add-vehicle-${route.id}`}
-                    disabled={pendingServiceActions[route.id] === true}
-                    aria-label={`Add ${route.mode === "metro" ? "train" : "bus"} on ${route.name} · ${formatBudget(route.service.nextVehicleCost)}`}
-                    onclick={() => void onAddServiceVehicle(route.id)}
-                  >
-                    {`Add ${route.mode === "metro" ? "train" : "bus"} · ${formatBudget(route.service.nextVehicleCost)}`}
-                  </button>
-                {/if}
-                {#if route.service.canRetireVehicle}
-                  <button
-                    type="button"
-                    class="route-toggle"
-                    data-testid={`route-retire-vehicle-${route.id}`}
-                    disabled={pendingServiceActions[route.id] === true}
-                    aria-label={`Retire ${route.mode === "metro" ? "train" : "bus"} on ${route.name} · no refund`}
-                    onclick={() => void onRetireServiceVehicle(route.id)}
-                  >
-                    {`Retire ${route.mode === "metro" ? "train" : "bus"} · no refund`}
-                  </button>
-                {/if}
                 <div class="route-item-controls">
                   <button
                     type="button"
-                    class="route-toggle"
+                    class="route-toggle route-icon"
                     data-testid={`route-edit-${route.id}`}
                     aria-label={`Edit route ${route.name}`}
                     onclick={() => {
@@ -565,16 +532,26 @@
                       onEditRoute(route.id);
                     }}
                   >
-                    Edit
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      <path
+                        d="M11.3 1.6a1.3 1.3 0 0 1 1.85 0l1.25 1.25a1.3 1.3 0 0 1 0 1.85l-8.4 8.4-3.9 1.05 1.05-3.9z"
+                      />
+                    </svg>
                   </button>
                   <button
                     type="button"
-                    class="route-toggle"
+                    class="route-toggle route-icon"
                     data-testid={`route-toggle-${route.id}`}
                     aria-label={`${route.active ? "Pause" : "Resume"} ${route.name}`}
                     onclick={() => onToggleRouteActive(route.id)}
                   >
-                    {route.active ? "Pause" : "Resume"}
+                    <svg viewBox="0 0 16 16" aria-hidden="true">
+                      {#if route.active}
+                        <path d="M4.5 3h2.4v10H4.5zM9.1 3h2.4v10H9.1z" />
+                      {:else}
+                        <path d="M4.8 3l8.4 5-8.4 5z" />
+                      {/if}
+                    </svg>
                   </button>
                   <div
                     class="route-colors"
@@ -595,12 +572,23 @@
                   </div>
                   <button
                     type="button"
-                    class="route-delete"
+                    class="route-delete route-icon"
                     class:route-delete--armed={pendingDeleteId === route.id}
                     data-testid={`route-delete-${route.id}`}
+                    aria-label={pendingDeleteId === route.id
+                      ? `Confirm delete ${route.name}`
+                      : `Delete route ${route.name}`}
                     onclick={() => handleDeleteClick(route.id)}
                   >
-                    {pendingDeleteId === route.id ? "Delete?" : "Delete"}
+                    <svg
+                      viewBox="0 0 16 16"
+                      aria-hidden="true"
+                      class="route-delete-icon"
+                    >
+                      <path
+                        d="M3 4.5h10M6.4 4.5v-2h3.2v2M4.6 4.5l.8 9.2h5.2l.8-9.2M6.8 7v4M9.2 7v4"
+                      />
+                    </svg>
                   </button>
                 </div>
               </li>
