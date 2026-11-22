@@ -1098,7 +1098,9 @@ test("starts a bus service and recovers fleet after a route edit", async ({
       );
     })
     .toBe(true);
-  await expect(service).toContainText("1.0 min");
+  // The single target editor reflects the applied whole-minute target.
+  await expect(page.getByTestId("route-headway-route-001")).toHaveValue("1");
+  await expect(service).toContainText("Fleet");
 
   // Save & run already deployed the initial fleet. Changing the target does
   // not issue another DeployInitialFleet for this now-running route.
@@ -1129,15 +1131,12 @@ test("starts a bus service and recovers fleet after a route edit", async ({
     throw new Error("Post-deploy Rust required fleet is missing");
   }
 
-  // Running-service UI keeps the target editor and shows Estimated interval
-  // with separate Fleet/Recommended values; setup deploy controls stay absent.
+  // Running-service UI keeps the single target editor and shows the live
+  // Every interval with separate Fleet/Recommended values; setup deploy
+  // controls stay absent.
+  await expect(page.getByTestId("route-headway-route-001")).toHaveValue("1");
   await expect(
-    service.getByText("Target").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText("1.0 min");
-  await expect(
-    service
-      .getByText("Estimated interval")
-      .locator("xpath=following-sibling::span[1]"),
+    service.getByText("Every").locator("xpath=following-sibling::span[1]"),
   ).toHaveText(/^\d+\.\d min$/);
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
@@ -1463,9 +1462,7 @@ test("tunes a Save & run bus service from its line summary", async ({
   expect(postAddMetrics.dailyOperatingCost).toBeGreaterThan(baselineDailyCost);
   const service = page.getByTestId("route-service-route-001");
   await expect(
-    service
-      .getByText("Estimated interval")
-      .locator("xpath=following-sibling::span[1]"),
+    service.getByText("Every").locator("xpath=following-sibling::span[1]"),
   ).toHaveText(`${(postAddNominal / 60).toFixed(1)} min`);
   await expect(
     service.getByText("Fleet").locator("xpath=following-sibling::span[1]"),
@@ -1708,24 +1705,18 @@ test("starts a Metro service with Save & run and tunes its target headway", asyn
   const service = page.getByTestId(`route-service-${lineId}`);
   await page.getByTestId(`route-headway-${lineId}`).fill("6");
   await page.getByTestId(`route-headway-set-${lineId}`).click();
+  // The saved running line shows the actual target in its single editor and
+  // the live interval, with separate Fleet/Recommended; setup deploy controls
+  // stay absent.
+  await expect(page.getByTestId(`route-headway-${lineId}`)).toHaveValue("6");
   await expect(
-    service.getByText("Target").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText("6.0 min");
+    service.getByText("Every").locator("xpath=following-sibling::span[1]"),
+  ).toHaveText(/^\d+\.\d min$/);
   await expect(
     service
       .getByText("Recommended")
       .locator("xpath=following-sibling::span[1]"),
   ).toHaveText("1 train");
-  // Editing a running service keeps its target editor and Estimated
-  // interval with separate Fleet/Recommended; setup deploy controls stay absent.
-  await expect(
-    service.getByText("Target").locator("xpath=following-sibling::span[1]"),
-  ).toHaveText("6.0 min");
-  await expect(
-    service
-      .getByText("Estimated interval")
-      .locator("xpath=following-sibling::span[1]"),
-  ).toHaveText(/^\d+\.\d min$/);
   const updatedSnapshot = await runtimeSnapshot(page);
   const updatedLine = updatedSnapshot.state.transit.metroLines.find(
     (line) => line.id === lineId,
