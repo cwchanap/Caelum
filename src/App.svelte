@@ -126,6 +126,12 @@
     }
   }
 
+  function handleClearSelection(): void {
+    if (runtime !== null) {
+      setSnapshot(runtime.clearSelection());
+    }
+  }
+
   async function refreshCities(): Promise<void> {
     if (runtime === null) return;
     const requestId = ++cityListRequestId;
@@ -941,6 +947,7 @@
               {stageHeight}
               onAssignRouteToPlatform={handleAssignRouteToPlatform}
               onOpenServiceControls={handleOpenServiceControls}
+              onClose={handleClearSelection}
             />
           {/if}
 

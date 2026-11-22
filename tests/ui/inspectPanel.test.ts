@@ -7,6 +7,7 @@ import type {
   ShellInspectorState,
   ShellTransitInspectorState,
   ShellVehicleInspectorState,
+  ShellZoneInspectorState,
 } from "../../src/runtime/types";
 
 // jsdom ships no ResizeObserver; Svelte's offsetWidth/Height bindings only
@@ -47,6 +48,7 @@ function renderPanel(
       platformId: string,
     ) => void;
     onOpenServiceControls?: (routeId: string) => void;
+    onClose?: () => void;
   } = {},
 ) {
   render(InspectPanel, {
@@ -59,6 +61,7 @@ function renderPanel(
       stageHeight: 0,
       onAssignRouteToPlatform: callbacks.onAssignRouteToPlatform ?? vi.fn(),
       onOpenServiceControls: callbacks.onOpenServiceControls ?? vi.fn(),
+      onClose: callbacks.onClose ?? vi.fn(),
     },
   });
 }
@@ -96,6 +99,21 @@ function transitInspector(
         routes: [],
       },
     ],
+    ...overrides,
+  };
+}
+
+function zoneInspector(
+  overrides: Partial<ShellZoneInspectorState> = {},
+): ShellZoneInspectorState {
+  return {
+    kind: "zone",
+    zoneLabel: "Residential Zone",
+    runningHint: {
+      nodeKind: "stop",
+      routeName: "Bus 1",
+      routeColor: "#2563eb",
+    },
     ...overrides,
   };
 }
@@ -164,6 +182,72 @@ describe("InspectPanel workplace status", () => {
       screen.getByTestId("building-panel").querySelector(".workplace-pattern"),
     ).toBeNull();
     expect(screen.getByText("Jobs 1 / 4")).toBeInTheDocument();
+  });
+});
+
+describe("InspectPanel header, close and queue bar", () => {
+  it("presents the inspector label as the header without numbered headings", () => {
+    renderPanel(transitInspector());
+
+    expect(screen.getByTestId("inspect-title")).toHaveTextContent("Bus Stop");
+    expect(screen.queryByText(/07/)).toBeNull();
+  });
+
+  it("closes the inspector from the card button", async () => {
+    const onClose = vi.fn();
+    renderPanel(transitInspector(), { onClose });
+
+    await fireEvent.click(screen.getByTestId("inspect-close"));
+
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it("scales one queue bar to the node's occupancy over total platform capacity", () => {
+    renderPanel(transitInspector());
+
+    const bar = screen.getByTestId("inspect-queue-bar");
+    expect(bar).toHaveAttribute("aria-label", "Queue 4/60");
+    expect(screen.getByTestId("inspect-queue-fill").style.width).toBe(
+      `${(4 / 60) * 100}%`,
+    );
+  });
+});
+
+describe("InspectPanel vacant zone", () => {
+  it("labels the zone and hints at the nearby running service", () => {
+    renderPanel(zoneInspector());
+
+    expect(screen.getByTestId("inspect-title")).toHaveTextContent(
+      "Residential Zone",
+    );
+    expect(screen.getByTestId("zone-hint-route")).toHaveTextContent("Bus 1");
+    expect(screen.getByTestId("zone-hint")).toHaveTextContent("Bus stop");
+    expect(screen.getByTestId("zone-hint")).toHaveTextContent(
+      /proximity hint, growth not guaranteed/i,
+    );
+  });
+
+  it("names a metro station hint for station coverage", () => {
+    renderPanel(
+      zoneInspector({
+        runningHint: {
+          nodeKind: "station",
+          routeName: "Metro 1",
+          routeColor: "#111827",
+        },
+      }),
+    );
+
+    expect(screen.getByTestId("zone-hint")).toHaveTextContent("Metro station");
+  });
+
+  it("stays quiet when no running line covers the zone", () => {
+    renderPanel(zoneInspector({ runningHint: null }));
+
+    expect(screen.queryByTestId("zone-hint-route")).toBeNull();
+    expect(screen.getByTestId("zone-quiet")).toHaveTextContent(
+      /no running line serves this land yet/i,
+    );
   });
 });
 
@@ -323,6 +407,7 @@ describe("InspectPanel visibility and placement", () => {
           stageHeight: 800,
           onAssignRouteToPlatform: vi.fn(),
           onOpenServiceControls: vi.fn(),
+          onClose: vi.fn(),
         },
       });
 
@@ -348,6 +433,7 @@ describe("InspectPanel visibility and placement", () => {
         stageHeight: 800,
         onAssignRouteToPlatform: vi.fn(),
         onOpenServiceControls: vi.fn(),
+        onClose: vi.fn(),
       },
     });
 

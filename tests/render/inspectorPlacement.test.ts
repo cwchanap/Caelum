@@ -93,6 +93,18 @@ describe("placeInspectorPopover", () => {
     expect(result!.left).toBeCloseTo(box.right + INSPECTOR_POPOVER_GAP);
   });
 
+  it("points its side hint at a tile beside the card", () => {
+    expect(placement({ x: 4, y: 4 })!.side).toBe("left");
+  });
+
+  it("keeps pointing at the tile after a right-edge flip", () => {
+    expect(placement({ x: 9, y: 4 })!.side).toBe("right");
+  });
+
+  it("points up from a card flipped above the bottom HUD band", () => {
+    expect(placement({ x: 4, y: 9 })!.side).toBe("bottom");
+  });
+
   it("nudges a too-wide card inside the safe area beside a visible edge tile", () => {
     const stage = { width: 400, height: 500 };
     const card = { width: 300, height: 100 };

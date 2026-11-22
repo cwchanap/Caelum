@@ -130,10 +130,26 @@ export interface ShellVehicleInspectorState {
   destinationLabel: string;
 }
 
+/** Proximity hint for vacant zoned land: a serving node on a running line
+ *  near the tile. A hint, not a growth guarantee — Rust active-services and
+ *  building-footprint checks still govern outcomes. */
+export interface ShellZoneRunningHint {
+  nodeKind: "stop" | "station";
+  routeName: string;
+  routeColor: string;
+}
+
+export interface ShellZoneInspectorState {
+  kind: "zone";
+  zoneLabel: string;
+  runningHint: ShellZoneRunningHint | null;
+}
+
 export type ShellInspectorState =
   | ShellTransitInspectorState
   | ShellBuildingInspectorState
-  | ShellVehicleInspectorState;
+  | ShellVehicleInspectorState
+  | ShellZoneInspectorState;
 
 export interface RouteEditorWaypointView {
   id: string;
@@ -347,6 +363,9 @@ export interface RuntimeController {
   cancelRouteDraft: () => RuntimeSnapshot;
   reloadRouteDraft: () => RuntimeSnapshot;
   handleEscape: () => RuntimeSnapshot;
+  /** Clears the selected tile/node/vehicle (Inspect popover) without
+   *  touching route selection, camera, overlays or tool state. */
+  clearSelection: () => RuntimeSnapshot;
   renameRoute: (routeId: string, name: string) => RuntimeCommandResult;
   recolorRoute: (routeId: string, color: string) => RuntimeCommandResult;
   setServiceTargetHeadway: (

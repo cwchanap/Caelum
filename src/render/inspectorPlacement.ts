@@ -28,6 +28,9 @@ function clamp(value: number, min: number, max: number): number {
   return Math.min(Math.max(value, min), max);
 }
 
+/** Which edge of the card carries the arrow pointing at the selected tile. */
+export type InspectorPopoverSide = "left" | "right" | "bottom";
+
 /**
  * Stage-local position for the Inspector card, or `null` when the selected
  * tile's center is outside the visible map area (or nothing is measured yet).
@@ -40,7 +43,11 @@ export function placeInspectorPopover({
   tile,
   map,
   camera,
-}: InspectorPopoverInput): { left: number; top: number } | null {
+}: InspectorPopoverInput): {
+  left: number;
+  top: number;
+  side: InspectorPopoverSide;
+} | null {
   if (
     !isPositive(stage.width) ||
     !isPositive(stage.height) ||
@@ -81,17 +88,26 @@ export function placeInspectorPopover({
   const tileBottom = centerY + size / 2;
 
   // Prefer the roomier side so a tile near an edge flips before it clamps.
-  const left =
-    safeRight - tileRight >= tileLeft - safeLeft
-      ? tileRight + INSPECTOR_POPOVER_GAP
-      : tileLeft - INSPECTOR_POPOVER_GAP - card.width;
-  const top =
-    safeBottom - tileBottom >= tileTop - safeTop
-      ? tileBottom + INSPECTOR_POPOVER_GAP
-      : tileTop - INSPECTOR_POPOVER_GAP - card.height;
+  const flippedLeft = safeRight - tileRight < tileLeft - safeLeft;
+  const flippedAbove = safeBottom - tileBottom < tileTop - safeTop;
+  const left = flippedLeft
+    ? tileLeft - INSPECTOR_POPOVER_GAP - card.width
+    : tileRight + INSPECTOR_POPOVER_GAP;
+  const top = flippedAbove
+    ? tileTop - INSPECTOR_POPOVER_GAP - card.height
+    : tileBottom + INSPECTOR_POPOVER_GAP;
+
+  // The arrow points back along the axis the card had to flip on; the
+  // horizontal side wins when neither axis was constrained.
+  const side: InspectorPopoverSide = flippedLeft
+    ? "right"
+    : flippedAbove
+      ? "bottom"
+      : "left";
 
   return {
     left: clamp(left, safeLeft, Math.max(safeLeft, safeRight - card.width)),
     top: clamp(top, safeTop, Math.max(safeTop, safeBottom - card.height)),
+    side,
   };
 }

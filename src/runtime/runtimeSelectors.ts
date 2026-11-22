@@ -11,8 +11,13 @@ import type {
 } from "../domain/types";
 import { AREA_LABELS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
+import {
+  METRO_STATION_COVERAGE_RADIUS,
+  stopCoverageRadius,
+} from "../domain/catalog/transit";
 import { OVERLAY_CATALOG } from "../ui/overlayCatalog";
 import { resolveNodeAtTile } from "../ui/actions";
+import { isPresentTransitNode } from "./presentationView";
 import { canSaveRouteDraft } from "../ui/routeDraft";
 import { pad2 } from "../format";
 import {
@@ -38,6 +43,8 @@ import type {
   ShellRouteListState,
   ShellRouteWaitLocation,
   ShellState,
+  ShellZoneInspectorState,
+  ShellZoneRunningHint,
 } from "./types";
 
 const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
@@ -158,6 +165,81 @@ function includesPoint(points: Point[], target: Point): boolean {
   return points.some((point) => point.x === target.x && point.y === target.y);
 }
 
+function chebyshevWithin(a: Point, b: Point, radius: number): boolean {
+  return Math.max(Math.abs(a.x - b.x), Math.abs(a.y - b.y)) <= radius;
+}
+
+function runningRouteForNode(
+  state: GameState,
+  nodeKind: "stop" | "station",
+  nodeId: string,
+): ShellZoneRunningHint | null {
+  const serving =
+    nodeKind === "stop"
+      ? state.transit.routes.filter((route) => route.stopIds.includes(nodeId))
+      : state.transit.metroLines.filter((line) =>
+          line.stationIds.includes(nodeId),
+        );
+  const running = serving.find(
+    (route) => routeServiceStatus(route).primary === "running",
+  );
+  return running === undefined
+    ? null
+    : { nodeKind, routeName: running.name, routeColor: running.color };
+}
+
+/** Serving node on a running line within the same Chebyshev coverage square
+ *  the overlay draws, stops before stations. */
+function zoneRunningHint(
+  state: GameState,
+  point: Point,
+): ShellZoneRunningHint | null {
+  const stopHint = state.transit.stops
+    .filter(
+      (stop) =>
+        isPresentTransitNode(stop) &&
+        chebyshevWithin(stop.position, point, stopCoverageRadius(stop)),
+    )
+    .map((stop) => runningRouteForNode(state, "stop", stop.id))
+    .find((hint): hint is ShellZoneRunningHint => hint !== null);
+  if (stopHint !== undefined) {
+    return stopHint;
+  }
+  return (
+    state.transit.stations
+      .filter(
+        (station) =>
+          isPresentTransitNode(station) &&
+          chebyshevWithin(
+            station.position,
+            point,
+            METRO_STATION_COVERAGE_RADIUS,
+          ),
+      )
+      .map((station) => runningRouteForNode(state, "station", station.id))
+      .find((hint): hint is ShellZoneRunningHint => hint !== null) ?? null
+  );
+}
+
+/** Narrow variant for vacant zoned land: the zone plus a proximity hint, not
+ *  a growth guarantee — Rust active-services and footprint checks govern. */
+function buildZoneInspector(
+  state: GameState,
+  point: Point,
+): ShellZoneInspectorState | null {
+  const tile = state.map.tiles.find(
+    (candidate) => candidate.x === point.x && candidate.y === point.y,
+  );
+  if (tile === undefined || tile.kind !== "empty" || tile.area === undefined) {
+    return null;
+  }
+  return {
+    kind: "zone",
+    zoneLabel: `${AREA_LABELS[tile.area]} Zone`,
+    runningHint: zoneRunningHint(state, point),
+  };
+}
+
 function buildVehicleInspector(
   state: GameState,
   vehicleId: string,
@@ -257,7 +339,7 @@ function buildInspector(
     includesPoint(candidate.occupiedTiles, point),
   );
   if (building === undefined) {
-    return null;
+    return buildZoneInspector(state, point);
   }
 
   const definition = BUILDING_CATALOG[building.type];

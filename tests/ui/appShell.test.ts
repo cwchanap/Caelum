@@ -284,6 +284,7 @@ function createRuntimeHarness(
     undoLastBuild: vi.fn(() => publish()),
     mountCanvas: vi.fn(() => () => {}),
     adjustCamera: vi.fn(() => publish()),
+    clearSelection: vi.fn(() => publish()),
   } satisfies RuntimeController;
   return {
     runtime,
