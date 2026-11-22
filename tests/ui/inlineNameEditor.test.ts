@@ -11,28 +11,30 @@ function renderEditor(
   }> = {},
 ) {
   const onCommit = vi.fn();
-  render(InlineNameEditor, {
-    props: {
-      value: "Harbour Bus",
-      label: "Rename Harbour Bus",
-      disabled: false,
-      testId: "route-name-route-bus-001",
-      onCommit,
-      ...overrides,
-    },
-  });
-  return { onCommit };
+  const props = {
+    value: "Harbour Bus",
+    label: "Rename Harbour Bus",
+    disabled: false,
+    testId: "route-name-route-bus-001",
+    onCommit,
+    ...overrides,
+  };
+  const { rerender } = render(InlineNameEditor, { props });
+  return {
+    onCommit,
+    rerender: (next: Partial<typeof props>) => rerender({ ...props, ...next }),
+  };
 }
 
 async function openEditor() {
-  const { onCommit } = renderEditor();
+  const { onCommit, rerender } = renderEditor();
   await fireEvent.click(
     screen.getByRole("button", { name: "Rename Harbour Bus" }),
   );
   const input = screen.getByTestId(
     "route-name-route-bus-001",
   ) as HTMLInputElement;
-  return { onCommit, input };
+  return { onCommit, rerender, input };
 }
 
 describe("InlineNameEditor", () => {
@@ -129,5 +131,64 @@ describe("InlineNameEditor", () => {
 
     expect(screen.queryByRole("textbox")).toBeNull();
     expect(onCommit).not.toHaveBeenCalled();
+  });
+
+  it("holds an open editor's Enter while busy and submits it once idle", async () => {
+    const { onCommit, rerender, input } = await openEditor();
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    // An autosave starts while the editor is already open.
+    await rerender({ disabled: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    // The submission is held, not discarded: the editor stays open with the
+    // draft and nothing is committed while the parent is busy.
+    expect(onCommit).not.toHaveBeenCalled();
+    const held = screen.getByTestId(
+      "route-name-route-bus-001",
+    ) as HTMLInputElement;
+    expect(held).toBe(input);
+    expect(held).toHaveValue("Harbour Express");
+
+    // The parent goes idle; the held submission lands.
+    await rerender({ disabled: false });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith("Harbour Express");
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("holds an open editor's blur while busy and submits it once idle", async () => {
+    const { onCommit, rerender, input } = await openEditor();
+
+    await fireEvent.input(input, {
+      target: { value: "  Renamed While Busy  " },
+    });
+    await rerender({ disabled: true });
+    await fireEvent.blur(input);
+
+    expect(onCommit).not.toHaveBeenCalled();
+    const held = screen.getByTestId(
+      "route-name-route-bus-001",
+    ) as HTMLInputElement;
+    expect(held).toBe(input);
+    expect(held).toHaveValue("  Renamed While Busy  ");
+
+    await rerender({ disabled: false });
+    expect(onCommit).toHaveBeenCalledTimes(1);
+    expect(onCommit).toHaveBeenCalledWith("Renamed While Busy");
+    expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("lets Escape cancel a submission that was held while busy", async () => {
+    const { onCommit, rerender, input } = await openEditor();
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    await rerender({ disabled: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+    await fireEvent.keyDown(input, { key: "Escape" });
+
+    await rerender({ disabled: false });
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 });

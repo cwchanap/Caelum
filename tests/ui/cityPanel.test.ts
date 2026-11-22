@@ -40,24 +40,28 @@ function renderPanel(
   const onRename = vi.fn();
   const onDelete = vi.fn();
   const onSave = vi.fn();
-  render(CityPanel, {
-    props: {
-      shell,
-      activeCity,
-      cities: [activeCity, inactiveCity],
-      busy: false,
-      dirty: false,
-      statusLabel: "Saved 12 s ago",
-      error: null,
-      onSave,
-      onLoad: vi.fn(),
-      onRename,
-      onDelete,
-      onNewCity: vi.fn(),
-      ...overrides,
-    },
-  });
-  return { onRename, onDelete, onSave };
+  const props = {
+    shell,
+    activeCity,
+    cities: [activeCity, inactiveCity] as CitySummary[] | null,
+    busy: false,
+    dirty: false,
+    statusLabel: "Saved 12 s ago",
+    error: null as string | null,
+    onSave,
+    onLoad: vi.fn(),
+    onRename,
+    onDelete,
+    onNewCity: vi.fn(),
+    ...overrides,
+  };
+  const { rerender } = render(CityPanel, { props });
+  return {
+    onRename,
+    onDelete,
+    onSave,
+    rerender: (next: Partial<typeof props>) => rerender({ ...props, ...next }),
+  };
 }
 
 describe("CityPanel", () => {
@@ -259,5 +263,36 @@ describe("CityPanel", () => {
     ).toBeDisabled();
     expect(screen.getByRole("button", { name: "Working…" })).toBeDisabled();
     expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
+  });
+
+  it("holds an open header rename during busy and submits it once idle", async () => {
+    const { onRename, rerender } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+
+    // An autosave starts while the header editor is already open.
+    await rerender({ busy: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    // The rename is held, not silently rejected and dropped by the busy gate.
+    expect(onRename).not.toHaveBeenCalled();
+    const held = screen.getByTestId("active-city-name") as HTMLInputElement;
+    expect(held.tagName).toBe("INPUT");
+    expect(held).toHaveValue("Harbour Reef");
+
+    // Persistence goes idle; the held rename lands on the runtime.
+    await rerender({ busy: false });
+    expect(onRename).toHaveBeenCalledTimes(1);
+    expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
+    expect(screen.getByTestId("active-city-name")).toHaveTextContent(
+      "Harbour Loop",
+    );
+    expect(
+      screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
+    ).toBeNull();
   });
 });

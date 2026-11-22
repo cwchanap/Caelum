@@ -12,11 +12,18 @@
   let editing = $state(false);
   let draft = $state("");
   let inputElement: HTMLInputElement | null = $state(null);
+  let pendingCommit = $state(false);
 
   // Focus the freshly mounted editor; reading inputElement keeps the effect
   // tied to the input actually being in the DOM.
   $effect(() => {
     if (editing) inputElement?.focus();
+  });
+
+  // A submission attempted while the parent is busy (e.g. an autosave) is
+  // held, not discarded; land it once the parent goes idle again.
+  $effect(() => {
+    if (!disabled && pendingCommit) commit();
   });
 
   function activate(): void {
@@ -28,6 +35,12 @@
   function commit(): void {
     // Enter commits and blurs; the blur handler must not commit a second time.
     if (!editing) return;
+    // Keep the editor and draft open while busy and defer the submission.
+    if (disabled) {
+      pendingCommit = true;
+      return;
+    }
+    pendingCommit = false;
     editing = false;
     const trimmed = draft.trim();
     if (trimmed.length === 0 || trimmed === value) return;
@@ -38,6 +51,7 @@
     event: KeyboardEvent & { currentTarget: HTMLInputElement },
   ): void {
     editing = false;
+    pendingCommit = false;
     // Restore without triggering dock-level Escape handling.
     event.preventDefault();
     event.stopPropagation();
