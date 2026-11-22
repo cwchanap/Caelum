@@ -6,6 +6,9 @@
     activeCityId: string | null;
     busy: boolean;
     dirty?: boolean;
+    /** Dock-only: the active row's name is read-only there; the City
+     *  header owns active-city rename. Delete stays available. */
+    activeNameReadOnly?: boolean;
     onLoad: (cityId: string) => void;
     onRename: (cityId: string, name: string) => void;
     onDelete: (cityId: string) => void;
@@ -16,6 +19,7 @@
     activeCityId,
     busy,
     dirty = false,
+    activeNameReadOnly = false,
     onLoad,
     onRename,
     onDelete,
@@ -94,34 +98,41 @@
           style={`background-color: ${avatarColor(city.id)}`}
           aria-hidden="true">{Array.from(city.name.trim())[0] ?? ""}</span
         >
-        <input
-          type="text"
-          class="city-name"
-          data-testid={`city-name-${city.id}`}
-          value={cityNameFor(city.id, city.name)}
-          aria-label={`Rename ${city.name}`}
-          disabled={busy}
-          autocomplete="off"
-          oninput={(event) =>
-            handleCityNameInput(
-              city.id,
-              event as Event & { currentTarget: HTMLInputElement },
-            )}
-          onblur={(event) => commitCityName(city, event.currentTarget)}
-          onkeydown={(event) => {
-            if (event.key === "Escape") {
-              cancelCityName(
-                city,
-                event as KeyboardEvent & {
-                  currentTarget: HTMLInputElement;
-                },
-              );
-            } else if (event.key === "Enter") {
-              commitCityName(city, event.currentTarget);
-              event.currentTarget.blur();
-            }
-          }}
-        />
+        {#if activeNameReadOnly && city.id === activeCityId}
+          <span
+            class="city-name city-name--readonly"
+            data-testid={`city-name-${city.id}`}>{city.name}</span
+          >
+        {:else}
+          <input
+            type="text"
+            class="city-name"
+            data-testid={`city-name-${city.id}`}
+            value={cityNameFor(city.id, city.name)}
+            aria-label={`Rename ${city.name}`}
+            disabled={busy}
+            autocomplete="off"
+            oninput={(event) =>
+              handleCityNameInput(
+                city.id,
+                event as Event & { currentTarget: HTMLInputElement },
+              )}
+            onblur={(event) => commitCityName(city, event.currentTarget)}
+            onkeydown={(event) => {
+              if (event.key === "Escape") {
+                cancelCityName(
+                  city,
+                  event as KeyboardEvent & {
+                    currentTarget: HTMLInputElement;
+                  },
+                );
+              } else if (event.key === "Enter") {
+                commitCityName(city, event.currentTarget);
+                event.currentTarget.blur();
+              }
+            }}
+          />
+        {/if}
         <span>
           Saved
           <time datetime={city.savedAt}>
@@ -132,7 +143,9 @@
 
       <div class="city-list-actions">
         {#if city.id === activeCityId}
-          <span class="city-list-active">Active</span>
+          <span class="city-list-active">
+            {activeNameReadOnly ? "Playing" : "Active"}
+          </span>
         {:else}
           <button
             type="button"
