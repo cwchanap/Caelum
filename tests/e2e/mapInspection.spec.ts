@@ -5,6 +5,7 @@ import {
   maxZoom,
   tileSize,
 } from "../../src/render/boardTransform";
+import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import {
   VEHICLE_INSTANCE_FLOATS,
   VEHICLE_LANE_OFFSET_PX,
@@ -365,4 +366,150 @@ test("scrolls an overflowing anchored Inspector instead of zooming the map", asy
     .toBeGreaterThan(0);
   expect((await runtimeSnapshot(page)).camera).toBeNull();
   await expect(inspector).toBeVisible();
+});
+
+test("inspects a stop, building and vacant zoned land, then dismisses", async ({
+  page,
+}) => {
+  await createDefaultCity(page);
+  const canvas = page.locator("canvas[data-runtime-canvas='true']");
+  await expect(canvas).toBeVisible();
+
+  await selectBuildLeaf(page, "roads", "road-twoWay");
+  await dragMapTiles(page, canvas, { x: 3, y: 4 }, { x: 11, y: 4 });
+
+  await selectBuildLeaf(page, "transit", "busStop");
+  for (const stop of ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await expect
+    .poll(async () => {
+      const { state } = await runtimeSnapshot(page);
+      return ROUTE_STOPS.every((position) =>
+        state.transit.stops.some(
+          (stop) =>
+            stop.status === "present" &&
+            stop.position.x === position.x &&
+            stop.position.y === position.y,
+        ),
+      );
+    })
+    .toBe(true);
+
+  await openCommandDestination(page, "lines");
+  await page.getByRole("button", { name: "New Bus" }).click();
+  for (const stop of ROUTE_STOPS) {
+    await clickMapTile(canvas, stop);
+  }
+  await openCommandDestination(page, "lines");
+  await expect(page.getByTestId("route-draft")).toBeVisible();
+  await page.getByRole("button", { name: /^Save & run/ }).click();
+
+  await expect
+    .poll(
+      async () => (await runtimeSnapshot(page)).state.transit.vehicles.length,
+    )
+    .toBeGreaterThan(0);
+
+  // Vacant land inside the first stop's coverage square for the proximity
+  // hint. The blank inspection target is read after the building exists.
+  const saved = await runtimeSnapshot(page);
+  const route = saved.state.transit.routes.at(0);
+  if (route === undefined) {
+    throw new Error("Saved route is missing from the runtime snapshot");
+  }
+  const home = ROUTE_STOPS[0];
+  const zonedTile = { x: home.x, y: home.y + 2 };
+  const houseOrigin = { x: 6, y: 6 };
+
+  // Residential land near the stop, and a two-tile lot for a hand-placed
+  // house off the covered land.
+  await selectBuildLeaf(page, "zones", "residential");
+  await clickMapTile(canvas, zonedTile);
+  await dragMapTiles(page, canvas, houseOrigin, {
+    x: houseOrigin.x + 1,
+    y: houseOrigin.y,
+  });
+  await selectBuildLeaf(page, "buildings", "smallHouse");
+  await clickMapTile(canvas, houseOrigin);
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).state.buildings.length)
+    .toBeGreaterThan(0);
+
+  const pauseButton = page.getByRole("button", { name: "Pause", exact: true });
+  if ((await pauseButton.count()) > 0) {
+    await pauseButton.click();
+  }
+  await expect(
+    page.getByRole("button", { name: "Resume", exact: true }),
+  ).toBeVisible();
+
+  const blankState = await runtimeSnapshot(page);
+  const blankTile = blankState.state.map.tiles.find(
+    (tile) =>
+      tile.kind === "empty" &&
+      tile.area === undefined &&
+      blankState.state.transit.stops.every(
+        (stop) =>
+          Math.max(
+            Math.abs(stop.position.x - tile.x),
+            Math.abs(stop.position.y - tile.y),
+          ) > 2,
+      ) &&
+      !blankState.state.buildings.some((building) =>
+        building.occupiedTiles.some(
+          (point) => point.x === tile.x && point.y === tile.y,
+        ),
+      ),
+  );
+  if (blankTile === undefined) {
+    throw new Error("Fixture map is missing a blank inspection target");
+  }
+
+  await selectTool(page, "select");
+  const inspector = page.getByTestId("panel-inspect");
+
+  // Stop click: label header, node queue bar, and the route chip opens Lines.
+  await clickMapTile(canvas, ROUTE_STOPS[1]);
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByTestId("inspect-title")).toHaveText("Bus Stop");
+  await expect(inspector.getByTestId("inspect-queue-bar")).toHaveAttribute(
+    "aria-label",
+    /Queue \d+\/\d+/,
+  );
+  await inspector.getByTestId(`open-service-${route.id}`).click();
+  await expect(page.getByTestId("command-panel")).toHaveAttribute(
+    "data-command-panel",
+    "lines",
+  );
+  await page.getByRole("button", { name: "Close Lines" }).click();
+  await expect(page.getByTestId("command-panel")).toHaveCount(0);
+  await expect(inspector).toBeVisible();
+  await inspector.getByTestId("inspect-close").click();
+  await expect(page.getByTestId("panel-inspect")).toHaveCount(0);
+
+  // Building click: catalog label as header; Escape dismisses.
+  await clickMapTile(canvas, houseOrigin);
+  await expect(inspector).toBeVisible();
+  await expect(inspector.getByTestId("inspect-title")).toHaveText(
+    BUILDING_CATALOG.smallHouse.label,
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("panel-inspect")).toHaveCount(0);
+
+  // Vacant zoned land near the running stop shows the proximity hint.
+  await clickMapTile(canvas, zonedTile);
+  await expect(inspector.getByTestId("inspect-title")).toHaveText(
+    "Residential Zone",
+  );
+  await expect(inspector.getByTestId("zone-hint-route")).toHaveText(route.name);
+  await expect(inspector.getByTestId("zone-hint")).toContainText(
+    "growth not guaranteed",
+  );
+  await page.keyboard.press("Escape");
+  await expect(page.getByTestId("panel-inspect")).toHaveCount(0);
+
+  // Blank uncovered land stays quiet.
+  await clickMapTile(canvas, blankTile);
+  await expect(page.getByTestId("panel-inspect")).toHaveCount(0);
 });

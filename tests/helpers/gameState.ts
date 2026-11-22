@@ -4,6 +4,7 @@ import {
   getBuildingFootprint,
 } from "../../src/domain/catalog/buildings";
 import type {
+  AreaKind,
   BuildingRotation,
   BuildingType,
   GameMap,
@@ -667,5 +668,22 @@ export function placeTestBuilding(
     budget: state.budget - definition.cost,
     buildings: [...state.buildings, building],
     transit,
+  };
+}
+
+/** Paints one tile's zoning layer for selector/UI fixtures. */
+export function withTestZone(
+  state: GameState,
+  point: Point,
+  area: AreaKind,
+): GameState {
+  return {
+    ...state,
+    map: {
+      ...state.map,
+      tiles: state.map.tiles.map((tile) =>
+        tile.x === point.x && tile.y === point.y ? { ...tile, area } : tile,
+      ),
+    },
   };
 }

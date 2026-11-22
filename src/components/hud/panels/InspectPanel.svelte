@@ -19,6 +19,7 @@
       platformId: string,
     ) => void;
     onOpenServiceControls: (routeId: string) => void;
+    onClose: () => void;
   }
 
   let {
@@ -30,6 +31,7 @@
     stageHeight,
     onAssignRouteToPlatform,
     onOpenServiceControls,
+    onClose,
   }: Props = $props();
 
   let cardEl: HTMLElement | null = $state(null);
@@ -61,12 +63,31 @@
       camera,
     });
   });
+
+  // One queue bar per transit node across all its platforms.
+  const queue = $derived.by(() => {
+    if (inspector.kind !== "transit") return null;
+    const occupancy = inspector.platforms.reduce(
+      (sum, platform) => sum + platform.occupancy,
+      0,
+    );
+    const capacity = inspector.platforms.reduce(
+      (sum, platform) => sum + platform.capacity,
+      0,
+    );
+    return {
+      occupancy,
+      capacity,
+      ratio: capacity === 0 ? 0 : Math.min(1, occupancy / capacity),
+    };
+  });
 </script>
 
 <aside
   bind:this={cardEl}
   class="card inspection-card"
   class:inspection-card--hidden={placement === null}
+  data-side={placement?.side}
   style:left={placement === null ? undefined : `${placement.left}px`}
   style:top={placement === null ? undefined : `${placement.top}px`}
   bind:offsetWidth={cardWidth}
@@ -74,10 +95,41 @@
   data-testid="panel-inspect"
   aria-label="Inspector"
 >
+  <header class="inspect-head">
+    <h3 class="inspect-title" data-testid="inspect-title">
+      {inspector.kind === "transit"
+        ? inspector.nodeLabel
+        : inspector.kind === "building"
+          ? inspector.buildingLabel
+          : inspector.kind === "vehicle"
+            ? inspector.vehicleLabel
+            : inspector.zoneLabel}
+    </h3>
+    <button
+      type="button"
+      class="inspect-close"
+      aria-label="Close inspector"
+      data-testid="inspect-close"
+      onclick={onClose}
+    >
+      ×
+    </button>
+  </header>
+
   {#if inspector.kind === "transit"}
+    <div
+      class="inspect-queue"
+      data-testid="inspect-queue-bar"
+      role="img"
+      aria-label={`Queue ${queue?.occupancy}/${queue?.capacity}`}
+    >
+      <span
+        class="inspect-queue-fill"
+        data-testid="inspect-queue-fill"
+        style:width={`${(queue?.ratio ?? 0) * 100}%`}
+      ></span>
+    </div>
     <section class="panel-section platform-panel" data-testid="platform-panel">
-      <h3 class="section-head"><span class="num">07</span> Platforms</h3>
-      <p class="brief-id">{inspector.nodeLabel}</p>
       {#each inspector.platforms as platform (platform.id)}
         <div class="platform-row">
           <div class="platform-head">
@@ -141,8 +193,6 @@
     </section>
   {:else if inspector.kind === "vehicle"}
     <section class="panel-section vehicle-panel" data-testid="vehicle-panel">
-      <h3 class="section-head"><span class="num">07</span> Vehicle</h3>
-      <p class="brief-id">{inspector.vehicleLabel}</p>
       <div class="platform-route">
         <button
           type="button"
@@ -173,10 +223,8 @@
         </div>
       </dl>
     </section>
-  {:else}
+  {:else if inspector.kind === "building"}
     <section class="panel-section building-panel" data-testid="building-panel">
-      <h3 class="section-head"><span class="num">07</span> Building</h3>
-      <p class="brief-id">{inspector.buildingLabel}</p>
       <span class="building-occupancy">
         {inspector.metricLabel}
         {inspector.occupancy} / {inspector.capacity}
@@ -193,6 +241,28 @@
           {/if}
         </p>
         <p class="workplace-pattern">{inspector.workPattern}</p>
+      {/if}
+    </section>
+  {:else}
+    <section class="panel-section zone-panel" data-testid="zone-panel">
+      {#if inspector.runningHint === null}
+        <p class="zone-hint" data-testid="zone-quiet">
+          No running line serves this land yet
+        </p>
+      {:else}
+        <span
+          class="chip route-chip"
+          style={`--route-color: ${inspector.runningHint.routeColor}`}
+          data-testid="zone-hint-route"
+        >
+          {inspector.runningHint.routeName}
+        </span>
+        <p class="zone-hint" data-testid="zone-hint">
+          {inspector.runningHint.nodeKind === "stop"
+            ? "Bus stop"
+            : "Metro station"}
+          nearby on a running line · proximity hint, growth not guaranteed
+        </p>
       {/if}
     </section>
   {/if}

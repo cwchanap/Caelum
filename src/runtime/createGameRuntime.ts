@@ -1374,6 +1374,24 @@ export async function createGameRuntime(
     return openRouteEdit(routeId);
   };
 
+  /** Clears the selected tile/node/vehicle only: keeps route selection,
+   *  camera, overlays, current service controls and tool state intact. */
+  const clearSelection = (): RuntimeSnapshot => {
+    if (
+      ui.selectedId === null &&
+      ui.selectedNodeKind === null &&
+      ui.selectedVehicleId === null
+    ) {
+      return commit(state, ui);
+    }
+    return commit(state, {
+      ...ui,
+      selectedId: null,
+      selectedNodeKind: null,
+      selectedVehicleId: null,
+    });
+  };
+
   const handleEscape = (): RuntimeSnapshot => {
     if (workingSave.isBusy()) return getSnapshot();
     if (ui.drag !== null) return api.cancelDrag();
@@ -1393,7 +1411,7 @@ export async function createGameRuntime(
       invalidateRoadPreview();
       return commit(state, nextToolUiState("inspect", ui));
     }
-    return commit(state, ui);
+    return clearSelection();
   };
 
   const sendRoadMutationPreviewRequest = (
@@ -2114,6 +2132,10 @@ export async function createGameRuntime(
     handleEscape() {
       if (dead) return getSnapshot();
       return handleEscape();
+    },
+    clearSelection() {
+      if (dead) return getSnapshot();
+      return clearSelection();
     },
     renameRoute(routeId, name) {
       if (dead) return Promise.resolve(getSnapshot());

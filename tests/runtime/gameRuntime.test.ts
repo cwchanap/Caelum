@@ -4578,19 +4578,75 @@ describe("command destination navigation", () => {
     expect(secondEscape.ui.activeTool).toBe("inspect");
   });
 
-  it("keeps the exact UI object and contextual selection on idle Select Escape", async () => {
+  it("keeps the exact UI object on idle Select Escape with nothing selected", async () => {
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
       hoverPreviewDebounceMs: 0,
       backend: backendSpy(),
     });
     runtime.setOverlay("coverage");
-    await runtime.handleTileClick({ x: 5, y: 5 });
     const before = runtime.getSnapshot();
     const escaped = runtime.handleEscape();
     expect(escaped.ui).toBe(before.ui);
-    expect(escaped.ui.selectedId).toBe("5,5");
     expect(escaped.ui.activeOverlay).toBe("coverage");
+  });
+
+  it("Escape on the idle inspect tool clears the selection but keeps the route selection", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithBusRoute()),
+    });
+    runtime.selectRoute("route-001");
+    await runtime.handleTileClick({ x: 5, y: 5 });
+
+    const escaped = runtime.handleEscape();
+    expect(escaped.ui.selectedId).toBeNull();
+    expect(escaped.ui.selectedNodeKind).toBeNull();
+    expect(escaped.ui.selectedVehicleId).toBeNull();
+    expect(escaped.ui.selectedRouteId).toBe("route-001");
+    expect(escaped.ui.activeTool).toBe("inspect");
+    expect(escaped.camera).toBe(runtime.getSnapshot().camera);
+  });
+
+  it("Escape closes the dock before clearing a selected tile", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(),
+    });
+    await runtime.handleTileClick({ x: 5, y: 5 });
+    runtime.setCommandDestination("data");
+
+    const firstEscape = runtime.handleEscape();
+    expect(firstEscape.ui.activeCommandDestination).toBeNull();
+    expect(firstEscape.ui.selectedId).toBe("5,5");
+    const secondEscape = runtime.handleEscape();
+    expect(secondEscape.ui.selectedId).toBeNull();
+  });
+
+  it("clearSelection clears the inspector selection without touching anything else", async () => {
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend: backendSpy(snapshotWithBusRoute()),
+    });
+    runtime.setOverlay("coverage");
+    runtime.selectRoute("route-001");
+    await runtime.handleTileClick({ x: 5, y: 5 });
+    const before = runtime.getSnapshot();
+
+    const cleared = runtime.clearSelection();
+    expect(cleared.ui.selectedId).toBeNull();
+    expect(cleared.ui.selectedNodeKind).toBeNull();
+    expect(cleared.ui.selectedVehicleId).toBeNull();
+    expect(cleared.ui.selectedRouteId).toBe("route-001");
+    expect(cleared.ui.activeOverlay).toBe("coverage");
+    expect(cleared.ui.activeTool).toBe("inspect");
+    expect(cleared.ui).not.toBe(before.ui);
+
+    const again = runtime.clearSelection();
+    expect(again.ui).toBe(cleared.ui);
   });
 });
 

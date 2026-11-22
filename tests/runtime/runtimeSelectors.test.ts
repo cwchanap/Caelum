@@ -30,6 +30,7 @@ import {
   createTestGameState,
   createTestServiceMetrics,
   placeTestBuilding,
+  withTestZone,
 } from "../helpers/gameState";
 import {
   pointsOnColumn,
@@ -2258,5 +2259,159 @@ describe("ShellCommandState and ShellCityState", () => {
     expect(
       selectShellState(base, createUiState()).topbar.tripIssues,
     ).toBeNull();
+  });
+});
+
+describe("selectShellState vacant zone", () => {
+  function inspectAt(selectedId: string) {
+    return {
+      ...createUiState(),
+      activeTool: "inspect" as const,
+      selectedId,
+    };
+  }
+
+  function runningBusState(): GameState {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(1, 2, 6));
+    state = addTestBusStop(state, { x: 2, y: 1 });
+    state = addTestBusStop(state, { x: 6, y: 1 });
+    state = addTestBusRoute(
+      state,
+      state.transit.stops.map((s) => s.id),
+    );
+    return assignTestVehicle(state, "bus", state.transit.routes[0].id);
+  }
+
+  it("projects a zoned empty tile near a running stop into a proximity hint", () => {
+    let state = runningBusState();
+    state = withTestZone(state, { x: 4, y: 3 }, "residential");
+    const routeColor = state.transit.routes[0].color;
+
+    const inspector = selectShellState(state, inspectAt("4,3")).inspector;
+
+    expect(inspector).toEqual({
+      kind: "zone",
+      zoneLabel: "Residential Zone",
+      runningHint: {
+        nodeKind: "stop",
+        routeName: "Bus 1",
+        routeColor,
+      },
+    });
+  });
+
+  it("stays quiet about nearby service that is not running", () => {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(1, 2, 6));
+    state = addTestBusStop(state, { x: 2, y: 1 });
+    state = addTestBusStop(state, { x: 6, y: 1 });
+    state = addTestBusRoute(
+      state,
+      state.transit.stops.map((s) => s.id),
+    );
+    state = withTestZone(state, { x: 4, y: 3 }, "commercial");
+
+    const inspector = selectShellState(state, inspectAt("4,3")).inspector;
+
+    expect(inspector).toEqual({
+      kind: "zone",
+      zoneLabel: "Commercial Zone",
+      runningHint: null,
+    });
+  });
+
+  it("keeps the zone variant for zoned land far from every node", () => {
+    let state = runningBusState();
+    state = withTestZone(state, { x: 12, y: 8 }, "industrial");
+
+    const inspector = selectShellState(state, inspectAt("12,8")).inspector;
+
+    expect(inspector).toEqual({
+      kind: "zone",
+      zoneLabel: "Industrial Zone",
+      runningHint: null,
+    });
+  });
+
+  it("honours the bus-stop Chebyshev coverage radius", () => {
+    let state = runningBusState();
+    state = withTestZone(state, { x: 2, y: 3 }, "residential");
+    const nearHint = selectShellState(state, inspectAt("2,3")).inspector;
+    expect(nearHint).toMatchObject({
+      kind: "zone",
+      runningHint: { nodeKind: "stop" },
+    });
+
+    state = withTestZone(state, { x: 3, y: 4 }, "residential");
+    const farHint = selectShellState(state, inspectAt("3,4")).inspector;
+    expect(farHint).toMatchObject({ kind: "zone", runningHint: null });
+  });
+
+  it("honours the terminal and station coverage radii", () => {
+    let state = createTestGameState();
+    state = withRoads(state, pointsOnRow(1, 2, 6));
+    state = addTestBusStop(state, { x: 2, y: 1 }, "busTerminal");
+    state = addTestBusStop(state, { x: 6, y: 1 });
+    state = addTestBusRoute(
+      state,
+      state.transit.stops.map((s) => s.id),
+    );
+    state = assignTestVehicle(state, "bus", state.transit.routes[0].id);
+    state = withTestZone(state, { x: 2, y: 5 }, "residential");
+    expect(selectShellState(state, inspectAt("2,5")).inspector).toMatchObject({
+      kind: "zone",
+      runningHint: { nodeKind: "stop" },
+    });
+
+    state = withTestZone(state, { x: 2, y: 6 }, "residential");
+    expect(selectShellState(state, inspectAt("2,6")).inspector).toMatchObject({
+      kind: "zone",
+      runningHint: null,
+    });
+
+    let metroState = createTestGameState();
+    metroState = withTracks(metroState, pointsOnRow(2, 7, 22));
+    metroState = addTestMetroStation(metroState, { x: 7, y: 2 });
+    metroState = addTestMetroStation(metroState, { x: 22, y: 2 });
+    metroState = addTestMetroLine(
+      metroState,
+      metroState.transit.stations.map((s) => s.id),
+    );
+    metroState = assignTestVehicle(
+      metroState,
+      "metro",
+      metroState.transit.metroLines[0].id,
+    );
+    metroState = withTestZone(metroState, { x: 7, y: 6 }, "residential");
+    expect(
+      selectShellState(metroState, inspectAt("7,6")).inspector,
+    ).toMatchObject({
+      kind: "zone",
+      runningHint: { nodeKind: "station", routeName: "Metro 1" },
+    });
+
+    metroState = withTestZone(metroState, { x: 7, y: 7 }, "residential");
+    expect(
+      selectShellState(metroState, inspectAt("7,7")).inspector,
+    ).toMatchObject({ kind: "zone", runningHint: null });
+  });
+
+  it("keeps unzoned and occupied tiles without a zone inspector", () => {
+    let state = runningBusState();
+    state = withRoads(state, [{ x: 12, y: 8 }]);
+
+    expect(selectShellState(state, inspectAt("12,9")).inspector).toBeNull();
+    expect(selectShellState(state, inspectAt("12,8")).inspector).toBeNull();
+  });
+
+  it("prefers the building inspector on an occupied zoned tile", () => {
+    let state = runningBusState();
+    state = withTestZone(state, { x: 12, y: 8 }, "residential");
+    state = placeTestBuilding(state, "smallHouse", { x: 12, y: 8 }, 0);
+
+    const inspector = selectShellState(state, inspectAt("12,8")).inspector;
+
+    expect(inspector?.kind).toBe("building");
   });
 });

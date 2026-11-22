@@ -1978,6 +1978,91 @@ body {
   visibility: hidden;
 }
 
+/* Arrow pointing toward the selected tile; the side comes from
+ * placeInspectorPopover and flips with the card around stage edges. */
+.inspection-card[data-side]::after {
+  content: "";
+  position: absolute;
+  width: 0;
+  height: 0;
+  border: 8px solid transparent;
+}
+
+.inspection-card[data-side="left"]::after {
+  left: -15px;
+  top: 50%;
+  margin-top: -8px;
+  border-right-color: var(--line);
+}
+
+.inspection-card[data-side="right"]::after {
+  right: -15px;
+  top: 50%;
+  margin-top: -8px;
+  border-left-color: var(--line);
+}
+
+.inspection-card[data-side="bottom"]::after {
+  bottom: -15px;
+  left: 50%;
+  margin-left: -8px;
+  border-top-color: var(--line);
+}
+
+.inspect-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 16px 0;
+}
+
+.inspect-title {
+  flex: 1;
+  min-width: 0;
+  margin: 0;
+  font-family: var(--font-body);
+  font-size: 14px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  color: var(--ink);
+}
+
+.inspect-close {
+  flex: 0 0 auto;
+  min-width: 32px;
+  min-height: 32px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface-sunk);
+  color: var(--ink-mid);
+  font-size: 16px;
+  line-height: 1;
+}
+
+.inspect-queue {
+  position: relative;
+  height: 6px;
+  margin: 10px 16px 0;
+  overflow: hidden;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-sunk);
+}
+
+.inspect-queue-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+  background: var(--accent);
+}
+
+.zone-panel .zone-hint {
+  margin: 8px 0 0;
+  font-size: 11px;
+  color: var(--ink-mid);
+}
+
 .build-detail {
   min-width: 0;
 }
