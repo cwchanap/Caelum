@@ -15,3 +15,6 @@ playwright-report/
 # Never commit them — CI regenerates in every job that needs them so the
 # browser always ships Rust core logic matching the PR.
 src/generated/caelum_wasm/
+
+# Generated HPA-1144 Canvas2D verification screenshots
+/docs/superpowers/assets/2026-11-18-hpa-1144-canvas2d-fallback-*.png
