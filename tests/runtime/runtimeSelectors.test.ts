@@ -1243,6 +1243,7 @@ describe("route selectors", () => {
           targetHeadwaySeconds: null,
           ...createTestServiceMetrics(),
           roundTripSeconds: null,
+          deployShortfallReason: null,
         },
         waitLocations: [],
         failures: [],
@@ -1260,6 +1261,7 @@ describe("route selectors", () => {
           targetHeadwaySeconds: null,
           ...createTestServiceMetrics(),
           roundTripSeconds: null,
+          deployShortfallReason: null,
         },
         waitLocations: [],
         failures: [],
@@ -1361,6 +1363,83 @@ describe("route selectors", () => {
         roundTripSeconds: null,
       },
     });
+  });
+
+  it("states the static deploy shortfall on a noFleet card the Standard budget cannot cover", () => {
+    const state = {
+      ...busRouteWithMetrics(
+        createTestServiceMetrics({
+          requiredFleet: 1,
+          estimatedDeploymentCost: 16_000,
+        }),
+      ),
+      budget: 15_999,
+    };
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service,
+    ).toMatchObject({
+      deployShortfallReason:
+        "Needs $16,000; only $15,999 is available. Replenish your budget, then deploy.",
+    });
+  });
+
+  it("omits the deploy shortfall when the Standard budget covers the estimate", () => {
+    const state = {
+      ...busRouteWithMetrics(
+        createTestServiceMetrics({
+          requiredFleet: 1,
+          estimatedDeploymentCost: 16_000,
+        }),
+      ),
+      budget: 16_000,
+    };
+    expect(
+      selectShellState(state, createUiState()).routes[0]?.service
+        .deployShortfallReason,
+    ).toBeNull();
+  });
+
+  it("never states a deploy shortfall in Creative mode", () => {
+    const base = busRouteWithMetrics(
+      createTestServiceMetrics({
+        requiredFleet: 1,
+        estimatedDeploymentCost: 16_000,
+      }),
+    );
+    const creative = {
+      ...base,
+      budget: 0,
+      rules: { ...base.rules, economyPreset: "creative" as const },
+    };
+    expect(
+      selectShellState(creative, createUiState()).routes[0]?.service
+        .deployShortfallReason,
+    ).toBeNull();
+  });
+
+  it("keeps the deploy shortfall off cards without a Deploy affordance", () => {
+    // A paused zero-fleet card renders no Deploy button, so no shortfall line.
+    const base = busRouteWithMetrics(
+      createTestServiceMetrics({
+        requiredFleet: 1,
+        estimatedDeploymentCost: 16_000,
+      }),
+    );
+    const paused = {
+      ...base,
+      budget: 0,
+      transit: {
+        ...base.transit,
+        routes: base.transit.routes.map((route) => ({
+          ...route,
+          active: false,
+        })),
+      },
+    };
+    expect(
+      selectShellState(paused, createUiState()).routes[0]?.service
+        .deployShortfallReason,
+    ).toBeNull();
   });
 
   it("uses route vehicle IDs for fleet lifecycle when service metrics are unavailable", () => {
