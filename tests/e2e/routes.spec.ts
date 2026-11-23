@@ -722,7 +722,7 @@ test("finishing a bus route starts its initial fleet", async ({ page }) => {
 
   // An affordable Standard draft quotes the whole pre-save fleet picture.
   await expect(page.getByTestId("route-after-save-fleet")).toHaveText(
-    /\d+ vehicles/,
+    /\d+ bus(es)?/,
   );
   await expect(page.getByTestId("route-after-save-running")).toHaveText(
     /\$[\d,]+\/day/,
@@ -1007,7 +1007,7 @@ test("creative sandbox prices the fleet nominally and never warns", async ({
   // Creative shows the nominal projection even at zero budget: no shortfall,
   // no Save-without-fleet relabel.
   await expect(page.getByTestId("route-after-save-fleet")).toHaveText(
-    /\d+ vehicles/,
+    /\d+ bus(es)?/,
   );
   await expect(page.getByTestId("route-after-save-running")).toHaveText(
     /\$[\d,]+\/day/,
