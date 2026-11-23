@@ -4600,13 +4600,23 @@ describe("command destination navigation", () => {
     runtime.selectRoute("route-001");
     await runtime.handleTileClick({ x: 5, y: 5 });
 
+    // A non-default camera must survive Escape: assert against the exact
+    // object captured BEFORE the Escape, not against the post-Escape state.
+    const camera = { zoom: 2, center: { x: 6, y: 6 } };
+    const host = lastFakeHost()!;
+    host.adjustCamera.mockImplementation(() => {
+      host.context.onCameraChange(camera);
+    });
+    runtime.adjustCamera({ kind: "zoomIn" });
+    expect(runtime.getSnapshot().camera).toBe(camera);
+
     const escaped = runtime.handleEscape();
     expect(escaped.ui.selectedId).toBeNull();
     expect(escaped.ui.selectedNodeKind).toBeNull();
     expect(escaped.ui.selectedVehicleId).toBeNull();
     expect(escaped.ui.selectedRouteId).toBe("route-001");
     expect(escaped.ui.activeTool).toBe("inspect");
-    expect(escaped.camera).toBe(runtime.getSnapshot().camera);
+    expect(escaped.camera).toBe(camera);
   });
 
   it("Escape closes the dock before clearing a selected tile", async () => {
@@ -6347,6 +6357,84 @@ describe("route creation and management", () => {
         (candidate) => candidate.id === "route-001",
       )?.vehicleIds,
     ).toHaveLength(2);
+  });
+
+  it("does not resurrect feedback dismissed while a deferred deployment waits", async () => {
+    const base = backendSpy(routeSnapshot());
+    const quoted = {
+      vehicles: 3,
+      targetHeadwaySeconds: 600,
+      cost: 1_000_000,
+      estimatedDailyOperatingCost: 1_200,
+    };
+    const deferredDeploys: Array<(result: GameplayUpdateResult) => void> = [];
+    let deployPending = false;
+    const backend: BackendSpy = {
+      ...base,
+      async previewRoute(request) {
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          initialFleet: quoted,
+        };
+      },
+      dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          // Hold the deployment open so the test can dismiss feedback
+          // while it waits; completion must not restore pre-await state.
+          deployPending = true;
+          return new Promise<GameplayUpdateResult>((resolve) => {
+            deferredDeploys.push(resolve);
+          });
+        }
+        return base.dispatch(intent);
+      },
+    };
+    const { runtime } = await withTwoStops(backend);
+    await flushPromises();
+
+    // Unrelated feedback is visible before Save (not owned by the editor,
+    // so it survives the accepted create while the deployment waits).
+    base.rejectNextDispatch();
+    const rejected = await runtime.setSpeed(2);
+    expect(rejected.rejection).not.toBeNull();
+
+    const saving = runtime.saveRouteDraft();
+    for (let i = 0; i < 100 && !deployPending; i += 1) {
+      await flushPromises();
+    }
+    expect(deployPending).toBe(true);
+
+    // While the deployment waits, the player dismisses the feedback.
+    runtime.dismissRejection();
+    expect(runtime.getSnapshot().rejection).toBeNull();
+
+    const published: RuntimeSnapshot[] = [];
+    runtime.subscribe((snapshot) => published.push(snapshot));
+    const deployResult: GameplayUpdateResult = {
+      update: createPresentationUpdate(base.snapshotInternal(), false),
+      applied: false,
+      rejection: {
+        code: "insufficientBudget",
+        context: {
+          requiredBudget: quoted.cost,
+          availableBudget: 120_000,
+          affectedRouteIds: ["route-001"],
+        },
+      },
+    };
+    deferredDeploys[0]?.(deployResult);
+    const final = await saving;
+
+    // The expected shortage keeps the CURRENT feedback (dismissed stays
+    // dismissed) — it must not resurrect the pre-await rejection.
+    expect(final.rejection).toBeNull();
+    expect(final.shell.actionFeedback).toBeNull();
+    expect(final.ui.routeDraft).toBeNull();
+    expect(final.ui.selectedRouteId).toBe("route-001");
+    for (const snapshot of published) {
+      expect(snapshot.rejection?.code).not.toBe("insufficientBudget");
+      expect(snapshot.shell.actionFeedback?.source).not.toBe("rejection");
+    }
   });
 
   it("routes Save through the selected service pattern", async () => {

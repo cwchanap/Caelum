@@ -111,7 +111,11 @@ describe("RouteEditor", () => {
       "Redo",
       "Cancel",
     ];
-    const rowControls = ["Move up", "Move down", "Remove"];
+    const rowActionNames = (label: string) => [
+      `Move up ${label}`,
+      `Move down ${label}`,
+      `Remove ${label}`,
+    ];
 
     const { rerender } = render(RouteEditor, {
       props: editorProps(createDraftView()),
@@ -121,8 +125,13 @@ describe("RouteEditor", () => {
     }
     expect(screen.getByRole("radio", { name: "Loop" })).toBeVisible();
     expect(screen.getByRole("radio", { name: "Shuttle" })).toBeVisible();
-    for (const name of rowControls) {
-      expect(screen.getAllByRole("button", { name })).toHaveLength(2);
+    // Row actions name their waypoint, so identical controls across rows
+    // stay distinguishable to assistive technology.
+    for (const name of [
+      ...rowActionNames("Stop A"),
+      ...rowActionNames("Stop B"),
+    ]) {
+      expect(screen.getByRole("button", { name })).toBeVisible();
     }
 
     await rerender(editorProps(editDraftView()));
@@ -229,8 +238,9 @@ describe("RouteEditor", () => {
     render(RouteEditor, { props: editorProps(createDraftView()) });
 
     expect(screen.getByTestId("route-after-save")).toBeVisible();
+    expect(screen.getByRole("heading", { name: "After saving" })).toBeVisible();
     expect(screen.getByTestId("route-after-save-fleet")).toHaveTextContent(
-      "2 vehicles",
+      "2 buses",
     );
     expect(screen.getByTestId("route-after-save-target")).toHaveTextContent(
       "Every 10.0 min",
@@ -238,10 +248,28 @@ describe("RouteEditor", () => {
     expect(screen.getByTestId("route-after-save-running")).toHaveTextContent(
       "$800/day",
     );
+    expect(screen.getByTestId("route-after-save-qualifier")).toHaveTextContent(
+      /Estimate from the current quote/,
+    );
     expect(screen.queryByTestId("route-shortfall-reason")).toBeNull();
     expect(
       screen.getByRole("button", { name: "Save & run · $16,000" }),
     ).toBeEnabled();
+  });
+
+  it("phrases the quoted fleet singular and mode-aware", () => {
+    render(RouteEditor, {
+      props: editorProps(
+        createDraftView({
+          mode: "metro",
+          initialFleet: { ...FLEET_QUOTE, vehicles: 1 },
+        }),
+      ),
+    });
+
+    expect(screen.getByTestId("route-after-save-fleet")).toHaveTextContent(
+      "1 train",
+    );
   });
 
   it("shows the low-money After saving summary and Save without fleet", () => {
@@ -363,7 +391,11 @@ describe("RouteEditor", () => {
     const firstRow = screen
       .getByTestId("route-waypoint-0")
       .closest("li") as HTMLElement;
-    for (const name of ["Move up", "Move down", "Remove"]) {
+    for (const name of [
+      `Move up Stop A`,
+      `Move down Stop A`,
+      `Remove Stop A`,
+    ]) {
       expect(within(firstRow).getByRole("button", { name })).toBeVisible();
     }
 

@@ -1094,13 +1094,15 @@ export async function createGameRuntime(
             type: "deployInitialFleet",
             lineId: createdRouteId,
           };
-          const previousRejection = rejection;
-          // dispatchNow publishes before returning, which would flash the
-          // deployment rejection as a transient `role="alert"`. Apply its
-          // rejection semantics and the Save-local suppression BEFORE the
-          // single commitDispatchResult publish below.
+          // dispatchNow publishes before returning, which would flash a
+          // deployment rejection as a transient `role="alert"`; this path
+          // applies rejection semantics before its single publish below.
           const result = await backend.dispatch(deployIntent);
           backendError = null;
+          // Read the current feedback now, not before the await: the player
+          // may have dismissed it while the deployment waited, and an
+          // expected shortage must not resurrect dismissed feedback.
+          const feedbackAtCompletion = rejection;
           if (
             result.rejection !== null ||
             (result.applied && ui.routeDraft === null)
@@ -1109,9 +1111,10 @@ export async function createGameRuntime(
           }
           if (result.rejection?.code === "insufficientBudget") {
             if (knownFleetShortage) {
-              // The editor warned before Save; keep the previous feedback and
-              // let the Lines card carry the no-fleet recovery path.
-              rejection = previousRejection;
+              // The editor warned before Save; keep whatever feedback the
+              // player sees at completion and let the Lines card carry the
+              // no-fleet recovery path.
+              rejection = feedbackAtCompletion;
             } else {
               // The budget changed only after click: tag the late shortage
               // before publication so the toast reads as recovery guidance,

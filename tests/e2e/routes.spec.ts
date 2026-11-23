@@ -6,6 +6,7 @@ import {
   clickMapTile,
   createDefaultCity,
   debugSetBudget,
+  drainGameplayQueue,
   dragMapTiles,
   hoverMapTile,
   mapBoardScale,
@@ -900,8 +901,11 @@ test("warns before save when the fleet is unaffordable and recovers without flee
   await page.getByRole("button", { name: "Save without fleet" }).click();
 
   // The line exists, is selected, and has no fleet — without a redundant
-  // toast repeating the warning the editor already showed.
+  // toast repeating the warning the editor already showed. Drain the queue
+  // first: the visible line publishes before the deferred deployment does,
+  // and the no-alert claim is only meaningful once it has landed.
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  await drainGameplayQueue(page);
   await expect(page.getByTestId("action-feedback")).toHaveCount(0);
   await expect(page.getByText("Saved without fleet")).toHaveCount(0);
   const saved = await readRuntimeTransit(page);
@@ -1018,6 +1022,8 @@ test("creative sandbox prices the fleet nominally and never warns", async ({
     .click();
 
   await expect(page.getByTestId("route-name-route-001")).toBeVisible();
+  // Drain the deferred deployment before claiming no feedback at all.
+  await drainGameplayQueue(page);
   await expect(page.getByTestId("action-feedback")).toHaveCount(0);
   await expect
     .poll(

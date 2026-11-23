@@ -5,6 +5,7 @@
     RouteDraft,
     RouteEditorView,
     ServicePattern,
+    TransitMode,
   } from "../../../runtime/types";
 
   let {
@@ -40,6 +41,12 @@
   } = $props();
 
   const hasSelection = $derived(editor.selectedIndex !== null);
+
+  // Matches the Lines card's fleet wording: mode-aware singular/plural.
+  const fleetNoun = (mode: TransitMode, count: number): string => {
+    if (mode === "metro") return count === 1 ? "train" : "trains";
+    return count === 1 ? "bus" : "buses";
+  };
 
   // Row actions select their row first, then reuse the runtime's synchronous
   // selected-waypoint move/remove; selection-only changes do not restart the
@@ -107,21 +114,21 @@
           <span class="route-waypoint-actions">
             <button
               type="button"
-              aria-label="Move up"
+              aria-label={`Move up ${waypoint.label}`}
               data-testid={`route-waypoint-move-up-${waypoint.index}`}
               disabled={waypoint.index === 0}
               onclick={() => rowMove(waypoint.index, -1)}>↑</button
             >
             <button
               type="button"
-              aria-label="Move down"
+              aria-label={`Move down ${waypoint.label}`}
               data-testid={`route-waypoint-move-down-${waypoint.index}`}
               disabled={waypoint.index === editor.waypoints.length - 1}
               onclick={() => rowMove(waypoint.index, 1)}>↓</button
             >
             <button
               type="button"
-              aria-label="Remove"
+              aria-label={`Remove ${waypoint.label}`}
               data-testid={`route-waypoint-remove-${waypoint.index}`}
               onclick={() => rowRemove(waypoint.index)}>✕</button
             >
@@ -214,13 +221,17 @@
   {/if}
 
   {#if editor.source === "create" && editor.initialFleet !== null}
+    <h4 class="route-after-save-heading">After saving</h4>
     <dl class="route-after-save" data-testid="route-after-save">
       <div class="route-after-save-row">
         <dt>Fleet</dt>
         <dd data-testid="route-after-save-fleet">
           {editor.initialFleet.shortfall
             ? "None yet"
-            : `${editor.initialFleet.vehicles} vehicles`}
+            : `${editor.initialFleet.vehicles} ${fleetNoun(
+                editor.mode,
+                editor.initialFleet.vehicles,
+              )}`}
         </dd>
       </div>
       <div class="route-after-save-row">
@@ -238,6 +249,13 @@
         </dd>
       </div>
     </dl>
+    <p
+      class="route-after-save-qualifier"
+      data-testid="route-after-save-qualifier"
+    >
+      Estimate from the current quote — actual fleet and cost depend on your
+      budget when you save and show on the line's card.
+    </p>
     {#if editor.initialFleet.shortfall}
       <p class="route-shortfall" data-testid="route-shortfall-reason">
         {editor.initialFleet.shortfallReason}

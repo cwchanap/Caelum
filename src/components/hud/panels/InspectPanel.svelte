@@ -88,6 +88,9 @@
   class="card inspection-card"
   class:inspection-card--hidden={placement === null}
   data-side={placement?.side}
+  style:--arrow-offset={placement === null
+    ? undefined
+    : `${placement.arrowOffset}px`}
   style:left={placement === null ? undefined : `${placement.left}px`}
   style:top={placement === null ? undefined : `${placement.top}px`}
   bind:offsetWidth={cardWidth}

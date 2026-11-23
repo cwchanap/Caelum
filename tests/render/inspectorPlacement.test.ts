@@ -6,6 +6,7 @@ import {
 } from "../../src/render/boardTransform";
 import type { Camera } from "../../src/render/boardTransform";
 import {
+  INSPECTOR_POPOVER_ARROW_INSET,
   INSPECTOR_POPOVER_EDGE,
   INSPECTOR_POPOVER_GAP,
   placeInspectorPopover,
@@ -103,6 +104,84 @@ describe("placeInspectorPopover", () => {
 
   it("points up from a card flipped above the bottom HUD band", () => {
     expect(placement({ x: 4, y: 9 })!.side).toBe("bottom");
+  });
+
+  it("slides the arrow along its edge to the tile center in the normal case", () => {
+    // A tall card nudged up by the safe-area clamp puts the tile's center
+    // inside the card's vertical span, so the left-edge arrow aligns with it.
+    const card = { width: CARD.width, height: 500 };
+    const transform = getBoardTransform(STAGE, MAP);
+    const size = tileSize * transform.scale;
+    const centerY = transform.offsetY + (3 + 0.5) * size;
+    const result = placeInspectorPopover({
+      stage: STAGE,
+      card,
+      tile: { x: 4, y: 3 },
+      map: MAP,
+      camera: null,
+    })!;
+
+    expect(result.side).toBe("left");
+    expect(result.arrowOffset).toBeCloseTo(centerY - result.top, 6);
+    expect(result.arrowOffset).toBeGreaterThan(INSPECTOR_POPOVER_ARROW_INSET);
+    expect(result.arrowOffset).toBeLessThan(
+      card.height - INSPECTOR_POPOVER_ARROW_INSET,
+    );
+  });
+
+  it("keeps the flipped card's arrow aligned with the tile", () => {
+    const card = { width: CARD.width, height: 500 };
+    const transform = getBoardTransform(STAGE, MAP);
+    const size = tileSize * transform.scale;
+    const centerY = transform.offsetY + (3 + 0.5) * size;
+    const result = placeInspectorPopover({
+      stage: STAGE,
+      card,
+      tile: { x: 9, y: 3 },
+      map: MAP,
+      camera: null,
+    })!;
+
+    expect(result.side).toBe("right");
+    expect(result.arrowOffset).toBeCloseTo(centerY - result.top, 6);
+  });
+
+  it("clamps the arrow inside the card edge on a diagonal flip", () => {
+    // Tile in the bottom-right corner: the card flips to the upper-left, so
+    // the tile sits diagonally beyond the right edge's span.
+    const result = placement({ x: 9, y: 9 })!;
+    expect(result.side).toBe("right");
+    expect(result.arrowOffset).toBe(
+      CARD.height - INSPECTOR_POPOVER_ARROW_INSET,
+    );
+  });
+
+  it("clamps the arrow when the card is nudged inside the safe area", () => {
+    const stage = { width: 400, height: 500 };
+    const card = { width: 300, height: 100 };
+    const transform = getBoardTransform(stage, MAP);
+    const size = tileSize * transform.scale;
+    const centerY = transform.offsetY + (4 + 0.5) * size;
+    const result = placeInspectorPopover({
+      stage,
+      card,
+      tile: { x: 4, y: 4 },
+      map: MAP,
+      camera: null,
+    })!;
+
+    expect(result.left).toBe(stage.width - INSPECTOR_POPOVER_EDGE - card.width);
+    // Beside-placement leaves the tile center above the card top; the
+    // arrow lands on the near-corner inset instead of overshooting it.
+    expect(result.arrowOffset).toBe(
+      Math.max(
+        INSPECTOR_POPOVER_ARROW_INSET,
+        Math.min(
+          centerY - result.top,
+          card.height - INSPECTOR_POPOVER_ARROW_INSET,
+        ),
+      ),
+    );
   });
 
   it("nudges a too-wide card inside the safe area beside a visible edge tile", () => {

@@ -296,13 +296,11 @@ export function zoomCameraAt(
     if (zoom < 1) {
       return { ...moved, retained: true };
     }
-    // The floor landing is exactly the fitted view.
-    if (zoom === 1) {
-      return null;
-    }
     // Hand control back to ordinary clamped navigation only when the clamp
-    // would not move the view; otherwise the passive view stays passive
-    // rather than snapping (explicit Fit always reframes deliberately).
+    // would not move the view — which at zoom 1 also means the whole
+    // projected transform already is the canonical Fit. A retained view
+    // reaching zoom 1 with passive offsets stays retained: returning `null`
+    // here would snap it to Fit and move the anchored world point.
     const clamped = clampCamera(board, map, moved);
     const same = (a: number, b: number) => Math.abs(a - b) <= 1e-9;
     return same(clamped.zoom, moved.zoom) &&
