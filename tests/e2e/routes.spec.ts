@@ -908,6 +908,23 @@ test("warns before save when the fleet is unaffordable and recovers without flee
   await drainGameplayQueue(page);
   await expect(page.getByTestId("action-feedback")).toHaveCount(0);
   await expect(page.getByText("Saved without fleet")).toHaveCount(0);
+
+  // The selected no-fleet card states the shortfall statically — same
+  // needs/available phrasing the rejection toast uses — while the dock keeps
+  // its plain "Lines" heading with no numbered plate.
+  const shortfallLine = page.getByTestId("route-deploy-shortfall-route-001");
+  await expect(shortfallLine).toBeVisible();
+  await expect(shortfallLine).toContainText(`Needs ${formatBudget(quote)}`);
+  const linesHeading = page
+    .getByTestId("panel-lines")
+    .getByRole("heading", { name: "Lines" });
+  await expect(linesHeading).toHaveText("Lines");
+
+  // Replenishing the budget clears the static reason on the card itself.
+  await debugSetBudget(page, 200_000);
+  await expect(
+    page.getByTestId("route-deploy-shortfall-route-001"),
+  ).toHaveCount(0);
   const saved = await readRuntimeTransit(page);
   expect(
     saved.routes.find((route) => route.id === "route-001")?.vehicleIds ?? [],

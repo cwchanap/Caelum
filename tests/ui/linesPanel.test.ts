@@ -57,6 +57,7 @@ function routeFixtures(): ShellRouteListState {
       selected: false,
       status: { primary: "running", pausedAfterRepair: false },
       service: {
+        deployShortfallReason: null,
         targetHeadwaySeconds: null,
         ...createTestServiceMetrics(),
         roundTripSeconds: null,
@@ -74,6 +75,7 @@ function routeFixtures(): ShellRouteListState {
       selected: false,
       status: { primary: "broken", pausedAfterRepair: true },
       service: {
+        deployShortfallReason: null,
         targetHeadwaySeconds: null,
         ...createTestServiceMetrics(),
         roundTripSeconds: null,
@@ -227,6 +229,7 @@ describe("LinesPanel line workspace", () => {
       ...routes[0],
       selected: true,
       service: {
+        deployShortfallReason: null,
         targetHeadwaySeconds: 360,
         ...createTestServiceMetrics({
           roundTripSeconds: 900,
@@ -371,6 +374,7 @@ describe("LinesPanel line workspace", () => {
       selected: true,
       status: { primary: "noFleet", pausedAfterRepair: false },
       service: {
+        deployShortfallReason: null,
         targetHeadwaySeconds: 360,
         ...createTestServiceMetrics({
           roundTripSeconds: 900,
@@ -400,6 +404,88 @@ describe("LinesPanel line workspace", () => {
         name: "Deploy fleet · est. $150,000",
       }),
     ).toBeVisible();
+  });
+
+  it("states the deploy shortfall statically on a selected no-fleet card and keeps Deploy dispatchable", async () => {
+    const routes = routeFixtures();
+    routes[0] = {
+      ...routes[0],
+      selected: true,
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      service: {
+        targetHeadwaySeconds: 360,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          requiredFleet: 1,
+          estimatedDeploymentCost: 150_000,
+        }),
+        deployShortfallReason:
+          "Needs $150,000; only $7,999 is available. Replenish your budget, then deploy.",
+      },
+    };
+    const props = panelProps({ routes });
+    render(LinesPanel, { props });
+
+    const card = screen.getByTestId("route-item-route-bus-001");
+    expect(card).toHaveClass("route-item--selected");
+    const reason = within(card).getByTestId(
+      "route-deploy-shortfall-route-bus-001",
+    );
+    expect(reason).toBeVisible();
+    expect(reason).toHaveTextContent(
+      "Needs $150,000; only $7,999 is available. Replenish your budget, then deploy.",
+    );
+    // The manual Deploy affordance stays clickable; authorizing against the
+    // live budget is the runtime's rejection toast job, not the card's.
+    await fireEvent.click(
+      within(card).getByRole("button", {
+        name: "Deploy fleet · est. $150,000",
+      }),
+    );
+    expect(props.onDeployInitialFleet).toHaveBeenCalledTimes(1);
+    expect(props.onDeployInitialFleet).toHaveBeenCalledWith("route-bus-001");
+  });
+
+  it("renders no deploy shortfall when the budget covers the estimate", () => {
+    const routes = routeFixtures();
+    routes[0] = {
+      ...routes[0],
+      selected: true,
+      status: { primary: "noFleet", pausedAfterRepair: false },
+      service: {
+        targetHeadwaySeconds: 360,
+        ...createTestServiceMetrics({
+          roundTripSeconds: 900,
+          requiredFleet: 1,
+          estimatedDeploymentCost: 150_000,
+        }),
+        deployShortfallReason: null,
+      },
+    };
+    render(LinesPanel, { props: panelProps({ routes }) });
+
+    expect(
+      screen.queryByTestId("route-deploy-shortfall-route-bus-001"),
+    ).toBeNull();
+  });
+
+  it("shows the plain Lines heading without numbered plate chrome", () => {
+    render(LinesPanel, { props: panelProps() });
+
+    const heading = screen.getByRole("heading", { name: "Lines" });
+    expect(heading).toBeVisible();
+    expect(heading.querySelector(".num")).toBeNull();
+  });
+
+  it("keeps the plain Lines heading in the draft-gate editor branch", () => {
+    render(LinesPanel, {
+      props: panelProps({ routeDraft: createDraftView() }),
+    });
+
+    const heading = screen.getByRole("heading", { name: "Lines" });
+    expect(heading).toBeVisible();
+    expect(heading.querySelector(".num")).toBeNull();
+    expect(screen.getByTestId("route-draft")).toBeVisible();
   });
 
   it("commits a route rename once when Enter is followed by blur", async () => {
@@ -486,6 +572,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "noFleet", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -552,6 +639,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "noFleet", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 300,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -606,6 +694,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "paused", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -627,6 +716,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "broken", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -664,6 +754,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "paused", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -685,6 +776,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "broken", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -726,6 +818,7 @@ describe("LinesPanel line workspace", () => {
           // Rust withholds service metrics while no cycle is derivable; the
           // card mirrors that projection. The target stays in its editor.
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             roundTripSeconds: null,
             assignedFleet: 1,
@@ -763,6 +856,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -785,6 +879,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "broken", pausedAfterRepair: true },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -846,6 +941,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "paused", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -882,6 +978,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -916,6 +1013,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -954,6 +1052,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -1003,6 +1102,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 300,
             ...createTestServiceMetrics({
               roundTripSeconds: 720,
@@ -1044,6 +1144,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -1103,6 +1204,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -1138,6 +1240,7 @@ describe("LinesPanel line workspace", () => {
         selected: false,
         status: { primary: "running" as const, pausedAfterRepair: false },
         service: {
+          deployShortfallReason: null,
           targetHeadwaySeconds: 360,
           ...createTestServiceMetrics({
             roundTripSeconds: 900,
@@ -1161,6 +1264,7 @@ describe("LinesPanel line workspace", () => {
         selected: false,
         status: { primary: "running" as const, pausedAfterRepair: false },
         service: {
+          deployShortfallReason: null,
           targetHeadwaySeconds: 360,
           ...createTestServiceMetrics({
             roundTripSeconds: 900,
@@ -1204,6 +1308,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -1246,6 +1351,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 300,
             ...createTestServiceMetrics({
               roundTripSeconds: 720,
@@ -1282,6 +1388,7 @@ describe("LinesPanel line workspace", () => {
           selected: false,
           status: { primary: "running", pausedAfterRepair: false },
           service: {
+            deployShortfallReason: null,
             targetHeadwaySeconds: 360,
             ...createTestServiceMetrics({
               roundTripSeconds: 900,
@@ -1347,6 +1454,7 @@ describe("LinesPanel wait locations", () => {
       selected: false,
       status: { primary: "running", pausedAfterRepair: false },
       service: {
+        deployShortfallReason: null,
         targetHeadwaySeconds: 360,
         ...createTestServiceMetrics({
           roundTripSeconds: 900,

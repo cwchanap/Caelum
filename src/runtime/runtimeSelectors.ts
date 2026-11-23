@@ -708,14 +708,19 @@ function missingNodeKindForLeg(
   return "stop";
 }
 
-function selectServiceState(route: Route | MetroLine): ShellServiceState {
+function selectServiceState(
+  state: GameState,
+  route: Route | MetroLine,
+  status: RouteServiceStatus,
+): ShellServiceState {
+  const estimatedDeploymentCost =
+    route.serviceMetrics?.estimatedDeploymentCost ?? null;
   return {
     targetHeadwaySeconds: route.targetHeadwaySeconds,
     roundTripSeconds: route.serviceMetrics?.roundTripSeconds ?? null,
     assignedFleet: route.vehicleIds.length,
     requiredFleet: route.serviceMetrics?.requiredFleet ?? null,
-    estimatedDeploymentCost:
-      route.serviceMetrics?.estimatedDeploymentCost ?? null,
+    estimatedDeploymentCost,
     dailyOperatingCost: route.serviceMetrics?.dailyOperatingCost ?? 0,
     estimatedDailyOperatingCost:
       route.serviceMetrics?.estimatedDailyOperatingCost ?? null,
@@ -724,6 +729,15 @@ function selectServiceState(route: Route | MetroLine): ShellServiceState {
     waitingAtRiskCount: route.serviceMetrics?.waitingAtRiskCount ?? 0,
     longestWaitSeconds: route.serviceMetrics?.longestWaitSeconds ?? null,
     canRetireVehicle: route.serviceMetrics?.canRetireVehicle ?? false,
+    // Static card copy for the no-fleet Deploy gate: the Rust-quoted
+    // estimate against the live Standard budget. Creative never warns, and
+    // cards without a Deploy affordance (paused/broken/fleeted) stay quiet.
+    deployShortfallReason:
+      status.primary === "noFleet" &&
+      estimatedDeploymentCost !== null &&
+      initialFleetShortfall(state, estimatedDeploymentCost)
+        ? `Needs ${formatBudget(estimatedDeploymentCost)}; only ${formatBudget(state.budget)} is available. Replenish your budget, then deploy.`
+        : null,
   };
 }
 
@@ -766,6 +780,7 @@ function selectRouteRow(
   waitRowsByLine: Map<string, WaitingLocationView[]>,
   nodeIdByPlatform: Map<string, string>,
 ): ShellRouteListItem {
+  const status = routeServiceStatus(route);
   return {
     id: route.id,
     name: route.name,
@@ -775,8 +790,8 @@ function selectRouteRow(
       "stopIds" in route ? route.stopIds.length : route.stationIds.length,
     active: route.active,
     selected,
-    status: routeServiceStatus(route),
-    service: selectServiceState(route),
+    status,
+    service: selectServiceState(state, route, status),
     failures: selectRouteFailures(
       state,
       route.pattern,

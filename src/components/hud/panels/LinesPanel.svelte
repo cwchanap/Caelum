@@ -213,7 +213,7 @@
 <div class="hud-panel" data-testid="panel-lines">
   {#if routeDraft !== null}
     <section class="panel-section lines-section">
-      <h3 class="section-head"><span class="num">03</span> Lines</h3>
+      <h3 class="section-head">Lines</h3>
       <p
         id="route-draft-panel-gate"
         data-testid="route-draft-panel-gate"
@@ -238,7 +238,7 @@
     </section>
   {:else}
     <section class="panel-section lines-section">
-      <h3 class="section-head"><span class="num">03</span> Lines</h3>
+      <h3 class="section-head">Lines</h3>
       <div class="toolbar toolbar--compact" aria-label="Line creation">
         <button
           type="button"
@@ -460,6 +460,14 @@
                           )}
                         </span>
                       </div>
+                    {/if}
+                    {#if route.service.deployShortfallReason !== null}
+                      <p
+                        class="route-deploy-shortfall"
+                        data-testid={`route-deploy-shortfall-${route.id}`}
+                      >
+                        {route.service.deployShortfallReason}
+                      </p>
                     {/if}
                     {#if route.status.primary === "noFleet" && route.service.targetHeadwaySeconds !== null && route.service.requiredFleet !== null}
                       <button

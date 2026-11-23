@@ -211,6 +211,10 @@ export interface ShellServiceState {
   waitingAtRiskCount: number;
   longestWaitSeconds: number | null;
   canRetireVehicle: boolean;
+  /** Static needs/available line for the no-fleet Deploy gate when the
+   *  Standard budget is below the Rust-quoted estimate; null otherwise
+   *  (affordable, Creative, or a card without a Deploy affordance). */
+  deployShortfallReason: string | null;
 }
 
 export interface RouteFailureRow {
