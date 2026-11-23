@@ -54,6 +54,23 @@ function hueDistance(a: number, b: number): number {
   return distance > 180 ? 360 - distance : distance;
 }
 
+function wcagContrast(foreground: string, background: string): number {
+  const channelLum = (channel: number): number =>
+    channel <= 0.03928
+      ? channel / 12.92
+      : Math.pow((channel + 0.055) / 1.055, 2.4);
+  const lum = (css: string): number => {
+    const [r, g, b] = parseColor(css);
+    return (
+      0.2126 * channelLum(r) + 0.7152 * channelLum(g) + 0.0722 * channelLum(b)
+    );
+  };
+  const a = lum(foreground);
+  const b = lum(background);
+  const [light, dark] = a > b ? [a, b] : [b, a];
+  return (light + 0.05) / (dark + 0.05);
+}
+
 function blockFor(selector: string): string {
   const match = styles.match(
     new RegExp(`${selector.replace(/[.*]/g, "\\$&")}\\s*{([^}]*)}`),
@@ -103,6 +120,21 @@ describe("sunny diorama visual foundation", () => {
       const block = blockFor(selector);
       expect(block).not.toContain("--ink-faint");
       expect(block).toContain("--ink-mid");
+    }
+  });
+
+  it("keeps the deploy shortfall line at AA contrast on its card surfaces", () => {
+    const token = (name: string): string =>
+      styles.match(new RegExp(`${name}:\\s*(#[0-9a-f]{6})`))?.[1] ?? "";
+    const color = blockFor(".route-deploy-shortfall").match(
+      /color:\s*(#[0-9a-f]{6})/,
+    )?.[1];
+    expect(color).toBeDefined();
+    // The line renders inside .route-service (--surface) on the route card
+    // (--surface-raised); the shared --warning token fails AA at 10px there.
+    for (const surface of [token("--surface-raised"), token("--surface")]) {
+      expect(surface).not.toBe("");
+      expect(wcagContrast(color ?? "", surface)).toBeGreaterThanOrEqual(4.5);
     }
   });
 
