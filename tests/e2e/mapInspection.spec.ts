@@ -92,15 +92,19 @@ async function probedArrowHit(
       throw new Error("card carries no arrow side");
     }
     const rect = card.getBoundingClientRect();
-    const centerX = rect.left + rect.width / 2;
-    const centerY = rect.top + rect.height / 2;
+    const style = getComputedStyle(card);
+    // The arrow slides along its edge toward the selected tile: read the
+    // placement offset instead of assuming the edge midpoint.
+    const border = parseFloat(style.borderTopWidth) || 0;
+    const offset = parseFloat(style.getPropertyValue("--arrow-offset")) || 0;
+    const along = border + offset;
     // 3px into the painted triangle, always past the card border box.
     const probe =
       side === "left"
-        ? { x: rect.left - 3, y: centerY }
+        ? { x: rect.left - 3, y: rect.top + along }
         : side === "right"
-          ? { x: rect.right + 3, y: centerY }
-          : { x: centerX, y: rect.bottom + 3 };
+          ? { x: rect.right + 3, y: rect.top + along }
+          : { x: rect.left + along, y: rect.bottom + 3 };
     const hit = document.elementFromPoint(probe.x, probe.y);
     return {
       side,

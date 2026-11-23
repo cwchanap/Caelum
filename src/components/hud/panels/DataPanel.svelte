@@ -27,12 +27,15 @@
           type="button"
           data-overlay={overlay}
           aria-pressed={activeOverlay === overlay}
+          aria-label={OVERLAY_CATALOG[overlay].label}
+          aria-describedby={`overlay-desc-${overlay}`}
           class={{ active: activeOverlay === overlay }}
           onclick={() =>
             onSetOverlay(activeOverlay === overlay ? null : overlay)}
         >
           <span class="overlay-name">{OVERLAY_CATALOG[overlay].label}</span>
-          <span class="overlay-desc">{OVERLAY_CATALOG[overlay].legendText}</span
+          <span class="overlay-desc" id={`overlay-desc-${overlay}`}
+            >{OVERLAY_CATALOG[overlay].legendText}</span
           >
         </button>
       {/each}

@@ -69,6 +69,11 @@
   let cityListRequestId = 0;
   let stopPersistenceLifecycle: (() => void) | undefined;
   let nowMs = $state(Date.now());
+  // One rename that arrived while persistence was busy (a held header
+  // editor landing as its panel unmounts) waits here and lands exactly once
+  // on the next idle publish.
+  let deferredCityRename: { cityId: string; name: string } | null =
+    $state(null);
   interface CloseCityVersion {
     id: string | undefined;
     savedAt: string | undefined;
@@ -230,6 +235,10 @@
 
   async function handleRenameCity(cityId: string, name: string): Promise<void> {
     if (runtime === null) return;
+    if (runtime.getSnapshot().persistence.busy) {
+      deferredCityRename = { cityId, name };
+      return;
+    }
     beginPersistenceMutation();
     const result = await runtime.persistence.renameCity(cityId, name);
     if (result.ok) await refreshCities();
@@ -740,6 +749,15 @@
 
   $effect(() => {
     snapshot = runtime?.getSnapshot() ?? null;
+  });
+
+  // Land a busy-arrived rename once persistence goes idle.
+  $effect(() => {
+    if (snapshot?.persistence.busy !== false) return;
+    const pending = deferredCityRename;
+    if (pending === null) return;
+    deferredCityRename = null;
+    void handleRenameCity(pending.cityId, pending.name);
   });
 
   $effect(() => {

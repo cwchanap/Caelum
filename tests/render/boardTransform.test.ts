@@ -441,6 +441,53 @@ describe("passive dock resize", () => {
     }
   });
 
+  it("a retained view landing on exactly Fit zoom stays put unless it is the canonical Fit", () => {
+    // A passive sub-fit view with noncanonical (letterboxed) offsets: one
+    // ×1.25 step lands zoom on exactly 1, and the anchored view must not
+    // snap to the canonical Fit transform.
+    const retained = {
+      zoom: 0.8,
+      center: { x: map.width / 2, y: map.height / 2 + 0.3 },
+      retained: true,
+    };
+    const anchor = { x: 640, y: 392 };
+    const before = getBoardTransform(full, map, retained);
+    const worldUnder = {
+      x: (anchor.x - before.offsetX) / before.scale,
+      y: (anchor.y - before.offsetY) / before.scale,
+    };
+
+    const landed = zoomCameraAt(full, map, retained, ZOOM_STEP, anchor);
+    expect(landed!.zoom).toBe(1);
+    expect(landed?.retained).toBe(true);
+    // The world point under the anchor never moves (no Fit snap).
+    const after = getBoardTransform(full, map, landed);
+    expect(after.offsetX + worldUnder.x * after.scale).toBeCloseTo(anchor.x, 6);
+    expect(after.offsetY + worldUnder.y * after.scale).toBeCloseTo(anchor.y, 6);
+    // Subsequent interactions: sub-fit rules still apply while retained —
+    // pan and Zoom Out are no-ops, and the next Zoom In resumes ordinary
+    // clamped navigation once past fit.
+    expect(panCamera(full, map, landed, 50, 50)).toBe(landed);
+    expect(zoomCameraAt(full, map, landed, 1 / ZOOM_STEP, anchor)).toBe(landed);
+    const nextStep = zoomCameraAt(full, map, landed, ZOOM_STEP, anchor);
+    expect(nextStep?.retained).toBeFalsy();
+    expect(nextStep!.zoom).toBeGreaterThan(1);
+
+    // A retained view whose complete transform already is the canonical Fit
+    // still coalesces back to `null` at zoom 1.
+    const canonicalCenter = {
+      zoom: 0.8,
+      center: { x: map.width / 2, y: map.height / 2 },
+      retained: true,
+    };
+    const middle = {
+      x: full.width / 2,
+      y: (HUD_INSET.top + full.height - HUD_INSET.bottom) / 2,
+    };
+    const fitted = zoomCameraAt(full, map, canonicalCenter, ZOOM_STEP, middle);
+    expect(fitted).toBeNull();
+  });
+
   it("zooming in from a passive view never snaps and resumes ordinary navigation", () => {
     const letterboxed = rebaseCameraForResize(full, docked, map, null)!;
     const anchor = { x: 400, y: 392 };

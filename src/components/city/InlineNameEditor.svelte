@@ -38,6 +38,19 @@
     }
   });
 
+  // A submission still held when the editor unmounts (its panel closed or
+  // switched away before the parent went idle) lands through the parent's
+  // deferred path instead of being silently dropped with the component.
+  $effect(() => {
+    return () => {
+      if (!pendingCommit) return;
+      pendingCommit = false;
+      const trimmed = draft.trim();
+      if (trimmed.length === 0 || trimmed === value) return;
+      onCommit(trimmed);
+    };
+  });
+
   function activate(): void {
     if (disabled) return;
     draft = value;

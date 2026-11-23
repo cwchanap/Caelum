@@ -1334,10 +1334,19 @@ body {
 }
 
 /* Pre-save "After saving" quote for new drafts; estimates only. */
+.route-after-save-heading {
+  margin: 10px 0 0;
+  color: var(--ink);
+  font-family: var(--font-display);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+}
+
 .route-after-save {
   display: grid;
   gap: 4px;
-  margin: 10px 0 0;
+  margin: 4px 0 0;
   padding: 8px 10px;
   border: 1px solid var(--line);
   background: color-mix(in srgb, var(--accent) 4%, transparent);
@@ -1367,6 +1376,13 @@ body {
 .route-shortfall {
   margin: 6px 0 0;
   color: var(--danger);
+  font-family: var(--font-body);
+  font-size: 10px;
+}
+
+.route-after-save-qualifier {
+  margin: 4px 0 0;
+  color: var(--ink-mid);
   font-family: var(--font-body);
   font-size: 10px;
 }
@@ -2012,7 +2028,8 @@ body {
 }
 
 /* Arrow pointing toward the selected tile; the side comes from
- * placeInspectorPopover and flips with the card around stage edges. */
+ * placeInspectorPopover and flips with the card around stage edges, while
+ * --arrow-offset slides the arrow along that edge toward the tile center. */
 .inspection-card[data-side]::after {
   content: "";
   position: absolute;
@@ -2023,21 +2040,21 @@ body {
 
 .inspection-card[data-side="left"]::after {
   left: -15px;
-  top: 50%;
+  top: var(--arrow-offset, 50%);
   margin-top: -8px;
   border-right-color: var(--line);
 }
 
 .inspection-card[data-side="right"]::after {
   right: -15px;
-  top: 50%;
+  top: var(--arrow-offset, 50%);
   margin-top: -8px;
   border-left-color: var(--line);
 }
 
 .inspection-card[data-side="bottom"]::after {
   bottom: -15px;
-  left: 50%;
+  left: var(--arrow-offset, 50%);
   margin-left: -8px;
   border-top-color: var(--line);
 }

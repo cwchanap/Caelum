@@ -400,6 +400,7 @@
                       disabled={!route.service.canRetireVehicle ||
                         pendingServiceActions[route.id] === true}
                       aria-label={`Retire ${vehicleNoun(route.mode)} on ${route.name} · no refund`}
+                      title={`Retire ${vehicleNoun(route.mode)} · no refund`}
                       onclick={() => retireVehicle(route)}
                     >
                       −
@@ -414,6 +415,9 @@
                       disabled={route.service.nextVehicleCost === null ||
                         pendingServiceActions[route.id] === true}
                       aria-label={`Add ${vehicleNoun(route.mode)} on ${route.name}${route.service.nextVehicleCost === null ? "" : ` · ${formatBudget(route.service.nextVehicleCost)}`}`}
+                      title={route.service.nextVehicleCost === null
+                        ? `Add ${vehicleNoun(route.mode)}`
+                        : `Add ${vehicleNoun(route.mode)} · ${formatBudget(route.service.nextVehicleCost)}`}
                       onclick={() => addVehicle(route)}
                     >
                       +

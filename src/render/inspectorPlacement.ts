@@ -31,6 +31,9 @@ function clamp(value: number, min: number, max: number): number {
 /** Which edge of the card carries the arrow pointing at the selected tile. */
 export type InspectorPopoverSide = "left" | "right" | "bottom";
 
+/** Closest the arrow center stays to the card corners along its edge. */
+export const INSPECTOR_POPOVER_ARROW_INSET = 12;
+
 /**
  * Stage-local position for the Inspector card, or `null` when the selected
  * tile's center is outside the visible map area (or nothing is measured yet).
@@ -47,6 +50,8 @@ export function placeInspectorPopover({
   left: number;
   top: number;
   side: InspectorPopoverSide;
+  /** Arrow position along its edge, in CSS px from the card's left/top. */
+  arrowOffset: number;
 } | null {
   if (
     !isPositive(stage.width) ||
@@ -105,9 +110,29 @@ export function placeInspectorPopover({
       ? "bottom"
       : "left";
 
+  const placedLeft = clamp(
+    left,
+    safeLeft,
+    Math.max(safeLeft, safeRight - card.width),
+  );
+  const placedTop = clamp(
+    top,
+    safeTop,
+    Math.max(safeTop, safeBottom - card.height),
+  );
+  // The arrow slides along its edge to the selected tile's center as the
+  // final clamped card sees it, so a diagonal or nudged card still points at
+  // the tile instead of at the edge midpoint.
+  const inset = INSPECTOR_POPOVER_ARROW_INSET;
+  const arrowOffset =
+    side === "bottom"
+      ? clamp(centerX - placedLeft, inset, Math.max(inset, card.width - inset))
+      : clamp(centerY - placedTop, inset, Math.max(inset, card.height - inset));
+
   return {
-    left: clamp(left, safeLeft, Math.max(safeLeft, safeRight - card.width)),
-    top: clamp(top, safeTop, Math.max(safeTop, safeBottom - card.height)),
+    left: placedLeft,
+    top: placedTop,
     side,
+    arrowOffset,
   };
 }

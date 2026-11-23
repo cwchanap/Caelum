@@ -27,7 +27,10 @@ import type {
   RuntimeController,
   RuntimeSnapshot,
 } from "../../src/runtime/types";
-import type { CitySummary } from "../../src/persistence/citySaveStore";
+import type {
+  CitySummary,
+  CitySaveStore,
+} from "../../src/persistence/citySaveStore";
 import {
   createMemoryCitySaveStore,
   createMemoryCitySaveStoreFailureControls,
@@ -395,6 +398,97 @@ describe("App command shell", () => {
     } finally {
       rendered.unmount();
       vi.useRealTimers();
+    }
+  });
+
+  it("lands a rename submitted while busy exactly once after its panel unmounts", async () => {
+    const store = createMemoryCitySaveStore();
+    await seed(store, record(CITY_NEW));
+    await seed(store, record(CITY_OLD));
+    let current = createRustSnapshot({ paused: true });
+    const renames: Array<[string, string]> = [];
+    let releaseSave: (() => void) | null = null;
+    const saveGate = new Promise<void>((resolve) => {
+      releaseSave = resolve;
+    });
+    const backend = {
+      ...previewBackendStubs(),
+      async presentation() {
+        return createPresentationUpdate(current);
+      },
+      async snapshotForSave() {
+        return { ok: true as const, snapshot: current };
+      },
+      async dispatch() {
+        current = { ...current, budget: 90_000 };
+        return {
+          update: createPresentationUpdate(current, true),
+          applied: true,
+          rejection: null,
+        };
+      },
+      async tick() {
+        return {
+          update: createPresentationUpdate(current, false),
+          applied: false,
+          rejection: null,
+        };
+      },
+      async reset() {
+        return { ok: true as const, update: createPresentationUpdate(current) };
+      },
+    };
+    // The save holds the busy gate until the test releases it.
+    const gatedStore: CitySaveStore = {
+      ...store,
+      async updateCity(id, update) {
+        await saveGate;
+        return store.updateCity(id, update);
+      },
+      async renameCity(id, name) {
+        renames.push([id, name]);
+        return store.renameCity(id, name);
+      },
+    };
+    const runtime = await createGameRuntime({
+      backend,
+      createHost: createFakeGameHost,
+      saveStore: gatedStore,
+      initialCity: CITY_NEW,
+    });
+    const rendered = render(App, { props: { runtime } });
+    try {
+      for (let i = 0; i < 20; i++) await Promise.resolve();
+      await fireEvent.click(screen.getByTestId("command-destination-city"));
+      await fireEvent.click(
+        screen.getByRole("button", { name: "Rename Maple Junction" }),
+      );
+      const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+      await fireEvent.input(input, { target: { value: "Maple Reef" } });
+
+      // A save starts and holds persistence busy.
+      const saving = runtime.persistence.save();
+      await screen.findByRole("button", { name: "Working…" });
+
+      // The rename is submitted while busy, then its panel unmounts before
+      // persistence goes idle — the submission must not be lost.
+      await fireEvent.keyDown(input, { key: "Enter" });
+      await fireEvent.click(screen.getByTestId("command-destination-build"));
+
+      releaseSave!();
+      await saving;
+      await tick();
+
+      // Exactly one rename lands, for the submitted value.
+      expect(renames).toEqual([["city-new", "Maple Reef"]]);
+
+      // Back on City, the header carries the new name.
+      await fireEvent.click(screen.getByTestId("command-destination-city"));
+      expect(screen.getByTestId("active-city-name")).toHaveTextContent(
+        "Maple Reef",
+      );
+    } finally {
+      rendered.unmount();
     }
   });
 
@@ -2092,6 +2186,13 @@ describe("App command shell", () => {
         name: /coverage|crowding|demand|traffic/i,
       }),
     ).toHaveLength(4);
+    // Overlay tiles announce a short name plus the helper text as an
+    // accessible description, not the whole sentence as the name.
+    const coverageTile = overlays.getByRole("button", { name: "Coverage" });
+    expect(coverageTile).toBeVisible();
+    expect(coverageTile).toHaveAccessibleDescription(
+      "Shaded tiles are near stops or stations; active service can support nearby growth.",
+    );
     expect(screen.queryByRole("button", { name: /lateness/i })).toBeNull();
     expect(
       screen.getByText("Choose an overlay to inspect the network."),

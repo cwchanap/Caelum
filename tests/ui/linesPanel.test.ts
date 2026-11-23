@@ -1074,12 +1074,56 @@ describe("LinesPanel line workspace", () => {
       name: "Retire bus on Harbour Bus · no refund",
     });
     expect(retire).toBeVisible();
+    // Sighted players get the same price/no-refund facts as native tooltips,
+    // keeping the fixed − / count / + layout intact.
+    expect(retire).toHaveAttribute("title", "Retire bus · no refund");
+    expect(
+      screen.getByRole("button", {
+        name: "Add bus on Harbour Bus · $12,500",
+      }),
+    ).toHaveAttribute("title", "Add bus · $12,500");
 
     await fireEvent.click(retire);
     expect(props.onRetireServiceVehicle).toHaveBeenCalledTimes(1);
     expect(props.onRetireServiceVehicle).toHaveBeenCalledWith(
       "route-bus-below-rec",
     );
+  });
+
+  it("hints the add price on the stepper even when the quote is unavailable", () => {
+    const props = panelProps({
+      routes: [
+        {
+          id: "route-bus-no-price",
+          name: "Harbour Bus",
+          color: ROUTE_COLOR_PALETTE[0],
+          mode: "bus",
+          stopCount: 3,
+          active: true,
+          selected: false,
+          status: { primary: "running", pausedAfterRepair: false },
+          service: {
+            targetHeadwaySeconds: 360,
+            ...createTestServiceMetrics({
+              roundTripSeconds: 900,
+              assignedFleet: 2,
+              requiredFleet: 4,
+              dailyOperatingCost: 500,
+              nextVehicleCost: null,
+              nominalHeadwaySeconds: 450,
+              canRetireVehicle: false,
+            }),
+          },
+          waitLocations: [],
+          failures: [],
+        },
+      ],
+    });
+    render(LinesPanel, { props });
+
+    expect(
+      screen.getByTestId("route-add-vehicle-route-bus-no-price"),
+    ).toHaveAttribute("title", "Add bus");
   });
 
   it("disables a route's Add/Retire controls while its service action is pending", async () => {

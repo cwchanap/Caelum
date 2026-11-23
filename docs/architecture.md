@@ -35,20 +35,30 @@ Atomic purchases remain atomic, while road and track strokes authorize and
 accumulate each newly authored paid tile in input order. Scenario-authored
 `place_building_core()` remains free. WASM and Tauri only forward the existing
 Rust results. TypeScript never derives or enforces authoritative cost policy:
-new-route previews carry a nullable, read-only `initialFleetCost` — the nominal
-price the shared Rust fleet helper computes from the live flow-aware service
-cycle at the 600-second default target — while road-mutation previews still surface Rust's
+new-route previews carry a nullable, read-only `initialFleet` — one Rust-quoted
+summary holding the fleet count the shared fleet helper computes from the live
+flow-aware service cycle, the 600-second default target headway, the nominal
+purchase price, and the estimated daily operating cost from the shared Rust
+operating-cost helper — while road-mutation previews still surface Rust's
 `RejectionCode::InsufficientBudget` for construction-budget failures. The
 quote is a point-in-time estimate: deployment itself is an atomic Rust
 purchase that re-authorizes the real price at dispatch. Save attempts the
 deployment whenever a quote exists; a null quote saves without deploying. An
-`insufficientBudget` deployment rejection leaves the created line saved, and
-the runtime annotates the rejection context `savedWithoutFleet` so feedback
-reads "Saved without fleet: …".
-Beyond formatting, cost reaches the UI in the new-draft Save label and the
-Lines service row's Rust snapshot-derived `estimatedDeploymentCost`;
-TypeScript's only direct economy-preset interpretation for affordability or
-cost behavior remains the read-only building-hover helper.
+`insufficientBudget` deployment rejection leaves the created line saved. The
+runtime separates the two shortage cases: a shortage the editor already
+warned about before Save (the pure TypeScript `initialFleetShortfall`
+predicate — Standard preset only, current budget below the quoted price —
+drives the editor warning and the Save-click suppression) preserves whatever
+feedback is current at deployment completion instead of flashing an alert,
+while a late shortage (budget changed only after the click) annotates the
+rejection context `savedWithoutFleet` so feedback reads "Saved without
+fleet: …".
+Beyond formatting, cost reaches the UI in the new-draft Save label, the
+"After saving" quote projection (fleet, target, estimated daily cost — actuals
+always come from the saved line's Lines card), and the Lines service row's
+Rust snapshot-derived `estimatedDeploymentCost`; TypeScript's only direct
+economy-preset interpretation for affordability or cost behavior remains the
+read-only building-hover helper.
 
 ## Runtime boundary (TypeScript host)
 
@@ -379,7 +389,7 @@ Rust remains the gameplay authority; the HPA-544 `PresentationUpdate` wire is un
 - `createGameHost` (`src/runtime/createGameHost.ts`) owns the canvas surface, pointer/keyboard input wiring, resize handling, the `requestAnimationFrame` loop with ≤10 Hz one-in-flight tick admission (250 ms wall-delta clamp), and fatal device-loss forwarding to the shell error path. The renderer behind it is chosen once at startup through a strict WebGPU capability probe (`probeWebGpuCapability` in `src/runtime/createGameHost.ts`): WebGPU when the adapter, device, preferred format, and probe swap-chain setup all succeed; otherwise the limited Canvas2D fallback (`src/render/canvas2d/`) built on the renderer-neutral `GameplayRenderer` contract (`src/render/gameplayRenderer.ts`). Unexpected WebGPU device loss after startup stays terminal — there is no second fallback.
 - `src/render/webgpu/` modules own geometric presentation: painter-order solid batches, the single instanced textured-sprite draw for shipped map art (one `texture_2d_array` atlas uploaded at startup, premultiplied-alpha blending, painter stage `solids → sprites → overSprites → vehicles → overVehicles`), the single instanced vehicle draw, vehicle interpolation between observed snapshots, and viewport culling before encode/upload. `boardTransform.ts` keeps the shared tile↔pixel mapping (`tileSize = 32`) and the camera math.
 - The runtime owns one display host for its whole life. Canvas unmount (New City / City Library screen switches) only detaches input and unconfigures the canvas context; GPU resources survive and the remounted canvas reuses them. Terminal teardown (`runtime.dispose()` on App unmount, or fatal `failBackend` / shell-error termination) calls `gameHost.destroy()` to destroy the renderer, atlas, and device.
-- The map camera (`{ zoom, center }`, or `null` for the fitted whole-map view) is local view state on `RuntimeSnapshot.camera`. It is never saved or sent to Rust, survives UI resets, Escape, and sandbox reset (same map size), and returns to `null` when a city is created or loaded. The host owns camera input because it knows the board's CSS size: wheel zoom anchored at the cursor, middle-drag or Space+drag pan under every tool, and plain left-drag pan past 4 px under click tools. Buttons and keys (arrows, `+`/`-`, `0`) go through `RuntimeController.adjustCamera`. The GPU transform, pointer mapping, and DOM text overlay all call `getBoardTransform(board, map, camera)`, and vehicle culling uses the visible world rectangle.
+- The map camera (`{ zoom, center }`, `null` for the fitted whole-map view, or `retained: true` marking a passive layout result) is local view state on `RuntimeSnapshot.camera`. It is never saved or sent to Rust, survives UI resets, Escape, and sandbox reset (same map size), and returns to `null` when a city is created or loaded. The host owns camera input because it knows the board's CSS size: wheel zoom anchored at the cursor, middle-drag or Space+drag pan under every tool, and plain left-drag pan past 4 px under click tools. Buttons and keys (arrows, `+`/`-`, `0`) go through `RuntimeController.adjustCamera`. The GPU transform, pointer mapping, and DOM text overlay all call `getBoardTransform(board, map, camera)`, and vehicle culling uses the visible world rectangle. On a passive, already-mounted board resize, `rebaseCameraForResize` preserves the old transform's absolute scale and offsets as a `retained` camera (resolved without `clampCamera`, so the drawn pixels never move); the view coalesces back to `null` only when its complete projected transform is again the canonical Fit, while explicit Fit always resets to `null`.
 - Svelte owns HUD, panels, and the DOM map-text overlay (`mapTextOverlay.ts`), which render from runtime snapshots.
 - Canvas2D gameplay rendering was deleted by HPA-640: `render/canvas.ts` and the per-concern Canvas renderers were removed with their tests after both the Chromium and Tauri/WKWebView gates passed. HPA-1144 adds back a new, limited Canvas2D fallback (`src/render/canvas2d/`) behind the shared `GameplayRenderer` contract: it is selected once at startup, only when WebGPU capability/setup is unavailable, while unexpected WebGPU device loss after startup stays terminal.
 
