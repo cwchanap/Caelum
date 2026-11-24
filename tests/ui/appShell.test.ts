@@ -809,6 +809,12 @@ describe("App command shell", () => {
         ok: true as const,
         value: [CITY_NEW, renamedOld],
       });
+    // A real load publishes the city switch: the loaded row turns read-only
+    // in the dock, so the assertion reads its text, not an input value.
+    harness.runtime.persistence.load = vi.fn(async () => {
+      harness.setPersistence({ activeCity: renamedOld });
+      return { ok: true as const, value: renamedOld };
+    });
     render(App, { props: { runtime: harness.runtime } });
 
     await fireEvent.click(screen.getByTestId("command-destination-city"));
@@ -830,7 +836,7 @@ describe("App command shell", () => {
     );
     renameRefresh.resolve({ ok: true, value: [CITY_NEW, renamedOld] });
     await waitFor(() =>
-      expect(screen.getByTestId("city-name-city-old")).toHaveValue(
+      expect(screen.getByTestId("city-name-city-old")).toHaveTextContent(
         "Harbour East",
       ),
     );
