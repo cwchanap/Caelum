@@ -322,8 +322,20 @@ export function zoomCameraAt(
   const safe = safeRect(board);
   const middleX = safe.x + safe.width / 2;
   const middleY = safe.y + safe.height / 2;
-  const worldX = current.center.x + (anchor.x - middleX) / before;
-  const worldY = current.center.y + (anchor.y - middleY) / before;
+  // A retained sub-fit shrink converges the map onto the anchor; a wheel
+  // pointer in an exposed HUD inset would pull it toward a point that can
+  // never come inside the safe viewport, so the shrink anchors at the
+  // nearest safe edge instead.
+  const anchorX =
+    current.retained === true && factor < 1
+      ? Math.min(Math.max(anchor.x, safe.x), safe.x + safe.width)
+      : anchor.x;
+  const anchorY =
+    current.retained === true && factor < 1
+      ? Math.min(Math.max(anchor.y, safe.y), safe.y + safe.height)
+      : anchor.y;
+  const worldX = current.center.x + (anchorX - middleX) / before;
+  const worldY = current.center.y + (anchorY - middleY) / before;
   // An ordinary view never zooms out below fit; a retained view may cross
   // below 1 while part of the map is still cropped, shrinking until the
   // whole map is inside the safe viewport (the check above then stops it).
@@ -336,8 +348,8 @@ export function zoomCameraAt(
   const moved = {
     zoom,
     center: {
-      x: worldX - (anchor.x - middleX) / after,
-      y: worldY - (anchor.y - middleY) / after,
+      x: worldX - (anchorX - middleX) / after,
+      y: worldY - (anchorY - middleY) / after,
     },
   };
   if (current.retained === true) {

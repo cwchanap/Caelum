@@ -11,7 +11,7 @@
     error: string | null;
     onContinue: (cityId: string) => void;
     onLoad: (cityId: string) => void;
-    onRename: (cityId: string, name: string) => void;
+    onRename: (cityId: string, name: string) => Promise<boolean>;
     onDelete: (cityId: string) => void;
     onNewCity: () => void;
     onRetry?: () => void;

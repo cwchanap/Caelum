@@ -584,6 +584,38 @@ describe("passive dock resize", () => {
     );
   });
 
+  it("wheel Zoom Out anchored in an exposed HUD inset cannot collapse the map into the HUD", () => {
+    // Same docked crop as above, but the wheel pointer sits on exposed
+    // canvas above the 72px safe top: anchoring the shrink there would
+    // converge the map onto a point it can never bring inside the safe
+    // viewport. The anchor must fall back to the safe edge so the shrink
+    // still lands the whole map inside and then stops.
+    const opened = rebaseCameraForResize(full, docked, map, null)!;
+    expect(opened.retained).toBe(true);
+
+    let camera: Camera | null = opened;
+    const safe = safeViewport(docked);
+    const anchor = { x: 10, y: 10 };
+    for (let step = 0; step < 100; step += 1) {
+      const next = zoomCameraAt(docked, map, camera, 1 / ZOOM_STEP, anchor);
+      if (next === camera) break;
+      camera = next;
+    }
+
+    const t = getBoardTransform(docked, map, camera);
+    expect(t.offsetX).toBeGreaterThanOrEqual(safe.x - 1e-6);
+    expect(t.offsetX + t.width).toBeLessThanOrEqual(
+      safe.x + safe.width + 1e-6,
+    );
+    expect(t.offsetY).toBeGreaterThanOrEqual(safe.y - 1e-6);
+    expect(t.offsetY + t.height).toBeLessThanOrEqual(
+      safe.y + safe.height + 1e-6,
+    );
+    expect(zoomCameraAt(docked, map, camera, 1 / ZOOM_STEP, anchor)).toBe(
+      camera,
+    );
+  });
+
   it("a tiny wheel Zoom Out on a letterboxed retained view never snaps larger", () => {
     const letterboxed = rebaseCameraForResize(full, docked, map, null)!;
     expect(letterboxed.zoom).toBeGreaterThan(1);

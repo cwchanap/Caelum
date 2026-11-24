@@ -10,7 +10,7 @@
      *  header owns active-city rename. Delete stays available. */
     activeNameReadOnly?: boolean;
     onLoad: (cityId: string) => void;
-    onRename: (cityId: string, name: string) => void;
+    onRename: (cityId: string, name: string) => Promise<boolean>;
     onDelete: (cityId: string) => void;
   }
 
@@ -54,6 +54,15 @@
     cityNameDrafts[cityId] = event.currentTarget.value;
   }
 
+  // A refused or failed rename re-arms the draft (unless a newer edit has
+  // replaced it) so the typed name is never silently discarded.
+  function renameKeepingDraft(cityId: string, name: string): Promise<boolean> {
+    return onRename(cityId, name).then((ok) => {
+      if (!ok && !(cityId in cityNameDrafts)) cityNameDrafts[cityId] = name;
+      return ok;
+    });
+  }
+
   function commitCityName(city: CitySummary, input: HTMLInputElement): void {
     if (!(city.id in cityNameDrafts)) return;
     const trimmed = input.value.trim();
@@ -63,7 +72,24 @@
       return;
     }
     input.value = trimmed;
-    if (trimmed !== city.name) onRename(city.id, trimmed);
+    if (trimmed !== city.name) void renameKeepingDraft(city.id, trimmed);
+  }
+
+  // mousedown.preventDefault on a row's Load keeps the press from
+  // blur-committing an open name editor, so the click must commit any
+  // pending drafts itself before the load replaces the library. Renames go
+  // one at a time through the persistence gate; a refusal keeps the draft
+  // and blocks the load rather than discarding the typed name.
+  async function flushCityNames(): Promise<boolean> {
+    for (const city of cities) {
+      const draft = cityNameDrafts[city.id];
+      if (draft === undefined) continue;
+      const trimmed = draft.trim();
+      delete cityNameDrafts[city.id];
+      if (trimmed.length === 0 || trimmed === city.name) continue;
+      if (!(await renameKeepingDraft(city.id, trimmed))) return false;
+    }
+    return true;
   }
 
   function cancelCityName(
@@ -153,9 +179,9 @@
             aria-label={`Load ${city.name}`}
             disabled={busy || dirty}
             onmousedown={(event) => event.preventDefault()}
-            onclick={() => {
+            onclick={async () => {
               pendingDeleteId = null;
-              onLoad(city.id);
+              if (await flushCityNames()) onLoad(city.id);
             }}>Load</button
           >
         {/if}

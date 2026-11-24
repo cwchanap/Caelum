@@ -756,6 +756,41 @@ describe("App command shell", () => {
     );
   });
 
+  it("waits for an in-flight rename before loading the city", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null, busy: false, dirty: false },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const renameDone = deferred<{ ok: true; value: CitySummary }>();
+    harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
+    render(App, { props: { runtime: harness.runtime } });
+
+    const input = await screen.findByTestId("city-name-city-old");
+    await fireEvent.input(input, { target: { value: "Old Harbour" } });
+    await fireEvent.blur(input);
+    expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+      "city-old",
+      "Old Harbour",
+    );
+
+    // The Load click lands while the rename still holds the persistence
+    // gate; the load must wait for it rather than be refused as busy.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    );
+    expect(harness.runtime.persistence.load).not.toHaveBeenCalled();
+
+    renameDone.resolve({
+      ok: true,
+      value: { ...CITY_OLD, name: "Old Harbour" },
+    });
+    await waitFor(() =>
+      expect(harness.runtime.persistence.load).toHaveBeenCalledWith(
+        "city-old",
+      ),
+    );
+  });
+
   it("does not show a deleted active city while refreshing the remaining library", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: CITY_NEW },

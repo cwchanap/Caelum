@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import CityList from "../../src/components/city/CityList.svelte";
 import CityLibraryScreen from "../../src/components/city/CityLibraryScreen.svelte";
@@ -21,7 +27,7 @@ const CITIES = [
 
 function renderList(busy = false, dirty = false, activeNameReadOnly = false) {
   const onLoad = vi.fn();
-  const onRename = vi.fn();
+  const onRename = vi.fn(async () => true);
   const onDelete = vi.fn();
   render(CityList, {
     props: {
@@ -78,7 +84,7 @@ describe("CityList", () => {
         activeCityId: null,
         busy: false,
         onLoad: vi.fn(),
-        onRename: vi.fn(),
+        onRename: vi.fn(async () => true),
         onDelete: vi.fn(),
       },
     });
@@ -90,7 +96,7 @@ describe("CityList", () => {
       activeCityId: "city-new",
       busy: false,
       onLoad: vi.fn(),
-      onRename: vi.fn(),
+      onRename: vi.fn(async () => true),
       onDelete: vi.fn(),
     };
     const first = render(CityList, { props: { cities: CITIES, ...baseProps } });
@@ -157,6 +163,69 @@ describe("CityList", () => {
     expect(parentEscape).not.toHaveBeenCalled();
     expect(document.activeElement).not.toBe(input);
     window.removeEventListener("keydown", parentEscape);
+  });
+
+  it("commits a pending rename before loading the city", async () => {
+    const { onLoad, onRename } = renderList();
+    const input = screen.getByTestId("city-name-city-old");
+
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    // mousedown.preventDefault keeps the press from blur-committing the
+    // draft, so the click itself must flush it before firing onLoad.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    );
+
+    expect(onRename).toHaveBeenCalledWith("city-old", "Harbour Reef");
+    await waitFor(() => expect(onLoad).toHaveBeenCalledWith("city-old"));
+  });
+
+  it("keeps the draft and skips the load when the rename is refused", async () => {
+    const onLoad = vi.fn();
+    const onRename = vi.fn(async () => false);
+    render(CityList, {
+      props: {
+        cities: CITIES,
+        activeCityId: "city-new",
+        busy: false,
+        onLoad,
+        onRename,
+        onDelete: vi.fn(),
+      },
+    });
+    const input = screen.getByTestId("city-name-city-old");
+
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    );
+
+    // The refused rename re-arms the draft so a retry can commit it; the
+    // load must not discard it by replacing the library.
+    await waitFor(() => expect(input).toHaveValue("Harbour Reef"));
+    expect(onRename).toHaveBeenCalledWith("city-old", "Harbour Reef");
+    expect(onLoad).not.toHaveBeenCalled();
+  });
+
+  it("re-arms the draft when a blur-committed rename is refused", async () => {
+    const onRename = vi.fn(async () => false);
+    render(CityList, {
+      props: {
+        cities: CITIES,
+        activeCityId: "city-new",
+        busy: false,
+        onLoad: vi.fn(),
+        onRename,
+        onDelete: vi.fn(),
+      },
+    });
+    const input = screen.getByTestId("city-name-city-old");
+
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await fireEvent.blur(input);
+
+    expect(onRename).toHaveBeenCalledWith("city-old", "Harbour Reef");
+    await waitFor(() => expect(input).toHaveValue("Harbour Reef"));
   });
 
   it("requires two Delete clicks", async () => {
@@ -253,7 +322,7 @@ describe("CityLibraryScreen", () => {
         error: "Could not rename city.",
         onContinue: vi.fn(),
         onLoad: vi.fn(),
-        onRename: vi.fn(),
+        onRename: vi.fn(async () => true),
         onDelete: vi.fn(),
         onNewCity: vi.fn(),
       },
