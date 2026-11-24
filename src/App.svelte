@@ -67,6 +67,10 @@
   let stageWidth = $state(0);
   let stageHeight = $state(0);
   let cityListRequestId = 0;
+  // Tracks a rename fired ahead of a load (a row's Load click flushes its
+  // draft, and a plain blur-commit fires on the Continue path) so the load
+  // waits for the exclusive gate instead of being refused as busy.
+  let renameInFlight: Promise<boolean> | null = null;
   let stopPersistenceLifecycle: (() => void) | undefined;
   let nowMs = $state(Date.now());
   interface CloseCityVersion {
@@ -208,6 +212,8 @@
 
   async function handleLoadCity(cityId: string): Promise<void> {
     if (runtime === null) return;
+    await renameInFlight;
+    if (runtime === null) return;
     // The CityPanel Load button is disabled while dirty and renders the
     // city-switch hint. Re-check the snapshot to guard the render/click race,
     // but don't overload cityListError (the list-read-failure channel) with
@@ -228,14 +234,27 @@
     if (result.ok) await refreshCities();
   }
 
-  async function handleRenameCity(cityId: string, name: string): Promise<void> {
-    if (runtime === null) return;
+  async function handleRenameCity(
+    cityId: string,
+    name: string,
+  ): Promise<boolean> {
+    if (runtime === null) return false;
     // Rename editors are disabled while persistence is busy; a stray commit
     // (e.g. a programmatic blur) still must not overlap a save.
-    if (runtime.getSnapshot().persistence.busy) return;
+    if (runtime.getSnapshot().persistence.busy) return false;
     beginPersistenceMutation();
-    const result = await runtime.persistence.renameCity(cityId, name);
-    if (result.ok) await refreshCities();
+    const op = runtime.persistence.renameCity(cityId, name).then(
+      async (result) => {
+        if (result.ok) await refreshCities();
+        return result.ok;
+      },
+    );
+    renameInFlight = op;
+    try {
+      return await op;
+    } finally {
+      if (renameInFlight === op) renameInFlight = null;
+    }
   }
 
   async function handleDeleteCity(cityId: string): Promise<void> {
@@ -897,7 +916,7 @@
       error={cityError}
       onContinue={(cityId) => void handleLoadCity(cityId)}
       onLoad={(cityId) => void handleLoadCity(cityId)}
-      onRename={(cityId, name) => void handleRenameCity(cityId, name)}
+      onRename={handleRenameCity}
       onDelete={(cityId) => void handleDeleteCity(cityId)}
       onNewCity={handleShowNewCity}
       onRetry={cityListError === null ? undefined : () => void refreshCities()}
@@ -1061,8 +1080,7 @@
                     error={cityError}
                     onSave={() => void handleSaveCity()}
                     onLoad={(cityId) => void handleLoadCity(cityId)}
-                    onRename={(cityId, name) =>
-                      void handleRenameCity(cityId, name)}
+                    onRename={handleRenameCity}
                     onDelete={(cityId) => void handleDeleteCity(cityId)}
                     onNewCity={handleShowNewCity}
                     onRetryList={cityListError === null

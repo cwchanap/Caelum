@@ -466,3 +466,21 @@ test("a real failed save keeps dirty and one keyboard Retry recovers", async ({
     ).toBe("road");
   }
 });
+
+test("a Load click commits the typed row rename before loading the city", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Dockside");
+  await page.reload();
+
+  const library = page.getByTestId("city-library-screen");
+  await expect(library).toBeVisible();
+  const rename = page.getByRole("textbox", { name: "Rename Dockside" });
+  await rename.fill("Harbour Reef");
+
+  // The press keeps focus on the input (mousedown is suppressed), so the
+  // Load click itself must commit the pending name before the city opens —
+  // not drop it with the library.
+  await page.getByRole("button", { name: "Load Dockside" }).click();
+  await expect(page.getByTestId("topbar-city-name")).toHaveText("Harbour Reef");
+});

@@ -32,12 +32,12 @@ function renderPanel(
     cities: CitySummary[] | null;
     busy: boolean;
     dirty: boolean;
-    onRename: (cityId: string, name: string) => void;
+    onRename: (cityId: string, name: string) => Promise<boolean>;
     onDelete: (cityId: string) => void;
     onSave: () => void;
   }> = {},
 ) {
-  const onRename = vi.fn();
+  const onRename = vi.fn(async () => true);
   const onDelete = vi.fn();
   const onSave = vi.fn();
   const props = {
@@ -77,7 +77,7 @@ describe("CityPanel", () => {
         error: null,
         onSave: vi.fn(),
         onLoad: vi.fn(),
-        onRename: vi.fn(),
+        onRename: vi.fn(async () => true),
         onDelete: vi.fn(),
         onNewCity: vi.fn(),
       },
@@ -122,7 +122,7 @@ describe("CityPanel", () => {
         error: null,
         onSave: vi.fn(),
         onLoad: vi.fn(),
-        onRename: vi.fn(),
+        onRename: vi.fn(async () => true),
         onDelete: vi.fn(),
         onNewCity: vi.fn(),
       },
@@ -150,7 +150,7 @@ describe("CityPanel", () => {
         error: null,
         onSave: vi.fn(),
         onLoad: vi.fn(),
-        onRename: vi.fn(),
+        onRename: vi.fn(async () => true),
         onDelete: vi.fn(),
         onNewCity: vi.fn(),
       },
