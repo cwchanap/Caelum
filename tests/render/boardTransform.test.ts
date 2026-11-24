@@ -442,12 +442,12 @@ describe("passive dock resize", () => {
   });
 
   it("a retained view landing on exactly Fit zoom stays put unless it is the canonical Fit", () => {
-    // A passive sub-fit view with noncanonical (letterboxed) offsets: one
-    // ×1.25 step lands zoom on exactly 1, and the anchored view must not
-    // snap to the canonical Fit transform.
+    // A passive sub-fit view with noncanonical (letterboxed) offsets along the
+    // horizontally letterboxed axis: one ×1.25 step lands zoom on exactly 1,
+    // and the anchored view must not snap to the canonical Fit transform.
     const retained = {
       zoom: 0.8,
-      center: { x: map.width / 2, y: map.height / 2 + 0.3 },
+      center: { x: map.width / 2 + 0.3, y: map.height / 2 },
       retained: true,
     };
     const anchor = { x: 640, y: 392 };
@@ -464,12 +464,12 @@ describe("passive dock resize", () => {
     const after = getBoardTransform(full, map, landed);
     expect(after.offsetX + worldUnder.x * after.scale).toBeCloseTo(anchor.x, 6);
     expect(after.offsetY + worldUnder.y * after.scale).toBeCloseTo(anchor.y, 6);
-    // Subsequent interactions: sub-fit rules still apply while retained —
-    // pan and Zoom Out are no-ops, and the next Zoom In resumes ordinary
-    // clamped navigation once past fit.
+    // Subsequent interactions: sub-fit rules still apply while contained and
+    // retained — pan and Zoom Out are no-ops, and zooming past the letterbox
+    // margin resumes ordinary clamped navigation.
     expect(panCamera(full, map, landed, 50, 50)).toBe(landed);
     expect(zoomCameraAt(full, map, landed, 1 / ZOOM_STEP, anchor)).toBe(landed);
-    const nextStep = zoomCameraAt(full, map, landed, ZOOM_STEP, anchor);
+    const nextStep = zoomCameraAt(full, map, landed, 1.5, anchor);
     expect(nextStep?.retained).toBeFalsy();
     expect(nextStep!.zoom).toBeGreaterThan(1);
 
@@ -593,6 +593,46 @@ describe("passive dock resize", () => {
     // At least a quarter-stage strip of the map stays visible onstage.
     expect(drawn.offsetX + drawn.width).toBeGreaterThanOrEqual(
       stage.width * 0.25 - 1e-6,
+    );
+  });
+
+  it("allows panning back into view when a sub-fit retained camera still has a cropped edge", () => {
+    const smallBoard = { width: 600, height: 500 };
+    const largeBoard = { width: 1600, height: 1000 };
+    const zoomed = zoomCameraAt(smallBoard, map, null, 2, { x: 300, y: 250 })!;
+    const pannedToRightEdge = panCamera(smallBoard, map, zoomed, -1e6, 0)!;
+    const resized = rebaseCameraForResize(
+      smallBoard,
+      largeBoard,
+      map,
+      pannedToRightEdge,
+    )!;
+    expect(resized.retained).toBe(true);
+    expect(resized.zoom).toBeLessThan(1);
+
+    const before = getBoardTransform(largeBoard, map, resized);
+    expect(before.offsetX).toBeLessThan(0);
+
+    // Dragging/panning further left cannot push the cropped left edge further offscreen.
+    const outward = panCamera(largeBoard, map, resized, -100, 0)!;
+    expect(outward.center.x).toBe(resized.center.x);
+
+    // Dragging/keyboard-panning right recovers the cropped left side without snapping zoom.
+    const stepped = applyCameraAction(largeBoard, map, resized, {
+      kind: "pan",
+      x: -1,
+      y: 0,
+    })!;
+    expect(stepped.zoom).toBeCloseTo(resized.zoom, 9);
+    const afterStep = getBoardTransform(largeBoard, map, stepped);
+    expect(afterStep.offsetX).toBeGreaterThan(before.offsetX);
+
+    const fullyRecovered = panCamera(largeBoard, map, stepped, 1e6, 0)!;
+    expect(fullyRecovered.zoom).toBeCloseTo(resized.zoom, 9);
+    const afterFull = getBoardTransform(largeBoard, map, fullyRecovered);
+    expect(afterFull.offsetX).toBeGreaterThanOrEqual(0);
+    expect(afterFull.offsetX + afterFull.width).toBeLessThanOrEqual(
+      largeBoard.width,
     );
   });
 });

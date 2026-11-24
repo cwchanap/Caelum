@@ -109,7 +109,10 @@
       pendingCommit = false;
     }}
     onkeydown={(event) => {
-      if (event.isComposing) return;
+      if (event.isComposing) {
+        if (event.key === "Escape") event.stopPropagation();
+        return;
+      }
       if (event.key === "Escape") {
         cancel(event as KeyboardEvent & { currentTarget: HTMLInputElement });
       } else if (event.key === "Enter") {

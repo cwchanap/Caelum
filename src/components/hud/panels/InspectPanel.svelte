@@ -125,8 +125,7 @@
         <div
           class="inspect-queue"
           data-testid="inspect-queue-bar"
-          role="img"
-          aria-label={`Queue ${queue?.occupancy}/${queue?.capacity}`}
+          aria-hidden="true"
         >
           <span
             class="inspect-queue-fill"

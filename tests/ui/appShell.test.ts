@@ -2391,6 +2391,27 @@ describe("App command shell", () => {
     expect(runtime.adjustCamera).not.toHaveBeenCalled();
   });
 
+  it("keeps the dock and rename editor open when IME composing Escape is pressed", async () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour City" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Tokyo Bay" } });
+    await fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+    await tick();
+
+    expect(runtime.handleEscape).not.toHaveBeenCalled();
+    expect(screen.getByTestId("command-panel")).toHaveAttribute(
+      "data-command-panel",
+      "city",
+    );
+    expect(screen.getByTestId("active-city-name")).toHaveValue("Tokyo Bay");
+  });
+
   it("calls runtime Escape once and disposes on unmount", async () => {
     const { runtime } = createRuntimeHarness();
     const view = render(App, { props: { runtime } });
