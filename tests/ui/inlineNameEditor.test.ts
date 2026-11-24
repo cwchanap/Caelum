@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
+import { tick } from "svelte";
 import { describe, expect, it, vi } from "vitest";
 import InlineNameEditor from "../../src/components/city/InlineNameEditor.svelte";
 
@@ -258,7 +259,12 @@ describe("InlineNameEditor", () => {
     await rerender({ value: "Harbour Express" });
     pending.resolve(false);
 
-    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    // The blur already closed the editor; wait out the commit's promise
+    // chain so a stale re-open (editing = true) would have landed before
+    // asserting the draft stayed closed.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await tick();
+    expect(screen.queryByRole("textbox")).toBeNull();
     expect(screen.getByTestId("route-name-route-bus-001")).toHaveTextContent(
       "Harbour Express",
     );
@@ -282,7 +288,11 @@ describe("InlineNameEditor", () => {
     await rerender({ entityId: "city-2" });
     pending.resolve(false);
 
-    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    // Same settle: the commit's promise chain must finish before the
+    // stayed-closed assertion means anything.
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    await tick();
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("ignores IME composing Enter and Escape without submitting, closing, or propagating Escape", async () => {

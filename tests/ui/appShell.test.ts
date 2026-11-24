@@ -809,10 +809,12 @@ describe("App command shell", () => {
         ok: true as const,
         value: [CITY_NEW, renamedOld],
       });
-    // A real load publishes the city switch: the loaded row turns read-only
-    // in the dock, so the assertion reads its text, not an input value.
+    // A real load publishes the city switch and resets ui
+    // (installRestoredGameplay), which closes the dock — the refreshed row
+    // is what the player sees after reopening it.
     harness.runtime.persistence.load = vi.fn(async () => {
       harness.setPersistence({ activeCity: renamedOld });
+      harness.runtime.setCommandDestination(null);
       return { ok: true as const, value: renamedOld };
     });
     render(App, { props: { runtime: harness.runtime } });
@@ -835,6 +837,11 @@ describe("App command shell", () => {
       expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(3),
     );
     renameRefresh.resolve({ ok: true, value: [CITY_NEW, renamedOld] });
+
+    // The load closed the dock; reopening shows the loaded row read-only,
+    // so the assertion reads its text, not an input value.
+    expect(screen.queryByTestId("city-name-city-old")).toBeNull();
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
     await waitFor(() =>
       expect(screen.getByTestId("city-name-city-old")).toHaveTextContent(
         "Harbour East",
