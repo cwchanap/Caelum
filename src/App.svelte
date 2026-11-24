@@ -248,15 +248,18 @@
     // (e.g. a programmatic blur) still must not overlap a save.
     if (runtime.getSnapshot().persistence.busy) return false;
     beginPersistenceMutation();
-    const op = runtime.persistence.renameCity(cityId, name).then(
-      async (result) => {
-        if (result.ok) await refreshCities();
-        return result.ok;
-      },
-    );
+    // renameInFlight covers only the rename write — the operation holding
+    // the persistence gate. The trailing refreshCities() stays on the
+    // rename's own promise so commit callers keep a fresh list, but
+    // Load/Save awaiting the gate must not stall on the library read.
+    const op = runtime.persistence
+      .renameCity(cityId, name)
+      .then((result) => result.ok);
     renameInFlight = op;
     try {
-      return await op;
+      const ok = await op;
+      if (ok) await refreshCities();
+      return ok;
     } finally {
       if (renameInFlight === op) renameInFlight = null;
     }
