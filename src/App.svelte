@@ -585,7 +585,7 @@
   }
 
   function handleWindowKeydown(event: KeyboardEvent): void {
-    if (shellError || runtime === null) {
+    if (shellError || runtime === null || event.isComposing) {
       return;
     }
 

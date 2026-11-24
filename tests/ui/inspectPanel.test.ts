@@ -206,7 +206,9 @@ describe("InspectPanel header, close and queue bar", () => {
     renderPanel(transitInspector());
 
     const bar = screen.getByTestId("inspect-queue-bar");
-    expect(bar).toHaveAttribute("aria-label", "Queue 4/60");
+    expect(bar).toHaveAttribute("aria-hidden", "true");
+    expect(bar).not.toHaveAttribute("role");
+    expect(bar).not.toHaveAttribute("aria-label");
     expect(screen.getByTestId("inspect-queue-fill").style.width).toBe(
       `${(4 / 60) * 100}%`,
     );

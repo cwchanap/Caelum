@@ -393,14 +393,26 @@ export function panCamera(
     return camera;
   }
   if (current.retained === true) {
-    // Sub-fit: the whole map is visible, so panning would only move it — a
-    // no-op.
-    if (current.zoom <= 1) {
+    const safe = safeRect(board);
+    const mapWidthPx = map.width * tilePx;
+    const mapHeightPx = map.height * tilePx;
+    const offsetX = safe.x + safe.width / 2 - current.center.x * tilePx;
+    const offsetY = safe.y + safe.height / 2 - current.center.y * tilePx;
+    const eps = 1e-6;
+    // Only treat panning as a no-op when the whole map already fits inside
+    // the safe viewport; a sub-fit view after enlarging the window can still
+    // have an edge cropped offscreen or behind the HUD.
+    if (
+      offsetX >= safe.x - eps &&
+      offsetX + mapWidthPx <= safe.x + safe.width + eps &&
+      offsetY >= safe.y - eps &&
+      offsetY + mapHeightPx <= safe.y + safe.height + eps
+    ) {
       return camera;
     }
-    // Above fit the passive placement leads: the first drag must not snap an
-    // off-range passive center, yet panning can never push the view further
-    // out than passive layout left it (the map cannot leave the board).
+    // Passive placement leads: the first drag must not snap an off-range
+    // passive center, yet panning can never push the view further out than
+    // passive layout left it (the map cannot leave the board).
     const moved = {
       zoom: current.zoom,
       center: {
@@ -408,7 +420,6 @@ export function panCamera(
         y: current.center.y - dy / tilePx,
       },
     };
-    const safe = safeRect(board);
     const bounded = {
       ...moved,
       center: {

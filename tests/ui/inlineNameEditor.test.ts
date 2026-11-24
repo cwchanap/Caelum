@@ -205,16 +205,30 @@ describe("InlineNameEditor", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("ignores IME composing Enter and Escape without submitting or closing", async () => {
+  it("ignores IME composing Enter and Escape without submitting, closing, or propagating Escape", async () => {
     const { onCommit, input } = await openEditor();
+    const windowEscape = vi.fn();
+    const onWindowKeydown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") windowEscape(event);
+    };
+    window.addEventListener("keydown", onWindowKeydown);
 
     await fireEvent.input(input, { target: { value: "Tokyo" } });
     await fireEvent.keyDown(input, { key: "Enter", isComposing: true });
-    await fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+    const escapeEvent = new KeyboardEvent("keydown", {
+      key: "Escape",
+      isComposing: true,
+      bubbles: true,
+      cancelable: true,
+    });
+    input.dispatchEvent(escapeEvent);
 
     expect(onCommit).not.toHaveBeenCalled();
+    expect(windowEscape).not.toHaveBeenCalled();
+    expect(escapeEvent.defaultPrevented).toBe(false);
     expect(screen.getByTestId("route-name-route-bus-001")).toBe(input);
     expect(document.activeElement).toBe(input);
+    window.removeEventListener("keydown", onWindowKeydown);
   });
 
   it("lets Escape cancel a submission that was held while busy without refocusing", async () => {

@@ -528,7 +528,10 @@ test("inspects a stop, building and vacant zoned land, then dismisses", async ({
   await expect(inspector).toBeVisible();
   await expect(inspector.getByTestId("inspect-title")).toHaveText("Bus Stop");
   await expect(inspector.getByTestId("inspect-queue-bar")).toHaveAttribute(
-    "aria-label",
+    "aria-hidden",
+    "true",
+  );
+  await expect(inspector.getByTestId("inspect-queue-text")).toHaveText(
     /Queue \d+\/\d+/,
   );
   // The arrow must actually render past the card edge, not merely exist in
