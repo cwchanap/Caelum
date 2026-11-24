@@ -791,6 +791,51 @@ describe("App command shell", () => {
     );
   });
 
+  it("re-reads the city list after a load that invalidated a rename refresh", async () => {
+    const renamedOld = { ...CITY_OLD, name: "Harbour East" };
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const renameRefresh = deferred<{ ok: true; value: CitySummary[] }>();
+    harness.runtime.persistence.listCities = vi
+      .fn()
+      .mockResolvedValueOnce({
+        ok: true as const,
+        value: [CITY_NEW, CITY_OLD],
+      })
+      .mockImplementationOnce(() => renameRefresh.promise)
+      .mockResolvedValue({
+        ok: true as const,
+        value: [CITY_NEW, renamedOld],
+      });
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    const input = await screen.findByTestId("city-name-city-old");
+    await fireEvent.input(input, { target: { value: "Harbour East" } });
+    await fireEvent.blur(input);
+    await waitFor(() =>
+      expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(2),
+    );
+
+    // The rename write released the gate but its trailing refresh is still
+    // in flight when Load lands; the load supersedes that read and must
+    // issue its own so the renamed row is not left showing the old name.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Load Harbour City" }),
+    );
+    await waitFor(() =>
+      expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(3),
+    );
+    renameRefresh.resolve({ ok: true, value: [CITY_NEW, renamedOld] });
+    await waitFor(() =>
+      expect(screen.getByTestId("city-name-city-old")).toHaveValue(
+        "Harbour East",
+      ),
+    );
+  });
+
   it("waits for an in-flight row rename before continuing into the first city", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null, busy: false, dirty: false },
