@@ -2528,4 +2528,23 @@ describe("App command shell", () => {
     await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     expect(noCity.runtime.undoLastBuild).not.toHaveBeenCalled();
   });
+
+  it("remounts GameCanvas when loading another city so the resize baseline resets", async () => {
+    const detach = vi.fn();
+    const { runtime, setPersistence } = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    runtime.mountCanvas = vi.fn(() => detach);
+    render(App, { props: { runtime } });
+
+    expect(runtime.mountCanvas).toHaveBeenCalledTimes(1);
+    expect(detach).not.toHaveBeenCalled();
+
+    setPersistence({ activeCity: CITY_OLD });
+    await tick();
+
+    expect(detach).toHaveBeenCalledTimes(1);
+    expect(runtime.mountCanvas).toHaveBeenCalledTimes(2);
+  });
 });

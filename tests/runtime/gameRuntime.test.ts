@@ -6437,6 +6437,94 @@ describe("route creation and management", () => {
     }
   });
 
+  it("preserves a deferred roadDirectionNotice when an expected fleet shortage is suppressed", async () => {
+    const base = deferredDispatchBackend(routeSnapshotWithRoute());
+    const quoted = {
+      vehicles: 3,
+      targetHeadwaySeconds: 600,
+      cost: 1_000_000,
+      estimatedDailyOperatingCost: 1_200,
+    };
+    const backend: DeferredDispatchBackend = {
+      ...base,
+      async previewRoute(request) {
+        return {
+          ...routePreview(request.generation, request.waypointIds),
+          initialFleet: quoted,
+        };
+      },
+      async dispatch(intent) {
+        if (intent.type === "deployInitialFleet") {
+          return {
+            update: createPresentationUpdate(base.snapshotInternal(), false),
+            applied: false,
+            rejection: {
+              code: "insufficientBudget",
+              context: {
+                requiredBudget: quoted.cost,
+                availableBudget: 120_000,
+                affectedRouteIds: [intent.lineId],
+              },
+            },
+          };
+        }
+        const result = await base.dispatch(intent);
+        if (
+          intent.type === "cycleRoadDirection" &&
+          result.applied &&
+          result.update.scene !== null
+        ) {
+          return {
+            ...result,
+            update: {
+              ...result.update,
+              scene: {
+                ...result.update.scene,
+                routes: result.update.scene.routes.map((route) =>
+                  route.id === "route-001"
+                    ? { ...route, pathBroken: true }
+                    : route,
+                ),
+              },
+            },
+          };
+        }
+        return result;
+      },
+    };
+    const runtime = await createGameRuntime({
+      createHost: createFakeGameHost,
+      hoverPreviewDebounceMs: 0,
+      backend,
+    });
+    // Queue a one-way change that breaks Bus 1, then open a new route draft
+    // before it resolves so roadDirectionNotice stays deferred behind the draft.
+    runtime.setTool("road");
+    runtime.setRoadPreset("oneWay");
+    const cycle = runtime.handleTileClick({ x: 14, y: 7 });
+    await flushPromises();
+
+    runtime.setTool("busRoute");
+    await runtime.handleTileClick({ x: 14, y: 7 });
+    await runtime.handleTileClick({ x: 14, y: 8 });
+    await base.resolveNext();
+    await cycle;
+    await flushPromises();
+    expect(
+      runtime.getSnapshot().ui.roadDirectionNotice?.brokenRouteNames,
+    ).toEqual(["Bus 1"]);
+
+    const savePromise = runtime.saveRouteDraft();
+    await flushPromises();
+    await base.resolveNext();
+    const saved = await savePromise;
+
+    expect(saved.ui.routeDraft).toBeNull();
+    expect(saved.rejection).toBeNull();
+    expect(saved.ui.roadDirectionNotice?.brokenRouteNames).toEqual(["Bus 1"]);
+    expect(saved.shell.actionFeedback?.source).toBe("roadDirection");
+  });
+
   it("routes Save through the selected service pattern", async () => {
     const backend = connectedRouteBackend(routeSnapshot());
     const { runtime } = await withTwoStops(backend);

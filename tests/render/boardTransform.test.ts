@@ -563,4 +563,36 @@ describe("passive dock resize", () => {
     expect(after.offsetX + worldUnder.x * after.scale).toBeCloseTo(anchor.x, 6);
     expect(after.offsetY + worldUnder.y * after.scale).toBeCloseTo(anchor.y, 6);
   });
+
+  it("wheel-zooming over the blank margin after docked Fit cannot push the map offstage", () => {
+    const stage = { width: 1024, height: 768 };
+    const dockedStage = { width: 664, height: 768 };
+    // Start at Fit with the dock open, then close the dock to expose a blank
+    // margin at x = 664..1024.
+    let camera: Camera | null = rebaseCameraForResize(
+      dockedStage,
+      stage,
+      map,
+      null,
+    );
+    expect(camera?.retained).toBe(true);
+
+    // Repeatedly wheel-zoom in with the cursor in the blank margin (x = 970).
+    for (let step = 0; step < 20; step += 1) {
+      camera = zoomCameraAt(stage, map, camera, ZOOM_STEP, {
+        x: 970,
+        y: 384,
+      });
+    }
+
+    const drawn = getBoardTransform(stage, map, camera);
+    expect(drawn.offsetX).toBeLessThan(stage.width);
+    expect(drawn.offsetX + drawn.width).toBeGreaterThan(0);
+    expect(drawn.offsetY).toBeLessThan(stage.height);
+    expect(drawn.offsetY + drawn.height).toBeGreaterThan(0);
+    // At least a quarter-stage strip of the map stays visible onstage.
+    expect(drawn.offsetX + drawn.width).toBeGreaterThanOrEqual(
+      stage.width * 0.25 - 1e-6,
+    );
+  });
 });

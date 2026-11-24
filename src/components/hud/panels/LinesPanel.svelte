@@ -305,6 +305,7 @@
                       value={route.name}
                       label={`Rename ${route.name}`}
                       testId={`route-name-${route.id}`}
+                      entityId={route.id}
                       onCommit={(name) => onRenameRoute(route.id, name)}
                     />
                   </div>

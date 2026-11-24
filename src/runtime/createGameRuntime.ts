@@ -1109,30 +1109,37 @@ export async function createGameRuntime(
           ) {
             rejection = result.rejection;
           }
-          if (result.rejection?.code === "insufficientBudget") {
-            if (knownFleetShortage) {
-              // The editor warned before Save; keep whatever feedback the
-              // player sees at completion and let the Lines card carry the
-              // no-fleet recovery path.
-              rejection = feedbackAtCompletion;
-            } else {
-              // The budget changed only after click: tag the late shortage
-              // before publication so the toast reads as recovery guidance,
-              // not a surprise failure.
-              rejection = {
-                ...result.rejection,
-                context: {
-                  ...result.rejection.context,
-                  savedWithoutFleet: true,
-                },
-              };
-            }
+          const suppressExpectedShortage =
+            knownFleetShortage &&
+            result.rejection?.code === "insufficientBudget";
+          if (suppressExpectedShortage) {
+            // The editor warned before Save; keep whatever feedback the
+            // player sees at completion and let the Lines card carry the
+            // no-fleet recovery path.
+            rejection = feedbackAtCompletion;
+          } else if (result.rejection?.code === "insufficientBudget") {
+            // The budget changed only after click: tag the late shortage
+            // before publication so the toast reads as recovery guidance,
+            // not a surprise failure.
+            rejection = {
+              ...result.rejection,
+              context: {
+                ...result.rejection.context,
+                savedWithoutFleet: true,
+              },
+            };
           }
           // dispatchNow semantics: resolve the UI at completion, not the UI
           // captured before the await — a replacement draft opened (or
           // cancelled) while the deployment was pending must survive this
           // commit instead of being discarded or resurrected by the saved UI.
-          return commitDispatchResult(result, ui, deployIntent);
+          // Preserve an already-surfaced roadDirectionNotice when the expected
+          // budget shortage is suppressed; successful deployment still clears it.
+          return commitDispatchResult(
+            result,
+            ui,
+            suppressExpectedShortage ? undefined : deployIntent,
+          );
         };
         const current = ui.routeDraft;
         const tokenIsCurrent = isCurrent(current);
