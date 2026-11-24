@@ -1,15 +1,17 @@
 import type {
+  GameMap,
   GameState,
   GameplayRejection,
   MetroLine,
   Route,
   RouteLegPath,
   SandboxTemplateId,
+  Tile,
   Tool,
   Point,
   WaitingLocationView,
 } from "../domain/types";
-import { AREA_LABELS } from "../domain/catalog/areas";
+import { AREA_LABELS, GROWTH_AREA_KINDS } from "../domain/catalog/areas";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import {
   METRO_STATION_COVERAGE_RADIUS,
@@ -221,16 +223,37 @@ function zoneRunningHint(
   );
 }
 
+// The tiles array is shared unchanged across presentation publishes, so a
+// coordinate index is built at most once per GameMap rather than scanning
+// every tile on each inspector rebuild.
+const tileIndexCache = new WeakMap<GameMap, Map<string, Tile>>();
+
+function tileAt(map: GameMap, point: Point): Tile | undefined {
+  let index = tileIndexCache.get(map);
+  if (index === undefined) {
+    index = new Map(map.tiles.map((tile) => [`${tile.x},${tile.y}`, tile]));
+    tileIndexCache.set(map, index);
+  }
+  return index.get(`${point.x},${point.y}`);
+}
+
 /** Narrow variant for vacant zoned land: the zone plus a proximity hint, not
- *  a growth guarantee — Rust active-services and footprint checks govern. */
+ *  a growth guarantee — Rust active-services and footprint checks govern.
+ *  Restricted to tiles growth can actually develop, mirroring growth.rs:
+ *  empty, un-tracked, un-structured land in a homes/workplaces zone. */
 function buildZoneInspector(
   state: GameState,
   point: Point,
 ): ShellZoneInspectorState | null {
-  const tile = state.map.tiles.find(
-    (candidate) => candidate.x === point.x && candidate.y === point.y,
-  );
-  if (tile === undefined || tile.kind !== "empty" || tile.area === undefined) {
+  const tile = tileAt(state.map, point);
+  if (
+    tile === undefined ||
+    tile.kind !== "empty" ||
+    tile.hasTrack === true ||
+    tile.roadStructureId !== undefined ||
+    tile.area === undefined ||
+    !GROWTH_AREA_KINDS.has(tile.area)
+  ) {
     return null;
   }
   return {

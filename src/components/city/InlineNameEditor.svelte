@@ -4,6 +4,9 @@
     label: string;
     disabled?: boolean;
     testId?: string;
+    /** Identifies the entity under edit: if the entity or its canonical name
+     *  swaps while the editor is open, the open draft belongs to the old one
+     *  and is discarded rather than applied to the replacement. */
     entityId?: string;
     onCommit: (value: string) => void;
   }
@@ -20,13 +23,8 @@
   let editing = $state(false);
   let draft = $state("");
   let inputElement: HTMLInputElement | null = $state(null);
-  let pendingCommit = $state(false);
-  // The value and entity identity a held submission was captured for; if
-  // either moves underneath (busy load/deletion swapping the edited entity,
-  // even to another entity with the same name), the held submission is
-  // dropped instead of landing on the replacement.
-  let heldForValue = $state("");
-  let heldForEntityId = $state<string | undefined>(undefined);
+  let editingForId: string | undefined;
+  let editingForValue = "";
 
   // Focus the freshly mounted editor; reading inputElement keeps the effect
   // tied to the input actually being in the DOM.
@@ -34,52 +32,30 @@
     if (editing) inputElement?.focus();
   });
 
-  // A submission attempted while the parent is busy (e.g. an autosave) is
-  // held, not discarded; land it once the parent goes idle again — unless
-  // the user edited the draft again or the value/entity changed under the
-  // editor, in which case the next explicit submission decides.
+  // An open draft was typed for the entity/value captured at activation; if
+  // either moves underneath the editor (e.g. a load swapping the active
+  // city, or an external rename), discard it instead of letting a stale
+  // draft land on the replacement.
   $effect(() => {
-    if (!disabled && pendingCommit) {
-      if (value !== heldForValue || entityId !== heldForEntityId) {
-        pendingCommit = false;
-        return;
-      }
-      commit();
+    if (editing && (entityId !== editingForId || value !== editingForValue)) {
+      editing = false;
     }
-  });
-
-  // A submission still held when the editor unmounts (its panel closed or
-  // switched away before the parent went idle) lands through the parent's
-  // deferred path instead of being silently dropped with the component —
-  // unless the underlying entity/value already changed (e.g. city load).
-  $effect(() => {
-    return () => {
-      if (!pendingCommit) return;
-      pendingCommit = false;
-      if (value !== heldForValue || entityId !== heldForEntityId) return;
-      const trimmed = draft.trim();
-      if (trimmed.length === 0 || trimmed === value) return;
-      onCommit(trimmed);
-    };
   });
 
   function activate(): void {
     if (disabled) return;
     draft = value;
+    editingForId = entityId;
+    editingForValue = value;
     editing = true;
   }
 
   function commit(): void {
     // Enter commits and blurs; the blur handler must not commit a second time.
-    if (!editing) return;
-    // Keep the editor and draft open while busy and defer the submission.
-    if (disabled) {
-      pendingCommit = true;
-      heldForValue = value;
-      heldForEntityId = entityId;
-      return;
-    }
-    pendingCommit = false;
+    // While the parent is busy the input itself is disabled, so a commit that
+    // still reaches this point (e.g. a blur from the disabling flip) is
+    // refused rather than queued — the draft stays for the user to retry.
+    if (!editing || disabled) return;
     editing = false;
     const trimmed = draft.trim();
     if (trimmed.length === 0 || trimmed === value) return;
@@ -90,7 +66,6 @@
     event: KeyboardEvent & { currentTarget: HTMLInputElement },
   ): void {
     editing = false;
-    pendingCommit = false;
     // Restore without triggering dock-level Escape handling.
     event.preventDefault();
     event.stopPropagation();
@@ -105,9 +80,7 @@
     class="inline-name-input"
     data-testid={testId}
     aria-label={label}
-    oninput={() => {
-      pendingCommit = false;
-    }}
+    {disabled}
     onkeydown={(event) => {
       if (event.isComposing) {
         if (event.key === "Escape") event.stopPropagation();
@@ -117,8 +90,6 @@
         cancel(event as KeyboardEvent & { currentTarget: HTMLInputElement });
       } else if (event.key === "Enter") {
         commit();
-        // Keep focus on the still-open editor when busy holds the submit so
-        // Escape can cancel it without clicking back into the field.
         if (!editing) {
           event.currentTarget.blur();
         }

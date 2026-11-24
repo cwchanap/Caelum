@@ -56,9 +56,10 @@ fleet: …".
 Beyond formatting, cost reaches the UI in the new-draft Save label, the
 "After saving" quote projection (fleet, target, estimated daily cost — actuals
 always come from the saved line's Lines card), and the Lines service row's
-Rust snapshot-derived `estimatedDeploymentCost`; TypeScript's only direct
-economy-preset interpretation for affordability or cost behavior remains the
-read-only building-hover helper.
+Rust snapshot-derived `estimatedDeploymentCost`; aside from the
+`initialFleetShortfall` warning predicate described above, TypeScript's only
+direct economy-preset interpretation for affordability or cost behavior
+remains the read-only building-hover helper.
 
 ## Runtime boundary (TypeScript host)
 

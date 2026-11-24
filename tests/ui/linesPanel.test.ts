@@ -113,6 +113,7 @@ function panelProps(
     selectedBuilding: BuildingType | null;
     routeDraft: RouteEditorView | null;
     routes: ShellRouteListState;
+    busy: boolean;
   }> = {},
 ) {
   return {
@@ -120,6 +121,7 @@ function panelProps(
     selectedBuilding: null,
     routeDraft: null,
     routes: routeFixtures(),
+    busy: false,
     pendingServiceActions: {},
     ...callbacks(),
     ...overrides,
@@ -505,6 +507,18 @@ describe("LinesPanel line workspace", () => {
       "route-bus-001",
       "Harbour Express",
     );
+  });
+
+  it("disables the route name editor while persistence is busy", async () => {
+    const props = panelProps({ busy: true });
+    render(LinesPanel, { props });
+
+    const pencil = screen.getByRole("button", { name: "Rename Harbour Bus" });
+    expect(pencil).toBeDisabled();
+    await fireEvent.click(pencil);
+
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(props.onRenameRoute).not.toHaveBeenCalled();
   });
 
   it("restores the canonical name and contains Escape in the route editor", async () => {

@@ -383,7 +383,15 @@ export function createGameHostWithRenderer(
     if (!(boardCssWidth > 0 && boardCssHeight > 0)) {
       return;
     }
-    if (nextWidth === boardCssWidth && nextHeight === boardCssHeight) {
+    // Compare at device-pixel granularity: fractional CSS sizes (e.g. at
+    // 110% browser zoom) can oscillate by sub-pixel amounts between observer
+    // batches, and a spurious rebase parks a retained camera that turns the
+    // Fit button on for a resize the eye cannot see.
+    const dpr = globalThis.devicePixelRatio ?? 1;
+    if (
+      Math.round(nextWidth * dpr) === Math.round(boardCssWidth * dpr) &&
+      Math.round(nextHeight * dpr) === Math.round(boardCssHeight * dpr)
+    ) {
       return;
     }
     const map = ctx.getState().map;

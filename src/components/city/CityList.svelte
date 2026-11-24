@@ -152,6 +152,7 @@
             class="btn"
             aria-label={`Load ${city.name}`}
             disabled={busy || dirty}
+            onmousedown={(event) => event.preventDefault()}
             onclick={() => {
               pendingDeleteId = null;
               onLoad(city.id);
@@ -164,6 +165,7 @@
           class:city-delete--armed={pendingDeleteId === city.id}
           data-testid={`city-delete-${city.id}`}
           disabled={busy}
+          onmousedown={(event) => event.preventDefault()}
           onclick={() => handleDeleteClick(city.id)}
         >
           {pendingDeleteId === city.id ? "Delete?" : "Delete"}

@@ -17,3 +17,12 @@ export const AREA_LABELS: Record<AreaKind, string> = {
   civic: "Civic",
   park: "Park",
 };
+
+/** Zones buildings can grow into — mirrors caelum-core's growth HOMES and
+ *  WORKPLACES tables; civic and park land never develops. */
+export const GROWTH_AREA_KINDS: ReadonlySet<AreaKind> = new Set([
+  "residential",
+  "commercial",
+  "industrial",
+  "office",
+]);

@@ -336,12 +336,19 @@ describe("passive dock resize", () => {
     expect(zoomed).not.toBeNull();
     const before = rendered(full, zoomed);
 
+    // A zoomed in-bounds view stays in bounds on the narrower board — the
+    // safe viewport keeps pointing inside the map — so the rebase comes
+    // back as an ordinary camera, not a retained one.
     const opened = rebaseCameraForResize(full, docked, map, zoomed);
-    expect(opened?.retained).toBe(true);
+    expect(opened?.retained).toBeFalsy();
     expectSameRender(rendered(docked, opened), before);
 
+    // The exact round trip lands back on the pre-dock camera, which the
+    // ordinary clamp already satisfies — it comes back without `retained`,
+    // so later zooms apply the normal limits instead of parking blank
+    // margins around the map.
     const closed = rebaseCameraForResize(docked, full, map, opened);
-    expect(closed?.retained).toBe(true);
+    expect(closed?.retained).toBeFalsy();
     expectSameRender(rendered(full, closed), before);
   });
 
@@ -513,11 +520,10 @@ describe("passive dock resize", () => {
   });
 
   it("a retained zoomed pan stays bounded and resumes ordinary clamped navigation", () => {
-    // A zoomed dock open leaves a passive above-fit view; an endless drag
-    // must stop at the ordinary map boundary instead of pushing the whole
-    // map off the board.
-    const zoomed = zoomCameraAt(full, map, null, 3, { x: 900, y: 300 })!;
-    const opened = rebaseCameraForResize(full, docked, map, zoomed)!;
+    // A docked Fit leaves a passive above-fit view with a cropped edge; an
+    // endless drag must stop at the ordinary map boundary instead of pushing
+    // the whole map off the board.
+    const opened = rebaseCameraForResize(full, docked, map, null)!;
     expect(opened.retained).toBe(true);
     const dragged = panCamera(docked, map, opened, -1e6, -1e6)!;
     expect(dragged).toEqual(clampCamera(docked, map, dragged));
@@ -544,6 +550,38 @@ describe("passive dock resize", () => {
     const backIn = panCamera(full, map, offRange, 1e6, 0)!;
     expect(backIn.retained).toBeFalsy();
     expect(backIn).toEqual(clampCamera(full, map, backIn));
+  });
+
+  it("Zoom Out on a retained view with a cropped edge shrinks below fit until the whole map is inside", () => {
+    // The dock-toggle trap: a Fit view rebased onto the narrower docked
+    // board parks the camera with the map's right edge cropped offscreen.
+    // Zoom Out must not stop at zoom 1 — it crosses below fit until every
+    // edge is inside the safe viewport.
+    const opened = rebaseCameraForResize(full, docked, map, null)!;
+    expect(opened.retained).toBe(true);
+    const parked = getBoardTransform(docked, map, opened);
+    expect(parked.offsetX + parked.width).toBeGreaterThan(docked.width);
+
+    let camera: Camera | null = opened;
+    const safe = safeViewport(docked);
+    for (let step = 0; step < 12; step += 1) {
+      const next = applyCameraAction(docked, map, camera, {
+        kind: "zoomOut",
+      });
+      if (next === camera) break;
+      camera = next;
+    }
+    const t = getBoardTransform(docked, map, camera);
+    expect(t.offsetX).toBeGreaterThanOrEqual(safe.x - 1e-6);
+    expect(t.offsetX + t.width).toBeLessThanOrEqual(safe.x + safe.width + 1e-6);
+    expect(t.offsetY).toBeGreaterThanOrEqual(safe.y - 1e-6);
+    expect(t.offsetY + t.height).toBeLessThanOrEqual(
+      safe.y + safe.height + 1e-6,
+    );
+    // Once the whole map is inside, Zoom Out becomes a no-op again.
+    expect(applyCameraAction(docked, map, camera, { kind: "zoomOut" })).toBe(
+      camera,
+    );
   });
 
   it("a tiny wheel Zoom Out on a letterboxed retained view never snaps larger", () => {

@@ -2484,6 +2484,22 @@ describe("selectShellState vacant zone", () => {
     expect(selectShellState(state, inspectAt("12,8")).inspector).toBeNull();
   });
 
+  it("skips the zone inspector on land growth cannot develop", () => {
+    let state = runningBusState();
+    // Civic and park land never grows in caelum-core, and the Rust
+    // eligibility rule also excludes tracked and structured tiles — the hint
+    // must not promise growth there.
+    state = withTestZone(state, { x: 4, y: 3 }, "park");
+    state = withTestZone(state, { x: 4, y: 4 }, "civic");
+    state = withTracks(withTestZone(state, { x: 4, y: 5 }, "residential"), [
+      { x: 4, y: 5 },
+    ]);
+
+    expect(selectShellState(state, inspectAt("4,3")).inspector).toBeNull();
+    expect(selectShellState(state, inspectAt("4,4")).inspector).toBeNull();
+    expect(selectShellState(state, inspectAt("4,5")).inspector).toBeNull();
+  });
+
   it("prefers the building inspector on an occupied zoned tile", () => {
     let state = runningBusState();
     state = withTestZone(state, { x: 12, y: 8 }, "residential");

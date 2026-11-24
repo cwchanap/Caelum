@@ -20,6 +20,7 @@
     selectedBuilding: BuildingType | null;
     routeDraft: RouteEditorView | null;
     routes: ShellRouteListState;
+    busy: boolean;
     onSetTool: (tool: RouteTool) => void;
     onSelectWaypoint: (
       index: number | null,
@@ -57,6 +58,7 @@
     selectedBuilding,
     routeDraft,
     routes,
+    busy,
     onSetTool,
     onSelectWaypoint,
     onRemove,
@@ -304,6 +306,7 @@
                     <InlineNameEditor
                       value={route.name}
                       label={`Rename ${route.name}`}
+                      disabled={busy}
                       testId={`route-name-${route.id}`}
                       entityId={route.id}
                       onCommit={(name) => onRenameRoute(route.id, name)}
