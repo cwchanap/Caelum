@@ -649,6 +649,53 @@ describe("passive dock resize", () => {
     );
   });
 
+  it("wheel Zoom Out anchored a pixel inside a cropped safe edge cannot collapse the map to a dot", () => {
+    // A pointer just inside the safe top edge anchors the shrink to a
+    // world point deep in the map, so the cropped edge's approach to the
+    // safe boundary is proportional to tilePx: the map could collapse to
+    // a few CSS pixels before mapInsideSafe ever stopped it.
+    const smallBoard = { width: 600, height: 500 };
+    const largeBoard = { width: 1600, height: 1000 };
+    const zoomed = zoomCameraAt(smallBoard, map, null, 2, {
+      x: 300,
+      y: 250,
+    })!;
+    const pannedToBottom = panCamera(smallBoard, map, zoomed, 0, -1e6)!;
+    const resized = rebaseCameraForResize(
+      smallBoard,
+      largeBoard,
+      map,
+      pannedToBottom,
+    )!;
+    expect(resized.retained).toBe(true);
+    expect(getBoardTransform(largeBoard, map, resized).offsetY).toBeLessThan(
+      HUD_INSET.top,
+    );
+
+    const safe = safeViewport(largeBoard);
+    const anchor = { x: 100, y: safe.y + 1 };
+    let camera: Camera | null = resized;
+    for (let step = 0; step < 100; step += 1) {
+      const next = zoomCameraAt(largeBoard, map, camera, 1 / ZOOM_STEP, anchor);
+      if (next === camera) break;
+      camera = next;
+    }
+
+    const t = getBoardTransform(largeBoard, map, camera);
+    expect(t.offsetX).toBeGreaterThanOrEqual(safe.x - 1e-6);
+    expect(t.offsetX + t.width).toBeLessThanOrEqual(safe.x + safe.width + 1e-6);
+    expect(t.offsetY).toBeGreaterThanOrEqual(safe.y - 1e-6);
+    expect(t.offsetY + t.height).toBeLessThanOrEqual(
+      safe.y + safe.height + 1e-6,
+    );
+    // The recovered view keeps the map at a useful size instead of
+    // shrinking toward the anchor until nothing is left.
+    expect(t.height).toBeGreaterThan(safe.height / 2);
+    expect(zoomCameraAt(largeBoard, map, camera, 1 / ZOOM_STEP, anchor)).toBe(
+      camera,
+    );
+  });
+
   it("a tiny wheel Zoom Out on a letterboxed retained view never snaps larger", () => {
     const letterboxed = rebaseCameraForResize(full, docked, map, null)!;
     expect(letterboxed.zoom).toBeGreaterThan(1);

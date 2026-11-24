@@ -401,6 +401,25 @@ export function zoomCameraAt(
       safe.height,
       middleY,
     );
+    // A shrink whose new scale already fits a whole axis inside the safe
+    // viewport pulls a cropped edge in rather than trusting the anchor: a
+    // pointer near a cropped edge pins a world point far inside the map,
+    // so that edge approaches the boundary ∝ tilePx and the map can
+    // collapse toward the anchor before mapInsideSafe ever stops it.
+    const pullInsideSafe = (
+      center: number,
+      mapTiles: number,
+      safeSpan: number,
+    ): number => {
+      const half = safeSpan / (2 * after);
+      return 2 * half >= mapTiles
+        ? Math.min(Math.max(center, mapTiles - half), half)
+        : center;
+    };
+    if (factor < 1) {
+      moved.center.x = pullInsideSafe(moved.center.x, map.width, safe.width);
+      moved.center.y = pullInsideSafe(moved.center.y, map.height, safe.height);
+    }
     // Still below fit: stay passive on the actually rendered pixels.
     if (zoom < 1) {
       return { ...moved, retained: true };
