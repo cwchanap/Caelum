@@ -200,17 +200,28 @@ describe("RouteEditor", () => {
     expect(screen.getByTestId("route-waypoint-move-up-1")).toBeEnabled();
     expect(screen.getByTestId("route-waypoint-remove-1")).toBeEnabled();
 
-    await fireEvent.click(screen.getByTestId("route-waypoint-move-up-1"));
-    expect(onSelectWaypoint).toHaveBeenCalledWith(1, "replace");
-    expect(onMove).toHaveBeenCalledWith(-1);
+    // Acting on an unselected waypoint selects that row before invoking the
+    // move/remove handler so it cannot operate on the previously selected row.
+    await fireEvent.click(screen.getByTestId("route-waypoint-move-down-0"));
+    expect(onSelectWaypoint).toHaveBeenNthCalledWith(1, 0, "replace");
+    expect(onMove).toHaveBeenNthCalledWith(1, 1);
+    expect(onSelectWaypoint.mock.invocationCallOrder[0]).toBeLessThan(
+      onMove.mock.invocationCallOrder[0]!,
+    );
 
-    await fireEvent.click(screen.getByTestId("route-waypoint-move-down-1"));
-    expect(onSelectWaypoint).toHaveBeenCalledWith(1, "replace");
-    expect(onMove).toHaveBeenCalledWith(1);
+    await fireEvent.click(screen.getByTestId("route-waypoint-move-up-2"));
+    expect(onSelectWaypoint).toHaveBeenNthCalledWith(2, 2, "replace");
+    expect(onMove).toHaveBeenNthCalledWith(2, -1);
+    expect(onSelectWaypoint.mock.invocationCallOrder[1]).toBeLessThan(
+      onMove.mock.invocationCallOrder[1]!,
+    );
 
-    await fireEvent.click(screen.getByTestId("route-waypoint-remove-1"));
-    expect(onSelectWaypoint).toHaveBeenCalledWith(1, "replace");
+    await fireEvent.click(screen.getByTestId("route-waypoint-remove-2"));
+    expect(onSelectWaypoint).toHaveBeenNthCalledWith(3, 2, "replace");
     expect(onRemove).toHaveBeenCalledTimes(1);
+    expect(onSelectWaypoint.mock.invocationCallOrder[2]).toBeLessThan(
+      onRemove.mock.invocationCallOrder[0]!,
+    );
   });
 
   it("combines the drafting actions into one toolbar", () => {

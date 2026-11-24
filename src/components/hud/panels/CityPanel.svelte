@@ -46,6 +46,7 @@
         label={`Rename ${activeCity.name}`}
         disabled={busy}
         testId="active-city-name"
+        entityId={activeCity.id}
         onCommit={(name) => onRename(activeCity.id, name)}
       />
     </h2>

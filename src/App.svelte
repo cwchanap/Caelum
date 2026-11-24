@@ -948,12 +948,14 @@
           bind:clientWidth={stageWidth}
           bind:clientHeight={stageHeight}
         >
-          <GameCanvas
-            bind:this={gameCanvas}
-            {runtime}
-            {snapshot}
-            onShellError={handleShellError}
-          />
+          {#key currentSnapshot.persistence.activeCity?.id}
+            <GameCanvas
+              bind:this={gameCanvas}
+              {runtime}
+              {snapshot}
+              onShellError={handleShellError}
+            />
+          {/key}
 
           {#if snapshot.shell.inspector !== null && snapshot.ui.activeCommandDestination === null}
             <InspectPanel

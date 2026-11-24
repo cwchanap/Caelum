@@ -4,19 +4,29 @@
     label: string;
     disabled?: boolean;
     testId?: string;
+    entityId?: string;
     onCommit: (value: string) => void;
   }
 
-  let { value, label, disabled = false, testId, onCommit }: Props = $props();
+  let {
+    value,
+    label,
+    disabled = false,
+    testId,
+    entityId,
+    onCommit,
+  }: Props = $props();
 
   let editing = $state(false);
   let draft = $state("");
   let inputElement: HTMLInputElement | null = $state(null);
   let pendingCommit = $state(false);
-  // The value a held submission was captured for; if `value` moves
-  // underneath (busy load/deletion swapping the edited entity), the held
-  // submission is dropped instead of landing on the replacement.
+  // The value and entity identity a held submission was captured for; if
+  // either moves underneath (busy load/deletion swapping the edited entity,
+  // even to another entity with the same name), the held submission is
+  // dropped instead of landing on the replacement.
   let heldForValue = $state("");
+  let heldForEntityId = $state<string | undefined>(undefined);
 
   // Focus the freshly mounted editor; reading inputElement keeps the effect
   // tied to the input actually being in the DOM.
@@ -26,11 +36,11 @@
 
   // A submission attempted while the parent is busy (e.g. an autosave) is
   // held, not discarded; land it once the parent goes idle again — unless
-  // the user edited the draft again or the value changed under the editor,
-  // in which case the next explicit submission decides.
+  // the user edited the draft again or the value/entity changed under the
+  // editor, in which case the next explicit submission decides.
   $effect(() => {
     if (!disabled && pendingCommit) {
-      if (value !== heldForValue) {
+      if (value !== heldForValue || entityId !== heldForEntityId) {
         pendingCommit = false;
         return;
       }
@@ -40,11 +50,13 @@
 
   // A submission still held when the editor unmounts (its panel closed or
   // switched away before the parent went idle) lands through the parent's
-  // deferred path instead of being silently dropped with the component.
+  // deferred path instead of being silently dropped with the component —
+  // unless the underlying entity/value already changed (e.g. city load).
   $effect(() => {
     return () => {
       if (!pendingCommit) return;
       pendingCommit = false;
+      if (value !== heldForValue || entityId !== heldForEntityId) return;
       const trimmed = draft.trim();
       if (trimmed.length === 0 || trimmed === value) return;
       onCommit(trimmed);
@@ -64,6 +76,7 @@
     if (disabled) {
       pendingCommit = true;
       heldForValue = value;
+      heldForEntityId = entityId;
       return;
     }
     pendingCommit = false;
@@ -96,11 +109,16 @@
       pendingCommit = false;
     }}
     onkeydown={(event) => {
+      if (event.isComposing) return;
       if (event.key === "Escape") {
         cancel(event as KeyboardEvent & { currentTarget: HTMLInputElement });
       } else if (event.key === "Enter") {
         commit();
-        event.currentTarget.blur();
+        // Keep focus on the still-open editor when busy holds the submit so
+        // Escape can cancel it without clicking back into the field.
+        if (!editing) {
+          event.currentTarget.blur();
+        }
       }
     }}
     onblur={commit}

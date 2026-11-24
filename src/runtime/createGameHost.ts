@@ -4,6 +4,7 @@ import {
   applyCameraAction,
   applyCanvasPixelSize,
   canvasToWorld,
+  fitScale,
   getBoardTransform,
   panCamera,
   rebaseCameraForResize,
@@ -351,11 +352,14 @@ export function createGameHostWithRenderer(
     const dpr = globalThis.devicePixelRatio ?? 1;
     const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
     const pixelHeight = Math.max(1, Math.round(cssHeight * dpr));
-    boardCssWidth = cssWidth;
-    boardCssHeight = cssHeight;
+    const map = ctx.getState().map;
+    if (fitScale({ width: cssWidth, height: cssHeight }, map) > 0) {
+      boardCssWidth = cssWidth;
+      boardCssHeight = cssHeight;
+    }
     const board = getBoardTransform(
       { width: cssWidth, height: cssHeight },
-      ctx.getState().map,
+      map,
       ctx.getCamera(),
     );
     transform = {
@@ -372,8 +376,9 @@ export function createGameHostWithRenderer(
    *  the drawn scale and offsets survive the new board size. The boardCss
    *  dimensions update here synchronously so a second observer batch before
    *  the next frame rebases against the latest size instead of double-rebasing
-   *  against stale ones. The first mount (nothing drawn yet) and equal sizes
-   *  are skipped. */
+   *  against stale ones. First mount, equal sizes, and zero-fit boxes (e.g.
+   *  when HUD insets consume the board height) leave the usable reference
+   *  untouched so restoration can still rebase from it. */
   const rebaseForResize = (nextWidth: number, nextHeight: number): void => {
     if (!(boardCssWidth > 0 && boardCssHeight > 0)) {
       return;
@@ -381,10 +386,14 @@ export function createGameHostWithRenderer(
     if (nextWidth === boardCssWidth && nextHeight === boardCssHeight) {
       return;
     }
+    const map = ctx.getState().map;
+    if (!(fitScale({ width: nextWidth, height: nextHeight }, map) > 0)) {
+      return;
+    }
     const rebased = rebaseCameraForResize(
       { width: boardCssWidth, height: boardCssHeight },
       { width: nextWidth, height: nextHeight },
-      ctx.getState().map,
+      map,
       ctx.getCamera(),
     );
     boardCssWidth = nextWidth;

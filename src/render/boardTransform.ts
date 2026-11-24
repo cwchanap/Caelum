@@ -292,6 +292,54 @@ export function zoomCameraAt(
     },
   };
   if (current.retained === true) {
+    // A retained view bypasses clampCamera; zooming into a blank margin
+    // outside the map could otherwise push the entire map offstage. Keep
+    // cursor-on-map anchoring exact, and only bound off-map zooming so a
+    // quarter-viewport strip (or whatever was already visible) stays onstage.
+    const clampAxisForOffMapZoom = (
+      nextCenter: number,
+      currentCenter: number,
+      worldCoord: number,
+      mapTiles: number,
+      safeStart: number,
+      safeSpan: number,
+      middle: number,
+    ): number => {
+      if (worldCoord >= 0 && worldCoord <= mapTiles) {
+        return nextCenter;
+      }
+      const keepPx = Math.min(safeSpan * 0.25, mapTiles * after);
+      if (worldCoord > mapTiles) {
+        const beforeEdge = middle + (mapTiles - currentCenter) * before;
+        const minEdge = Math.min(beforeEdge, safeStart + keepPx);
+        const afterEdge = middle + (mapTiles - nextCenter) * after;
+        return afterEdge < minEdge
+          ? mapTiles - (minEdge - middle) / after
+          : nextCenter;
+      }
+      const beforeEdge = middle - currentCenter * before;
+      const maxEdge = Math.max(beforeEdge, safeStart + safeSpan - keepPx);
+      const afterEdge = middle - nextCenter * after;
+      return afterEdge > maxEdge ? (middle - maxEdge) / after : nextCenter;
+    };
+    moved.center.x = clampAxisForOffMapZoom(
+      moved.center.x,
+      current.center.x,
+      worldX,
+      map.width,
+      safe.x,
+      safe.width,
+      middleX,
+    );
+    moved.center.y = clampAxisForOffMapZoom(
+      moved.center.y,
+      current.center.y,
+      worldY,
+      map.height,
+      safe.y,
+      safe.height,
+      middleY,
+    );
     // Still below fit: stay passive on the actually rendered pixels.
     if (zoom < 1) {
       return { ...moved, retained: true };

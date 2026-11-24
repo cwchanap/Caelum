@@ -1499,6 +1499,38 @@ describe("createGameHost passive resize camera", () => {
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
     fake.restore();
   });
+
+  it("preserves the last usable size reference across a zero-fit resize", () => {
+    const fake = withFakeResizeObserver();
+    const { container, callbacks, fireFrame, getState } = createFixture();
+    fireFrame(0);
+    const initialBox = container.getBoundingClientRect();
+    const map = getState().map;
+    const before = getBoardTransform(
+      { width: initialBox.width, height: initialBox.height },
+      map,
+      null,
+    );
+
+    // Collapse height inside the HUD inset band (<= 160px): width and height
+    // are both positive, yet fitScale is 0. Both rebaseForResize and syncSize
+    // must keep the 1280/initial usable size untouched.
+    fake.fire([{ contentRect: { width: initialBox.width, height: 150 } }]);
+    fireFrame(16);
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+
+    // Restore to a positive-fit height: rebasing must use the original usable
+    // size so the drawn scale and offsets match the pre-collapse frame.
+    const restored = { width: initialBox.width, height: 600 };
+    fake.fire([{ contentRect: restored }]);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+    const rebased = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
+    const after = getBoardTransform(restored, map, rebased);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+    expect(after.offsetX).toBeCloseTo(before.offsetX, 6);
+    expect(after.offsetY).toBeCloseTo(before.offsetY, 6);
+    fake.restore();
+  });
 });
 
 describe("createGameHost 10 Hz tick admission", () => {

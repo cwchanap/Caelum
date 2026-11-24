@@ -202,13 +202,16 @@ describe("InspectPanel header, close and queue bar", () => {
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
-  it("scales one queue bar to the node's occupancy over total platform capacity", () => {
+  it("scales one queue bar and displays numeric total to the node's occupancy over total platform capacity", () => {
     renderPanel(transitInspector());
 
     const bar = screen.getByTestId("inspect-queue-bar");
     expect(bar).toHaveAttribute("aria-label", "Queue 4/60");
     expect(screen.getByTestId("inspect-queue-fill").style.width).toBe(
       `${(4 / 60) * 100}%`,
+    );
+    expect(screen.getByTestId("inspect-queue-text")).toHaveTextContent(
+      "Queue 4/60",
     );
   });
 });

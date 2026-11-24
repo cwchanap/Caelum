@@ -205,16 +205,59 @@ describe("InlineNameEditor", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("lets Escape cancel a submission that was held while busy", async () => {
+  it("ignores IME composing Enter and Escape without submitting or closing", async () => {
+    const { onCommit, input } = await openEditor();
+
+    await fireEvent.input(input, { target: { value: "Tokyo" } });
+    await fireEvent.keyDown(input, { key: "Enter", isComposing: true });
+    await fireEvent.keyDown(input, { key: "Escape", isComposing: true });
+
+    expect(onCommit).not.toHaveBeenCalled();
+    expect(screen.getByTestId("route-name-route-bus-001")).toBe(input);
+    expect(document.activeElement).toBe(input);
+  });
+
+  it("lets Escape cancel a submission that was held while busy without refocusing", async () => {
     const { onCommit, rerender, input } = await openEditor();
 
     await fireEvent.input(input, { target: { value: "Harbour Express" } });
     await rerender({ disabled: true });
     await fireEvent.keyDown(input, { key: "Enter" });
-    await fireEvent.keyDown(input, { key: "Escape" });
+    expect(document.activeElement).toBe(input);
+
+    await fireEvent.keyDown(document.activeElement ?? document.body, {
+      key: "Escape",
+    });
 
     await rerender({ disabled: false });
     expect(onCommit).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("drops a held submission when entityId changes even if the replacement shares the same name", async () => {
+    const onCommit = vi.fn();
+    const props = {
+      value: "Harbour City",
+      label: "Rename Harbour City",
+      disabled: false,
+      testId: "active-city-name",
+      entityId: "city-1",
+      onCommit,
+    };
+    const { rerender, unmount } = render(InlineNameEditor, { props });
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour City" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await rerender({ ...props, disabled: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    // Swap to another city with the exact same name; neither idle resume nor
+    // unmount cleanup may apply the held rename to the replacement entity.
+    await rerender({ ...props, disabled: false, entityId: "city-2" });
+    expect(onCommit).not.toHaveBeenCalled();
+    unmount();
+    expect(onCommit).not.toHaveBeenCalled();
   });
 });

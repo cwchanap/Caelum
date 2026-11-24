@@ -1,10 +1,12 @@
 import { expect, test } from "@playwright/test";
+import { fitScale } from "../../src/render/boardTransform";
 import {
   armOneShotCitySaveFailure,
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
   installOneShotCitySaveFailure,
+  mapBoardScale,
   openCommandDestination,
   runtimeSnapshot,
   selectBuildLeaf,
@@ -195,13 +197,25 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
         activeCity: current.persistence.activeCity?.name ?? null,
         busy: current.persistence.busy,
         activeCommandDestination: current.ui.activeCommandDestination,
+        camera: current.camera,
       };
     })
     .toEqual({
       activeCity: "Zephyr Smoke",
       busy: false,
       activeCommandDestination: null,
+      camera: null,
     });
+  // Loading from the open City dock closes the dock and remounts the canvas
+  // so the loaded map opens at canonical Fit for the full stage.
+  await expect(page.getByTestId("workspace-dock")).toHaveCount(0);
+  const loadedCanvasBox = await canvas.boundingBox();
+  const loadedMap = (await runtimeSnapshot(page)).state.map;
+  expect(loadedCanvasBox).not.toBeNull();
+  expect(await mapBoardScale(canvas)).toBeCloseTo(
+    fitScale(loadedCanvasBox!, loadedMap),
+    6,
+  );
   await openCommandDestination(page, "city");
   await expect(page.getByTestId("active-city-name")).toHaveText("Zephyr Smoke");
 

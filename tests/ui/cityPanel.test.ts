@@ -322,4 +322,23 @@ describe("CityPanel", () => {
     expect(onRename).toHaveBeenCalledTimes(1);
     expect(onRename).toHaveBeenCalledWith("city-2", "Harbour Reef");
   });
+
+  it("does not land a held rename when another city with the same name becomes active", async () => {
+    const { onRename, rerender } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await rerender({ busy: true });
+    await fireEvent.keyDown(input, { key: "Enter" });
+
+    await rerender({
+      busy: false,
+      activeCity: { ...inactiveCity, name: "Harbour Loop" },
+    });
+
+    expect(onRename).not.toHaveBeenCalled();
+  });
 });

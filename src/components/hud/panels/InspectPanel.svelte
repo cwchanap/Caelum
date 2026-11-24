@@ -121,17 +121,22 @@
     </header>
 
     {#if inspector.kind === "transit"}
-      <div
-        class="inspect-queue"
-        data-testid="inspect-queue-bar"
-        role="img"
-        aria-label={`Queue ${queue?.occupancy}/${queue?.capacity}`}
-      >
-        <span
-          class="inspect-queue-fill"
-          data-testid="inspect-queue-fill"
-          style:width={`${(queue?.ratio ?? 0) * 100}%`}
-        ></span>
+      <div class="inspect-queue-summary">
+        <div
+          class="inspect-queue"
+          data-testid="inspect-queue-bar"
+          role="img"
+          aria-label={`Queue ${queue?.occupancy}/${queue?.capacity}`}
+        >
+          <span
+            class="inspect-queue-fill"
+            data-testid="inspect-queue-fill"
+            style:width={`${(queue?.ratio ?? 0) * 100}%`}
+          ></span>
+        </div>
+        <span class="inspect-queue-text" data-testid="inspect-queue-text">
+          Queue {queue?.occupancy}/{queue?.capacity}
+        </span>
       </div>
       <section
         class="panel-section platform-panel"
