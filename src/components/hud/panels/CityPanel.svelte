@@ -36,29 +36,34 @@
     onRetryList,
   }: Props = $props();
 
-  let headerNameEditor: { commit: () => void } | null = $state(null);
+  let headerNameEditor: { commit: () => Promise<boolean> } | null =
+    $state(null);
   let cityList: { flushCityNames: () => Promise<boolean> } | null =
     $state(null);
 
-  // The Load/New City presses suppress the header editor's blur commit
+  // The Load/New City/Save presses suppress the header editor's blur commit
   // (mousedown.preventDefault), so the click must flush it itself before
   // the action swaps the active city or unmounts the panel — the same
-  // contract CityList's Load applies to its row drafts. The header commit
-  // goes through onRename, and App's load handler already waits for the
-  // in-flight rename before loading.
-  function flushHeaderName(): void {
-    headerNameEditor?.commit();
+  // contract CityList's Load applies to its row drafts, including gating
+  // the action when the rename is refused or fails.
+  async function flushHeaderName(): Promise<boolean> {
+    return (await headerNameEditor?.commit()) !== false;
   }
 
-  function handleListLoad(cityId: string): void {
-    flushHeaderName();
-    onLoad(cityId);
+  async function handleListLoad(cityId: string): Promise<void> {
+    if (await flushHeaderName()) onLoad(cityId);
   }
 
   async function handleNewCity(): Promise<void> {
     if ((await cityList?.flushCityNames()) === false) return;
-    flushHeaderName();
+    if (!(await flushHeaderName())) return;
     onNewCity();
+  }
+
+  async function handleSave(): Promise<void> {
+    if ((await cityList?.flushCityNames()) === false) return;
+    if (!(await flushHeaderName())) return;
+    onSave();
   }
 </script>
 
@@ -94,7 +99,7 @@
         class="btn"
         disabled={busy}
         onmousedown={(event) => event.preventDefault()}
-        onclick={onSave}
+        onclick={() => void handleSave()}
       >
         {busy ? "Working…" : "Save Now"}
       </button>

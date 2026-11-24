@@ -8,7 +8,7 @@
      *  swaps while the editor is open, the open draft belongs to the old one
      *  and is discarded rather than applied to the replacement. */
     entityId?: string;
-    onCommit: (value: string) => void;
+    onCommit: (value: string) => void | boolean | Promise<boolean>;
   }
 
   let {
@@ -52,17 +52,23 @@
 
   // Exported so a parent can flush an open draft before an action that
   // suppresses the blur commit (mousedown.preventDefault) and then unmounts
-  // or retargets the editor — e.g. CityPanel's Load/New City buttons.
-  export function commit(): void {
+  // or retargets the editor — e.g. CityPanel's Load/New City buttons. The
+  // result reports whether the action may proceed: false when the commit
+  // was refused (a kept draft) or the commit callback itself failed.
+  export function commit(): Promise<boolean> {
     // Enter commits and blurs; the blur handler must not commit a second time.
     // While the parent is busy the input itself is disabled, so a commit that
     // still reaches this point (e.g. a blur from the disabling flip) is
     // refused rather than queued — the draft stays for the user to retry.
-    if (!editing || disabled) return;
+    if (!editing) return Promise.resolve(true);
+    if (disabled) return Promise.resolve(false);
     editing = false;
     const trimmed = draft.trim();
-    if (trimmed.length === 0 || trimmed === value) return;
-    onCommit(trimmed);
+    if (trimmed.length === 0 || trimmed === value) return Promise.resolve(true);
+    return Promise.resolve(onCommit(trimmed)).then(
+      (result) => result !== false,
+      () => false,
+    );
   }
 
   function cancel(

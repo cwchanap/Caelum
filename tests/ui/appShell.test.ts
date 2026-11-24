@@ -686,7 +686,9 @@ describe("App command shell", () => {
       "true",
     );
     await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
-    expect(harness.runtime.persistence.save).toHaveBeenCalledTimes(1);
+    await waitFor(() =>
+      expect(harness.runtime.persistence.save).toHaveBeenCalledTimes(1),
+    );
   });
 
   it("opens and cancels New City from the active City panel", async () => {
@@ -698,7 +700,7 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
     expect(screen.getByTestId("game-canvas-host")).toBeVisible();
   });
@@ -712,7 +714,7 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
 
     // A tick marks the active city dirty while the form is open. The Create
     // button is busy/name-gated, not dirty-gated, so it stays clickable.
@@ -802,9 +804,13 @@ describe("App command shell", () => {
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
     // A real press would blur-commit on mousedown and the busy flip would
     // eat the click; the prevented press flushes the draft itself instead.
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Continue Maple Junction" }),
-    );
+    // fireEvent.click skips mousedown entirely, so assert it is canceled —
+    // otherwise the test still passes with the preventDefault removed.
+    const continueButton = screen.getByRole("button", {
+      name: "Continue Maple Junction",
+    });
+    expect(await fireEvent.mouseDown(continueButton)).toBe(false);
+    await fireEvent.click(continueButton);
     expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
       "city-old",
       "Harbour Reef",
@@ -838,9 +844,11 @@ describe("App command shell", () => {
 
     // The Load press suppresses the header editor's blur commit, so the
     // click flushes the header draft and the load waits for the rename.
-    await fireEvent.click(
-      await screen.findByRole("button", { name: "Load Harbour City" }),
-    );
+    const loadButton = await screen.findByRole("button", {
+      name: "Load Harbour City",
+    });
+    expect(await fireEvent.mouseDown(loadButton)).toBe(false);
+    await fireEvent.click(loadButton);
     expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
       "city-new",
       "Maple Central",
@@ -853,6 +861,81 @@ describe("App command shell", () => {
     });
     await waitFor(() =>
       expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-old"),
+    );
+  });
+
+  it("commits and waits for an open header rename before saving", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const renameDone = deferred<{ ok: true; value: CitySummary }>();
+    harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Maple Junction" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Maple Central" } });
+
+    // Same prevented press as Load: the click flushes the header draft and
+    // the save waits for the rename to land.
+    const saveButton = screen.getByRole("button", { name: "Save Now" });
+    expect(await fireEvent.mouseDown(saveButton)).toBe(false);
+    await fireEvent.click(saveButton);
+    await waitFor(() =>
+      expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+        "city-new",
+        "Maple Central",
+      ),
+    );
+    expect(harness.runtime.persistence.save).not.toHaveBeenCalled();
+
+    renameDone.resolve({
+      ok: true,
+      value: { ...CITY_NEW, name: "Maple Central" },
+    });
+    await waitFor(() =>
+      expect(harness.runtime.persistence.save).toHaveBeenCalledTimes(1),
+    );
+  });
+
+  it("waits for a just-committed header rename before saving", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const renameDone = deferred<{ ok: true; value: CitySummary }>();
+    harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Maple Junction" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Maple Central" } });
+    // Enter commits on its own and the editor closes, so the Save press has
+    // no draft left to flush — the save must wait on the in-flight rename
+    // rather than being refused as busy.
+    await fireEvent.keyDown(input, { key: "Enter" });
+    expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+      "city-new",
+      "Maple Central",
+    );
+
+    await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    expect(harness.runtime.persistence.save).not.toHaveBeenCalled();
+
+    renameDone.resolve({
+      ok: true,
+      value: { ...CITY_NEW, name: "Maple Central" },
+    });
+    await waitFor(() =>
+      expect(harness.runtime.persistence.save).toHaveBeenCalledTimes(1),
     );
   });
 
@@ -1005,7 +1088,7 @@ describe("App command shell", () => {
     );
 
     expect(screen.getByTestId("game-canvas-host")).toBeVisible();
-    expect(screen.getByRole("alert")).toHaveTextContent(
+    expect(await screen.findByRole("alert")).toHaveTextContent(
       "Could not apply the city state.",
     );
     expect(
@@ -1041,7 +1124,7 @@ describe("App command shell", () => {
     expect(screen.getByRole("button", { name: "New City" })).toBeVisible();
 
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
   });
 
   it("refreshes the library when Cancel follows a failed Create after list failure", async () => {
@@ -1112,7 +1195,7 @@ describe("App command shell", () => {
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
     // The New City form uses a create-specific error state, so the stale
     // rename error must not leak into it.
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -1140,7 +1223,7 @@ describe("App command shell", () => {
     await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
 
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
     // The late list error resolves after New City opened; it must not inject
     // "Could not load the city list" into the form.
     lateList.resolve({
@@ -1209,6 +1292,11 @@ describe("App command shell", () => {
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     await screen.findByTestId("city-row-city-new");
     await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
+    // The second listCities call is the save-triggered refresh; observing it
+    // guarantees the read (and its captured pre-save snapshot) is in flight.
+    await waitFor(() =>
+      expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(2),
+    );
 
     const savedAt = "2026-08-10T14:00:00.000Z";
     harness.setPersistence({ activeCity: { ...CITY_NEW, savedAt } });
@@ -1297,7 +1385,7 @@ describe("App command shell", () => {
     ).toBeVisible();
 
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
     await fireEvent.click(screen.getByRole("button", { name: "Cancel" }));
 
     // Cancel re-fetches the list even with an active city, restoring the rows.
@@ -1342,7 +1430,7 @@ describe("App command shell", () => {
     expect(
       screen.getByRole("button", { name: "Retry city list" }),
     ).toBeVisible();
-    const retry = screen.getByRole("button", { name: /^Retry$/ });
+    const retry = await screen.findByRole("button", { name: /^Retry$/ });
     retry.focus();
     expect(retry).toHaveFocus();
     await fireEvent.click(retry);
@@ -2636,7 +2724,7 @@ describe("App command shell", () => {
     const view = render(App, { props: { runtime: harness.runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
-    expect(screen.getByTestId("new-city-screen")).toBeVisible();
+    expect(await screen.findByTestId("new-city-screen")).toBeVisible();
 
     await fireEvent.keyDown(window, { key: "z", ctrlKey: true });
     expect(harness.runtime.undoLastBuild).not.toHaveBeenCalled();
