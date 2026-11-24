@@ -225,7 +225,11 @@
       return;
     }
     beginPersistenceMutation();
-    await runtime.persistence.load(cityId);
+    const result = await runtime.persistence.load(cityId);
+    // A rename's trailing refresh can still be in flight when the load
+    // lands; superseding it without a replacement leaves the library
+    // showing the pre-rename name. Re-read so the list is fresh.
+    if (result.ok) void refreshCities();
   }
 
   async function handleSaveCity(): Promise<void> {
