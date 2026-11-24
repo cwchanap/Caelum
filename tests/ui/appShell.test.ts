@@ -785,9 +785,74 @@ describe("App command shell", () => {
       value: { ...CITY_OLD, name: "Old Harbour" },
     });
     await waitFor(() =>
-      expect(harness.runtime.persistence.load).toHaveBeenCalledWith(
-        "city-old",
-      ),
+      expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-old"),
+    );
+  });
+
+  it("waits for an in-flight row rename before continuing into the first city", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: null, busy: false, dirty: false },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const renameDone = deferred<{ ok: true; value: CitySummary }>();
+    harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
+    render(App, { props: { runtime: harness.runtime } });
+
+    const input = await screen.findByTestId("city-name-city-old");
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    // A real press would blur-commit on mousedown and the busy flip would
+    // eat the click; the prevented press flushes the draft itself instead.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Continue Maple Junction" }),
+    );
+    expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+      "city-old",
+      "Harbour Reef",
+    );
+    expect(harness.runtime.persistence.load).not.toHaveBeenCalled();
+
+    renameDone.resolve({
+      ok: true,
+      value: { ...CITY_OLD, name: "Harbour Reef" },
+    });
+    await waitFor(() =>
+      expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-new"),
+    );
+  });
+
+  it("commits and waits for an open header rename before loading from the dock", async () => {
+    const harness = createRuntimeHarness({
+      persistence: { activeCity: CITY_NEW },
+      cities: [CITY_NEW, CITY_OLD],
+    });
+    const renameDone = deferred<{ ok: true; value: CitySummary }>();
+    harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
+    render(App, { props: { runtime: harness.runtime } });
+
+    await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Maple Junction" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Maple Central" } });
+
+    // The Load press suppresses the header editor's blur commit, so the
+    // click flushes the header draft and the load waits for the rename.
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Load Harbour City" }),
+    );
+    expect(harness.runtime.persistence.renameCity).toHaveBeenCalledWith(
+      "city-new",
+      "Maple Central",
+    );
+    expect(harness.runtime.persistence.load).not.toHaveBeenCalled();
+
+    renameDone.resolve({
+      ok: true,
+      value: { ...CITY_NEW, name: "Maple Central" },
+    });
+    await waitFor(() =>
+      expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-old"),
     );
   });
 

@@ -1,4 +1,10 @@
-import { fireEvent, render, screen, within } from "@testing-library/svelte";
+import {
+  fireEvent,
+  render,
+  screen,
+  waitFor,
+  within,
+} from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import CityPanel from "../../src/components/hud/panels/CityPanel.svelte";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
@@ -40,6 +46,8 @@ function renderPanel(
   const onRename = vi.fn(async () => true);
   const onDelete = vi.fn();
   const onSave = vi.fn();
+  const onLoad = vi.fn();
+  const onNewCity = vi.fn();
   const props = {
     shell,
     activeCity,
@@ -49,10 +57,10 @@ function renderPanel(
     statusLabel: "Saved 12 s ago",
     error: null as string | null,
     onSave,
-    onLoad: vi.fn(),
+    onLoad,
     onRename,
     onDelete,
-    onNewCity: vi.fn(),
+    onNewCity,
     ...overrides,
   };
   const { rerender } = render(CityPanel, { props });
@@ -60,6 +68,8 @@ function renderPanel(
     onRename,
     onDelete,
     onSave,
+    onLoad,
+    onNewCity,
     rerender: (next: Partial<typeof props>) => rerender({ ...props, ...next }),
   };
 }
@@ -298,6 +308,41 @@ describe("CityPanel", () => {
     expect(
       screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
     ).toBeNull();
+  });
+
+  it("commits an open header rename before loading another city", async () => {
+    const { onRename, onLoad } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+
+    // The Load press suppresses the header editor's blur commit
+    // (mousedown.preventDefault), so the click itself flushes the header
+    // draft before the load swaps the active city under the open editor.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Load Dockside" }),
+    );
+
+    expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
+    expect(onLoad).toHaveBeenCalledWith("city-2");
+  });
+
+  it("commits an open header rename before leaving for New City", async () => {
+    const { onRename, onNewCity } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+
+    expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
+    await waitFor(() => expect(onNewCity).toHaveBeenCalled());
   });
 
   it("discards an open rename draft when another city becomes active", async () => {

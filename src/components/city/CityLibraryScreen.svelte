@@ -29,6 +29,17 @@
     onNewCity,
     onRetry,
   }: Props = $props();
+
+  let cityList: { flushCityNames: () => Promise<boolean> } | null =
+    $state(null);
+
+  // Continue/New City use the same prevented-mousedown contract as a row's
+  // Load: it keeps a blur-commit's busy flip from eating the click, so the
+  // click itself must flush any row-name draft before the action replaces
+  // the library.
+  async function flushThen(action: () => void): Promise<void> {
+    if ((await cityList?.flushCityNames()) !== false) action();
+  }
 </script>
 
 <main
@@ -68,16 +79,23 @@
             type="button"
             class="btn city-library-continue"
             disabled={busy}
-            onclick={() => onContinue(cities[0].id)}
+            onmousedown={(event) => event.preventDefault()}
+            onclick={() => void flushThen(() => onContinue(cities[0].id))}
           >
             Continue
             <span class="city-library-continue-name">{cities[0].name}</span>
           </button>
-          <button type="button" disabled={busy} onclick={onNewCity}>
+          <button
+            type="button"
+            disabled={busy}
+            onmousedown={(event) => event.preventDefault()}
+            onclick={() => void flushThen(onNewCity)}
+          >
             New City
           </button>
         </div>
         <CityList
+          bind:this={cityList}
           {cities}
           {activeCityId}
           {busy}
