@@ -385,12 +385,18 @@ describe("CityPanel", () => {
       ) as HTMLInputElement;
       await fireEvent.input(input, { target: { value: "Harbour Reef" } });
       await fireEvent.click(screen.getByRole("button", { name: action }));
-      // The failed flush closed the editor without landing the draft; the
-      // action must stay put rather than run on a false success.
-      for (let i = 0; i < 10; i++) await Promise.resolve();
-      expect(
-        screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
-      ).toBeNull();
+      // The failed flush re-opens the draft for retry instead of dropping
+      // it; the gated action still stays put on the false commit result.
+      const restored = await screen.findByRole("textbox", {
+        name: "Rename Harbour Loop",
+      });
+      expect(restored).toHaveValue("Harbour Reef");
+      await fireEvent.keyDown(restored, { key: "Escape" });
+      await waitFor(() =>
+        expect(
+          screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
+        ).toBeNull(),
+      );
     }
 
     expect(onSave).not.toHaveBeenCalled();
