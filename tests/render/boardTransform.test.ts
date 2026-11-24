@@ -604,9 +604,42 @@ describe("passive dock resize", () => {
 
     const t = getBoardTransform(docked, map, camera);
     expect(t.offsetX).toBeGreaterThanOrEqual(safe.x - 1e-6);
-    expect(t.offsetX + t.width).toBeLessThanOrEqual(
-      safe.x + safe.width + 1e-6,
+    expect(t.offsetX + t.width).toBeLessThanOrEqual(safe.x + safe.width + 1e-6);
+    expect(t.offsetY).toBeGreaterThanOrEqual(safe.y - 1e-6);
+    expect(t.offsetY + t.height).toBeLessThanOrEqual(
+      safe.y + safe.height + 1e-6,
     );
+    expect(zoomCameraAt(docked, map, camera, 1 / ZOOM_STEP, anchor)).toBe(
+      camera,
+    );
+  });
+
+  it("wheel Zoom Out anchored in an exposed HUD inset lands a top-cropped map inside", () => {
+    // The fixture above starts with the map's top already at the safe edge.
+    // With the top cropped offscreen instead, the shrink anchors at the
+    // clamped safe edge (anchor.y = 10 lands on safe.y) and the cropped
+    // edge approaches it without crossing — still converging until every
+    // edge is inside.
+    let camera: Camera | null = {
+      zoom: 1.4,
+      center: { x: 42, y: 33 },
+      retained: true,
+    };
+    const safe = safeViewport(docked);
+    const parked = getBoardTransform(docked, map, camera);
+    expect(parked.offsetY).toBeLessThan(safe.y);
+    expect(parked.offsetX).toBeLessThan(safe.x);
+
+    const anchor = { x: 10, y: 10 };
+    for (let step = 0; step < 100; step += 1) {
+      const next = zoomCameraAt(docked, map, camera, 1 / ZOOM_STEP, anchor);
+      if (next === camera) break;
+      camera = next;
+    }
+
+    const t = getBoardTransform(docked, map, camera);
+    expect(t.offsetX).toBeGreaterThanOrEqual(safe.x - 1e-6);
+    expect(t.offsetX + t.width).toBeLessThanOrEqual(safe.x + safe.width + 1e-6);
     expect(t.offsetY).toBeGreaterThanOrEqual(safe.y - 1e-6);
     expect(t.offsetY + t.height).toBeLessThanOrEqual(
       safe.y + safe.height + 1e-6,

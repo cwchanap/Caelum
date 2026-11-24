@@ -35,6 +35,31 @@
     onNewCity,
     onRetryList,
   }: Props = $props();
+
+  let headerNameEditor: { commit: () => void } | null = $state(null);
+  let cityList: { flushCityNames: () => Promise<boolean> } | null =
+    $state(null);
+
+  // The Load/New City presses suppress the header editor's blur commit
+  // (mousedown.preventDefault), so the click must flush it itself before
+  // the action swaps the active city or unmounts the panel — the same
+  // contract CityList's Load applies to its row drafts. The header commit
+  // goes through onRename, and App's load handler already waits for the
+  // in-flight rename before loading.
+  function flushHeaderName(): void {
+    headerNameEditor?.commit();
+  }
+
+  function handleListLoad(cityId: string): void {
+    flushHeaderName();
+    onLoad(cityId);
+  }
+
+  async function handleNewCity(): Promise<void> {
+    if ((await cityList?.flushCityNames()) === false) return;
+    flushHeaderName();
+    onNewCity();
+  }
 </script>
 
 <div class="hud-panel" data-testid="panel-city">
@@ -42,6 +67,7 @@
     <h3 class="section-head">City</h3>
     <h2 class="city-title">
       <InlineNameEditor
+        bind:this={headerNameEditor}
         value={activeCity.name}
         label={`Rename ${activeCity.name}`}
         disabled={busy}
@@ -77,7 +103,7 @@
         class="btn"
         disabled={busy || dirty}
         onmousedown={(event) => event.preventDefault()}
-        onclick={onNewCity}>New City</button
+        onclick={() => void handleNewCity()}>New City</button
       >
     </div>
 
@@ -128,12 +154,13 @@
     {#if cities !== null}
       <section class="city-local-list" aria-label="Local cities">
         <CityList
+          bind:this={cityList}
           {cities}
           activeCityId={activeCity.id}
           {busy}
           {dirty}
           activeNameReadOnly
-          {onLoad}
+          onLoad={handleListLoad}
           {onRename}
           {onDelete}
         />

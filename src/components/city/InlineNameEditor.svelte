@@ -50,7 +50,10 @@
     editing = true;
   }
 
-  function commit(): void {
+  // Exported so a parent can flush an open draft before an action that
+  // suppresses the blur commit (mousedown.preventDefault) and then unmounts
+  // or retargets the editor — e.g. CityPanel's Load/New City buttons.
+  export function commit(): void {
     // Enter commits and blurs; the blur handler must not commit a second time.
     // While the parent is busy the input itself is disabled, so a commit that
     // still reaches this point (e.g. a blur from the disabling flip) is

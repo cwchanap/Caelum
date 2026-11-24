@@ -313,6 +313,73 @@ describe("CityList", () => {
 });
 
 describe("CityLibraryScreen", () => {
+  function renderLibrary(
+    onRename: (id: string, name: string) => Promise<boolean>,
+  ) {
+    const onContinue = vi.fn();
+    const onNewCity = vi.fn();
+    render(CityLibraryScreen, {
+      props: {
+        cities: CITIES,
+        activeCityId: null,
+        busy: false,
+        error: null,
+        onContinue,
+        onLoad: vi.fn(),
+        onRename,
+        onDelete: vi.fn(),
+        onNewCity,
+      },
+    });
+    return { onContinue, onNewCity };
+  }
+
+  it("commits a pending row rename before continuing", async () => {
+    const onRename = vi.fn(async () => true);
+    const { onContinue } = renderLibrary(onRename);
+    const input = screen.getByTestId("city-name-city-new");
+
+    await fireEvent.input(input, { target: { value: "Maple Central" } });
+    // Continue uses the same prevented mousedown as a row Load, so the click
+    // itself flushes the draft before the continue swaps out the library.
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Continue Maple Junction" }),
+    );
+
+    expect(onRename).toHaveBeenCalledWith("city-new", "Maple Central");
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith("city-new"));
+  });
+
+  it("waits for an in-flight row rename before continuing", async () => {
+    let resolveRename!: (ok: boolean) => void;
+    const onRename = vi.fn(
+      () => new Promise<boolean>((done) => (resolveRename = done)),
+    );
+    const { onContinue } = renderLibrary(onRename);
+    const input = screen.getByTestId("city-name-city-old");
+
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Continue Maple Junction" }),
+    );
+    expect(onContinue).not.toHaveBeenCalled();
+
+    resolveRename(true);
+    await waitFor(() => expect(onContinue).toHaveBeenCalledWith("city-new"));
+  });
+
+  it("keeps the draft and skips New City when the rename is refused", async () => {
+    const onRename = vi.fn(async () => false);
+    const { onNewCity } = renderLibrary(onRename);
+    const input = screen.getByTestId("city-name-city-old");
+
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+
+    await waitFor(() => expect(input).toHaveValue("Harbour Reef"));
+    expect(onNewCity).not.toHaveBeenCalled();
+  });
+
   it("retains loaded city controls for a non-list operation error", () => {
     const { container } = render(CityLibraryScreen, {
       props: {

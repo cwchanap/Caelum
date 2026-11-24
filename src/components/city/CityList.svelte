@@ -79,8 +79,10 @@
   // blur-committing an open name editor, so the click must commit any
   // pending drafts itself before the load replaces the library. Renames go
   // one at a time through the persistence gate; a refusal keeps the draft
-  // and blocks the load rather than discarding the typed name.
-  async function flushCityNames(): Promise<boolean> {
+  // and blocks the load rather than discarding the typed name. Exported for
+  // sibling actions outside the list (library Continue/New City, dock New
+  // City) whose prevented mousedown suppresses the same blur commit.
+  export async function flushCityNames(): Promise<boolean> {
     for (const city of cities) {
       const draft = cityNameDrafts[city.id];
       if (draft === undefined) continue;
@@ -103,11 +105,14 @@
     event.currentTarget.blur();
   }
 
-  function handleDeleteClick(cityId: string): void {
+  // The armed second click is also a prevented-mousedown press: deleting the
+  // active city swaps the library out from under every open editor, so the
+  // drafts flush first, same as Load.
+  async function handleDeleteClick(cityId: string): Promise<void> {
     if (busy) return;
     if (pendingDeleteId === cityId) {
       pendingDeleteId = null;
-      onDelete(cityId);
+      if (await flushCityNames()) onDelete(cityId);
     } else {
       pendingDeleteId = cityId;
     }
@@ -192,7 +197,7 @@
           data-testid={`city-delete-${city.id}`}
           disabled={busy}
           onmousedown={(event) => event.preventDefault()}
-          onclick={() => handleDeleteClick(city.id)}
+          onclick={() => void handleDeleteClick(city.id)}
         >
           {pendingDeleteId === city.id ? "Delete?" : "Delete"}
         </button>
