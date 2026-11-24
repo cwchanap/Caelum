@@ -65,10 +65,24 @@
     editing = false;
     const trimmed = draft.trim();
     if (trimmed.length === 0 || trimmed === value) return Promise.resolve(true);
-    return Promise.resolve(onCommit(trimmed)).then(
-      (result) => result !== false,
-      () => false,
-    );
+    return Promise.resolve(onCommit(trimmed))
+      .then(
+        (result) => result !== false,
+        () => false,
+      )
+      .then((committed) => {
+        // A refused or failed commit re-opens the draft so the typed name
+        // survives for an explicit retry — unless the entity or canonical
+        // value already moved, where the open-draft effect drops it as stale.
+        if (
+          !committed &&
+          entityId === editingForId &&
+          value === editingForValue
+        ) {
+          editing = true;
+        }
+        return committed;
+      });
   }
 
   function cancel(

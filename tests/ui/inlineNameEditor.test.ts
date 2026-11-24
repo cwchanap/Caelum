@@ -1,6 +1,14 @@
-import { fireEvent, render, screen } from "@testing-library/svelte";
+import { fireEvent, render, screen, waitFor } from "@testing-library/svelte";
 import { describe, expect, it, vi } from "vitest";
 import InlineNameEditor from "../../src/components/city/InlineNameEditor.svelte";
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => {
+    resolve = done;
+  });
+  return { promise, resolve };
+}
 
 function renderEditor(
   overrides: Partial<{
@@ -8,6 +16,7 @@ function renderEditor(
     label: string;
     disabled: boolean;
     testId: string;
+    entityId: string;
   }> = {},
 ) {
   const onCommit = vi.fn();
@@ -210,6 +219,70 @@ describe("InlineNameEditor", () => {
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith("Harbour Express II");
     expect(screen.queryByRole("textbox")).toBeNull();
+  });
+
+  it("re-opens with the draft when a commit fails so the action can retry", async () => {
+    const { onCommit, input } = await openEditor();
+    onCommit.mockResolvedValue(false);
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    await fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith("Harbour Express");
+
+    // The failed commit restores the open editor with the typed draft
+    // instead of silently losing it behind the closed display.
+    const restored = await screen.findByRole("textbox", {
+      name: "Rename Harbour Bus",
+    });
+    expect(restored).toHaveValue("Harbour Express");
+
+    // Retrying the same draft lands it and the editor closes for good.
+    onCommit.mockResolvedValue(true);
+    await fireEvent.keyDown(restored, { key: "Enter" });
+    expect(onCommit).toHaveBeenCalledTimes(2);
+    expect(onCommit).toHaveBeenLastCalledWith("Harbour Express");
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+  });
+
+  it("stays closed when the canonical value moves before a failed commit", async () => {
+    const pending = deferred<boolean>();
+    const { onCommit, rerender, input } = await openEditor();
+    onCommit.mockReturnValue(pending.promise);
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    await fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith("Harbour Express");
+
+    // An external rename (or a load) moves the canonical value under the
+    // in-flight commit; the stale draft must not re-open on top of it.
+    await rerender({ value: "Harbour Express" });
+    pending.resolve(false);
+
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
+    expect(screen.getByTestId("route-name-route-bus-001")).toHaveTextContent(
+      "Harbour Express",
+    );
+  });
+
+  it("stays closed when the entity id moves before a failed commit", async () => {
+    const pending = deferred<boolean>();
+    const { onCommit, rerender } = renderEditor({ entityId: "city-1" });
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Bus" }),
+    );
+    const input = screen.getByTestId(
+      "route-name-route-bus-001",
+    ) as HTMLInputElement;
+    onCommit.mockReturnValue(pending.promise);
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    await fireEvent.blur(input);
+    expect(onCommit).toHaveBeenCalledWith("Harbour Express");
+
+    await rerender({ entityId: "city-2" });
+    pending.resolve(false);
+
+    await waitFor(() => expect(screen.queryByRole("textbox")).toBeNull());
   });
 
   it("ignores IME composing Enter and Escape without submitting, closing, or propagating Escape", async () => {
