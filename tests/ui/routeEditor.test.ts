@@ -224,10 +224,12 @@ describe("RouteEditor", () => {
     );
   });
 
-  it("combines the drafting actions into one toolbar", () => {
+  it("combines the drafting actions into one labelled group", () => {
     render(RouteEditor, { props: editorProps(createDraftView()) });
 
-    const toolbar = screen.getByRole("toolbar", {
+    // A plain group, not a toolbar: arrow keys do not move between buttons,
+    // so the landmark must not promise toolbar keyboard behavior.
+    const toolbar = screen.getByRole("group", {
       name: "Route drafting tools",
     });
     for (const name of [

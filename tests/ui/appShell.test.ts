@@ -401,7 +401,7 @@ describe("App command shell", () => {
     }
   });
 
-  it("lands a rename submitted while busy exactly once after its panel unmounts", async () => {
+  it("never applies a rename submitted while busy, even after the save completes", async () => {
     const store = createMemoryCitySaveStore();
     await seed(store, record(CITY_NEW));
     await seed(store, record(CITY_OLD));
@@ -466,12 +466,13 @@ describe("App command shell", () => {
       const input = screen.getByTestId("active-city-name") as HTMLInputElement;
       await fireEvent.input(input, { target: { value: "Maple Reef" } });
 
-      // A save starts and holds persistence busy.
+      // A save starts and holds persistence busy; the name editor disables.
       const saving = runtime.persistence.save();
       await screen.findByRole("button", { name: "Working…" });
+      expect(input).toBeDisabled();
 
-      // The rename is submitted while busy, then its panel unmounts before
-      // persistence goes idle — the submission must not be lost.
+      // A submission attempted while busy is refused, not queued — and the
+      // panel unmounting must not smuggle it through a deferred path.
       await fireEvent.keyDown(input, { key: "Enter" });
       await fireEvent.click(screen.getByTestId("command-destination-build"));
 
@@ -479,13 +480,12 @@ describe("App command shell", () => {
       await saving;
       await tick();
 
-      // Exactly one rename lands, for the submitted value.
-      expect(renames).toEqual([["city-new", "Maple Reef"]]);
+      expect(renames).toEqual([]);
 
-      // Back on City, the header carries the new name.
+      // Back on City, the header still carries the old name.
       await fireEvent.click(screen.getByTestId("command-destination-city"));
       expect(screen.getByTestId("active-city-name")).toHaveTextContent(
-        "Maple Reef",
+        "Maple Junction",
       );
     } finally {
       rendered.unmount();

@@ -1171,10 +1171,13 @@ describe("createGameHost lifecycle", () => {
     expect(renderer.resize).toHaveBeenCalledWith(400, 300);
 
     // The fallback resize also rebases the camera so the map keeps its
-    // rendered scale and offsets instead of snapping to the new Fit.
+    // rendered scale and offsets instead of snapping to the new Fit. The
+    // preserved pixels land exactly on the new clamp boundary — the map
+    // filled the old board edge-to-edge — so the result is an ordinary
+    // camera, not a retained one.
     expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
     const rebased = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
-    expect(rebased.retained).toBe(true);
+    expect(rebased.retained).toBeFalsy();
     const map = createTestGameState().map;
     const previous = {
       width: map.width * tileSize,
@@ -1430,9 +1433,12 @@ describe("createGameHost passive resize camera", () => {
     vi.stubGlobal("ResizeObserver", FakeResizeObserver);
     return {
       fire: (entries: unknown[]) => roCallback?.(entries),
-      restore: () => vi.unstubAllGlobals(),
     };
   }
+
+  // A failing assertion must not leak the stubbed ResizeObserver into later
+  // tests in the file.
+  afterEach(() => vi.unstubAllGlobals());
 
   it("does not rebase on the first mount or an equal-size batch", () => {
     const fake = withFakeResizeObserver();
@@ -1447,7 +1453,24 @@ describe("createGameHost passive resize camera", () => {
     fake.fire([{ contentRect: { width: box.width, height: box.height } }]);
 
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
-    fake.restore();
+  });
+
+  it("ignores sub-device-pixel size wobble between observer batches", () => {
+    vi.stubGlobal("devicePixelRatio", 2);
+    const fake = withFakeResizeObserver();
+    const { container, callbacks, fireFrame } = createFixture();
+    fireFrame(0);
+    callbacks.onCameraChange.mockClear();
+
+    // Fractional CSS sizes can oscillate by less than one device pixel
+    // (e.g. at 110% browser zoom); that is not a resize the camera should
+    // rebase for.
+    const box = container.getBoundingClientRect();
+    fake.fire([
+      { contentRect: { width: box.width + 0.2, height: box.height } },
+    ]);
+
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
   });
 
   it("rebases each resize against the latest rendered size without double-rebasing", () => {
@@ -1459,7 +1482,10 @@ describe("createGameHost passive resize camera", () => {
     fake.fire([{ contentRect: { width: 400, height: 300 } }]);
     expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
     const first = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
-    expect(first.retained).toBe(true);
+    // The fixture's board fits the map exactly at tile scale, so the
+    // preserved pixels sit exactly on the new clamp boundary — an ordinary
+    // camera, not a retained one.
+    expect(first.retained).toBeFalsy();
 
     // A second batch before the next frame must rebase from the first size
     // (boardCss dimensions update synchronously), not from the stale mount
@@ -1473,7 +1499,6 @@ describe("createGameHost passive resize camera", () => {
     expect(t2.scale).toBeCloseTo(t1.scale, 9);
     expect(t2.offsetX).toBeCloseTo(t1.offsetX, 6);
     expect(t2.offsetY).toBeCloseTo(t1.offsetY, 6);
-    fake.restore();
   });
 
   it("a fresh mount cannot rebase its camera against the previous city's size", () => {
@@ -1497,7 +1522,6 @@ describe("createGameHost passive resize camera", () => {
     fake.fire([{ contentRect: { width: box.width, height: box.height } }]);
 
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
-    fake.restore();
   });
 
   it("preserves the last usable size reference across a zero-fit resize", () => {
@@ -1529,7 +1553,6 @@ describe("createGameHost passive resize camera", () => {
     expect(after.scale).toBeCloseTo(before.scale, 9);
     expect(after.offsetX).toBeCloseTo(before.offsetX, 6);
     expect(after.offsetY).toBeCloseTo(before.offsetY, 6);
-    fake.restore();
   });
 });
 

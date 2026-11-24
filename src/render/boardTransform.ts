@@ -30,8 +30,9 @@ type MapSize = Pick<GameMap, "width" | "height">;
  * the fit-to-safe-viewport scale (1 shows the whole map); `center` is the
  * world point, in tiles, drawn at the middle of the safe viewport. `null`
  * everywhere means "fit". `retained` marks a passive layout result (dock or
- * window resize): the rendered pixels are authoritative, so clamping is
- * bypassed until navigation or an explicit Fit takes over.
+ * window resize) that the ordinary clamp would move: the rendered pixels are
+ * authoritative, so clamping is bypassed until navigation or an explicit Fit
+ * takes over.
  */
 export interface Camera {
   zoom: number;
@@ -189,6 +190,33 @@ export function clampCamera(
   };
 }
 
+/**
+ * Whether the view draws the whole map inside the safe viewport. For a
+ * retained view this is the test that decides whether panning or Zoom Out is
+ * a real no-op — zoom alone cannot prove it, since a passive center can leave
+ * an edge cropped offscreen or behind the HUD even at or below fit.
+ */
+function mapInsideSafe(
+  board: BoardSize,
+  map: MapSize,
+  camera: Camera,
+): boolean {
+  const tilePx = fitScale(board, map) * camera.zoom * tileSize;
+  if (!(tilePx > 0)) {
+    return false;
+  }
+  const safe = safeRect(board);
+  const offsetX = safe.x + safe.width / 2 - camera.center.x * tilePx;
+  const offsetY = safe.y + safe.height / 2 - camera.center.y * tilePx;
+  const eps = 1e-6;
+  return (
+    offsetX >= safe.x - eps &&
+    offsetX + map.width * tilePx <= safe.x + safe.width + eps &&
+    offsetY >= safe.y - eps &&
+    offsetY + map.height * tilePx <= safe.y + safe.height + eps
+  );
+}
+
 function resolvedCamera(
   board: BoardSize,
   map: MapSize,
@@ -218,7 +246,10 @@ function fittedAsNull(camera: Camera): Camera | null {
  * moves under a layout change — even from the default Fit, where clamping
  * would recenter a letterboxed view. No pointer anchor is involved. Returns
  * `null` when the preserved pixels already are the new board's canonical Fit
- * (e.g. an exact dock round trip), so the ordinary fitted view resumes.
+ * (e.g. an exact dock round trip), so the ordinary fitted view resumes. A
+ * preserved view the ordinary clamp would leave untouched comes back as a
+ * plain camera — `retained` is reserved for pixels clamping cannot
+ * reproduce, so later navigation applies the normal limits.
  */
 export function rebaseCameraForResize(
   oldBoard: BoardSize,
@@ -234,22 +265,32 @@ export function rebaseCameraForResize(
   const safe = safeRect(newBoard);
   const tilePx = previous.scale * tileSize;
   const rebased: Camera = {
-    retained: true,
     zoom: previous.scale / fit,
     center: {
       x: (safe.x + safe.width / 2 - previous.offsetX) / tilePx,
       y: (safe.y + safe.height / 2 - previous.offsetY) / tilePx,
     },
   };
+  // The rebased camera reproduces `previous` pixel-for-pixel, so comparing
+  // `previous` to the new canonical Fit is the same comparison without a
+  // round trip through the camera.
   const canonical = getBoardTransform(newBoard, map, null);
-  const actual = getBoardTransform(newBoard, map, rebased);
   const close = (a: number, b: number) =>
     Math.abs(a - b) <= 1e-6 * Math.max(1, Math.abs(b));
-  return close(actual.scale, canonical.scale) &&
-    close(actual.offsetX, canonical.offsetX) &&
-    close(actual.offsetY, canonical.offsetY)
-    ? null
-    : rebased;
+  if (
+    close(previous.scale, canonical.scale) &&
+    close(previous.offsetX, canonical.offsetX) &&
+    close(previous.offsetY, canonical.offsetY)
+  ) {
+    return null;
+  }
+  const clamped = clampCamera(newBoard, map, rebased);
+  const same = (a: number, b: number) => Math.abs(a - b) <= 1e-9;
+  return same(clamped.zoom, rebased.zoom) &&
+    same(clamped.center.x, rebased.center.x) &&
+    same(clamped.center.y, rebased.center.y)
+    ? fittedAsNull(clamped)
+    : { ...rebased, retained: true };
 }
 
 /** Zoom by `factor`, keeping the world point under `anchor` (board CSS px)
@@ -267,9 +308,15 @@ export function zoomCameraAt(
   if (!(before > 0)) {
     return camera;
   }
-  // A retained view showing the whole map cannot shrink usefully: Zoom Out
-  // would only re-center it, so it stays where passive layout put it.
-  if (current.retained === true && current.zoom <= 1 && factor < 1) {
+  // Shrinking a retained view that already draws the whole map inside the
+  // safe viewport only re-centers it, so Zoom Out stays a no-op — but a view
+  // with an edge still cropped keeps zooming out below fit until every edge
+  // is inside.
+  if (
+    current.retained === true &&
+    factor < 1 &&
+    mapInsideSafe(board, map, current)
+  ) {
     return camera;
   }
   const safe = safeRect(board);
@@ -277,8 +324,10 @@ export function zoomCameraAt(
   const middleY = safe.y + safe.height / 2;
   const worldX = current.center.x + (anchor.x - middleX) / before;
   const worldY = current.center.y + (anchor.y - middleY) / before;
-  // A retained sub-fit view must never snap larger toward Fit.
-  const floor = current.retained === true ? Math.min(1, current.zoom) : 1;
+  // An ordinary view never zooms out below fit; a retained view may cross
+  // below 1 while part of the map is still cropped, shrinking until the
+  // whole map is inside the safe viewport (the check above then stops it).
+  const floor = current.retained === true ? 0 : 1;
   const zoom = Math.min(
     Math.max(current.zoom * factor, floor),
     maxZoom(board, map),
@@ -394,20 +443,10 @@ export function panCamera(
   }
   if (current.retained === true) {
     const safe = safeRect(board);
-    const mapWidthPx = map.width * tilePx;
-    const mapHeightPx = map.height * tilePx;
-    const offsetX = safe.x + safe.width / 2 - current.center.x * tilePx;
-    const offsetY = safe.y + safe.height / 2 - current.center.y * tilePx;
-    const eps = 1e-6;
     // Only treat panning as a no-op when the whole map already fits inside
     // the safe viewport; a sub-fit view after enlarging the window can still
     // have an edge cropped offscreen or behind the HUD.
-    if (
-      offsetX >= safe.x - eps &&
-      offsetX + mapWidthPx <= safe.x + safe.width + eps &&
-      offsetY >= safe.y - eps &&
-      offsetY + mapHeightPx <= safe.y + safe.height + eps
-    ) {
+    if (mapInsideSafe(board, map, current)) {
       return camera;
     }
     // Passive placement leads: the first drag must not snap an off-range

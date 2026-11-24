@@ -61,13 +61,22 @@
     </div>
 
     <div class="city-actions">
-      <button type="button" class="btn" disabled={busy} onclick={onSave}>
+      <!-- mousedown.preventDefault keeps the press from blurring the name
+           editor: a blur-commit would flip busy and eat the click itself. -->
+      <button
+        type="button"
+        class="btn"
+        disabled={busy}
+        onmousedown={(event) => event.preventDefault()}
+        onclick={onSave}
+      >
         {busy ? "Working…" : "Save Now"}
       </button>
       <button
         type="button"
         class="btn"
         disabled={busy || dirty}
+        onmousedown={(event) => event.preventDefault()}
         onclick={onNewCity}>New City</button
       >
     </div>
@@ -82,7 +91,13 @@
       <p class="city-action-error" role="alert">{error}</p>
     {/if}
     {#if onRetryList !== undefined}
-      <button type="button" class="btn" disabled={busy} onclick={onRetryList}>
+      <button
+        type="button"
+        class="btn"
+        disabled={busy}
+        onmousedown={(event) => event.preventDefault()}
+        onclick={onRetryList}
+      >
         Retry city list
       </button>
     {/if}

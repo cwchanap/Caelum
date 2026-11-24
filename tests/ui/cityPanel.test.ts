@@ -265,7 +265,7 @@ describe("CityPanel", () => {
     expect(screen.getByRole("button", { name: "New City" })).toBeDisabled();
   });
 
-  it("holds an open header rename during busy and submits it once idle", async () => {
+  it("refuses an open header rename during busy and lands it only on retry", async () => {
     const { onRename, rerender } = renderPanel();
 
     await fireEvent.click(
@@ -276,16 +276,20 @@ describe("CityPanel", () => {
 
     // An autosave starts while the header editor is already open.
     await rerender({ busy: true });
+    expect(input).toBeDisabled();
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    // The rename is held, not silently rejected and dropped by the busy gate.
+    // The rename is refused, not queued: the editor stays open with the
+    // draft and nothing is sent to the runtime while busy.
     expect(onRename).not.toHaveBeenCalled();
     const held = screen.getByTestId("active-city-name") as HTMLInputElement;
     expect(held.tagName).toBe("INPUT");
     expect(held).toHaveValue("Harbour Reef");
 
-    // Persistence goes idle; the held rename lands on the runtime.
+    // Idle replays nothing; the draft lands only on an explicit retry.
     await rerender({ busy: false });
+    expect(onRename).not.toHaveBeenCalled();
+    await fireEvent.keyDown(held, { key: "Enter" });
     expect(onRename).toHaveBeenCalledTimes(1);
     expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
     expect(screen.getByTestId("active-city-name")).toHaveTextContent(
@@ -296,7 +300,7 @@ describe("CityPanel", () => {
     ).toBeNull();
   });
 
-  it("does not land a held rename on another city that becomes active", async () => {
+  it("discards an open rename draft when another city becomes active", async () => {
     const { onRename, rerender } = renderPanel();
 
     await fireEvent.click(
@@ -307,23 +311,19 @@ describe("CityPanel", () => {
     await rerender({ busy: true });
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    // A load or deletion completing under the held editor swaps the active
-    // city; the rename captured for Harbour Loop must not be applied to the
-    // new active city's id.
+    // A load or deletion completing under the open editor swaps the active
+    // city; the draft typed for Harbour Loop is discarded rather than
+    // applied to the replacement city's id.
     await rerender({ busy: false, activeCity: inactiveCity });
 
     expect(onRename).not.toHaveBeenCalled();
-    const still = screen.getByTestId("active-city-name") as HTMLInputElement;
-    expect(still).toBe(input);
-    expect(still).toHaveValue("Harbour Reef");
-
-    // A fresh explicit submission targets the now-current active city.
-    await fireEvent.keyDown(still, { key: "Enter" });
-    expect(onRename).toHaveBeenCalledTimes(1);
-    expect(onRename).toHaveBeenCalledWith("city-2", "Harbour Reef");
+    expect(screen.getByTestId("active-city-name").tagName).toBe("SPAN");
+    expect(screen.getByTestId("active-city-name")).toHaveTextContent(
+      "Dockside",
+    );
   });
 
-  it("does not land a held rename when another city with the same name becomes active", async () => {
+  it("discards an open rename draft when another city with the same name becomes active", async () => {
     const { onRename, rerender } = renderPanel();
 
     await fireEvent.click(
@@ -334,11 +334,14 @@ describe("CityPanel", () => {
     await rerender({ busy: true });
     await fireEvent.keyDown(input, { key: "Enter" });
 
+    // The value string is identical but the entity id moved, so the draft
+    // is still discarded.
     await rerender({
       busy: false,
       activeCity: { ...inactiveCity, name: "Harbour Loop" },
     });
 
     expect(onRename).not.toHaveBeenCalled();
+    expect(screen.getByTestId("active-city-name").tagName).toBe("SPAN");
   });
 });

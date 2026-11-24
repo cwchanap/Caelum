@@ -19,22 +19,23 @@ function renderEditor(
     onCommit,
     ...overrides,
   };
-  const { rerender } = render(InlineNameEditor, { props });
+  const { rerender, unmount } = render(InlineNameEditor, { props });
   return {
     onCommit,
+    unmount,
     rerender: (next: Partial<typeof props>) => rerender({ ...props, ...next }),
   };
 }
 
 async function openEditor() {
-  const { onCommit, rerender } = renderEditor();
+  const { onCommit, rerender, unmount } = renderEditor();
   await fireEvent.click(
     screen.getByRole("button", { name: "Rename Harbour Bus" }),
   );
   const input = screen.getByTestId(
     "route-name-route-bus-001",
   ) as HTMLInputElement;
-  return { onCommit, rerender, input };
+  return { onCommit, rerender, unmount, input };
 }
 
 describe("InlineNameEditor", () => {
@@ -133,15 +134,16 @@ describe("InlineNameEditor", () => {
     expect(onCommit).not.toHaveBeenCalled();
   });
 
-  it("holds an open editor's Enter while busy and submits it once idle", async () => {
+  it("refuses an open editor's Enter while busy and lands it only on retry", async () => {
     const { onCommit, rerender, input } = await openEditor();
 
     await fireEvent.input(input, { target: { value: "Harbour Express" } });
     // An autosave starts while the editor is already open.
     await rerender({ disabled: true });
+    expect(input).toBeDisabled();
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    // The submission is held, not discarded: the editor stays open with the
+    // The submission is refused, not queued: the editor stays open with the
     // draft and nothing is committed while the parent is busy.
     expect(onCommit).not.toHaveBeenCalled();
     const held = screen.getByTestId(
@@ -150,14 +152,17 @@ describe("InlineNameEditor", () => {
     expect(held).toBe(input);
     expect(held).toHaveValue("Harbour Express");
 
-    // The parent goes idle; the held submission lands.
+    // Going idle replays nothing; the draft lands only on another explicit
+    // submission.
     await rerender({ disabled: false });
+    expect(onCommit).not.toHaveBeenCalled();
+    await fireEvent.keyDown(held, { key: "Enter" });
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith("Harbour Express");
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("holds an open editor's blur while busy and submits it once idle", async () => {
+  it("refuses an open editor's blur while busy and lands it only on retry", async () => {
     const { onCommit, rerender, input } = await openEditor();
 
     await fireEvent.input(input, {
@@ -174,20 +179,22 @@ describe("InlineNameEditor", () => {
     expect(held).toHaveValue("  Renamed While Busy  ");
 
     await rerender({ disabled: false });
+    expect(onCommit).not.toHaveBeenCalled();
+    await fireEvent.keyDown(held, { key: "Enter" });
     expect(onCommit).toHaveBeenCalledTimes(1);
     expect(onCommit).toHaveBeenCalledWith("Renamed While Busy");
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("drops a held submission when the user edits again, and lands only a fresh explicit submission", async () => {
+  it("commits the latest draft, not a busy-era keystroke, once idle", async () => {
     const { onCommit, rerender, input } = await openEditor();
 
     await fireEvent.input(input, { target: { value: "Harbour Express" } });
     await rerender({ disabled: true });
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    // The user refocuses the still-open input and revises the name; the
-    // deferred submission must not fire for the abandoned draft.
+    // The user revises the name; no deferred submission fires for the draft
+    // that was refused while busy.
     await fireEvent.input(input, { target: { value: "Harbour Express II" } });
     await rerender({ disabled: false });
 
@@ -231,7 +238,7 @@ describe("InlineNameEditor", () => {
     window.removeEventListener("keydown", onWindowKeydown);
   });
 
-  it("lets Escape cancel a submission that was held while busy without refocusing", async () => {
+  it("lets Escape close the editor while busy, discarding the draft", async () => {
     const { onCommit, rerender, input } = await openEditor();
 
     await fireEvent.input(input, { target: { value: "Harbour Express" } });
@@ -248,29 +255,15 @@ describe("InlineNameEditor", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("drops a held submission when entityId changes even if the replacement shares the same name", async () => {
-    const onCommit = vi.fn();
-    const props = {
-      value: "Harbour City",
-      label: "Rename Harbour City",
-      disabled: false,
-      testId: "active-city-name",
-      entityId: "city-1",
-      onCommit,
-    };
-    const { rerender, unmount } = render(InlineNameEditor, { props });
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Rename Harbour City" }),
-    );
-    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
-    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
-    await rerender({ ...props, disabled: true });
+  it("never applies a busy-era keystroke after the component unmounts", async () => {
+    const { onCommit, rerender, unmount, input } = await openEditor();
+
+    await fireEvent.input(input, { target: { value: "Harbour Express" } });
+    await rerender({ disabled: true });
     await fireEvent.keyDown(input, { key: "Enter" });
 
-    // Swap to another city with the exact same name; neither idle resume nor
-    // unmount cleanup may apply the held rename to the replacement entity.
-    await rerender({ ...props, disabled: false, entityId: "city-2" });
-    expect(onCommit).not.toHaveBeenCalled();
+    // Unmounting while a refused submission would still be pending commits
+    // nothing — there is no deferred path to land.
     unmount();
     expect(onCommit).not.toHaveBeenCalled();
   });

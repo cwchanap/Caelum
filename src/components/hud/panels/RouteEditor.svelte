@@ -140,7 +140,7 @@
 
   <div
     class="route-draft-toolbar"
-    role="toolbar"
+    role="group"
     aria-label="Route drafting tools"
   >
     <button
