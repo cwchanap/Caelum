@@ -262,7 +262,7 @@ describe("CityPanel", () => {
   it("invokes Save Now once and gates the header pencil while busy", async () => {
     const { onSave } = renderPanel();
     await fireEvent.click(screen.getByRole("button", { name: "Save Now" }));
-    expect(onSave).toHaveBeenCalledTimes(1);
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
   });
 
   it("disables the header pencil and Save controls while busy", () => {
@@ -322,12 +322,14 @@ describe("CityPanel", () => {
     // The Load press suppresses the header editor's blur commit
     // (mousedown.preventDefault), so the click itself flushes the header
     // draft before the load swaps the active city under the open editor.
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Load Dockside" }),
-    );
+    const load = screen.getByRole("button", { name: "Load Dockside" });
+    expect(await fireEvent.mouseDown(load)).toBe(false);
+    await fireEvent.click(load);
 
-    expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
-    expect(onLoad).toHaveBeenCalledWith("city-2");
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef"),
+    );
+    await waitFor(() => expect(onLoad).toHaveBeenCalledWith("city-2"));
   });
 
   it("commits an open header rename before leaving for New City", async () => {
@@ -341,8 +343,59 @@ describe("CityPanel", () => {
 
     await fireEvent.click(screen.getByRole("button", { name: "New City" }));
 
-    expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef"),
+    );
     await waitFor(() => expect(onNewCity).toHaveBeenCalled());
+  });
+
+  it("commits an open header rename before saving", async () => {
+    const { onRename, onSave } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+
+    // Save Now shares the prevented-press contract: the canceled mousedown
+    // keeps the press from blur-committing the editor, so the click flushes
+    // the draft itself before saving.
+    const save = screen.getByRole("button", { name: "Save Now" });
+    expect(await fireEvent.mouseDown(save)).toBe(false);
+    await fireEvent.click(save);
+
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef"),
+    );
+    await waitFor(() => expect(onSave).toHaveBeenCalledTimes(1));
+  });
+
+  it("keeps Load, New City, and Save Now put when the header rename fails", async () => {
+    const { onLoad, onNewCity, onSave } = renderPanel({
+      onRename: vi.fn(async () => false),
+    });
+
+    for (const action of ["Save Now", "New City", "Load Dockside"]) {
+      await fireEvent.click(
+        screen.getByRole("button", { name: "Rename Harbour Loop" }),
+      );
+      const input = screen.getByTestId(
+        "active-city-name",
+      ) as HTMLInputElement;
+      await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+      await fireEvent.click(screen.getByRole("button", { name: action }));
+      // The failed flush closed the editor without landing the draft; the
+      // action must stay put rather than run on a false success.
+      for (let i = 0; i < 10; i++) await Promise.resolve();
+      expect(
+        screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
+      ).toBeNull();
+    }
+
+    expect(onSave).not.toHaveBeenCalled();
+    expect(onNewCity).not.toHaveBeenCalled();
+    expect(onLoad).not.toHaveBeenCalled();
   });
 
   it("discards an open rename draft when another city becomes active", async () => {

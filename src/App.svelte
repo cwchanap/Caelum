@@ -230,6 +230,11 @@
 
   async function handleSaveCity(): Promise<void> {
     if (runtime === null) return;
+    // A rename committed just ahead of the click (an Enter commit, or the
+    // panel's flush) still holds the persistence gate; wait for it rather
+    // than being refused as busy — the same contract as handleLoadCity.
+    await renameInFlight;
+    if (runtime === null) return;
     const result = await runtime.persistence.save();
     if (result.ok) await refreshCities();
   }
