@@ -33,6 +33,7 @@ import {
   VEHICLE_HALF_WIDTH,
 } from "../../src/render/webgpu/vehicleInstances";
 import {
+  canvasToWorld,
   getBoardTransform,
   HUD_INSET,
   tileSize,
@@ -1033,19 +1034,52 @@ describe("createGameHost lifecycle", () => {
     host.render();
     fireFrame(16);
 
+    const pinchCamera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const board = canvas.getBoundingClientRect();
+    const pinchTransform = getBoardTransform(
+      board,
+      getState().map,
+      pinchCamera,
+    );
+
     host.adjustCamera({ kind: "zoomIn" });
     host.render();
     fireFrame(32);
 
     const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
-    const releaseTile = { x: 16, y: 9 };
+    const keyboardTransform = getBoardTransform(board, getState().map, camera);
+    expect(keyboardTransform.scale).toBeGreaterThan(pinchTransform.scale);
+
+    const releaseTile = { x: 19, y: 9 };
     const release = centerForCamera(releaseTile, getState().map, camera);
+    expect(
+      canvasToWorld(
+        canvas,
+        release.clientX,
+        release.clientY,
+        getState().map,
+        pinchTransform,
+      )?.tile,
+    ).toEqual({ x: 20, y: 9 });
+    expect(
+      canvasToWorld(
+        canvas,
+        release.clientX,
+        release.clientY,
+        getState().map,
+        keyboardTransform,
+      )?.tile,
+    ).toEqual(releaseTile);
+
     dispatchPointer(canvas, "pointermove", {
       ...release,
       pointerId: 1,
       button: -1,
       buttons: 1,
     });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(releaseTile);
+
+    const moveCallCount = callbacks.onDragCurrent.mock.calls.length;
     dispatchPointer(canvas, "pointerup", {
       ...release,
       pointerId: 1,
@@ -1053,6 +1087,7 @@ describe("createGameHost lifecycle", () => {
       buttons: 0,
     });
 
+    expect(callbacks.onDragCurrent.mock.calls.length).toBe(moveCallCount + 1);
     expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(releaseTile);
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
@@ -2064,6 +2099,74 @@ describe("createGameHost passive resize camera", () => {
       buttons: 0,
     });
     expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(null);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("keeps a camera drag repin pending across a zero-fit frame", () => {
+    const fake = withFakeResizeObserver();
+    const { canvas, container, callbacks, setUi, fireFrame, getState } =
+      createFixture({
+        ui: { activeTool: "remove" },
+      });
+    fireFrame(0);
+    const initialBox = container.getBoundingClientRect();
+    const startTile = { x: 14, y: 9 };
+    const start = center(startTile);
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...start,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "remove", start: startTile, current: startTile },
+    });
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...start,
+        deltaY: -70,
+        ctrlKey: true,
+        buttons: 0,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(callbacks.onCameraChange).toHaveBeenCalled();
+
+    // Positive width and height can still have no safe viewport once the HUD
+    // insets consume the height. That unusable paint must not consume the pin.
+    fake.fire([{ contentRect: { width: initialBox.width, height: 150 } }]);
+    fireFrame(16);
+
+    const restored = { width: initialBox.width, height: 600 };
+    fake.fire([{ contentRect: restored }]);
+    fireFrame(32);
+
+    const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const transform = getBoardTransform(restored, getState().map, camera);
+    expect(transform.scale).toBeGreaterThan(0);
+    const releaseTile = { x: 16, y: 9 };
+    const release = {
+      clientX:
+        transform.offsetX + (releaseTile.x + 0.5) * tileSize * transform.scale,
+      clientY:
+        transform.offsetY + (releaseTile.y + 0.5) * tileSize * transform.scale,
+    };
+    dispatchPointer(canvas, "pointermove", {
+      ...release,
+      pointerId: 1,
+      button: -1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...release,
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(releaseTile);
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
