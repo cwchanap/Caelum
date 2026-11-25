@@ -372,19 +372,19 @@ describe("CityPanel", () => {
   });
 
   it("keeps Load, New City, and Save Now put when the header rename fails", async () => {
-    const { onLoad, onNewCity, onSave } = renderPanel({
-      onRename: vi.fn(async () => false),
-    });
+    const onRename = vi.fn(async () => false);
+    const { onLoad, onNewCity, onSave } = renderPanel({ onRename });
 
     for (const action of ["Save Now", "New City", "Load Dockside"]) {
+      onRename.mockClear();
       await fireEvent.click(
         screen.getByRole("button", { name: "Rename Harbour Loop" }),
       );
-      const input = screen.getByTestId(
-        "active-city-name",
-      ) as HTMLInputElement;
+      const input = screen.getByTestId("active-city-name") as HTMLInputElement;
       await fireEvent.input(input, { target: { value: "Harbour Reef" } });
       await fireEvent.click(screen.getByRole("button", { name: action }));
+      await waitFor(() => expect(onRename).toHaveBeenCalledTimes(1));
+      expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef");
       // The failed flush re-opens the draft for retry instead of dropping
       // it; the gated action still stays put on the false commit result.
       const restored = await screen.findByRole("textbox", {

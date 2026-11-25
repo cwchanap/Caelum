@@ -1458,19 +1458,122 @@ describe("createGameHost passive resize camera", () => {
   it("ignores sub-device-pixel size wobble between observer batches", () => {
     vi.stubGlobal("devicePixelRatio", 2);
     const fake = withFakeResizeObserver();
-    const { container, callbacks, fireFrame } = createFixture();
+    const { container, callbacks, fireFrame, getState, renderer } =
+      createFixture();
     fireFrame(0);
+    const verticesBefore = new Float32Array(
+      renderer.frames.at(-1)!.solids[0]!.vertices,
+    );
     callbacks.onCameraChange.mockClear();
 
     // Fractional CSS sizes can oscillate by less than one device pixel
     // (e.g. at 110% browser zoom); that is not a resize the camera should
-    // rebase for.
+    // rebase for, nor may it alter the drawn transform or advance the
+    // rebase reference.
     const box = container.getBoundingClientRect();
+    const map = getState().map;
+    const before = getBoardTransform(
+      { width: box.width, height: box.height },
+      map,
+      null,
+    );
     fake.fire([
       { contentRect: { width: box.width + 0.2, height: box.height } },
     ]);
+    fireFrame(16);
 
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+    expect(renderer.frames.at(-1)!.solids[0]!.vertices).toEqual(verticesBefore);
+
+    // A later real resize rebases from the original usable size, not from the
+    // ignored sub-pixel wobble.
+    const realSize = { width: box.width + 1, height: box.height };
+    fake.fire([{ contentRect: realSize }]);
+    expect(callbacks.onCameraChange).toHaveBeenCalledTimes(1);
+    const rebased = callbacks.onCameraChange.mock.calls[0]![0] as Camera;
+    const after = getBoardTransform(realSize, map, rebased);
+    expect(after.scale).toBeCloseTo(before.scale, 9);
+    expect(after.offsetX).toBeCloseTo(before.offsetX, 6);
+    expect(after.offsetY).toBeCloseTo(before.offsetY, 6);
+  });
+
+  it("wheel zoom and drag pan between a resize observation and the next draw use the rebased board size", () => {
+    const fake = withFakeResizeObserver();
+    const { canvas, container, callbacks, fireFrame, getState } = createFixture(
+      { ui: { activeTool: "inspect" } },
+    );
+    fireFrame(0);
+
+    const box = container.getBoundingClientRect();
+    const map = getState().map;
+    const resized = {
+      width: Math.round(box.width * 0.65),
+      height: box.height,
+    };
+    // Observer rebases the camera synchronously while the canvas element still
+    // keeps its pre-draw DOM bounding rect until the next rAF.
+    fake.fire([{ contentRect: resized }]);
+    const rebased = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    expect(rebased).not.toBeNull();
+
+    const pointer = { clientX: 84, clientY: HUD_INSET.top + 48 };
+    const beforeWheel = getBoardTransform(resized, map, rebased);
+    const worldUnder = {
+      x: (pointer.clientX - beforeWheel.offsetX) / beforeWheel.scale,
+      y: (pointer.clientY - beforeWheel.offsetY) / beforeWheel.scale,
+    };
+
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        clientX: pointer.clientX,
+        clientY: pointer.clientY,
+        deltaY: -200,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    const wheeled = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const afterWheel = getBoardTransform(resized, map, wheeled);
+    expect(afterWheel.offsetX + worldUnder.x * afterWheel.scale).toBeCloseTo(
+      pointer.clientX,
+      6,
+    );
+    expect(afterWheel.offsetY + worldUnder.y * afterWheel.scale).toBeCloseTo(
+      pointer.clientY,
+      6,
+    );
+
+    // Drag-panning in the same pre-draw interval also uses the rebased board
+    // size rather than the stale canvas DOM rect.
+    dispatchPointer(canvas, "pointerdown", {
+      button: 0,
+      buttons: 1,
+      clientX: pointer.clientX,
+      clientY: pointer.clientY,
+    });
+    dispatchPointer(canvas, "pointermove", {
+      buttons: 1,
+      clientX: pointer.clientX + 20,
+      clientY: pointer.clientY + 12,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      button: 0,
+      buttons: 0,
+      clientX: pointer.clientX + 20,
+      clientY: pointer.clientY + 12,
+    });
+    const panned = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    fireFrame(16);
+
+    const afterDraw = getBoardTransform(resized, map, panned);
+    expect(afterDraw.offsetX + worldUnder.x * afterDraw.scale).toBeCloseTo(
+      pointer.clientX + 20,
+      6,
+    );
+    expect(afterDraw.offsetY + worldUnder.y * afterDraw.scale).toBeCloseTo(
+      pointer.clientY + 12,
+      6,
+    );
   });
 
   it("rebases each resize against the latest rendered size without double-rebasing", () => {

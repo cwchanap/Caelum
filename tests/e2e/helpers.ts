@@ -213,8 +213,9 @@ async function boardView(
   });
 }
 
-/** The board transform the renderer uses for this canvas box (CSS px), with
- *  the current map size and camera. */
+/** The expected CSS board transform computed from this canvas box, the
+ *  current map size, and the snapshot camera (not read back from the
+ *  renderer). */
 async function boardTransform(
   page: Page,
   box: { width: number; height: number },
@@ -253,10 +254,10 @@ export async function mapWorldViewportPoint(
   };
 }
 
-/** The absolute CSS scale the map is drawn with right now (the scale in the
- *  board transform the renderer uses for the current canvas box). A single
- *  map point can stay put under an anchored zoom, so position checks prove
- *  scale stability only alongside this. */
+/** The expected CSS scale computed from the current canvas box and the runtime
+ *  snapshot's map and camera (not read back from the renderer). A single map
+ *  point can stay put under an anchored zoom, so position checks prove scale
+ *  stability only alongside this. */
 export async function mapBoardScale(canvas: Locator): Promise<number> {
   const box = await canvas.boundingBox();
   if (box === null) {
