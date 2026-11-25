@@ -865,35 +865,77 @@ describe("createGameHost lifecycle", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("pinch zoom still works during a held drag", () => {
-    const { canvas, callbacks, setUi } = createFixture({
-      ui: { activeTool: "road" },
-    });
+  it("pinch zoom during a held drag remaps the release after redraw", () => {
+    const { canvas, callbacks, setUi, host, fireFrame, getState } =
+      createFixture({
+        ui: { activeTool: "road" },
+      });
+    fireFrame(0);
+    const startTile = { x: 14, y: 9 };
+    const start = center(startTile);
 
     dispatchPointer(canvas, "pointerdown", {
-      ...center({ x: 1, y: 0 }),
+      ...start,
       pointerId: 1,
       button: 0,
       buttons: 1,
     });
+    expect(callbacks.onDragStart).toHaveBeenCalledWith(startTile);
     setUi({
-      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+      drag: { tool: "road", start: startTile, current: startTile },
     });
 
     // Trackpad pinch arrives as ctrl+wheel with no mouse button bits. It is
     // deliberate camera input, not the foreign zero-button pointer stream.
     canvas.dispatchEvent(
       new WheelEvent("wheel", {
-        ...center({ x: 5, y: 5 }),
-        deltaY: -20,
+        ...start,
+        deltaY: -70,
         ctrlKey: true,
         buttons: 0,
         bubbles: true,
         cancelable: true,
       }),
     );
-
     expect(callbacks.onCameraChange).toHaveBeenCalled();
+
+    // The runtime publishes the camera and repaints. Once the zoomed frame is
+    // what the player sees, the rest of the stroke resolves in that frame.
+    host.render();
+    fireFrame(16);
+    const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const { map } = getState();
+    const transform = getBoardTransform(
+      {
+        width: map.width * tileSize,
+        height: map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom,
+      },
+      map,
+      camera,
+    );
+    const releaseTile = { x: 16, y: 9 };
+    const release = {
+      clientX:
+        transform.offsetX + (releaseTile.x + 0.5) * tileSize * transform.scale,
+      clientY:
+        transform.offsetY + (releaseTile.y + 0.5) * tileSize * transform.scale,
+    };
+
+    dispatchPointer(canvas, "pointermove", {
+      ...release,
+      pointerId: 1,
+      button: -1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...release,
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(releaseTile);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
   it("commits a drag on the chorded primary release instead of arming the next click", () => {
@@ -930,22 +972,27 @@ describe("createGameHost lifecycle", () => {
       buttons: 5,
     });
     expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+    // The release carries newer coordinates than the last move; committing
+    // must read this event's position rather than reuse the tracked endpoint.
     dispatchPointer(canvas, "pointermove", {
-      ...center({ x: 3, y: 3 }),
+      ...center({ x: 4, y: 4 }),
       pointerId: 1,
       button: 0,
       buttons: 4,
     });
 
-    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 3 });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 4, y: 4 });
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(
+      callbacks.onDragCurrent.mock.invocationCallOrder.at(-1),
+    ).toBeLessThan(callbacks.onDragCommit.mock.invocationCallOrder[0]!);
     expect(releaseCapture.mock.calls).toContainEqual([1]);
 
     // The trailing middle-button pointerup is not another release, and the
     // next ordinary press starts a fresh one-tile gesture rather than
     // extending the stale one.
     dispatchPointer(canvas, "pointerup", {
-      ...center({ x: 3, y: 3 }),
+      ...center({ x: 4, y: 4 }),
       pointerId: 1,
       button: 1,
       buttons: 0,
