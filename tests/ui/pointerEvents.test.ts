@@ -22,6 +22,7 @@ import {
 
 class FakePointerEvent extends Event {
   button: number;
+  buttons: number;
   clientX: number;
   clientY: number;
   pointerId: number;
@@ -30,6 +31,7 @@ class FakePointerEvent extends Event {
     type: string,
     init: {
       button?: number;
+      buttons?: number;
       clientX?: number;
       clientY?: number;
       pointerId?: number;
@@ -39,6 +41,7 @@ class FakePointerEvent extends Event {
   ) {
     super(type, { bubbles: init.bubbles ?? true });
     this.button = init.button ?? 0;
+    this.buttons = init.buttons ?? 0;
     this.clientX = init.clientX ?? 0;
     this.clientY = init.clientY ?? 0;
     this.pointerId = init.pointerId ?? 1;
@@ -235,9 +238,9 @@ describe("runtime canvas pointer wiring", () => {
     runtime.setTool("road");
     runtime.setRoadPreset("twoWay");
 
-    dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
-    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
-    dispatch(canvas, "pointerup", center({ x: 4, y: 0 }));
+    dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), buttons: 1 });
+    dispatch(canvas, "pointermove", { ...center({ x: 3, y: 0 }), buttons: 1 });
+    dispatch(canvas, "pointerup", { ...center({ x: 4, y: 0 }), buttons: 0 });
     await flushRuntime();
 
     // The release tile snaps the final hover, so the line covers 1..4 (not 1..3).
@@ -257,13 +260,18 @@ describe("runtime canvas pointer wiring", () => {
     dispatch(canvas, "pointerdown", {
       ...center({ x: 1, y: 0 }),
       pointerId: 7,
+      buttons: 1,
     });
 
     expect(setCapture.mock.calls).toContainEqual([7]);
     // And is released on commit.
     const releaseCapture = Element.prototype
       .releasePointerCapture as unknown as { mock: { calls: number[][] } };
-    dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), pointerId: 7 });
+    dispatch(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 7,
+      buttons: 0,
+    });
     await flushRuntime();
     expect(releaseCapture.mock.calls).toContainEqual([7]);
   });
@@ -285,6 +293,7 @@ describe("runtime canvas pointer wiring", () => {
     dispatch(canvas, "pointerdown", {
       ...center({ x: 1, y: 0 }),
       pointerId: 9,
+      buttons: 1,
     });
 
     expect(setCapture.mock.calls).not.toContainEqual([9]);
@@ -295,8 +304,12 @@ describe("runtime canvas pointer wiring", () => {
     const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
-    dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), button: 2 });
-    dispatch(canvas, "pointerup", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      button: 2,
+      buttons: 2,
+    });
+    dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), buttons: 0 });
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(tileKind(runtime, 1, 0)).toBe("empty");
@@ -307,8 +320,8 @@ describe("runtime canvas pointer wiring", () => {
     const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
-    dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
-    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), buttons: 1 });
+    dispatch(canvas, "pointermove", { ...center({ x: 3, y: 0 }), buttons: 1 });
     // A stray right-button release must not place the road early.
     dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), button: 2 });
 
@@ -316,7 +329,7 @@ describe("runtime canvas pointer wiring", () => {
     expect(tileKind(runtime, 1, 0)).toBe("empty");
 
     // The primary release then commits normally.
-    dispatch(canvas, "pointerup", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointerup", { ...center({ x: 3, y: 0 }), buttons: 0 });
     await flushRuntime();
     expect(tileKind(runtime, 1, 0)).toBe("road");
   });
@@ -330,10 +343,12 @@ describe("runtime canvas pointer wiring", () => {
     dispatch(canvas, "pointerdown", {
       ...center({ x: 1, y: 0 }),
       pointerId: 5,
+      buttons: 1,
     });
     dispatch(canvas, "pointermove", {
       ...center({ x: 3, y: 0 }),
       pointerId: 5,
+      buttons: 1,
     });
     // Chromium can send pointercancel at (0, 0) (no coordinates); committing
     // must keep the last tracked tile (3, 0) rather than stretching to (0, 0).
@@ -360,11 +375,13 @@ describe("runtime canvas pointer wiring", () => {
       ...center({ x: 1, y: 0 }),
       pointerId: 6,
       pointerType: "touch",
+      buttons: 1,
     });
     dispatch(canvas, "pointermove", {
       ...center({ x: 3, y: 0 }),
       pointerId: 6,
       pointerType: "touch",
+      buttons: 1,
     });
     dispatch(canvas, "pointercancel", {
       ...center({ x: 3, y: 0 }),
@@ -381,14 +398,14 @@ describe("runtime canvas pointer wiring", () => {
     const { runtime, canvas } = await mount();
     runtime.setTool("road");
 
-    dispatch(canvas, "pointerdown", center({ x: 1, y: 0 }));
-    dispatch(canvas, "pointermove", center({ x: 3, y: 0 }));
+    dispatch(canvas, "pointerdown", { ...center({ x: 1, y: 0 }), buttons: 1 });
+    dispatch(canvas, "pointermove", { ...center({ x: 3, y: 0 }), buttons: 1 });
 
     expect(runtime.getSnapshot().ui.drag).not.toBeNull();
 
     // Only reachable mid-drag when pointer capture is missing or lost; the
     // previewed stroke still commits at its last tracked tile.
-    dispatch(canvas, "pointerleave", center({ x: 5, y: 0 }));
+    dispatch(canvas, "pointerleave", { ...center({ x: 5, y: 0 }), buttons: 1 });
 
     expect(runtime.getSnapshot().ui.drag).toBeNull();
     expect(runtime.getSnapshot().ui.hoverTile).toBeNull();

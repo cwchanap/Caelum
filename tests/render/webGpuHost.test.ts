@@ -865,6 +865,119 @@ describe("createGameHost lifecycle", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
+  it("pinch zoom still works during a held drag", () => {
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+    });
+
+    // Trackpad pinch arrives as ctrl+wheel with no mouse button bits. It is
+    // deliberate camera input, not the foreign zero-button pointer stream.
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...center({ x: 5, y: 5 }),
+        deltaY: -20,
+        ctrlKey: true,
+        buttons: 0,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+
+    expect(callbacks.onCameraChange).toHaveBeenCalled();
+  });
+
+  it("commits a drag on the chorded primary release instead of arming the next click", () => {
+    const releaseCapture = Element.prototype
+      .releasePointerCapture as unknown as { mock: { calls: number[][] } };
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "remove" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 2, y: 2 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    expect(callbacks.onDragStart).toHaveBeenCalledWith({ x: 2, y: 2 });
+    setUi({
+      drag: { tool: "remove", start: { x: 2, y: 2 }, current: { x: 2, y: 2 } },
+    });
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 3 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 3 });
+
+    // Chorded mouse buttons report their intermediate state changes as
+    // pointermove: middle presses with button 1, then the primary release
+    // reports button 0 while the middle bit remains in `buttons`.
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 3 }),
+      pointerId: 1,
+      button: 1,
+      buttons: 5,
+    });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 3 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 4,
+    });
+
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 3 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+    expect(releaseCapture.mock.calls).toContainEqual([1]);
+
+    // The trailing middle-button pointerup is not another release, and the
+    // next ordinary press starts a fresh one-tile gesture rather than
+    // extending the stale one.
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 3 }),
+      pointerId: 1,
+      button: 1,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 8, y: 8 }),
+      pointerId: 1,
+      buttons: 0,
+    });
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 8, y: 8 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    expect(callbacks.onDragStart).toHaveBeenCalledTimes(2);
+    expect(callbacks.onDragStart).toHaveBeenLastCalledWith({ x: 8, y: 8 });
+    setUi({
+      drag: { tool: "remove", start: { x: 8, y: 8 }, current: { x: 8, y: 8 } },
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 8, y: 8 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 8, y: 8 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(2);
+  });
+
   it("a second pointer down mid-drag cannot restart or steal the gesture", () => {
     // Two-finger contact: the first pointer owns the drag. A foreign
     // pointerdown must not re-open it, capture, steer, or commit — the
