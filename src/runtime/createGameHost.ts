@@ -189,7 +189,9 @@ export function createGameHostWithRenderer(
   // for camera moves that have no pointer event of their own (keys, buttons).
   let retrackPointer: (() => void) | null = null;
   // Mount-owned drag hooks for explicit camera repainting.
-  let syncDragToDrawnFrame: ((transformChanged: boolean) => void) | null = null;
+  let syncDragToDrawnFrame:
+    | ((transformChanged: boolean, transformUsable: boolean) => void)
+    | null = null;
   let requestDragCameraRepaint: (() => void) | null = null;
 
   /** Terminal GPU teardown, invoked by `runtime.dispose()`, `failBackend`, or
@@ -608,7 +610,7 @@ export function createGameHostWithRenderer(
     };
     // An explicitly moved camera re-pins a drag here, before the redraw-aware
     // retrack below, so the release cannot actuate an unpainted camera.
-    syncDragToDrawnFrame?.(transformChanged);
+    syncDragToDrawnFrame?.(transformChanged, board.scale > 0);
     if (transformChanged) {
       // The world the pointer paths resolve against just moved on screen:
       // re-aim a resting pointer's hover/drag at the tile now under it so it
@@ -1477,8 +1479,8 @@ export function createGameHostWithRenderer(
       }
     };
     requestDragCameraRepaint = requestDragRepaint;
-    syncDragToDrawnFrame = (transformChanged) => {
-      if (dragCameraRepaintPin === null) {
+    syncDragToDrawnFrame = (transformChanged, transformUsable) => {
+      if (!transformUsable || dragCameraRepaintPin === null) {
         return;
       }
       const unpaintedPin = dragCameraRepaintPin;
