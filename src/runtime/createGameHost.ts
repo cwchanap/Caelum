@@ -189,7 +189,7 @@ export function createGameHostWithRenderer(
   // for camera moves that have no pointer event of their own (keys, buttons).
   let retrackPointer: (() => void) | null = null;
   // Mount-owned drag hooks for explicit camera repainting.
-  let syncDragToDrawnFrame: (() => void) | null = null;
+  let syncDragToDrawnFrame: ((transformChanged: boolean) => void) | null = null;
   let requestDragCameraRepaint: (() => void) | null = null;
 
   /** Terminal GPU teardown, invoked by `runtime.dispose()`, `failBackend`, or
@@ -594,6 +594,11 @@ export function createGameHostWithRenderer(
     board: BoardTransform,
   ): void => {
     const previousTransform = drawnTargets?.transform;
+    const transformChanged =
+      previousTransform === undefined ||
+      previousTransform.scale !== board.scale ||
+      previousTransform.offsetX !== board.offsetX ||
+      previousTransform.offsetY !== board.offsetY;
     drawnTargets = {
       vehicleIds: built.vehicleIds,
       positions: built.positions,
@@ -603,13 +608,8 @@ export function createGameHostWithRenderer(
     };
     // An explicitly moved camera re-pins a drag here, before the redraw-aware
     // retrack below, so the release cannot actuate an unpainted camera.
-    syncDragToDrawnFrame?.();
-    if (
-      previousTransform === undefined ||
-      previousTransform.scale !== board.scale ||
-      previousTransform.offsetX !== board.offsetX ||
-      previousTransform.offsetY !== board.offsetY
-    ) {
+    syncDragToDrawnFrame?.(transformChanged);
+    if (transformChanged) {
       // The world the pointer paths resolve against just moved on screen:
       // re-aim a resting pointer's hover/drag at the tile now under it so it
       // agrees with a click instead of lingering on the previous mapping.
@@ -1477,12 +1477,17 @@ export function createGameHostWithRenderer(
       }
     };
     requestDragCameraRepaint = requestDragRepaint;
-    syncDragToDrawnFrame = () => {
+    syncDragToDrawnFrame = (transformChanged) => {
       if (dragCameraRepaintPin === null) {
         return;
       }
       const unpaintedPin = dragCameraRepaintPin;
       dragCameraRepaintPin = null;
+      // A no-op action or a passive resize that preserved the drawn pixels is
+      // not navigation and must leave the stroke's original bounds alone.
+      if (!transformChanged) {
+        return;
+      }
       // drawnTargets has just been replaced with this painted frame. Re-pin
       // only the same stroke that asked for the camera remap; a finished stroke
       // or a newly started one must not inherit the earlier one-shot rebase.

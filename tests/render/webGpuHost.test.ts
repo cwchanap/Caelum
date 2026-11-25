@@ -1981,6 +1981,92 @@ describe("createGameHost passive resize camera", () => {
     expect(callbacks.onCameraChange).not.toHaveBeenCalled();
   });
 
+  it("does not re-pin a drag to a passive resize for a no-op camera action", () => {
+    const fake = withFakeResizeObserver();
+    const camera: Camera = { zoom: 3, center: { x: 14, y: 9 } };
+    const { canvas, container, callbacks, setUi, host, fireFrame, getState } =
+      createFixture({
+        ui: { activeTool: "remove" },
+        camera,
+      });
+    fireFrame(0);
+    const map = getState().map;
+    const oldBox = container.getBoundingClientRect();
+    const startTile = { x: 14, y: 9 };
+    const start = centerForCamera(startTile, map, camera);
+    const before = getBoardTransform(oldBox, map, camera);
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...start,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "remove", start: startTile, current: startTile },
+    });
+
+    // Dock close: a passive resize preserves the drawn transform while
+    // exposing more canvas, but the live stroke stays on its original box.
+    const nextWidth = Math.round(oldBox.width * 1.25);
+    Element.prototype.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: nextWidth,
+          height: oldBox.height,
+          left: 0,
+          top: 0,
+          right: nextWidth,
+          bottom: oldBox.height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    fake.fire([{ contentRect: { width: nextWidth, height: oldBox.height } }]);
+    fireFrame(16);
+    const rebased = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const afterResize = getBoardTransform(
+      { width: nextWidth, height: oldBox.height },
+      map,
+      rebased,
+    );
+    expect(afterResize.scale).toBeCloseTo(before.scale, 9);
+    expect(afterResize.offsetX).toBeCloseTo(before.offsetX, 6);
+    expect(afterResize.offsetY).toBeCloseTo(before.offsetY, 6);
+
+    // Zoom In is already at the limit. It must not count as navigation that
+    // widens the still-live stroke's reachable box.
+    host.adjustCamera({ kind: "zoomIn" });
+    host.render();
+    fireFrame(32);
+    const unchanged = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const afterNoop = getBoardTransform(
+      { width: nextWidth, height: oldBox.height },
+      map,
+      unchanged,
+    );
+    expect(afterNoop.scale).toBeCloseTo(before.scale, 9);
+    expect(afterNoop.offsetX).toBeCloseTo(before.offsetX, 6);
+    expect(afterNoop.offsetY).toBeCloseTo(before.offsetY, 6);
+
+    const beyondOldBox = { clientX: oldBox.width + 20, clientY: start.clientY };
+    dispatchPointer(canvas, "pointermove", {
+      ...beyondOldBox,
+      pointerId: 1,
+      button: -1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...beyondOldBox,
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(null);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("preserves the last usable size reference across a zero-fit resize", () => {
     const fake = withFakeResizeObserver();
     const { container, callbacks, fireFrame, getState } = createFixture();
