@@ -865,11 +865,66 @@ describe("createGameHost lifecycle", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
-  it("pinch zoom during a held drag remaps the release after redraw", () => {
-    const { canvas, callbacks, setUi, host, fireFrame, getState } =
+  it("keeps the visible drag geometry when a scene update lands before the zoom redraw", () => {
+    const { canvas, callbacks, setUi, fireFrame, setSceneRevision } =
       createFixture({
-        ui: { activeTool: "road" },
+        ui: { activeTool: "remove" },
       });
+    fireFrame(0);
+    const startTile = { x: 14, y: 9 };
+    const start = center(startTile);
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...start,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    expect(callbacks.onDragStart).toHaveBeenCalledWith(startTile);
+    setUi({
+      drag: { tool: "remove", start: startTile, current: startTile },
+    });
+
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...start,
+        deltaY: -70,
+        ctrlKey: true,
+        buttons: 0,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(callbacks.onCameraChange).toHaveBeenCalled();
+
+    // City growth can advance the live scene before the zoomed camera has
+    // painted. The still-visible pre-zoom frame remains the geometry the
+    // release actuates.
+    setSceneRevision(2);
+    const releaseTile = { x: 16, y: 9 };
+    dispatchPointer(canvas, "pointerup", {
+      ...center(releaseTile),
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(releaseTile);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("pinch zoom during a held drag remaps the release after redraw", () => {
+    const {
+      canvas,
+      callbacks,
+      setUi,
+      host,
+      fireFrame,
+      getState,
+      setSceneRevision,
+    } = createFixture({
+      ui: { activeTool: "road" },
+    });
     fireFrame(0);
     const startTile = { x: 14, y: 9 };
     const start = center(startTile);
@@ -898,6 +953,10 @@ describe("createGameHost lifecycle", () => {
       }),
     );
     expect(callbacks.onCameraChange).toHaveBeenCalled();
+
+    // A structural city update can land in the same interval; the redraw then
+    // carries both the new scene revision and the zoomed camera.
+    setSceneRevision(2);
 
     // The runtime publishes the camera and repaints. Once the zoomed frame is
     // what the player sees, the rest of the stroke resolves in that frame.
