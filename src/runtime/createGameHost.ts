@@ -961,14 +961,19 @@ export function createGameHostWithRenderer(
     // A held press, pan, or drag is driven by a pointer with a button down.
     // Zero-button events cannot advance that held gesture, and in headed
     // automation they can come from the real OS cursor sharing the synthetic
-    // mouse pointerId. Ignore them rather than steering or finishing early;
-    // pointerup remains the deliberate release.
+    // mouse pointerId. Ignore passive zero-button events rather than steering
+    // or finishing early; explicit button releases remain deliberate.
     const foreignDuringGesture = (event: MouseEvent): boolean =>
       event.buttons === 0 && (pan !== null || ctx.getUi().drag !== null);
 
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault();
-      if (event.deltaY === 0 || foreignDuringGesture(event)) {
+      // Pinch can arrive as ctrl+wheel with zero buttons; unlike a foreign
+      // pointer move, it is deliberate camera input even while a drag is held.
+      if (
+        event.deltaY === 0 ||
+        (!event.ctrlKey && foreignDuringGesture(event))
+      ) {
         return;
       }
       const rect = boardRect();
@@ -1134,6 +1139,19 @@ export function createGameHostWithRenderer(
       if (dragPointerId !== null && event.pointerId !== dragPointerId) {
         return;
       }
+      // Chorded mouse buttons report an intermediate primary release as a
+      // pointermove while another button remains held; that is the drag's
+      // release even though pointerup waits for the final button.
+      if (
+        ctx.getUi().drag !== null &&
+        event.pointerType === "mouse" &&
+        event.button === 0 &&
+        event.buttons !== 0 &&
+        (event.buttons & 1) === 0
+      ) {
+        finishDrag(event);
+        return;
+      }
       trackPointer(event.clientX, event.clientY);
     };
 
@@ -1195,6 +1213,19 @@ export function createGameHostWithRenderer(
       }
     };
 
+    const finishDrag = (event: PointerEvent): void => {
+      const point =
+        pointerTarget(event.clientX, event.clientY, dragMapping ?? undefined)
+          ?.tile ?? null;
+      // Snap the gesture to the release tile before committing, so a release on
+      // a different tile than the last move builds to where the user let go.
+      ctx.onDragCurrent(point);
+      ctx.onDragCommit();
+      releasePointer(event.pointerId);
+      dragPointerId = null;
+      dragMapping = null;
+    };
+
     const handlePointerUp = (event: PointerEvent): void => {
       if (pan !== null && event.pointerId === pan.pointerId) {
         // A pan that moved swallows the click that follows this release; a
@@ -1211,16 +1242,7 @@ export function createGameHostWithRenderer(
       if (dragPointerId !== null && event.pointerId !== dragPointerId) {
         return;
       }
-      const point =
-        pointerTarget(event.clientX, event.clientY, dragMapping ?? undefined)
-          ?.tile ?? null;
-      // Snap the gesture to the release tile before committing, so a release on
-      // a different tile than the last move builds to where the user let go.
-      ctx.onDragCurrent(point);
-      ctx.onDragCommit();
-      releasePointer(event.pointerId);
-      dragPointerId = null;
-      dragMapping = null;
+      finishDrag(event);
     };
 
     const handlePointerLeave = (event: PointerEvent): void => {
