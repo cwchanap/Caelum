@@ -3,7 +3,7 @@
 **Spec:** [2026-11-20-hpa-977-finish-docked-panels-design.md](../specs/2026-11-20-hpa-977-finish-docked-panels-design.md)  
 **Linear:** https://linear.app/cwchanap/issue/HPA-977/finish-the-docked-panels-from-the-revamp  
 **Baseline:** main @ d143036ecc08907c6c8ba9a26a1c74aa09bcb8ce, 2026-11-20  
-**Delivery:** **Exactly one HPA-977 PR.** This initial draft commits docs only; commit all code, tests and screenshot evidence to **this PR/branch** before marking ready. Do not open an implementation PR. No new art/SFX.
+**Delivery:** **Exactly one HPA-977 PR.** This initial draft commits docs only; commit all code and tests to **this PR/branch** before marking ready. Keep raw screenshot captures in the ignored `/verification-output/` directory and retain visual acceptance through immutable tested-commit links or CI artifacts rather than committed files. Do not open an implementation PR. No new art/SFX.
 
 ## What is already present
 
@@ -89,7 +89,7 @@ Implement and verify all changes on **this branch/PR**; no future separate code 
 | Inspect | Stop/station queue with bar, vehicle/building content, vacant zone hint, close/reopen, route chip to Lines, no empty-land ghost inspector. |
 | Data / City | Overlay tiles and linked metrics select real overlays; city Rename/Save respects busy/dirty behavior; **active city remains deletable** with two-click confirmation and last-city fallback. |
 | Camera | Dock open/close/switch at Fit and zoomed views, including map-line-triggered Lines, preserve CSS tile scale and absolute map offsets for still-visible points; temporary clipping/letterboxing is allowed; **only intentional Fit** reframes the map. |
-| Visual | Capture Playwright screenshots via MCP at **1440×900** for RouteEditor normal/low-money, Lines, Inspect, zoned popover, Data and City. Compare against the Linear attachments and HTML mockup; retain screenshot evidence and inspect for card overlap, typography, arrow positioning and button readability. At **1280×720**, verify dock content is scrollable and no control is clipped or overlaying the map. |
+| Visual | Capture Playwright screenshots via MCP at **1440×900** for RouteEditor normal/low-money, Lines, Inspect, zoned popover, Data and City. Compare against the Linear attachments and HTML mockup; inspect for card overlap, typography, arrow positioning and button readability, keep raw captures in `/verification-output/`, and retain acceptance evidence through immutable tested-commit links or CI artifacts rather than committed PNGs. At **1280×720**, verify dock content is scrollable and no control is clipped or overlaying the map. |
 
 **Every task uses red/green on fast targeted tests before proceeding** (host/transform Vitest before Playwright); commit each cohesive task separately **within this same PR**, not as separate PRs. Keep the low-money and dock geometry regressions as committed Playwright specs so GitHub CI gates them; **execute the browser E2E acceptance through MCP** and use MCP screenshots against Linear images for visual verification. Then run focused Vitest and `bun run rust:test`, `bun run check`, `bun run format:check`, `bun run lint`, `bun run test:unit`, focused `bun run test:e2e -- --project=chromium` (or equivalent), and required GitHub CI. One browser target suffices; no native acceptance unless platform-specific code is changed. The small Rust preview DTO change **must** have end-to-end proof through the real WASM browser gameplay flow, not only Rust unit tests. No human acceptance step.
 
