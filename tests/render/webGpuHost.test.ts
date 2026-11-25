@@ -801,6 +801,70 @@ describe("createGameHost lifecycle", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
+  it("a held mouse gesture ignores zero-button events that share the mouse pointerId", () => {
+    // Headed browser automation can interleave the real OS cursor with the
+    // synthetic mouse stream. Both are mouse pointerId 1, so pointerId alone
+    // cannot keep that foreign zero-button stream from committing the stroke.
+    const { canvas, callbacks, setUi } = createFixture({
+      ui: { activeTool: "road" },
+    });
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...center({ x: 1, y: 0 }),
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "road", start: { x: 1, y: 0 }, current: { x: 1, y: 0 } },
+    });
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 2, y: 0 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 20, y: 12 }),
+      pointerId: 1,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 2, y: 0 });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...center({ x: 20, y: 12 }),
+        deltaY: -200,
+        buttons: 0,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    expect(callbacks.onCameraChange).not.toHaveBeenCalled();
+
+    dispatchPointer(canvas, "pointerleave", {
+      ...center({ x: 20, y: 12 }),
+      pointerId: 1,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCommit).not.toHaveBeenCalled();
+
+    dispatchPointer(canvas, "pointermove", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...center({ x: 3, y: 0 }),
+      pointerId: 1,
+      button: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith({ x: 3, y: 0 });
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("a second pointer down mid-drag cannot restart or steal the gesture", () => {
     // Two-finger contact: the first pointer owns the drag. A foreign
     // pointerdown must not re-open it, capture, steer, or commit — the

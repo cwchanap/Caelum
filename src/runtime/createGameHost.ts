@@ -958,9 +958,17 @@ export function createGameHostWithRenderer(
       }
     };
 
+    // A held press, pan, or drag is driven by a pointer with a button down.
+    // Zero-button events cannot advance that held gesture, and in headed
+    // automation they can come from the real OS cursor sharing the synthetic
+    // mouse pointerId. Ignore them rather than steering or finishing early;
+    // pointerup remains the deliberate release.
+    const foreignDuringGesture = (event: MouseEvent): boolean =>
+      event.buttons === 0 && (pan !== null || ctx.getUi().drag !== null);
+
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault();
-      if (event.deltaY === 0) {
+      if (event.deltaY === 0 || foreignDuringGesture(event)) {
         return;
       }
       const rect = boardRect();
@@ -1090,12 +1098,10 @@ export function createGameHostWithRenderer(
     };
 
     const handlePointerMove = (event: PointerEvent): void => {
+      if (foreignDuringGesture(event)) {
+        return;
+      }
       if (pan !== null && event.pointerId === pan.pointerId) {
-        if (event.buttons === 0) {
-          endPan(pan.pointerId);
-          trackPointer(event.clientX, event.clientY);
-          return;
-        }
         if (!pan.moved) {
           const travel = Math.hypot(
             event.clientX - pan.startX,
@@ -1125,24 +1131,8 @@ export function createGameHostWithRenderer(
         trackPointer(event.clientX, event.clientY);
         return;
       }
-      if (dragPointerId !== null) {
-        if (event.pointerId !== dragPointerId) {
-          return;
-        }
-        if (event.buttons === 0) {
-          const point =
-            pointerTarget(
-              event.clientX,
-              event.clientY,
-              dragMapping ?? undefined,
-            )?.tile ?? null;
-          ctx.onDragCurrent(point);
-          ctx.onDragCommit();
-          releasePointer(dragPointerId);
-          dragPointerId = null;
-          dragMapping = null;
-          return;
-        }
+      if (dragPointerId !== null && event.pointerId !== dragPointerId) {
+        return;
       }
       trackPointer(event.clientX, event.clientY);
     };
@@ -1234,6 +1224,9 @@ export function createGameHostWithRenderer(
     };
 
     const handlePointerLeave = (event: PointerEvent): void => {
+      if (foreignDuringGesture(event)) {
+        return;
+      }
       lastPointer = null;
       if (pan !== null) {
         // A captured pan keeps tracking past the edge; an uncaptured press
