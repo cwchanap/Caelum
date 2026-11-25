@@ -189,9 +189,7 @@ export function createGameHostWithRenderer(
   // for camera moves that have no pointer event of their own (keys, buttons).
   let retrackPointer: (() => void) | null = null;
   // Mount-owned drag hooks for explicit camera repainting.
-  let syncDragToDrawnFrame:
-    | ((transformChanged: boolean, transformUsable: boolean) => void)
-    | null = null;
+  let syncDragToDrawnFrame: ((transformUsable: boolean) => void) | null = null;
   let requestDragCameraRepaint: (() => void) | null = null;
 
   /** Terminal GPU teardown, invoked by `runtime.dispose()`, `failBackend`, or
@@ -610,7 +608,7 @@ export function createGameHostWithRenderer(
     };
     // An explicitly moved camera re-pins a drag here, before the redraw-aware
     // retrack below, so the release cannot actuate an unpainted camera.
-    syncDragToDrawnFrame?.(transformChanged, board.scale > 0);
+    syncDragToDrawnFrame?.(board.scale > 0);
     if (transformChanged) {
       // The world the pointer paths resolve against just moved on screen:
       // re-aim a resting pointer's hover/drag at the tile now under it so it
@@ -1479,22 +1477,28 @@ export function createGameHostWithRenderer(
       }
     };
     requestDragCameraRepaint = requestDragRepaint;
-    syncDragToDrawnFrame = (transformChanged, transformUsable) => {
+    syncDragToDrawnFrame = (transformUsable) => {
       if (!transformUsable || dragCameraRepaintPin === null) {
         return;
       }
       const unpaintedPin = dragCameraRepaintPin;
       dragCameraRepaintPin = null;
-      // A no-op action or a passive resize that preserved the drawn pixels is
-      // not navigation and must leave the stroke's original bounds alone.
-      if (!transformChanged) {
+      // Compare with the stroke's visible geometry, not the previous recorded
+      // frame: a zero-fit frame in between must not make an unchanged transform
+      // look like navigation.
+      const paintedMapping = pointerMapping();
+      if (
+        paintedMapping.transform.scale === unpaintedPin.transform.scale &&
+        paintedMapping.transform.offsetX === unpaintedPin.transform.offsetX &&
+        paintedMapping.transform.offsetY === unpaintedPin.transform.offsetY
+      ) {
         return;
       }
       // drawnTargets has just been replaced with this painted frame. Re-pin
       // only the same stroke that asked for the camera remap; a finished stroke
       // or a newly started one must not inherit the earlier one-shot rebase.
       if (ctx.getUi().drag !== null && dragMapping === unpaintedPin) {
-        dragMapping = pointerMapping();
+        dragMapping = paintedMapping;
       }
     };
     activeDetach = detach;

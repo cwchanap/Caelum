@@ -2102,6 +2102,81 @@ describe("createGameHost passive resize camera", () => {
     expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
   });
 
+  it("does not re-pin a no-op camera action after a zero-fit recovery", () => {
+    const fake = withFakeResizeObserver();
+    const camera: Camera = { zoom: 3, center: { x: 14, y: 9 } };
+    const { canvas, container, callbacks, setUi, host, fireFrame, getState } =
+      createFixture({
+        ui: { activeTool: "remove" },
+        camera,
+      });
+    fireFrame(0);
+    const map = getState().map;
+    const initialBox = container.getBoundingClientRect();
+    const startTile = { x: 14, y: 9 };
+    const start = centerForCamera(startTile, map, camera);
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...start,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "remove", start: startTile, current: startTile },
+    });
+
+    const widerWidth = Math.round(initialBox.width * 1.25);
+    Element.prototype.getBoundingClientRect = vi.fn(
+      () =>
+        ({
+          width: widerWidth,
+          height: initialBox.height,
+          left: 0,
+          top: 0,
+          right: widerWidth,
+          bottom: initialBox.height,
+          x: 0,
+          y: 0,
+          toJSON: () => ({}),
+        }) as DOMRect,
+    );
+    fake.fire([
+      { contentRect: { width: widerWidth, height: initialBox.height } },
+    ]);
+    fireFrame(16);
+
+    // Zoom In is already at the limit. Collapse and restore the viewport before
+    // its requested repaint so the zero-fit frame cannot become the comparison
+    // baseline that makes the unchanged visible transform look like navigation.
+    host.adjustCamera({ kind: "zoomIn" });
+    fake.fire([{ contentRect: { width: widerWidth, height: 150 } }]);
+    fireFrame(32);
+    fake.fire([
+      { contentRect: { width: widerWidth, height: initialBox.height } },
+    ]);
+    fireFrame(48);
+
+    const beyondOldBox = {
+      clientX: initialBox.width + 20,
+      clientY: start.clientY,
+    };
+    dispatchPointer(canvas, "pointermove", {
+      ...beyondOldBox,
+      pointerId: 1,
+      button: -1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...beyondOldBox,
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(null);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
   it("keeps a camera drag repin pending across a zero-fit frame", () => {
     const fake = withFakeResizeObserver();
     const { canvas, container, callbacks, setUi, fireFrame, getState } =
