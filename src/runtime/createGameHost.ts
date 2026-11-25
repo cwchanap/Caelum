@@ -852,8 +852,9 @@ export function createGameHostWithRenderer(
       moved: boolean;
     } | null = null;
     let dragPointerId: number | null = null;
-    // A drag resolves every event in the geometry it began in: a resize or
+    // A drag starts pinned to the geometry it began in: a passive resize or
     // scene flip mid-stroke must not re-anchor the remaining moves/release.
+    // Explicit wheel zoom clears the pin so the stroke follows the repainted view.
     let dragMapping: ReturnType<typeof pointerMapping> | null = null;
     let suppressClick = false;
     let spaceHeld = false;
@@ -994,6 +995,14 @@ export function createGameHostWithRenderer(
           y: event.clientY - rect.top,
         }),
       );
+      // Wheel zoom is deliberate navigation, unlike a passive resize or scene
+      // flip: once its repaint lands, the rest of a live stroke resolves in
+      // the zoomed frame the player sees. Until then pointerMapping still
+      // reads the previously drawn frame, so an immediate release matches the
+      // pixels on screen.
+      if (ctx.getUi().drag !== null) {
+        dragMapping = null;
+      }
       trackPointer(event.clientX, event.clientY);
     };
 
