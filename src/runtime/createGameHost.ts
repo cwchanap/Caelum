@@ -188,8 +188,9 @@ export function createGameHostWithRenderer(
   // Re-aims the hover at the tile under the last on-board pointer position,
   // for camera moves that have no pointer event of their own (keys, buttons).
   let retrackPointer: (() => void) | null = null;
-  // Mount-owned drag hook run after drawnTargets describes a newly painted frame.
+  // Mount-owned drag hooks for explicit camera repainting.
   let syncDragToDrawnFrame: (() => void) | null = null;
+  let requestDragCameraRepaint: (() => void) | null = null;
 
   /** Terminal GPU teardown, invoked by `runtime.dispose()`, `failBackend`, or
    *  shell-error termination. Canvas unmount during screen switches only
@@ -600,8 +601,8 @@ export function createGameHostWithRenderer(
       revision: built.revision,
       transform: board,
     };
-    // A wheel-zoomed drag re-pins here, before the redraw-aware retrack below,
-    // so the release cannot actuate an unpainted camera.
+    // An explicitly moved camera re-pins a drag here, before the redraw-aware
+    // retrack below, so the release cannot actuate an unpainted camera.
     syncDragToDrawnFrame?.();
     if (
       previousTransform === undefined ||
@@ -801,6 +802,7 @@ export function createGameHostWithRenderer(
     if (next === undefined) {
       return;
     }
+    requestDragCameraRepaint?.();
     ctx.onCameraChange(next);
     retrackPointer?.();
   };
@@ -859,10 +861,10 @@ export function createGameHostWithRenderer(
     let dragPointerId: number | null = null;
     // A drag starts pinned to the geometry it began in: a passive resize or
     // scene flip mid-stroke must not re-anchor the remaining moves/release.
-    // Explicit wheel zoom re-pins it only after the zoomed frame is painted;
-    // until then the still-visible pre-zoom geometry remains authoritative.
+    // Explicit camera input re-pins it only after the new frame is painted;
+    // until then the still-visible prior geometry remains authoritative.
     let dragMapping: ReturnType<typeof pointerMapping> | null = null;
-    let dragZoomRepaintPin: ReturnType<typeof pointerMapping> | null = null;
+    let dragCameraRepaintPin: ReturnType<typeof pointerMapping> | null = null;
     let suppressClick = false;
     let spaceHeld = false;
     let lastPointer: { clientX: number; clientY: number } | null = null;
@@ -974,6 +976,12 @@ export function createGameHostWithRenderer(
     const foreignDuringGesture = (event: MouseEvent): boolean =>
       event.buttons === 0 && (pan !== null || ctx.getUi().drag !== null);
 
+    const requestDragRepaint = (): void => {
+      if (ctx.getUi().drag !== null && dragMapping !== null) {
+        dragCameraRepaintPin = dragMapping;
+      }
+    };
+
     const handleWheel = (event: WheelEvent): void => {
       event.preventDefault();
       // Pinch can arrive as ctrl+wheel with zero buttons; unlike a foreign
@@ -996,6 +1004,7 @@ export function createGameHostWithRenderer(
       const factor = Math.exp(
         -pixels * (event.ctrlKey ? PINCH_ZOOM_PER_PX : WHEEL_ZOOM_PER_PX),
       );
+      requestDragRepaint();
       ctx.onCameraChange(
         zoomCameraAt(board, ctx.getState().map, ctx.getCamera(), factor, {
           x: event.clientX - rect.left,
@@ -1007,9 +1016,6 @@ export function createGameHostWithRenderer(
       // the zoomed frame the player sees. Keep the old pin until that paint;
       // a scene revision can otherwise make an immediate release actuate the
       // unpainted camera instead of the pixels still on screen.
-      if (ctx.getUi().drag !== null && dragMapping !== null) {
-        dragZoomRepaintPin = dragMapping;
-      }
       trackPointer(event.clientX, event.clientY);
     };
 
@@ -1461,6 +1467,7 @@ export function createGameHostWithRenderer(
       activeDetach = null;
       retrackPointer = null;
       syncDragToDrawnFrame = null;
+      requestDragCameraRepaint = null;
       drawnTargets = null;
     }
 
@@ -1469,14 +1476,15 @@ export function createGameHostWithRenderer(
         trackPointer(lastPointer.clientX, lastPointer.clientY);
       }
     };
+    requestDragCameraRepaint = requestDragRepaint;
     syncDragToDrawnFrame = () => {
-      if (dragZoomRepaintPin === null) {
+      if (dragCameraRepaintPin === null) {
         return;
       }
-      const unpaintedPin = dragZoomRepaintPin;
-      dragZoomRepaintPin = null;
+      const unpaintedPin = dragCameraRepaintPin;
+      dragCameraRepaintPin = null;
       // drawnTargets has just been replaced with this painted frame. Re-pin
-      // only the same stroke that asked for the zoom remap; a finished stroke
+      // only the same stroke that asked for the camera remap; a finished stroke
       // or a newly started one must not inherit the earlier one-shot rebase.
       if (ctx.getUi().drag !== null && dragMapping === unpaintedPin) {
         dragMapping = pointerMapping();
