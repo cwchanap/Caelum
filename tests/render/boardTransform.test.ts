@@ -559,6 +559,7 @@ describe("passive dock resize", () => {
     // edge is inside the safe viewport.
     const opened = rebaseCameraForResize(full, docked, map, null)!;
     expect(opened.retained).toBe(true);
+    expect(opened.zoom).toBeGreaterThan(1);
     const parked = getBoardTransform(docked, map, opened);
     expect(parked.offsetX + parked.width).toBeGreaterThan(docked.width);
 
@@ -571,6 +572,11 @@ describe("passive dock resize", () => {
       if (next === camera) break;
       camera = next;
     }
+    // Recovery crossed below zoom 1 and stayed retained rather than snapping
+    // back to canonical Fit (`null`).
+    expect(camera).not.toBeNull();
+    expect(camera?.retained).toBe(true);
+    expect(camera!.zoom).toBeLessThan(1);
     const t = getBoardTransform(docked, map, camera);
     expect(t.offsetX).toBeGreaterThanOrEqual(safe.x - 1e-6);
     expect(t.offsetX + t.width).toBeLessThanOrEqual(safe.x + safe.width + 1e-6);

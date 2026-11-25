@@ -335,6 +335,16 @@ export function createGameHostWithRenderer(
     return routeCache.vertices;
   };
 
+  const sameDevicePixelSize = (
+    aWidth: number,
+    aHeight: number,
+    bWidth: number,
+    bHeight: number,
+    dpr: number,
+  ): boolean =>
+    Math.round(aWidth * dpr) === Math.round(bWidth * dpr) &&
+    Math.round(aHeight * dpr) === Math.round(bHeight * dpr);
+
   const syncSize = (target: HTMLCanvasElement): BoardTransform => {
     let cssWidth: number;
     let cssHeight: number;
@@ -350,6 +360,22 @@ export function createGameHostWithRenderer(
       syncCanvasSize(target);
     }
     const dpr = globalThis.devicePixelRatio ?? 1;
+    if (
+      boardCssWidth > 0 &&
+      boardCssHeight > 0 &&
+      sameDevicePixelSize(
+        cssWidth,
+        cssHeight,
+        boardCssWidth,
+        boardCssHeight,
+        dpr,
+      )
+    ) {
+      // Keep the effective reference and drawn transform fixed across
+      // sub-device-pixel wobbles so gradual jitter cannot accumulate.
+      cssWidth = boardCssWidth;
+      cssHeight = boardCssHeight;
+    }
     const pixelWidth = Math.max(1, Math.round(cssWidth * dpr));
     const pixelHeight = Math.max(1, Math.round(cssHeight * dpr));
     const map = ctx.getState().map;
@@ -389,8 +415,13 @@ export function createGameHostWithRenderer(
     // Fit button on for a resize the eye cannot see.
     const dpr = globalThis.devicePixelRatio ?? 1;
     if (
-      Math.round(nextWidth * dpr) === Math.round(boardCssWidth * dpr) &&
-      Math.round(nextHeight * dpr) === Math.round(boardCssHeight * dpr)
+      sameDevicePixelSize(
+        nextWidth,
+        nextHeight,
+        boardCssWidth,
+        boardCssHeight,
+        dpr,
+      )
     ) {
       return;
     }
@@ -830,6 +861,17 @@ export function createGameHostWithRenderer(
 
     const boardRect = (): DOMRect => nextCanvas.getBoundingClientRect();
 
+    // After a resize observation and before the next drawFrame, the canvas
+    // element keeps its old fixed pixel box while ctx.getCamera() has already
+    // been rebased to (boardCssWidth, boardCssHeight). Use those rebased
+    // dimensions for zoom/pan math so wheel and drag gestures stay anchored.
+    const cameraBoardSize = (
+      rect: DOMRect,
+    ): { width: number; height: number } =>
+      boardCssWidth > 0 && boardCssHeight > 0
+        ? { width: boardCssWidth, height: boardCssHeight }
+        : rect;
+
     /** The one position mapping every pointer path shares: the last drawn
      *  frame's transform and map while the drawn scene revision is current
      *  (a pointer actuates what is on screen), else the live state+camera —
@@ -922,10 +964,11 @@ export function createGameHostWithRenderer(
         return;
       }
       const rect = boardRect();
+      const board = cameraBoardSize(rect);
       // deltaMode: 0 pixels, 1 lines, 2 pages (one board height).
       const pixels =
         event.deltaMode === 2
-          ? event.deltaY * rect.height
+          ? event.deltaY * board.height
           : event.deltaMode === 1
             ? event.deltaY * 16
             : event.deltaY;
@@ -933,7 +976,7 @@ export function createGameHostWithRenderer(
         -pixels * (event.ctrlKey ? PINCH_ZOOM_PER_PX : WHEEL_ZOOM_PER_PX),
       );
       ctx.onCameraChange(
-        zoomCameraAt(rect, ctx.getState().map, ctx.getCamera(), factor, {
+        zoomCameraAt(board, ctx.getState().map, ctx.getCamera(), factor, {
           x: event.clientX - rect.left,
           y: event.clientY - rect.top,
         }),
@@ -1070,7 +1113,13 @@ export function createGameHostWithRenderer(
         pan.lastX = event.clientX;
         pan.lastY = event.clientY;
         ctx.onCameraChange(
-          panCamera(boardRect(), ctx.getState().map, ctx.getCamera(), dx, dy),
+          panCamera(
+            cameraBoardSize(boardRect()),
+            ctx.getState().map,
+            ctx.getCamera(),
+            dx,
+            dy,
+          ),
         );
         // A clamped camera stops the map while the cursor keeps moving.
         trackPointer(event.clientX, event.clientY);
@@ -1242,6 +1291,28 @@ export function createGameHostWithRenderer(
       releasePointer(event.pointerId);
     };
 
+    const applyObservedResize = (
+      nextWidth: number,
+      nextHeight: number,
+    ): void => {
+      const dpr = globalThis.devicePixelRatio ?? 1;
+      const sameAsBoard =
+        boardCssWidth > 0 &&
+        boardCssHeight > 0 &&
+        sameDevicePixelSize(
+          nextWidth,
+          nextHeight,
+          boardCssWidth,
+          boardCssHeight,
+          dpr,
+        );
+      observedCssWidth = sameAsBoard ? boardCssWidth : nextWidth;
+      observedCssHeight = sameAsBoard ? boardCssHeight : nextHeight;
+      hasObservedSize = true;
+      rebaseForResize(observedCssWidth, observedCssHeight);
+      render();
+    };
+
     const handleResize = (): void => {
       // Window resize is a fallback when ResizeObserver is missing; with an
       // observer the size cache updates from contentRect without layout
@@ -1256,9 +1327,8 @@ export function createGameHostWithRenderer(
         if (!(rect.width > 0 && rect.height > 0)) {
           return;
         }
-        observedCssWidth = rect.width;
-        observedCssHeight = rect.height;
-        hasObservedSize = true;
+        applyObservedResize(rect.width, rect.height);
+        return;
       }
       if (!(observedCssWidth > 0 && observedCssHeight > 0)) {
         return;
@@ -1279,11 +1349,7 @@ export function createGameHostWithRenderer(
         ) {
           return;
         }
-        observedCssWidth = entry.contentRect.width;
-        observedCssHeight = entry.contentRect.height;
-        hasObservedSize = true;
-        rebaseForResize(observedCssWidth, observedCssHeight);
-        render();
+        applyObservedResize(entry.contentRect.width, entry.contentRect.height);
       });
       // Observe the board host, not the canvas: `applyCanvasPixelSize`
       // converts the canvas's `100%` CSS size to fixed pixel dimensions on

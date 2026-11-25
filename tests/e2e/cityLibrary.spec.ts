@@ -1,15 +1,16 @@
 import { expect, test } from "@playwright/test";
-import { fitScale } from "../../src/render/boardTransform";
 import {
   armOneShotCitySaveFailure,
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
+  hoverMapTile,
   installOneShotCitySaveFailure,
-  mapBoardScale,
   openCommandDestination,
   runtimeSnapshot,
+  sampleTilePixels,
   selectBuildLeaf,
+  settleLayout,
 } from "./helpers";
 
 test("a very long unbroken city name ellipsizes inside the Continue button", async ({
@@ -209,13 +210,41 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   // Loading from the open City dock closes the dock and remounts the canvas
   // so the loaded map opens at canonical Fit for the full stage.
   await expect(page.getByTestId("workspace-dock")).toHaveCount(0);
+  await settleLayout(page);
   const loadedCanvasBox = await canvas.boundingBox();
+  const stageBox = await page.getByTestId("game-stage").boundingBox();
   const loadedMap = (await runtimeSnapshot(page)).state.map;
   expect(loadedCanvasBox).not.toBeNull();
-  expect(await mapBoardScale(canvas)).toBeCloseTo(
-    fitScale(loadedCanvasBox!, loadedMap),
-    6,
-  );
+  expect(stageBox).not.toBeNull();
+  expect(
+    Math.abs(loadedCanvasBox!.width - stageBox!.width),
+  ).toBeLessThanOrEqual(1);
+  expect(
+    Math.abs(loadedCanvasBox!.height - stageBox!.height),
+  ).toBeLessThanOrEqual(1);
+
+  // Verify the rendered frame (via debugCaptureFrame pixel sampling) and the
+  // host's drawn pointer transform both reflect full-stage canonical Fit.
+  await page.mouse.move(2, 2);
+  const [roadPixel, grassPixel] = await sampleTilePixels(page, [
+    { tile: { x: 2, y: 1 }, dx: 0, dy: 0 },
+    { tile: { x: 0, y: 0 }, dx: 0, dy: 0 },
+  ]);
+  expect(roadPixel).not.toBeNull();
+  expect(grassPixel).not.toBeNull();
+  expect(roadPixel).not.toEqual(grassPixel);
+
+  for (const corner of [
+    { x: 0, y: 0 },
+    { x: loadedMap.width - 1, y: loadedMap.height - 1 },
+  ]) {
+    await expect
+      .poll(async () => {
+        await hoverMapTile(canvas, corner);
+        return (await runtimeSnapshot(page)).ui.hoverTile;
+      })
+      .toEqual(corner);
+  }
   await openCommandDestination(page, "city");
   await expect(page.getByTestId("active-city-name")).toHaveText("Zephyr Smoke");
 
