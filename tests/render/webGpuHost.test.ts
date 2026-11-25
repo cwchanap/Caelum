@@ -1499,9 +1499,8 @@ describe("createGameHost passive resize camera", () => {
 
   it("wheel zoom and drag pan between a resize observation and the next draw use the rebased board size", () => {
     const fake = withFakeResizeObserver();
-    const { canvas, container, callbacks, fireFrame, getState } = createFixture(
-      { ui: { activeTool: "inspect" } },
-    );
+    const { canvas, container, callbacks, fireFrame, getState, renderer } =
+      createFixture({ ui: { activeTool: "inspect" } });
     fireFrame(0);
 
     const box = container.getBoundingClientRect();
@@ -1574,6 +1573,18 @@ describe("createGameHost passive resize camera", () => {
       pointer.clientY + 12,
       6,
     );
+
+    // The submitted frame uses that same transform: the first scene vertex is
+    // the map origin and the second is one tile over in the empty fixture map.
+    const clipX = (worldX: number) =>
+      (2 * (afterDraw.offsetX + worldX * afterDraw.scale)) / resized.width - 1;
+    const clipY = (worldY: number) =>
+      1 - (2 * (afterDraw.offsetY + worldY * afterDraw.scale)) / resized.height;
+    const submittedVertices = renderer.frames.at(-1)!.solids[0]!.vertices;
+    expect(submittedVertices[0]).toBeCloseTo(clipX(0), 6);
+    expect(submittedVertices[1]).toBeCloseTo(clipY(0), 6);
+    expect(submittedVertices[6]).toBeCloseTo(clipX(tileSize), 6);
+    expect(submittedVertices[7]).toBeCloseTo(clipY(0), 6);
   });
 
   it("rebases each resize against the latest rendered size without double-rebasing", () => {
