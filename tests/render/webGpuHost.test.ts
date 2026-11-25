@@ -357,6 +357,25 @@ const center = (tile: {
   clientY: tile.y * tileSize + tileSize / 2 + HUD_INSET.top,
 });
 
+const centerForCamera = (
+  tile: { x: number; y: number },
+  map: GameMap,
+  camera: Camera,
+): { clientX: number; clientY: number } => {
+  const transform = getBoardTransform(
+    {
+      width: map.width * tileSize,
+      height: map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom,
+    },
+    map,
+    camera,
+  );
+  return {
+    clientX: transform.offsetX + (tile.x + 0.5) * tileSize * transform.scale,
+    clientY: transform.offsetY + (tile.y + 0.5) * tileSize * transform.scale,
+  };
+};
+
 function dispatchPointer(
   canvas: HTMLCanvasElement,
   type: string,
@@ -963,23 +982,64 @@ describe("createGameHost lifecycle", () => {
     host.render();
     fireFrame(16);
     const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
-    const { map } = getState();
-    const transform = getBoardTransform(
-      {
-        width: map.width * tileSize,
-        height: map.height * tileSize + HUD_INSET.top + HUD_INSET.bottom,
-      },
-      map,
-      camera,
-    );
     const releaseTile = { x: 16, y: 9 };
-    const release = {
-      clientX:
-        transform.offsetX + (releaseTile.x + 0.5) * tileSize * transform.scale,
-      clientY:
-        transform.offsetY + (releaseTile.y + 0.5) * tileSize * transform.scale,
-    };
+    const release = centerForCamera(releaseTile, getState().map, camera);
 
+    dispatchPointer(canvas, "pointermove", {
+      ...release,
+      pointerId: 1,
+      button: -1,
+      buttons: 1,
+    });
+    dispatchPointer(canvas, "pointerup", {
+      ...release,
+      pointerId: 1,
+      button: 0,
+      buttons: 0,
+    });
+
+    expect(callbacks.onDragCurrent).toHaveBeenLastCalledWith(releaseTile);
+    expect(callbacks.onDragCommit).toHaveBeenCalledTimes(1);
+  });
+
+  it("remaps a drag again after a keyboard zoom paints", () => {
+    const { canvas, callbacks, setUi, host, fireFrame, getState } =
+      createFixture({
+        ui: { activeTool: "remove" },
+      });
+    fireFrame(0);
+    const startTile = { x: 14, y: 9 };
+    const start = center(startTile);
+
+    dispatchPointer(canvas, "pointerdown", {
+      ...start,
+      pointerId: 1,
+      button: 0,
+      buttons: 1,
+    });
+    setUi({
+      drag: { tool: "remove", start: startTile, current: startTile },
+    });
+    canvas.dispatchEvent(
+      new WheelEvent("wheel", {
+        ...start,
+        deltaY: -70,
+        ctrlKey: true,
+        buttons: 0,
+        bubbles: true,
+        cancelable: true,
+      }),
+    );
+    host.render();
+    fireFrame(16);
+
+    host.adjustCamera({ kind: "zoomIn" });
+    host.render();
+    fireFrame(32);
+
+    const camera = callbacks.onCameraChange.mock.lastCall?.[0] as Camera;
+    const releaseTile = { x: 16, y: 9 };
+    const release = centerForCamera(releaseTile, getState().map, camera);
     dispatchPointer(canvas, "pointermove", {
       ...release,
       pointerId: 1,
