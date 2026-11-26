@@ -28,7 +28,7 @@ import {
   SPRITE_ATLAS_WIDTH,
   SPRITE_TEXELS_PER_TILE,
   TRANSIT_SPRITE_LAYERS,
-} from "./spriteAtlas";
+} from "./spriteLayers";
 
 /** Alpha applied to route geometry when a different route is emphasized. */
 export const UNRELATED_ROUTE_OPACITY = 0.42;

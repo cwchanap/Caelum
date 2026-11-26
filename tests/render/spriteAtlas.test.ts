@@ -14,6 +14,7 @@ import {
   loadSpriteImages,
   type SpriteBuildingType,
 } from "../../src/render/webgpu/spriteAtlas";
+import * as spriteLayers from "../../src/render/webgpu/spriteLayers";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import { createFakeDevice } from "../helpers/fakeWebGpu";
 
@@ -125,6 +126,47 @@ function registerShippedDimensions(): void {
 const SPRITE_TEXTURE_USAGE = 0x04 | 0x02 | 0x10;
 
 describe("sprite atlas table", () => {
+  it("shares a single asset-free layer contract with atlas uploads", async () => {
+    registerShippedDimensions();
+
+    expect(BUILDING_SPRITE_LAYERS).toBe(spriteLayers.BUILDING_SPRITE_LAYERS);
+    expect(TRANSIT_SPRITE_LAYERS).toBe(spriteLayers.TRANSIT_SPRITE_LAYERS);
+    expect(SPRITE_LAYER_COUNT).toBe(spriteLayers.SPRITE_LAYER_COUNT);
+    expect(SPRITE_ATLAS_WIDTH).toBe(spriteLayers.SPRITE_ATLAS_WIDTH);
+    expect(SPRITE_ATLAS_HEIGHT).toBe(spriteLayers.SPRITE_ATLAS_HEIGHT);
+    expect(SPRITE_TEXELS_PER_TILE).toBe(spriteLayers.SPRITE_TEXELS_PER_TILE);
+    expect(spriteLayers.TREE_SPRITE_COUNT).toBe(3);
+    expect(spriteLayers.BUILDING_SPRITE_LAYERS).toEqual({
+      busTerminal: 3,
+      smallHouse: 4,
+      largeHouse: 5,
+      supermarket: 6,
+      cinema: 7,
+      factory: 8,
+      warehouse: 9,
+      officeTower: 10,
+      businessPark: 11,
+      clinic: 12,
+      school: 13,
+      parkPlaza: 14,
+    });
+    expect(spriteLayers.TRANSIT_SPRITE_LAYERS).toEqual({
+      busStop: 15,
+      busStopRing: 16,
+      metroStation: 17,
+      metroStationRing: 18,
+      trackStraight: 19,
+      trackCorner: 20,
+    });
+
+    const images = await loadSpriteImages();
+    for (const [type, layer] of Object.entries(
+      spriteLayers.TRANSIT_SPRITE_LAYERS,
+    ) as [keyof typeof TRANSIT_SPRITE_URLS, number][]) {
+      expect(images[layer]!.src).toBe(TRANSIT_SPRITE_URLS[type]);
+    }
+  });
+
   it("maps exactly the twelve sprite-bearing buildings and three tree variants", () => {
     expect(Object.keys(BUILDING_SPRITE_URLS).sort()).toEqual(
       [

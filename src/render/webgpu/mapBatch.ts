@@ -20,7 +20,7 @@ import {
   TRANSIT_SPRITE_LAYERS,
   spriteLayerFor,
   treeSpriteLayer,
-} from "./spriteAtlas";
+} from "./spriteLayers";
 import {
   ROAD_DIRECTION_OFFSET,
   ROUNDABOUT_DIMENSIONS,
