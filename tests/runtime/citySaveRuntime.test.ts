@@ -548,7 +548,11 @@ describe("runtime autosave", () => {
   });
 
   it("saves an eligible dirty city once after 60 seconds", async () => {
-    const { store, updateCity, runtime } = await seededRuntime();
+    const seeded = { ...ACTIVE_CITY, templateId: "smallTown" as const };
+    const store = createMemoryCitySaveStore();
+    await seed(store, record(seeded));
+    const updateCity = vi.spyOn(store, "updateCity");
+    const runtime = await runtimeWithStore(store, { initialCity: seeded });
     await runtime.debugSetBudget(90_000);
     expect(runtime.getSnapshot().persistence.dirty).toBe(true);
 
@@ -567,8 +571,14 @@ describe("runtime autosave", () => {
     });
     await expect(store.readCity(ACTIVE_CITY.id)).resolves.toMatchObject({
       ok: true,
-      value: { savedAt: "2026-08-08T10:00:00.000Z" },
+      value: {
+        savedAt: "2026-08-08T10:00:00.000Z",
+        city: { templateId: "smallTown" },
+      },
     });
+    expect(runtime.getSnapshot().persistence.activeCity?.templateId).toBe(
+      "smallTown",
+    );
     runtime.dispose();
   });
 
