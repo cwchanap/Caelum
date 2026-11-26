@@ -73,12 +73,26 @@
       aria-pressed={paused}
       onclick={onTogglePause}
     >
-      <!-- Painted geometry, not a font glyph: U+23F8/U+25B6 render as
-           empty rectangles on platforms lacking the symbols font. -->
-      <span
-        class={["ctrl-pause-icon", { "ctrl-pause-icon--play": paused }]}
+      <!-- Inline vector geometry, not a font glyph (U+23F8/U+25B6 render
+           as empty rectangles on platforms lacking the symbols font) and
+           not CSS background/clip-path paint (both are blanked under
+           forced colors). currentColor resolves to a forced system
+           foreground, so the shape always contrasts the button fill. -->
+      <svg
+        class="ctrl-pause-icon"
+        viewBox="0 0 14 16"
+        width="14"
+        height="16"
         aria-hidden="true"
-      ></span>
+        focusable="false"
+      >
+        {#if paused}
+          <polygon points="0,0 14,8 0,16" />
+        {:else}
+          <rect width="5" height="16" />
+          <rect x="9" width="5" height="16" />
+        {/if}
+      </svg>
     </button>
 
     <div class="readout readout--clock">

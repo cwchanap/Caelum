@@ -232,6 +232,28 @@ test.describe("New City reference composition", () => {
         ).toBeGreaterThan(16);
       }
 
+      // The same letterbox rule applies to the three illustrated radio-card
+      // thumbnails: a stretched image row previously repainted cream bands.
+      const thumbs = page.locator(".choice-tile--template img");
+      for (let i = 0; i < 3; i += 1) {
+        const thumb = thumbs.nth(i);
+        await expect
+          .poll(async () =>
+            thumb.evaluate((image: HTMLImageElement) => image.complete),
+          )
+          .toBe(true);
+        const stats = paintedPreviewStats(decodePng(await thumb.screenshot()));
+        expect(
+          stats.creamFraction,
+          `template thumbnail ${i} cream letterbox at ` +
+            `${viewport.width}x${viewport.height}`,
+        ).toBeLessThan(0.02);
+        expect(
+          stats.distinctColors,
+          `template thumbnail ${i} painted content`,
+        ).toBeGreaterThan(16);
+      }
+
       await page.screenshot({
         path: testInfo.outputPath(
           `new-city-${viewport.width}x${viewport.height}.png`,

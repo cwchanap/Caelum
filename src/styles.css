@@ -328,30 +328,18 @@ body {
   background: var(--surface-sunk);
 }
 
-/* Pause/resume is painted geometry, not a text glyph: the Unicode ⏸/▶
-   codepoints render as empty rectangles on platforms without a symbols
-   font. Both shapes inherit currentColor so hover/paused recolors stay
-   identical to the old glyph. */
+/* Pause/resume is inline SVG geometry, not a text glyph (the Unicode
+   ⏸/▶ codepoints render as empty rectangles on platforms without a
+   symbols font) and not CSS background/clip-path paint (gradients are
+   stripped and fills forced to match under forced colors). currentColor
+   resolves to a forced system foreground there, keeping contrast against
+   the button fill; it also keeps hover/paused recolors identical. */
 .ctrl-pause-icon {
   display: block;
   flex-shrink: 0;
   width: 14px;
   height: 16px;
-
-  /* Pause: two 5px bars with a 4px gap. */
-  background: linear-gradient(
-    to right,
-    currentColor 0 5px,
-    transparent 5px 9px,
-    currentColor 9px 14px
-  );
-}
-
-/* Resume: a right-pointing play triangle via clip-path. */
-.ctrl-pause-icon--play {
-  width: 13px;
-  background: currentColor;
-  clip-path: polygon(0 0, 100% 50%, 0 100%);
+  fill: currentColor;
 }
 
 .speed-group--paused {
@@ -2438,7 +2426,12 @@ body {
      wrapping the third tile under the pair and doubling the group height. */
   flex: 1 1 0;
   min-width: 0;
-  align-items: stretch;
+
+  /* Top-align, not stretch: when a sibling tile's note wraps, the taller
+     card stretches this image's grid row and a stretched box would break
+     the 512/331 aspect crop and repaint the baked cream letterbox. */
+  align-items: start;
+  align-content: start;
   padding: 8px;
 }
 
