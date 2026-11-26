@@ -1827,7 +1827,10 @@ describe("App command shell", () => {
     expect(cityName).toHaveAttribute("title", "Harbour City");
     expect(screen.getByTestId("topbar-save-status")).toHaveTextContent("Saved");
 
-    expect(screen.getByRole("button", { name: "Pause" })).toBeVisible();
+    const pauseButton = screen.getByRole("button", { name: "Pause" });
+    expect(pauseButton).toBeVisible();
+    expect(pauseButton).toHaveAttribute("aria-label", "Pause");
+    expect(pauseButton).toHaveAttribute("aria-pressed", "false");
     expect(screen.getByText("Time")).toBeVisible();
     expect(screen.getByRole("button", { name: "1x" })).toBeVisible();
     expect(screen.getByRole("button", { name: "2x" })).toBeVisible();

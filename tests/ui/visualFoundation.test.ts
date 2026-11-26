@@ -246,6 +246,39 @@ describe("sunny diorama visual foundation", () => {
     expect(badgeZ).toBeLessThan(zoomZ);
   });
 
+  it("centres the topbar clock cluster on symmetric grid tracks", () => {
+    const topbar = blockFor(".topbar");
+    expect(topbar).toContain("display: grid");
+    expect(topbar).toContain(
+      "grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr)",
+    );
+    expect(blockFor(".topbar-cluster--city")).toContain("justify-self: start");
+    expect(blockFor(".topbar-cluster--stats")).toContain("justify-self: end");
+  });
+
+  it("keeps the pause control a fixed circular icon button", () => {
+    const block = blockFor(".ctrl-pause");
+    expect(block).toMatch(/border-radius:\s*(50%|999px)/);
+    expect(block).toMatch(/width:\s*\d+px/);
+    expect(block).toMatch(/height:\s*\d+px/);
+  });
+
+  it("keeps the selected speed a white pill with readable ink", () => {
+    const block = blockFor(".speed-group button.active");
+    expect(block).toContain("background: var(--surface-raised)");
+    expect(block).toContain("color: var(--ink-strong)");
+  });
+
+  it("retires the shell crosshair pseudo-element", () => {
+    expect(styles).not.toContain(".shell::before");
+  });
+
+  it("ships a favicon resolved from the existing app icon", () => {
+    expect(indexHtml).toContain('rel="icon"');
+    expect(indexHtml).toContain("app-icon.png");
+    expect(indexHtml).not.toContain("vite.svg");
+  });
+
   it("keeps the selected segmented option styled while hovered", () => {
     const hover = styles.match(
       /\.segmented button:hover:not\(:disabled, \.active\)\s*{([^}]*)}/,

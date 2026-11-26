@@ -173,14 +173,16 @@ body {
    TOPBAR — floating HUD strip over the full-bleed map
    ────────────────────────────────────────────────────────────────────────── */
 
+/* Symmetric side tracks keep the clock cluster centred on the full topbar,
+ * not on the space left between the city and stats clusters. */
 .topbar {
   position: absolute;
   top: 6px;
   left: 0;
   right: 0;
   z-index: 32;
-  display: flex;
-  justify-content: space-between;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
   align-items: stretch;
   gap: 10px;
   padding: 0 16px;
@@ -199,18 +201,20 @@ body {
 }
 
 .topbar-cluster--city {
-  flex-shrink: 0;
+  justify-self: start;
   min-width: 0;
+  max-width: 100%;
 }
 
 .topbar-cluster--clock {
-  flex-shrink: 0;
+  justify-self: center;
   animation-delay: 0.05s;
 }
 
 .topbar-cluster--stats {
-  flex-shrink: 1;
+  justify-self: end;
   min-width: 0;
+  max-width: 100%;
   gap: 12px;
   padding: 8px 14px;
   animation-delay: 0.1s;
@@ -309,13 +313,17 @@ body {
 }
 
 .ctrl-pause {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  width: 44px;
+  height: 44px;
+  padding: 0;
+  border-radius: 50%;
   background: var(--surface-sunk);
-  font-size: 11px;
-  letter-spacing: 0.18em;
-  text-transform: uppercase;
-  min-height: 30px;
-  padding: 0 14px;
-  white-space: nowrap;
+  font-size: 14px;
+  line-height: 1;
 }
 
 .speed-group--paused {
@@ -330,10 +338,15 @@ body {
   letter-spacing: 0.06em;
 }
 
+/* The selected speed is a stable white pill with readable ink, including
+ * while the simulation is paused. */
 .speed-group button.active {
+  color: var(--ink-strong);
+  background: var(--surface-raised);
+  border-radius: 999px;
   box-shadow:
-    inset 0 0 0 1px color-mix(in srgb, var(--accent-warm) 55%, white),
-    0 0 12px color-mix(in srgb, var(--accent-warm) 40%, transparent);
+    inset 0 0 0 1px var(--line-strong),
+    0 1px 3px rgba(62, 54, 38, 0.18);
 }
 
 .ctrl-pause:hover {
@@ -492,32 +505,6 @@ body {
   height: 14px;
   border: 1px solid var(--line-strong);
   border-radius: 1px;
-}
-
-/* Frame the canvas with corner crosshairs */
-.shell::before {
-  content: "";
-  position: absolute;
-  top: calc(var(--hud-top) + 16px);
-  left: 16px;
-  right: 16px;
-  bottom: calc(var(--hud-bottom) + 16px);
-  pointer-events: none;
-  background:
-    linear-gradient(var(--accent), var(--accent)) top left / 14px 1px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) top left / 1px 14px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) top right / 14px 1px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) top right / 1px 14px no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom left / 14px 1px
-      no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom left / 1px 14px
-      no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom right / 14px 1px
-      no-repeat,
-    linear-gradient(var(--accent), var(--accent)) bottom right / 1px 14px
-      no-repeat;
-  opacity: 0.4;
-  z-index: 4;
 }
 
 .panel-section {
@@ -1917,9 +1904,7 @@ body {
   }
 
   .ctrl-pause {
-    padding: 0 8px;
-    font-size: 10px;
-    letter-spacing: 0.12em;
+    font-size: 12px;
   }
 
   .topbar .readout-label {
@@ -2294,6 +2279,7 @@ body {
 
 .new-city-screen {
   display: grid;
+
   /* A bounded track makes the card's max-height:100% resolve against a
      definite area so the form column scrolls instead of overflowing. */
   grid-template-rows: minmax(0, 1fr);
@@ -2325,6 +2311,7 @@ body {
 .new-city-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+
   /* Bounded rows let the form column's overflow-y:auto win when the card
      is capped by the small-viewport max-height. */
   grid-auto-rows: minmax(0, 1fr);

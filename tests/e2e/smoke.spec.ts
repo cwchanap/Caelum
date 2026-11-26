@@ -14,6 +14,15 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
 }) => {
   await createDefaultCity(page);
 
+  const faviconHref = await page
+    .locator('link[rel="icon"]')
+    .first()
+    .getAttribute("href");
+  expect(faviconHref).toMatch(/app-icon\.png/);
+  const faviconResponse = await page.request.get(faviconHref ?? "");
+  expect(faviconResponse.ok()).toBe(true);
+  expect((await faviconResponse.body()).length).toBeGreaterThan(0);
+
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
   const timeReadout = topbar.locator(".readout", {
