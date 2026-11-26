@@ -48,9 +48,7 @@ function renderList(busy = false, dirty = false, activeNameReadOnly = false) {
 
 /** Activate a row's pencil-activated name editor and return its input. */
 async function openRowEditor(cityId: string, name: string) {
-  await fireEvent.click(
-    screen.getByRole("button", { name: `Rename ${name}` }),
-  );
+  await fireEvent.click(screen.getByRole("button", { name: `Rename ${name}` }));
   return screen.getByTestId(`city-name-${cityId}`) as HTMLInputElement;
 }
 
@@ -270,7 +268,9 @@ describe("CityList", () => {
   it("requires two Delete clicks", async () => {
     const { onDelete } = renderList();
     const row = screen.getByTestId("city-row-city-old");
-    const del = within(row).getByRole("button", { name: "Delete Harbour City" });
+    const del = within(row).getByRole("button", {
+      name: "Delete Harbour City",
+    });
 
     await fireEvent.click(del);
     expect(del).toHaveTextContent("Delete?");
@@ -483,14 +483,13 @@ describe("CityLibraryScreen", () => {
       name: /^Continue Maple Junction/,
     });
     expect(continueButton).toBeVisible();
-    expect(
-      continueButton.querySelector("time[datetime]"),
-    ).toHaveAttribute("datetime", CITIES[0].savedAt);
+    expect(continueButton.querySelector("time[datetime]")).toHaveAttribute(
+      "datetime",
+      CITIES[0].savedAt,
+    );
     expect(screen.getByText("Your cities")).toBeVisible();
     expect(screen.getByText("Your cities")).toHaveTextContent("2");
-    expect(
-      screen.getByRole("button", { name: /^New City/ }),
-    ).toBeVisible();
+    expect(screen.getByRole("button", { name: /^New City/ })).toBeVisible();
   });
 
   it("commits a pending row rename before continuing", async () => {
@@ -574,9 +573,7 @@ describe("CityLibraryScreen", () => {
     expect(
       screen.getByRole("button", { name: "Rename Maple Junction" }),
     ).toBeVisible();
-    expect(
-      screen.getAllByRole("button", { name: /^Delete / }),
-    ).toHaveLength(2);
+    expect(screen.getAllByRole("button", { name: /^Delete / })).toHaveLength(2);
     expect(screen.getByRole("button", { name: /^New City/ })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Retry city list" }),

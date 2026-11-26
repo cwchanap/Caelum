@@ -251,9 +251,7 @@ test("radio groups default, preview and arrow keys choose on the New City screen
   await expect(caption).toHaveText("Blank Grid · 56×36 · Standard");
 
   // Clicking the visible card selects its hidden native radio.
-  await economyGroup
-    .locator(".choice-tile", { hasText: "Creative" })
-    .click();
+  await economyGroup.locator(".choice-tile", { hasText: "Creative" }).click();
   await expect(
     economyGroup.getByRole("radio", { name: "Creative" }),
   ).toBeChecked();

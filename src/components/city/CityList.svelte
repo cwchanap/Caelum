@@ -51,8 +51,7 @@
     const literalNames = new Set(cities.map((city) => city.name));
     const bases = cities.map((city) =>
       cities.some((other) => other !== city && other.name === city.name)
-        ? `${city.name} saved ` +
-          savedAtFormat.format(new Date(city.savedAt))
+        ? `${city.name} saved ` + savedAtFormat.format(new Date(city.savedAt))
         : city.name,
     );
     const assigned: string[] = [];
