@@ -1,10 +1,6 @@
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
-import {
-  createIndexedDbCitySaveStore,
-  DATABASE_VERSION,
-  DEFAULT_DATABASE_NAME,
-} from "../../../src/persistence/indexedDbCitySaveStore";
+import { createIndexedDbCitySaveStore } from "../../../src/persistence/indexedDbCitySaveStore";
 import { createWasmBackend } from "../../../src/runtime/backend/wasmBackend";
 import { record as citySaveRecord } from "../../fixtures/citySave";
 import {
@@ -70,15 +66,12 @@ describe("IndexedDbCitySaveStore persistence", () => {
     const store = createIndexedDbCitySaveStore({ indexedDB: fakeIndexedDB });
     expect(await expectCitySaveStoreOk(store.listCities())).toEqual([]);
 
-    // The default adapter opened the v9 database at version 9.
-    const opened = await new Promise<IDBDatabase>((resolve, reject) => {
-      const request = fakeIndexedDB.open(DEFAULT_DATABASE_NAME);
-      request.onsuccess = () => resolve(request.result);
-      request.onerror = () => reject(request.error);
+    // The default adapter opened the v9 database at version 9 (literal values,
+    // so a constant regression on either side fails here).
+    expect(await fakeIndexedDB.databases()).toContainEqual({
+      name: "caelum-city-saves-v9",
+      version: 9,
     });
-    expect(opened.name).toBe("caelum-city-saves-v9");
-    expect(opened.version).toBe(DATABASE_VERSION);
-    opened.close();
 
     // The legacy v8 record is still present in its own database.
     const legacyReopened = await new Promise<IDBDatabase>((resolve, reject) => {
