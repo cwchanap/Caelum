@@ -2294,15 +2294,21 @@ body {
 
 .new-city-screen {
   display: grid;
+  /* A bounded track makes the card's max-height:100% resolve against a
+     definite area so the form column scrolls instead of overflowing. */
+  grid-template-rows: minmax(0, 1fr);
   place-items: center;
   width: 100vw;
   height: 100vh;
   padding: 48px;
-  background: var(--bg);
+  background-color: #c3d99a;
+  background-size: cover;
+  background-position: center;
 }
 
 .new-city-card {
   display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
   gap: 14px;
   width: min(60rem, 100%);
   max-height: 100%;
@@ -2319,6 +2325,9 @@ body {
 .new-city-columns {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  /* Bounded rows let the form column's overflow-y:auto win when the card
+     is capped by the small-viewport max-height. */
+  grid-auto-rows: minmax(0, 1fr);
   gap: 24px;
   align-items: start;
   min-height: 0;
@@ -2326,7 +2335,10 @@ body {
 
 .new-city-form {
   display: grid;
+  align-content: start;
   gap: 12px;
+  min-height: 0;
+  overflow-y: auto;
 }
 
 .new-city-card label:not(.choice-tile) {
@@ -2365,9 +2377,10 @@ body {
 .choice-tile {
   position: relative;
   display: grid;
-  grid-template-columns: auto 1fr;
+  grid-template-columns: 1fr;
   align-items: center;
-  gap: 4px 8px;
+  justify-items: center;
+  gap: 2px;
   padding: 8px 12px;
   border: 1px solid var(--line);
   border-radius: 10px;
@@ -2379,16 +2392,22 @@ body {
   border-color: var(--accent);
 }
 
+/* The native radio stays in the DOM covering the whole card so it keeps
+   keyboard/screen-reader semantics and the whole card is its hit area;
+   it is visually hidden with opacity, never display:none. */
 .choice-tile input {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
   min-height: 0;
-  width: 16px;
-  height: 16px;
+  width: 100%;
+  height: 100%;
   margin: 0;
-  accent-color: var(--accent);
+  opacity: 0;
   cursor: pointer;
 }
 
-.choice-tile input:focus-visible {
+.choice-tile:has(input:focus-visible) {
   outline: 3px solid var(--accent);
   outline-offset: 2px;
 }
@@ -2400,9 +2419,7 @@ body {
 }
 
 .choice-tile--template {
-  grid-template-columns: 1fr;
   align-items: stretch;
-  justify-items: center;
   padding: 8px;
 }
 
@@ -2421,8 +2438,8 @@ body {
 }
 
 .choice-detail {
-  grid-column: 2;
   font-size: 12px;
+  font-weight: 400;
   color: var(--ink-mid);
 }
 
@@ -2445,17 +2462,29 @@ body {
 .new-city-preview {
   align-self: stretch;
   display: grid;
-  align-content: center;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 8px;
   min-height: 0;
 }
 
+/* The template WebPs are square with a cream border frame; cover at the
+   frame's aspect crops that letterbox edge instead of letterboxing the
+   preview again or stretching the map. */
 .new-city-preview img {
   width: 100%;
-  max-height: 100%;
-  object-fit: contain;
+  height: 100%;
+  min-height: 0;
+  object-fit: cover;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-sunk);
+}
+
+.new-city-caption {
+  margin: 0;
+  text-align: center;
+  font-size: 13px;
+  color: var(--ink-mid);
 }
 
 .new-city-error {
@@ -2536,6 +2565,45 @@ body {
   padding: 6px 14px;
 }
 
+/* The two primary library actions stack as full-width cards above the
+   shared city list. */
+.city-library-actions--column {
+  flex-direction: column;
+  align-items: stretch;
+  flex-wrap: nowrap;
+}
+
+.city-library-action-icon {
+  flex: none;
+  width: 18px;
+  height: 18px;
+  fill: currentColor;
+}
+
+.city-library-action-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  text-align: start;
+}
+
+.city-library-action-label {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
+.city-library-action-hint {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
 .city-library-continue {
   background: var(--accent);
   border-color: var(--accent);
@@ -2547,10 +2615,12 @@ body {
 
   /* Flexbox drops whitespace-only text between "Continue" and the name
      span, so the visible space must come from the gap. */
-  gap: 6px;
+  gap: 10px;
   align-items: center;
   min-width: 0;
   max-width: 100%;
+  padding: 10px 14px;
+  text-align: start;
 }
 
 .city-library-continue-name {
@@ -2564,6 +2634,39 @@ body {
   border-color: var(--accent-warm);
 }
 
+.city-library-new {
+  display: inline-flex;
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  max-width: 100%;
+  padding: 10px 14px;
+}
+
+.city-library-new .city-library-action-hint {
+  color: var(--ink-mid);
+  opacity: 1;
+}
+
+.city-library-list-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  margin: 0;
+  font-family: var(--font-display);
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--ink);
+}
+
+.city-library-count {
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--ink-mid);
+}
+
 .city-section > .city-actions {
   margin-top: 8px;
 }
@@ -2574,6 +2677,23 @@ body {
   padding: 4px 10px;
 }
 
+/* Pencil-activated row name: the name is plain text until the pencil opens
+   the shared InlineNameEditor input. */
+.city-name-field {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.city-name-field .inline-name-value {
+  overflow: hidden;
+  min-width: 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+}
+
 .city-section .city-name {
   min-width: 0;
   padding: 4px 6px;
@@ -2582,6 +2702,12 @@ body {
   background: var(--surface);
   color: var(--ink);
   font-family: var(--font-body);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+}
+
+.city-section .city-name-field .inline-name-value,
+.city-section .city-name-field .inline-name-input {
   font-size: 11px;
   letter-spacing: 0.02em;
 }
@@ -2699,9 +2825,14 @@ body {
   color: var(--ink-mid);
 }
 
-.city-library-screen .city-name {
+.city-library-screen .city-name-field .inline-name-value {
+  font-size: 14px;
+}
+
+.city-library-screen .city-name-field .inline-name-input {
   min-width: 0;
   padding: 8px 10px;
+  width: 16ch;
   border: 1px solid var(--line);
   border-radius: 8px;
   background: var(--surface-raised);
@@ -2710,7 +2841,7 @@ body {
   font-size: 14px;
 }
 
-.city-library-screen .city-name:focus-visible {
+.city-library-screen .city-name-field .inline-name-input:focus-visible {
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }

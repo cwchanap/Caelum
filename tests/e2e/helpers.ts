@@ -86,7 +86,7 @@ export async function createDefaultCity(
   const newCityScreen = page.getByTestId("new-city-screen");
   const libraryNewCityButton = page
     .getByTestId("city-library-screen")
-    .getByRole("button", { name: "New City", exact: true });
+    .getByRole("button", { name: /^New City/ });
   await expect(newCityScreen.or(libraryNewCityButton)).toBeVisible();
   if (await libraryNewCityButton.isVisible()) {
     await libraryNewCityButton.click();

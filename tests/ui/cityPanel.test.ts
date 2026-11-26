@@ -251,12 +251,12 @@ describe("CityPanel", () => {
     expect(del).toHaveTextContent("Delete?");
     expect(onDelete).not.toHaveBeenCalled();
     await fireEvent.click(del);
-    expect(onDelete).toHaveBeenCalledWith("city-1");
+    await waitFor(() => expect(onDelete).toHaveBeenCalledWith("city-1"));
 
-    // Inactive rows keep their editable name input and Load control.
+    // Inactive rows keep their pencil-activated name editor and Load control.
     const inactiveRow = screen.getByTestId("city-row-city-2");
     expect(
-      within(inactiveRow).getByRole("textbox", { name: "Rename Dockside" }),
+      within(inactiveRow).getByRole("button", { name: "Rename Dockside" }),
     ).toBeVisible();
     expect(
       within(inactiveRow).getByRole("button", { name: "Load Dockside" }),

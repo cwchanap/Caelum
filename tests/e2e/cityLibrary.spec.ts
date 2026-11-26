@@ -53,25 +53,26 @@ test("Continue button keeps visible space between the label and the city name", 
   const continueButton = library.getByRole("button", { name: /Continue/ });
   await expect(continueButton).toBeVisible();
 
-  // The flex container drops the whitespace-only text between "Continue"
-  // and the name span, so the visible separation must come from the gap.
-  const { computedGap, pixelGap } = await continueButton.evaluate((button) => {
-    const label = Array.from(button.childNodes).find(
+  // The whitespace-only text between "Continue" and the nested name span
+  // must still leave a visible separation inside the action label.
+  const pixelGap = await continueButton.evaluate((button) => {
+    const label = button.querySelector(".city-library-action-label")!;
+    const text = Array.from(label.childNodes).find(
       (node) =>
         node.nodeType === Node.TEXT_NODE &&
         (node.textContent?.trim().length ?? 0) > 0,
     ) as Text;
     const name = button.querySelector(".city-library-continue-name")!;
     const labelRange = document.createRange();
-    labelRange.selectNodeContents(label);
+    // Trim the trailing whitespace so the range ends at the last visible
+    // glyph instead of at the space that provides the separation.
+    const end = text.textContent!.search(/\s*$/);
+    labelRange.setStart(text, text.textContent!.search(/\S/));
+    labelRange.setEnd(text, end === -1 ? text.textContent!.length : end);
     const labelRect = labelRange.getBoundingClientRect();
     const nameRect = name.getBoundingClientRect();
-    return {
-      computedGap: parseFloat(getComputedStyle(button).columnGap),
-      pixelGap: nameRect.left - labelRect.right,
-    };
+    return nameRect.left - labelRect.right;
   });
-  expect(computedGap).toBeGreaterThanOrEqual(4);
   expect(pixelGap).toBeGreaterThanOrEqual(2);
 });
 
@@ -138,24 +139,24 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   await expect(library.getByText("Caelum", { exact: true })).toBeVisible();
   await expect(library.locator("img[src*='app-icon']")).toBeVisible();
 
+  // Row names are visible text with a pencil-activated editor; the pencils
+  // carry the unique per-city labels used to pick each row.
   await expect(
-    page.getByRole("textbox", { name: "Rename Browser Smoke A" }),
+    page.getByRole("button", { name: "Rename Browser Smoke A" }),
   ).toBeVisible();
   await expect(
-    page.getByRole("textbox", { name: "Rename Browser Smoke B" }),
+    page.getByRole("button", { name: "Rename Browser Smoke B" }),
   ).toBeVisible();
 
-  // Every row shows a colored initial avatar and its saved timestamp. City
-  // names live only in the rename textbox's accessible name, never as row
-  // text, so rows must be selected by that descendant textbox.
+  // Every row shows a colored initial avatar and its saved timestamp.
   const rowA = page.locator("[data-testid^='city-row-']").filter({
-    has: page.getByRole("textbox", {
+    has: page.getByRole("button", {
       name: "Rename Browser Smoke A",
       exact: true,
     }),
   });
   const rowB = page.locator("[data-testid^='city-row-']").filter({
-    has: page.getByRole("textbox", {
+    has: page.getByRole("button", {
       name: "Rename Browser Smoke B",
       exact: true,
     }),
@@ -174,6 +175,9 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
     (element) => element.style.backgroundColor,
   );
   expect(colorBeforeRename).not.toBe("");
+  await page
+    .getByRole("button", { name: "Rename Browser Smoke A" })
+    .click();
   const renameA = page.getByRole("textbox", { name: "Rename Browser Smoke A" });
   await renameA.fill("Zephyr Smoke");
   await renameA.press("Enter");
@@ -286,7 +290,7 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   // Confirmed two-click Delete removes the other saved city from the list.
   await openCommandDestination(page, "city");
   const rowBPanel = page.locator("[data-testid^='city-row-']").filter({
-    has: page.getByRole("textbox", {
+    has: page.getByRole("button", {
       name: "Rename Browser Smoke B",
       exact: true,
     }),
@@ -504,6 +508,7 @@ test("a Load click commits the typed row rename before loading the city", async 
 
   const library = page.getByTestId("city-library-screen");
   await expect(library).toBeVisible();
+  await page.getByRole("button", { name: "Rename Dockside" }).click();
   const rename = page.getByRole("textbox", { name: "Rename Dockside" });
   await rename.fill("Harbour Reef");
 

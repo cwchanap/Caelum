@@ -516,6 +516,13 @@ describe("App command shell", () => {
     render(App, { props: { runtime } });
 
     const create = await screen.findByRole("button", { name: "Create City" });
+    // The name field is prefilled with an editable valid name, so Create is
+    // immediately available; clearing it disables Create again.
+    expect(screen.getByLabelText("City name")).toHaveValue("Riverside");
+    expect(create).toBeEnabled();
+    await fireEvent.input(screen.getByLabelText("City name"), {
+      target: { value: "" },
+    });
     expect(create).toBeDisabled();
 
     const templateGroup = within(
@@ -524,11 +531,11 @@ describe("App command shell", () => {
     const sizeGroup = within(screen.getByRole("group", { name: "Map size" }));
     const economyGroup = within(screen.getByRole("group", { name: "Economy" }));
 
-    // Defaults: Crossroads, Small, Standard. The visible size/economy detail
-    // notes are part of the radio's accessible name (no aria-hidden), so
-    // screen readers hear the dimensions and preset descriptions too.
+    // Defaults: Crossroads, Small, Standard. The visible template/size/
+    // economy detail notes are part of the radio's accessible name (no
+    // aria-hidden), so screen readers hear the descriptions too.
     expect(
-      templateGroup.getByRole("radio", { name: "Crossroads" }),
+      templateGroup.getByRole("radio", { name: /^Crossroads/ }),
     ).toBeChecked();
     expect(sizeGroup.getByRole("radio", { name: "Small 28×18" })).toBeChecked();
     expect(
@@ -542,7 +549,7 @@ describe("App command shell", () => {
       economyGroup.getByRole("radio", { name: "Creative Build for free" }),
     );
     await fireEvent.click(
-      templateGroup.getByRole("radio", { name: "Small Town" }),
+      templateGroup.getByRole("radio", { name: /^Small Town/ }),
     );
     await fireEvent.click(
       sizeGroup.getByRole("radio", { name: "Large 84×54" }),
@@ -641,7 +648,7 @@ describe("App command shell", () => {
     expect(screen.getByTestId("city-row-city-old")).toBeVisible();
     // Continue names the actual newest saved city.
     expect(
-      screen.getByRole("button", { name: "Continue Maple Junction" }),
+      screen.getByRole("button", { name: /^Continue Maple Junction/ }),
     ).toBeVisible();
     // The library embeds the shared CityList inside its card scope.
     expect(
@@ -657,10 +664,12 @@ describe("App command shell", () => {
 
     render(App, { props: { runtime: harness.runtime } });
     await fireEvent.click(
-      await screen.findByRole("button", { name: "Continue Maple Junction" }),
+      await screen.findByRole("button", { name: /^Continue Maple Junction/ }),
     );
 
-    expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-new");
+    await waitFor(() =>
+      expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-new"),
+    );
   });
 
   it("reuses the shared CityList compactly inside the City panel", async () => {
@@ -747,6 +756,9 @@ describe("App command shell", () => {
 
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     const row = await screen.findByTestId("city-row-city-old");
+    await fireEvent.click(
+      within(row).getByRole("button", { name: "Rename Harbour City" }),
+    );
     const input = within(row).getByTestId("city-name-city-old");
     await fireEvent.input(input, { target: { value: "  Old Harbour  " } });
     await fireEvent.keyDown(input, { key: "Enter" });
@@ -772,6 +784,9 @@ describe("App command shell", () => {
     harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
     render(App, { props: { runtime: harness.runtime } });
 
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Rename Harbour City" }),
+    );
     const input = await screen.findByTestId("city-name-city-old");
     await fireEvent.input(input, { target: { value: "Old Harbour" } });
     await fireEvent.blur(input);
@@ -825,6 +840,9 @@ describe("App command shell", () => {
     render(App, { props: { runtime: harness.runtime } });
 
     await fireEvent.click(screen.getByTestId("command-destination-city"));
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Rename Harbour City" }),
+    );
     const input = await screen.findByTestId("city-name-city-old");
     await fireEvent.input(input, { target: { value: "Harbour East" } });
     await fireEvent.blur(input);
@@ -863,6 +881,9 @@ describe("App command shell", () => {
     harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
     render(App, { props: { runtime: harness.runtime } });
 
+    await fireEvent.click(
+      await screen.findByRole("button", { name: "Rename Harbour City" }),
+    );
     const input = await screen.findByTestId("city-name-city-old");
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
     // A real press would blur-commit on mousedown and the busy flip would
@@ -870,7 +891,7 @@ describe("App command shell", () => {
     // fireEvent.click skips mousedown entirely, so assert it is canceled —
     // otherwise the test still passes with the preventDefault removed.
     const continueButton = screen.getByRole("button", {
-      name: "Continue Maple Junction",
+      name: /^Continue Maple Junction/,
     });
     expect(await fireEvent.mouseDown(continueButton)).toBe(false);
     await fireEvent.click(continueButton);
@@ -1126,7 +1147,9 @@ describe("App command shell", () => {
     expect(
       screen.getByRole("button", { name: "Load Harbour City" }),
     ).toBeDisabled();
-    expect(screen.getByTestId("city-name-city-old")).toBeDisabled();
+    expect(
+      screen.getByRole("button", { name: "Rename Harbour City" }),
+    ).toBeDisabled();
   });
 
   it("keeps the active shell and shows a mapped error after a failed Load", async () => {

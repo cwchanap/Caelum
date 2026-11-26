@@ -1,6 +1,7 @@
 <script lang="ts">
   import type { CitySummary } from "../../persistence/citySaveStore";
   import { SANDBOX_TEMPLATE_LABELS } from "../../domain/catalog/sandboxTemplates";
+  import InlineNameEditor from "./InlineNameEditor.svelte";
 
   interface Props {
     cities: CitySummary[];
@@ -26,7 +27,11 @@
     onDelete,
   }: Props = $props();
   let pendingDeleteId = $state<string | null>(null);
-  let cityNameDrafts = $state<Record<string, string>>({});
+  // One InlineNameEditor ref per mounted editable row, keyed by city id; the
+  // keyed each sets the slot to null when a row unmounts.
+  let nameEditors = $state<
+    Record<string, { commit: () => Promise<boolean> } | null>
+  >({});
 
   const savedAtFormat = new Intl.DateTimeFormat("en-US", {
     dateStyle: "medium",
@@ -44,66 +49,21 @@
     return AVATAR_COLORS[(hash >>> 0) % AVATAR_COLORS.length];
   }
 
-  function cityNameFor(cityId: string, canonical: string): string {
-    return cityNameDrafts[cityId] ?? canonical;
-  }
-
-  function handleCityNameInput(
-    cityId: string,
-    event: Event & { currentTarget: HTMLInputElement },
-  ): void {
-    cityNameDrafts[cityId] = event.currentTarget.value;
-  }
-
-  // A refused or failed rename re-arms the draft (unless a newer edit has
-  // replaced it) so the typed name is never silently discarded.
-  function renameKeepingDraft(cityId: string, name: string): Promise<boolean> {
-    return onRename(cityId, name).then((ok) => {
-      if (!ok && !(cityId in cityNameDrafts)) cityNameDrafts[cityId] = name;
-      return ok;
-    });
-  }
-
-  function commitCityName(city: CitySummary, input: HTMLInputElement): void {
-    if (!(city.id in cityNameDrafts)) return;
-    const trimmed = input.value.trim();
-    delete cityNameDrafts[city.id];
-    if (trimmed.length === 0) {
-      input.value = city.name;
-      return;
-    }
-    input.value = trimmed;
-    if (trimmed !== city.name) void renameKeepingDraft(city.id, trimmed);
-  }
-
   // mousedown.preventDefault on a row's Load keeps the press from
   // blur-committing an open name editor, so the click must commit any
   // pending drafts itself before the load replaces the library. Renames go
-  // one at a time through the persistence gate; a refusal keeps the draft
-  // and blocks the load rather than discarding the typed name. Exported for
-  // sibling actions outside the list (library Continue/New City, dock New
-  // City) whose prevented mousedown suppresses the same blur commit.
+  // one at a time through the persistence gate; a refusal re-opens the
+  // editor with its draft and blocks the load rather than discarding the
+  // typed name. Exported for sibling actions outside the list (library
+  // Continue/New City, dock Save/New City) whose prevented mousedown
+  // suppresses the same blur commit.
   export async function flushCityNames(): Promise<boolean> {
     for (const city of cities) {
-      const draft = cityNameDrafts[city.id];
-      if (draft === undefined) continue;
-      const trimmed = draft.trim();
-      delete cityNameDrafts[city.id];
-      if (trimmed.length === 0 || trimmed === city.name) continue;
-      if (!(await renameKeepingDraft(city.id, trimmed))) return false;
+      const editor = nameEditors[city.id];
+      if (editor == null) continue;
+      if (!(await editor.commit())) return false;
     }
     return true;
-  }
-
-  function cancelCityName(
-    city: CitySummary,
-    event: KeyboardEvent & { currentTarget: HTMLInputElement },
-  ): void {
-    delete cityNameDrafts[city.id];
-    event.currentTarget.value = city.name;
-    event.preventDefault();
-    event.stopPropagation();
-    event.currentTarget.blur();
   }
 
   // The armed second click is also a prevented-mousedown press: deleting the
@@ -136,34 +96,17 @@
             data-testid={`city-name-${city.id}`}>{city.name}</span
           >
         {:else}
-          <input
-            type="text"
-            class="city-name"
-            data-testid={`city-name-${city.id}`}
-            value={cityNameFor(city.id, city.name)}
-            aria-label={`Rename ${city.name}`}
-            disabled={busy}
-            autocomplete="off"
-            oninput={(event) =>
-              handleCityNameInput(
-                city.id,
-                event as Event & { currentTarget: HTMLInputElement },
-              )}
-            onblur={(event) => commitCityName(city, event.currentTarget)}
-            onkeydown={(event) => {
-              if (event.key === "Escape") {
-                cancelCityName(
-                  city,
-                  event as KeyboardEvent & {
-                    currentTarget: HTMLInputElement;
-                  },
-                );
-              } else if (event.key === "Enter") {
-                commitCityName(city, event.currentTarget);
-                event.currentTarget.blur();
-              }
-            }}
-          />
+          <span class="city-name-field">
+            <InlineNameEditor
+              bind:this={nameEditors[city.id]}
+              value={city.name}
+              label={`Rename ${city.name}`}
+              disabled={busy}
+              testId={`city-name-${city.id}`}
+              entityId={city.id}
+              onCommit={(name) => onRename(city.id, name)}
+            />
+          </span>
         {/if}
         <span class="city-template">
           {SANDBOX_TEMPLATE_LABELS[city.templateId]}
