@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type {
   GameState,
+  Heading,
+  MetroLine,
   PathGeometry,
+  Route,
   RouteLegPath,
   TransitPath,
 } from "../../src/domain/types";
@@ -21,8 +24,27 @@ import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createTestGameState } from "../helpers/gameState";
 import { coveredStripFraction } from "../helpers/vertexCoverage";
+import { tileSize } from "../../src/render/boardTransform";
 
 const EPSILON = 1e-4;
+const SHARED_CUE_COLORS = ["#111111", "#222222", "#333333", "#444444"];
+const MIXED_CUE_COLORS = [
+  "#111111",
+  "#222222",
+  "#333333",
+  "#444444",
+  "#555555",
+  "#666666",
+  "#777777",
+];
+const DENSE_HUB_CUE_COLORS = [
+  ...MIXED_CUE_COLORS,
+  "#888888",
+  "#999999",
+  "#aaaaaa",
+  "#bbbbbb",
+  "#cccccc",
+];
 
 function rowsOf(data: Float32Array): number[][] {
   const rows: number[][] = [];
@@ -52,6 +74,10 @@ function expectTint(row: number[], color: string, alpha = 1): void {
   );
 }
 
+function expectMarkerTileExtent(row: number[]): void {
+  expect(row.slice(3, 5)).toEqual([tileSize / 2, tileSize / 2]);
+}
+
 function colorOf(css: string): number[] {
   return Array.from(parseColor(css));
 }
@@ -74,9 +100,149 @@ function hasVertexNear(
   y: number,
   tolerance = 0.01,
 ): boolean {
-  return verticesOfColor(data, css).some(
+  return vertexCountNear(data, css, x, y, tolerance) > 0;
+}
+
+function vertexCountNear(
+  data: Float32Array,
+  css: string,
+  x: number,
+  y: number,
+  tolerance = 0.01,
+): number {
+  return verticesOfColor(data, css).filter(
     ([vx, vy]) => Math.abs(vx - x) < tolerance && Math.abs(vy - y) < tolerance,
+  ).length;
+}
+
+function expectCueCircleInsideTile(
+  data: Float32Array,
+  css: string,
+  centerX: number,
+  centerY: number,
+): void {
+  const rows = rowsOf(data);
+  const start = rows.findIndex(
+    (row) =>
+      sameColor(row, css) &&
+      Math.abs(row[0]! - centerX) < EPSILON &&
+      Math.abs(row[1]! - centerY) < EPSILON,
   );
+  expect(
+    start,
+    `${css} cue center at ${centerX},${centerY}`,
+  ).toBeGreaterThanOrEqual(0);
+  const circleRows = rows.slice(start, start + 24 * 3);
+  expect(circleRows).toHaveLength(24 * 3);
+  expect(
+    circleRows.filter(
+      ([x, y]) =>
+        Math.abs(x - centerX) < EPSILON && Math.abs(y - centerY) < EPSILON,
+    ),
+  ).toHaveLength(24);
+  for (const [x, y] of circleRows) {
+    expect(x, `${css} cue x bound`).toBeGreaterThanOrEqual(32 - EPSILON);
+    expect(x, `${css} cue x bound`).toBeLessThanOrEqual(64 + EPSILON);
+    expect(y, `${css} cue y bound`).toBeGreaterThanOrEqual(32 - EPSILON);
+    expect(y, `${css} cue y bound`).toBeLessThanOrEqual(64 + EPSILON);
+  }
+}
+
+function cueCenterInNode(
+  data: Float32Array,
+  css: string,
+  nodeCenter = 48,
+): { x: number; y: number } {
+  const rgb = colorOf(css).slice(0, 3);
+  const counts = new Map<string, { x: number; y: number; count: number }>();
+  for (const row of rowsOf(data)) {
+    if (
+      !row
+        .slice(2, 5)
+        .every((value, index) => Math.abs(value - rgb[index]) < EPSILON)
+    ) {
+      continue;
+    }
+    const x = row[0]!;
+    const y = row[1]!;
+    if (
+      Math.abs(x - nodeCenter) >= tileSize / 2 ||
+      Math.abs(y - nodeCenter) >= tileSize / 2
+    ) {
+      continue;
+    }
+    const key = `${x.toFixed(6)},${y.toFixed(6)}`;
+    const entry = counts.get(key) ?? { x, y, count: 0 };
+    entry.count += 1;
+    counts.set(key, entry);
+  }
+  const centers = [...counts.values()].filter((entry) => entry.count === 24);
+  expect(
+    centers,
+    `${css} repeated cue centers near ${nodeCenter}`,
+  ).toHaveLength(1);
+  return centers[0]!;
+}
+
+function expectCueVisiblyOutsideRim(
+  center: { x: number; y: number },
+  mode: "bus" | "metro",
+  nodeCenter = 48,
+): void {
+  const dx = center.x - nodeCenter;
+  const dy = center.y - nodeCenter;
+  const distance = Math.hypot(dx, dy);
+  const maxComponent = Math.max(Math.abs(dx), Math.abs(dy)) / distance;
+  const rimAxis = (72 * tileSize) / 192;
+  const rimDiagonal = (88 * tileSize) / 192;
+  const bound =
+    mode === "metro" ? Math.min(rimDiagonal, rimAxis / maxComponent) : rimAxis;
+  // The center itself is outside the opaque silhouette, and at least two
+  // world px of radial cue cap remains beyond it after the sprite overpaints.
+  expect(distance, `${mode} cue center outside rim`).toBeGreaterThan(bound);
+  expect(
+    distance + 3 - bound,
+    `${mode} visible cue cap`,
+  ).toBeGreaterThanOrEqual(2);
+}
+
+function expectMinimumPairwiseDistance(
+  centers: Array<{ x: number; y: number }>,
+  minimum: number,
+): void {
+  for (let left = 0; left < centers.length; left += 1) {
+    for (let right = left + 1; right < centers.length; right += 1) {
+      const distance = Math.hypot(
+        centers[left]!.x - centers[right]!.x,
+        centers[left]!.y - centers[right]!.y,
+      );
+      expect(
+        distance,
+        `cue spacing ${left}/${right}: ${JSON.stringify(centers)}`,
+      ).toBeGreaterThanOrEqual(minimum);
+    }
+  }
+}
+
+function expectSharedCueLayout(
+  data: Float32Array,
+  mode: "bus" | "metro",
+  count: number,
+  displacedIndices: number[] = Array.from(
+    { length: count },
+    (_, index) => index,
+  ),
+): Array<{ x: number; y: number }> {
+  const centers: Array<{ x: number; y: number }> = [];
+  for (const index of displacedIndices) {
+    const color = SHARED_CUE_COLORS[index]!;
+    const center = cueCenterInNode(data, color);
+    expectCueCircleInsideTile(data, color, center.x, center.y);
+    expectCueVisiblyOutsideRim(center, mode);
+    centers.push(center);
+  }
+  expectMinimumPairwiseDistance(centers, 6);
+  return centers;
 }
 
 function alphasOfColor(data: Float32Array, css: string): number[] {
@@ -164,6 +330,278 @@ function stateWithLegs(
           serviceMetrics: null,
         },
       ],
+    },
+  };
+}
+
+function straightTrackPath(): TransitPath {
+  return {
+    kind: "track",
+    totalTravelSeconds: 1,
+    steps: [
+      {
+        position: { x: 1, y: 1 },
+        heading: "east",
+        travelSeconds: 1,
+        geometry: { kind: "line", from: { x: 1, y: 1 }, to: { x: 2, y: 1 } },
+      },
+    ],
+  };
+}
+
+function sharedBusCorridorState(count: number): GameState {
+  const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+  const route = { ...base.transit.routes[0] };
+  return {
+    ...base,
+    transit: {
+      ...base.transit,
+      // Deliberately reverse source order: corridor ordering is the sorted
+      // route-id order, not array order.
+      routes: Array.from({ length: count }, (_, index) => ({
+        ...route,
+        id: `route-000${index + 1}`,
+        color: SHARED_CUE_COLORS[index]!,
+      })).reverse(),
+    },
+  };
+}
+
+function sharedMetroCorridorState(count: number): GameState {
+  const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+  const line = {
+    id: "metro-0001",
+    name: "Metro",
+    color: SHARED_CUE_COLORS[0]!,
+    stationIds: ["a", "b"],
+    vehicleIds: [],
+    active: true,
+    pattern: "loop" as const,
+    revision: 1,
+    legs: [routeLeg("a", "b", "connected", straightTrackPath())],
+    pathBroken: false,
+    targetHeadwaySeconds: null,
+    serviceMetrics: null,
+  };
+  return {
+    ...base,
+    transit: {
+      ...base.transit,
+      stops: [],
+      stations: base.transit.stops.map(({ id, position }) => ({
+        id,
+        position,
+        status: "present" as const,
+        platforms: [],
+      })),
+      routes: [],
+      metroLines: Array.from({ length: count }, (_, index) => ({
+        ...line,
+        id: `metro-000${index + 1}`,
+        color: SHARED_CUE_COLORS[index]!,
+      })).reverse(),
+    },
+  };
+}
+
+function hubTrackPath(
+  from: { x: number; y: number },
+  to: { x: number; y: number },
+): TransitPath {
+  const heading: Heading =
+    to.x > from.x
+      ? "east"
+      : to.x < from.x
+        ? "west"
+        : to.y > from.y
+          ? "south"
+          : "north";
+  return {
+    kind: "track",
+    totalTravelSeconds: 1,
+    steps: [
+      {
+        position: from,
+        heading,
+        geometry: { kind: "line", from, to },
+        travelSeconds: 1,
+      },
+    ],
+  };
+}
+
+/** Twelve terminating metro lines leave the hub in all four cardinal
+ *  directions. Every line has a nonzero corridor offset, so all twelve emit a
+ *  cue. Their interleaved creation order reproduces the dense-hub collision
+ *  ordering seen when lines are authored over several editing passes. */
+const DENSE_HUB_DIRECTIONS = [
+  "west",
+  "south",
+  "south",
+  "east",
+  "south",
+  "east",
+  "south",
+  "north",
+  "west",
+  "south",
+  "south",
+  "north",
+] as const;
+
+function denseMetroHubState(
+  directions: readonly Heading[] = DENSE_HUB_DIRECTIONS,
+): GameState {
+  const base = createTestGameState();
+  const positions = {
+    hub: { x: 1, y: 1 },
+    north: { x: 1, y: 0 },
+    east: { x: 2, y: 1 },
+    south: { x: 1, y: 2 },
+    west: { x: 0, y: 1 },
+  };
+  const metroLines: MetroLine[] = [];
+  for (const [lineIndex, direction] of directions.entries()) {
+    const id = `metro-${String(lineIndex + 1).padStart(4, "0")}`;
+    metroLines.push({
+      id,
+      name: id,
+      color: DENSE_HUB_CUE_COLORS[lineIndex]!,
+      stationIds: ["hub", direction],
+      vehicleIds: [],
+      active: true,
+      pattern: "loop",
+      revision: 1,
+      legs: [
+        routeLeg(
+          "hub",
+          direction,
+          "connected",
+          hubTrackPath(positions.hub, positions[direction]),
+        ),
+      ],
+      pathBroken: false,
+      targetHeadwaySeconds: null,
+      serviceMetrics: null,
+    });
+  }
+  return {
+    ...base,
+    transit: {
+      ...base.transit,
+      stops: [],
+      stations: Object.entries(positions).map(([id, position]) => ({
+        id,
+        position,
+        status: "present" as const,
+        platforms: [],
+      })),
+      routes: [],
+      metroLines,
+    },
+  };
+}
+
+function oneTileRoadPath(fromX: number, toX: number): TransitPath {
+  const direction = Math.sign(toX - fromX) === 1 ? "east" : "west";
+  return {
+    kind: "road",
+    totalTravelSeconds: 1,
+    steps: [
+      {
+        position: { x: fromX, y: 1 },
+        enteringHeading: direction,
+        leavingHeading: direction,
+        movement: "straight",
+        geometry: {
+          kind: "line",
+          from: { x: fromX, y: 1 },
+          to: { x: toX, y: 1 },
+        },
+        travelSeconds: 1,
+      },
+    ],
+  };
+}
+
+/** Three physical stops in a row. Westbound and eastbound legs meet at the
+ *  middle stop, while a through route crosses it; each side corridor is shared,
+ *  so same-side cue centers coincide without cross-corridor collision
+ *  resolution. Westbound routes are created first, then eastbound routes, then
+ *  the through route — matching the deterministic id ordering the corridor
+ *  allocator sees. */
+function mixedCorridorState(
+  westboundRouteCount = 1,
+  eastboundRouteCount = 1,
+): GameState {
+  const base = createTestGameState();
+  const westboundPath = oneTileRoadPath(1, 0);
+  const westToMiddlePath = oneTileRoadPath(0, 1);
+  const eastPath = oneTileRoadPath(1, 2);
+  const routeBase = {
+    vehicleIds: [],
+    active: true,
+    pattern: "loop" as const,
+    revision: 1,
+    pathBroken: false,
+    targetHeadwaySeconds: null,
+    serviceMetrics: null,
+  };
+  const route = (
+    id: string,
+    color: string,
+    stopIds: string[],
+    legs: RouteLegPath[],
+  ) => ({
+    ...routeBase,
+    id,
+    name: id,
+    color,
+    stopIds,
+    legs,
+  });
+  const routes: Route[] = [];
+  const addRoute = (stopIds: string[], legs: RouteLegPath[]): void => {
+    const index = routes.length;
+    routes.push(
+      route(`route-00${index + 1}`, MIXED_CUE_COLORS[index]!, stopIds, legs),
+    );
+  };
+  for (let index = 0; index < westboundRouteCount; index += 1) {
+    addRoute(
+      ["middle", "west"],
+      [routeLeg("middle", "west", "connected", westboundPath)],
+    );
+  }
+  for (let index = 0; index < eastboundRouteCount; index += 1) {
+    addRoute(
+      ["middle", "east"],
+      [routeLeg("middle", "east", "connected", eastPath)],
+    );
+  }
+  addRoute(
+    ["west", "middle", "east"],
+    [
+      routeLeg("west", "middle", "connected", westToMiddlePath),
+      routeLeg("middle", "east", "connected", eastPath),
+    ],
+  );
+  return {
+    ...base,
+    transit: {
+      ...base.transit,
+      stops: [
+        { id: "west", x: 0 },
+        { id: "middle", x: 1 },
+        { id: "east", x: 2 },
+      ].map(({ id, x }) => ({
+        id,
+        kind: "busStop" as const,
+        status: "present" as const,
+        position: { x, y: 1 },
+        platforms: [],
+      })),
+      routes,
     },
   };
 }
@@ -761,10 +1199,11 @@ describe("buildTransitBatch nodes and cues", () => {
     const rim = Array.from(
       sprites.slice(SPRITE_INSTANCE_FLOATS, SPRITE_INSTANCE_FLOATS * 2),
     );
-    expect(face.slice(0, 5)).toEqual([48, 48, 0, 7, 7]);
+    expect(face.slice(0, 5)).toEqual([48, 48, 0, tileSize / 2, tileSize / 2]);
     expect(face[7]).toBe(TRANSIT_SPRITE_LAYERS.busStop);
     expect(face.slice(8, 12)).toEqual([1, 1, 1, 1]);
     expect(rim[7]).toBe(TRANSIT_SPRITE_LAYERS.busStopRing);
+    expectMarkerTileExtent(rim);
     rim
       .slice(8, 12)
       .forEach((value, i) =>
@@ -799,23 +1238,33 @@ describe("buildTransitBatch nodes and cues", () => {
     };
     const { sprites } = buildTransitBatch(state, createUiState(), 1);
     expect(sprites.length).toBe(4 * SPRITE_INSTANCE_FLOATS);
-    expect(
-      markerRow(sprites, 80, 80, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
-    ).toEqual([1, 1, 1, 1]);
-    expectTint(
-      markerRow(sprites, 80, 80, TRANSIT_SPRITE_LAYERS.busStopRing),
-      colors.bus,
+    const busFace = markerRow(sprites, 80, 80, TRANSIT_SPRITE_LAYERS.busStop);
+    expect(busFace.slice(8, 12)).toEqual([1, 1, 1, 1]);
+    expectMarkerTileExtent(busFace);
+    const busRim = markerRow(
+      sprites,
+      80,
+      80,
+      TRANSIT_SPRITE_LAYERS.busStopRing,
     );
-    expect(
-      markerRow(sprites, 144, 80, TRANSIT_SPRITE_LAYERS.metroStation).slice(
-        8,
-        12,
-      ),
-    ).toEqual([1, 1, 1, 1]);
-    expectTint(
-      markerRow(sprites, 144, 80, TRANSIT_SPRITE_LAYERS.metroStationRing),
-      colors.metro,
+    expectTint(busRim, colors.bus);
+    expectMarkerTileExtent(busRim);
+    const metroFace = markerRow(
+      sprites,
+      144,
+      80,
+      TRANSIT_SPRITE_LAYERS.metroStation,
     );
+    expect(metroFace.slice(8, 12)).toEqual([1, 1, 1, 1]);
+    expectMarkerTileExtent(metroFace);
+    const metroRim = markerRow(
+      sprites,
+      144,
+      80,
+      TRANSIT_SPRITE_LAYERS.metroStationRing,
+    );
+    expectTint(metroRim, colors.metro);
+    expectMarkerTileExtent(metroRim);
   });
 
   it("rims served markers in the serving line's color", () => {
@@ -1120,26 +1569,29 @@ describe("buildTransitBatch nodes and cues", () => {
   });
 
   it("positions displaced bus cues against the opaque sprite silhouette", () => {
-    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
-    const route = { ...base.transit.routes[0] };
-    const state = {
-      ...base,
-      transit: {
-        ...base.transit,
-        routes: [
-          { ...route, id: "route-0002", color: "#222222" },
-          { ...route, id: "route-0001", color: "#111111" },
-        ],
-      },
-    };
+    const state = sharedBusCorridorState(2);
     const { vertices, sprites } = buildTransitBatch(state, createUiState(), 1);
 
     // The opaque rim ends about 72 texels from center in a 192px image,
-    // displayed at 14 world px. The ±2px corridor offsets leave the
-    // radius-3 cues slightly overlapping that visible silhouette.
-    expect(hasVertexNear(vertices, "#111111", 48, 48 - 5.25 - 2)).toBe(true);
-    expect(hasVertexNear(vertices, "#222222", 48, 48 + 5.25 + 2)).toBe(true);
-    expect(hasVertexNear(vertices, "#111111", 48, 46)).toBe(false);
+    // displayed one tile wide. Single cues on each side stay centered on
+    // their corridor normal at the tile edge; each circle's center vertex
+    // repeats once per segment, making the exact center count observable.
+    const axisCue = tileSize / 2 - 3;
+    const rimAxis = (72 * tileSize) / 192;
+    expect(axisCue - 3).toBeLessThan(rimAxis);
+    expect(axisCue + 3).toBeGreaterThan(rimAxis);
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - axisCue)).toBe(24);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + axisCue)).toBe(24);
+    // Neither the uncapped corridor rim+2 positions (±14) nor the old 14px
+    // badge footprint positions (±7.25) are cue centers any longer.
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - 14)).toBe(0);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + 14)).toBe(0);
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - 5.25 - 2)).toBe(0);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + 5.25 + 2)).toBe(0);
+    // There is also no stray cue at the raw ±2 world px corridor offset.
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - 2)).toBe(0);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + 2)).toBe(0);
+    expectSharedCueLayout(vertices, "bus", 2);
     expectTint(
       markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
       "#111111",
@@ -1147,6 +1599,130 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(
       markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
     ).toEqual([1, 1, 1, 1]);
+  });
+
+  it("separates westbound, eastbound, and through-route cues at one node", () => {
+    const state = mixedCorridorState();
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const centers = SHARED_CUE_COLORS.slice(0, 3).map((color) =>
+      cueCenterInNode(vertices, color),
+    );
+    for (const [index, center] of centers.entries()) {
+      const color = SHARED_CUE_COLORS[index]!;
+      expectCueCircleInsideTile(vertices, color, center.x, center.y);
+      expectCueVisiblyOutsideRim(center, "bus");
+    }
+    // The two directional local routes begin on the same corridor side and
+    // would exactly coincide without cross-corridor resolution; the through
+    // route occupies the opposite side in this deterministic id ordering.
+    expect(centers[0]!.y).toBeLessThan(48);
+    expect(centers[1]!.y).toBeLessThan(48);
+    expect(centers[2]!.y).toBeGreaterThan(48);
+    expectMinimumPairwiseDistance(centers, 6);
+  });
+
+  it("keeps fanned westbound, eastbound, and through cues separated", () => {
+    const state = mixedCorridorState(3, 3);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    // Three westbound routes, three eastbound routes, and the through route
+    // all have nonzero corridor slots here. The same-side fans therefore start
+    // partially overlapping across the two independent corridor keys.
+    const centers = MIXED_CUE_COLORS.map((color) =>
+      cueCenterInNode(vertices, color),
+    );
+    for (const [index, center] of centers.entries()) {
+      const color = MIXED_CUE_COLORS[index]!;
+      expectCueCircleInsideTile(vertices, color, center.x, center.y);
+      expectCueVisiblyOutsideRim(center, "bus");
+    }
+    expectMinimumPairwiseDistance(centers, 6);
+  });
+
+  it("keeps three-line shared bus cues attached inside the node tile", () => {
+    const state = sharedBusCorridorState(3);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const axisCue = tileSize / 2 - 3;
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - axisCue)).toBe(24);
+    expect(vertexCountNear(vertices, "#333333", 48, 48 + axisCue)).toBe(24);
+    // The zero-offset middle route still emits no displaced cue, and the ±4px
+    // outer offsets are not allowed to reappear at the old detached centers.
+    expect(vertexCountNear(vertices, "#222222", 48, 48 - axisCue)).toBe(0);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + axisCue)).toBe(0);
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - 16)).toBeLessThan(24);
+    expect(vertexCountNear(vertices, "#333333", 48, 48 + 16)).toBeLessThan(24);
+    expectSharedCueLayout(vertices, "bus", 3, [0, 2]);
+  });
+
+  it("fans four-line shared bus cues around the outside of the rim", () => {
+    const state = sharedBusCorridorState(4);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    // Two cues share each side. They fan ±0.25 radians around that side's
+    // normal; the y clamp is exactly at the radius-3 tile inset.
+    const fanX = 3.3194449758734716;
+    const edgeCue = tileSize / 2 - 3;
+    expect(vertexCountNear(vertices, "#111111", 48 - fanX, 48 - edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#222222", 48 + fanX, 48 - edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#333333", 48 - fanX, 48 + edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#444444", 48 + fanX, 48 + edgeCue)).toBe(
+      24,
+    );
+    // The rejected radial compression put same-side cues at ±9, hidden under
+    // the opaque rim. Those positions must not reappear.
+    expect(vertexCountNear(vertices, "#222222", 48, 48 - 9)).toBe(0);
+    expect(vertexCountNear(vertices, "#333333", 48, 48 + 9)).toBe(0);
+    expectSharedCueLayout(vertices, "bus", 4);
+  });
+
+  it("keeps fanned cues visible and separated on a diagonal corridor", () => {
+    const diagonalPath: TransitPath = {
+      kind: "road",
+      totalTravelSeconds: 4,
+      steps: [
+        {
+          position: { x: 1, y: 1 },
+          enteringHeading: "east",
+          leavingHeading: "east",
+          movement: "straight",
+          geometry: {
+            kind: "line",
+            from: { x: 1, y: 1 },
+            to: { x: 2, y: 2 },
+          },
+          travelSeconds: 4,
+        },
+      ],
+    };
+    for (const [mode, base] of [
+      ["bus", sharedBusCorridorState(4)],
+      ["metro", sharedMetroCorridorState(4)],
+    ] as const) {
+      const state = {
+        ...base,
+        transit: {
+          ...base.transit,
+          routes: base.transit.routes.map((route) => ({
+            ...route,
+            legs: [routeLeg("a", "b", "connected", diagonalPath)],
+          })),
+          metroLines: base.transit.metroLines.map((line) => ({
+            ...line,
+            legs: [routeLeg("a", "b", "connected", diagonalPath)],
+          })),
+        },
+      };
+      const { vertices } = buildTransitBatch(state, createUiState(), 1);
+      expectSharedCueLayout(vertices, mode, 4);
+    }
   });
 
   it("positions displaced metro cues against the opaque station silhouette", () => {
@@ -1193,8 +1769,9 @@ describe("buildTransitBatch nodes and cues", () => {
     };
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
-    expect(hasVertexNear(vertices, "#111111", 48, 48 - 5.25 - 2)).toBe(true);
-    expect(hasVertexNear(vertices, "#222222", 48, 48 + 5.25 + 2)).toBe(true);
+    const axisCue = tileSize / 2 - 3;
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - axisCue)).toBe(24);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + axisCue)).toBe(24);
 
     const diagonalPath: TransitPath = {
       kind: "track",
@@ -1231,23 +1808,144 @@ describe("buildTransitBatch nodes and cues", () => {
       createUiState(),
       1,
     ).vertices;
-    const component = ((88 * 14) / 192 + 2) / Math.SQRT2;
+    const component = ((88 * tileSize) / 192 + 2) / Math.SQRT2;
     expect(
-      hasVertexNear(
+      vertexCountNear(
         diagonalVertices,
         "#111111",
         48 + component,
         48 - component,
       ),
-    ).toBe(true);
+    ).toBe(24);
     expect(
-      hasVertexNear(
+      vertexCountNear(
         diagonalVertices,
         "#222222",
         48 - component,
         48 + component,
       ),
-    ).toBe(true);
+    ).toBe(24);
+    expectCueCircleInsideTile(
+      diagonalVertices,
+      "#111111",
+      48 + component,
+      48 - component,
+    );
+    expectCueCircleInsideTile(
+      diagonalVertices,
+      "#222222",
+      48 - component,
+      48 + component,
+    );
+  });
+
+  it("keeps three-line shared metro cues attached inside the node tile", () => {
+    const state = sharedMetroCorridorState(3);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const axisCue = tileSize / 2 - 3;
+    expect(vertexCountNear(vertices, "#111111", 48, 48 - axisCue)).toBe(24);
+    expect(vertexCountNear(vertices, "#333333", 48, 48 + axisCue)).toBe(24);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 - axisCue)).toBe(0);
+    expect(vertexCountNear(vertices, "#222222", 48, 48 + axisCue)).toBe(0);
+    expectSharedCueLayout(vertices, "metro", 3, [0, 2]);
+  });
+
+  it("fans four-line shared metro cues around the outside of the rim", () => {
+    const state = sharedMetroCorridorState(4);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    const fanX = 3.3194449758734716;
+    const edgeCue = tileSize / 2 - 3;
+    expect(vertexCountNear(vertices, "#111111", 48 - fanX, 48 - edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#222222", 48 + fanX, 48 - edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#333333", 48 - fanX, 48 + edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#444444", 48 + fanX, 48 + edgeCue)).toBe(
+      24,
+    );
+    expect(vertexCountNear(vertices, "#222222", 48, 48 - 9)).toBe(0);
+    expect(vertexCountNear(vertices, "#333333", 48, 48 + 9)).toBe(0);
+    expectSharedCueLayout(vertices, "metro", 4);
+  });
+
+  it("keeps dense four-way metro hub cues on their intended sides", () => {
+    const state = denseMetroHubState();
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    // The hub's vertical corridors fan east/west and its horizontal corridors
+    // fan north/south. Negative corridor offsets come first in deterministic
+    // line-id order; this fixture's creation order determines those ids.
+    const expected = [
+      ["#111111", "north"],
+      ["#222222", "east"],
+      ["#333333", "east"],
+      ["#444444", "north"],
+      ["#555555", "east"],
+      ["#666666", "south"],
+      ["#777777", "west"],
+      ["#888888", "east"],
+      ["#999999", "south"],
+      ["#aaaaaa", "west"],
+      ["#bbbbbb", "west"],
+      ["#cccccc", "west"],
+    ] as const;
+    const centers = expected.map(([color, side]) => {
+      const center = cueCenterInNode(vertices, color);
+      expectCueCircleInsideTile(vertices, color, center.x, center.y);
+      expectCueVisiblyOutsideRim(center, "metro");
+      if (side === "north") expect(center.y, color).toBeLessThan(48);
+      if (side === "south") expect(center.y, color).toBeGreaterThan(48);
+      if (side === "east") expect(center.x, color).toBeGreaterThan(48);
+      if (side === "west") expect(center.x, color).toBeLessThan(48);
+      return center;
+    });
+    expect(centers).toHaveLength(12);
+
+    // The old one-direction retry rotated the west-corridor south cue onto
+    // the north edge 1.85px from the west-corridor north cue. Searching both
+    // tangential directions finds this open negative-angle south-edge slot.
+    expect(centers[8]!.x).toBeCloseTo(48 - 7.101932367969276, 5);
+    expect(centers[8]!.y).toBeCloseTo(61, 5);
+    expectMinimumPairwiseDistance(centers, 6);
+  });
+
+  it("retains the best checked same-side slot when dense-hub spacing runs out", () => {
+    const state = denseMetroHubState([
+      "north",
+      "north",
+      "east",
+      "east",
+      "south",
+      "south",
+      "south",
+      "south",
+      "south",
+      "south",
+      "west",
+      "west",
+    ]);
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    // In this contiguous creation order the center and corner-adjacent slots
+    // leave no 6px position for the final south cue. The positive/negative
+    // symmetric best checked positions are 5.117px from the centered cue;
+    // deterministic positive-first order chooses the east one without leaving
+    // the south side.
+    const centered = cueCenterInNode(vertices, "#444444");
+    const fallback = cueCenterInNode(vertices, "#cccccc");
+    const bestCheckedSpacing = 5.117145487033226;
+    expect(fallback.x).toBeCloseTo(48 + bestCheckedSpacing, 5);
+    expect(fallback.y).toBeCloseTo(61, 5);
+    expect(fallback.y).toBeGreaterThan(48);
+    expect(
+      Math.hypot(fallback.x - centered.x, fallback.y - centered.y),
+    ).toBeCloseTo(bestCheckedSpacing, 5);
   });
 
   it("emits one dimmed station rim and an opaque face", () => {

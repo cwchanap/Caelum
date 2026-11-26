@@ -3,13 +3,22 @@ import { tileSize } from "../../src/render/boardTransform";
 import {
   sampleFrameTransform,
   sampleTilePixels,
+  settleLayout,
   type PixelProbe,
 } from "./helpers";
 import {
   expectRotatedLargeHouseFootprint,
   shadowedGrassRgb,
 } from "./spriteFootprint";
-import { expectTransitSpriteScene } from "./transitSpriteScene";
+import {
+  buildTransitSpriteScene,
+  expectFitBadgePixels,
+  expectTransitSpriteScene,
+} from "./transitSpriteScene";
+import {
+  expectMixedCorridorCuePixels,
+  expectSharedCuePixels,
+} from "./transitCues";
 
 test("all six shipped transit sprites decode to nonempty 192px art and white masks", async ({
   page,
@@ -93,6 +102,44 @@ test("transit art joins rails and colors physical badges on WebGPU", async ({
 }) => {
   test.setTimeout(180_000);
   await expectTransitSpriteScene(page, "webgpu");
+});
+
+test("shared transit cue colors stay visible on WebGPU", async ({ page }) => {
+  test.setTimeout(240_000);
+  await expectSharedCuePixels(page, "webgpu");
+});
+
+test("mixed-corridor transit cue colors stay visible on WebGPU", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  await expectMixedCorridorCuePixels(page, "webgpu");
+});
+
+test("transit Fit badge structure holds at DPR 2", async ({ browser }) => {
+  test.setTimeout(180_000);
+  const context = await browser.newContext({
+    baseURL: "http://127.0.0.1:5281",
+    viewport: { width: 1280, height: 800 },
+    deviceScaleFactor: 2,
+  });
+  const page = await context.newPage();
+  try {
+    await buildTransitSpriteScene(page, "webgpu");
+    await page.setViewportSize({ width: 1440, height: 900 });
+    await settleLayout(page);
+    await page.getByTestId("map-zoom-fit").click();
+    await settleLayout(page);
+    const fit = await sampleFrameTransform(page);
+    expect(fit).not.toBeNull();
+    expect(fit!.dpr).toBeCloseTo(2, 5);
+    const fitTileCssPx = fit!.scale * tileSize;
+    expect(fitTileCssPx).toBeGreaterThan(13.5);
+    expect(fitTileCssPx).toBeLessThan(14);
+    await expectFitBadgePixels(page, fitTileCssPx);
+  } finally {
+    await context.close();
+  }
 });
 
 test("rotated largeHouse sprite stays in its 2x3 footprint with transparent insets", async ({

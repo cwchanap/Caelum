@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { tileSize } from "../../src/render/boardTransform";
 import {
   clickMapTile,
   createDefaultCity,
@@ -35,17 +36,302 @@ function closeToColor(
   );
 }
 
+const redRim = ([r, g, b]: [number, number, number]) => r - Math.max(g, b) > 35;
+const blueRim = ([r, g, b]: [number, number, number]) =>
+  b - Math.max(r, g) > 25;
+const creamFace = ([r, g, b]: [number, number, number]) =>
+  r > 200 && g > 190 && b > 150 && r >= g - 15;
+const darkGlyph = ([r, g, b]: [number, number, number]) =>
+  r < 170 && g < 160 && b < 150;
+
+interface DeviceCrop {
+  width: number;
+  height: number;
+  dpr: number;
+  samples: Array<[number, number, number] | null>;
+}
+
+interface PixelBounds {
+  count: number;
+  width: number;
+  height: number;
+}
+
+function pixelBounds(
+  crop: DeviceCrop,
+  matches: (sample: [number, number, number]) => boolean,
+  centerRadius?: number,
+): PixelBounds {
+  const center = (crop.width - 1) / 2;
+  let count = 0;
+  let minX = crop.width;
+  let maxX = -1;
+  let minY = crop.height;
+  let maxY = -1;
+  for (let y = 0; y < crop.height; y += 1) {
+    for (let x = 0; x < crop.width; x += 1) {
+      if (
+        centerRadius !== undefined &&
+        (Math.abs(x - center) > centerRadius ||
+          Math.abs(y - center) > centerRadius)
+      ) {
+        continue;
+      }
+      const sample = crop.samples[y * crop.width + x];
+      if (sample == null || !matches(sample)) continue;
+      count += 1;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+    }
+  }
+  return {
+    count,
+    width: count === 0 ? 0 : maxX - minX + 1,
+    height: count === 0 ? 0 : maxY - minY + 1,
+  };
+}
+
+/** Samples one device-pixel-aligned crop around a tile center through the
+ *  same capture oracle as point probes, so Fit-scale assertions measure the
+ *  pixels the renderer actually produced rather than the artwork file. */
+async function sampleBadgeDeviceCrop(
+  page: Page,
+  tile: { x: number; y: number },
+  radiusCssPx: number,
+): Promise<DeviceCrop> {
+  const transform = await sampleFrameTransform(page);
+  if (transform === null) throw new Error("No capturable frame transform");
+  const radiusDevicePx = Math.ceil(radiusCssPx * transform.dpr);
+  const centerWorld = {
+    x: (tile.x + 0.5) * tileSize,
+    y: (tile.y + 0.5) * tileSize,
+  };
+  const centerDevice = {
+    x: (transform.offsetX + centerWorld.x * transform.scale) * transform.dpr,
+    y: (transform.offsetY + centerWorld.y * transform.scale) * transform.dpr,
+  };
+  const left = Math.round(centerDevice.x) - radiusDevicePx;
+  const top = Math.round(centerDevice.y) - radiusDevicePx;
+  const width = radiusDevicePx * 2 + 1;
+  const probes: PixelProbe[] = [];
+  for (let py = 0; py < width; py += 1) {
+    for (let px = 0; px < width; px += 1) {
+      const worldX =
+        ((left + px) / transform.dpr - transform.offsetX) / transform.scale;
+      const worldY =
+        ((top + py) / transform.dpr - transform.offsetY) / transform.scale;
+      probes.push({
+        tile,
+        dx: worldX - centerWorld.x,
+        dy: worldY - centerWorld.y,
+      });
+    }
+  }
+  return {
+    width,
+    height: width,
+    dpr: transform.dpr,
+    samples: await sampleTilePixels(page, probes),
+  };
+}
+
+function cssBounds(bounds: PixelBounds, dpr: number): PixelBounds {
+  return {
+    count: bounds.count / (dpr * dpr),
+    width: bounds.width / dpr,
+    height: bounds.height / dpr,
+  };
+}
+
+function cropSampleAtCss(
+  crop: DeviceCrop,
+  xCss: number,
+  yCss: number,
+): [number, number, number] | null {
+  const center = (crop.width - 1) / 2;
+  const x = Math.round(center + xCss * crop.dpr);
+  const y = Math.round(center + yCss * crop.dpr);
+  if (x < 0 || x >= crop.width || y < 0 || y >= crop.height) return null;
+  return crop.samples[y * crop.width + x] ?? null;
+}
+
+function luminance(sample: [number, number, number]): number {
+  return (sample[0] + sample[1] + sample[2]) / 3;
+}
+
+function texelLuminance(
+  crop: DeviceCrop,
+  tileCssPx: number,
+  texelX: number,
+  texelY: number,
+): number {
+  const xCss = ((texelX - 96) / 192) * tileCssPx;
+  const yCss = ((texelY - 96) / 192) * tileCssPx;
+  const sample = cropSampleAtCss(crop, xCss, yCss);
+  if (sample === null) {
+    throw new Error(`missing badge texel probe ${texelX},${texelY}`);
+  }
+  return luminance(sample);
+}
+
+function texelRegionExtreme(
+  crop: DeviceCrop,
+  tileCssPx: number,
+  x0: number,
+  x1: number,
+  y0: number,
+  y1: number,
+  extreme: "light" | "dark",
+): number {
+  let best = extreme === "light" ? -Infinity : Infinity;
+  for (let x = x0; x <= x1; x += 4) {
+    for (let y = y0; y <= y1; y += 4) {
+      const value = texelLuminance(crop, tileCssPx, x, y);
+      best =
+        extreme === "light" ? Math.max(best, value) : Math.min(best, value);
+    }
+  }
+  return best;
+}
+
+function expectBusGlyphPattern(crop: DeviceCrop, tileCssPx: number): void {
+  const light = (x0: number, x1: number, y0: number, y1: number) =>
+    texelRegionExtreme(crop, tileCssPx, x0, x1, y0, y1, "light");
+  const dark = (x0: number, x1: number, y0: number, y1: number) =>
+    texelRegionExtreme(crop, tileCssPx, x0, x1, y0, y1, "dark");
+  const windshield = light(82, 110, 74, 90);
+  const upperFrame = (dark(56, 68, 70, 86) + dark(124, 136, 70, 86)) / 2;
+  const body = dark(60, 132, 94, 106);
+  const lowerGap = light(90, 102, 116, 123);
+  const wheels = (dark(66, 78, 112, 122) + dark(114, 126, 112, 122)) / 2;
+  const values = { windshield, upperFrame, body, lowerGap, wheels };
+  expect(
+    windshield - upperFrame > 40,
+    `bus windshield/frame contrast: ${JSON.stringify(values)}`,
+  ).toBe(true);
+  expect(
+    windshield - body > 80,
+    `bus windshield/body contrast: ${JSON.stringify(values)}`,
+  ).toBe(true);
+  expect(
+    lowerGap - wheels > 20,
+    `bus wheel-gap contrast: ${JSON.stringify(values)}`,
+  ).toBe(true);
+}
+
+interface DeviceAxes {
+  dpr: number;
+  horizontal: Array<[number, number, number] | null>;
+  vertical: Array<[number, number, number] | null>;
+}
+
+/** Samples the center row and column at device-pixel spacing in one capture. */
+async function sampleBadgeDeviceAxes(
+  page: Page,
+  tile: { x: number; y: number },
+  radiusCssPx: number,
+): Promise<DeviceAxes> {
+  const transform = await sampleFrameTransform(page);
+  if (transform === null) throw new Error("No capturable frame transform");
+  const radiusDevicePx = Math.ceil(radiusCssPx * transform.dpr);
+  const centerWorld = {
+    x: (tile.x + 0.5) * tileSize,
+    y: (tile.y + 0.5) * tileSize,
+  };
+  const centerDevice = {
+    x: (transform.offsetX + centerWorld.x * transform.scale) * transform.dpr,
+    y: (transform.offsetY + centerWorld.y * transform.scale) * transform.dpr,
+  };
+  const centerX = Math.round(centerDevice.x);
+  const centerY = Math.round(centerDevice.y);
+  const width = radiusDevicePx * 2 + 1;
+  const probeAt = (deviceX: number, deviceY: number): PixelProbe => {
+    const worldX =
+      (deviceX / transform.dpr - transform.offsetX) / transform.scale;
+    const worldY =
+      (deviceY / transform.dpr - transform.offsetY) / transform.scale;
+    return {
+      tile,
+      dx: worldX - centerWorld.x,
+      dy: worldY - centerWorld.y,
+    };
+  };
+  const probes: PixelProbe[] = [];
+  for (let step = -radiusDevicePx; step <= radiusDevicePx; step += 1) {
+    probes.push(probeAt(centerX + step, centerY));
+  }
+  for (let step = -radiusDevicePx; step <= radiusDevicePx; step += 1) {
+    probes.push(probeAt(centerX, centerY + step));
+  }
+  const samples = await sampleTilePixels(page, probes);
+  return {
+    dpr: transform.dpr,
+    horizontal: samples.slice(0, width),
+    vertical: samples.slice(width),
+  };
+}
+
+function axisSpanCss(
+  axis: Array<[number, number, number] | null>,
+  matches: (sample: [number, number, number]) => boolean,
+  dpr: number,
+): number {
+  let first = -1;
+  let last = -1;
+  axis.forEach((sample, index) => {
+    if (sample === null || !matches(sample)) return;
+    if (first === -1) first = index;
+    last = index;
+  });
+  return first === -1 ? 0 : (last - first + 1) / dpr;
+}
+
+function expectMetroGlyphPattern(crop: DeviceCrop, tileCssPx: number): void {
+  const light = (x0: number, x1: number, y0: number, y1: number) =>
+    texelRegionExtreme(crop, tileCssPx, x0, x1, y0, y1, "light");
+  const dark = (x0: number, x1: number, y0: number, y1: number) =>
+    texelRegionExtreme(crop, tileCssPx, x0, x1, y0, y1, "dark");
+  const topNotch = light(90, 102, 62, 76);
+  const topStems = (dark(58, 76, 62, 80) + dark(116, 134, 62, 80)) / 2;
+  const centerValley = dark(88, 104, 100, 120);
+  const bottomCenter = light(90, 102, 122, 134);
+  const bottomStems = (dark(58, 76, 116, 132) + dark(116, 134, 116, 132)) / 2;
+  const values = {
+    topNotch,
+    topStems,
+    centerValley,
+    bottomCenter,
+    bottomStems,
+  };
+  expect(
+    topNotch - topStems > 60,
+    `metro top notch/stem contrast: ${JSON.stringify(values)}`,
+  ).toBe(true);
+  expect(
+    topNotch - centerValley > 80,
+    `metro notch/valley contrast: ${JSON.stringify(values)}`,
+  ).toBe(true);
+  expect(
+    bottomCenter - bottomStems > 40,
+    `metro bottom notch/stem contrast: ${JSON.stringify(values)}`,
+  ).toBe(true);
+}
+
 async function expectMetroBadge(
   page: Page,
   rim: readonly number[],
   tolerance: number,
   tile: { x: number; y: number } = stations[0],
 ): Promise<void> {
+  const texel = tileSize / 192;
   const pixels = await sampleTilePixels(page, [
-    { tile, dx: -3.5, dy: 0 },
+    // Face texel (48,96), inside the cream field away from the M glyph.
+    { tile, dx: -48 * texel, dy: 0 },
     // Mask texels (96,30) and (96,162) lie beyond the horizontal 8px stroke.
-    { tile, dx: 0, dy: -4.8125 },
-    { tile, dx: 0, dy: 4.8125 },
+    { tile, dx: 0, dy: -66 * texel },
+    { tile, dx: 0, dy: 66 * texel },
   ]);
   expect(
     closeToColor(pixels[0]!, [255, 248, 238], tolerance),
@@ -59,11 +345,12 @@ async function expectMetroBadge(
   }
 }
 
-/** Real UI construction, with the same independent pixel probes in both renderers. */
-export async function expectTransitSpriteScene(
+/** Real UI construction shared by the full interaction regression and the
+ *  focused DPR-2 badge oracle. */
+export async function buildTransitSpriteScene(
   page: Page,
   renderer: "webgpu" | "canvas2d",
-): Promise<void> {
+) {
   await createDefaultCity(
     page,
     `Transit ${renderer}`,
@@ -104,6 +391,76 @@ export async function expectTransitSpriteScene(
       );
     })
     .toBe(true);
+  return canvas;
+}
+
+/** Assert the actual rendered bus/metro badge structure at the reference
+ *  Large Fit already selected in the page. */
+export async function expectFitBadgePixels(
+  page: Page,
+  fitTileCssPx: number,
+): Promise<void> {
+  const busCrop = await sampleBadgeDeviceCrop(page, stops[0], 6.5);
+  const metroCrop = await sampleBadgeDeviceCrop(page, stations[0], 6.5);
+  const busRimBounds = cssBounds(pixelBounds(busCrop, redRim), busCrop.dpr);
+  const metroRimBounds = cssBounds(
+    pixelBounds(metroCrop, blueRim),
+    metroCrop.dpr,
+  );
+  const busFaceBounds = cssBounds(pixelBounds(busCrop, creamFace), busCrop.dpr);
+  const metroFaceBounds = cssBounds(
+    pixelBounds(metroCrop, creamFace),
+    metroCrop.dpr,
+  );
+  const busGlyphBounds = cssBounds(
+    pixelBounds(busCrop, darkGlyph, 3 * busCrop.dpr),
+    busCrop.dpr,
+  );
+  const metroGlyphBounds = cssBounds(
+    pixelBounds(metroCrop, darkGlyph, 3 * metroCrop.dpr),
+    metroCrop.dpr,
+  );
+  for (const [label, bounds] of [
+    ["bus", busRimBounds],
+    ["metro", metroRimBounds],
+  ] as const) {
+    expect(
+      bounds.width >= 8 && bounds.height >= 8,
+      `Fit ${label} rim CSS bounds: ${JSON.stringify(bounds)}`,
+    ).toBe(true);
+    expect(
+      bounds.width / bounds.height > 0.8 && bounds.width / bounds.height < 1.25,
+      `Fit ${label} rim aspect: ${JSON.stringify(bounds)}`,
+    ).toBe(true);
+  }
+  for (const [label, bounds] of [
+    ["bus", busFaceBounds],
+    ["metro", metroFaceBounds],
+  ] as const) {
+    expect(
+      bounds.count >= 4 && bounds.width >= 3 && bounds.height >= 4,
+      `Fit ${label} face CSS bounds: ${JSON.stringify(bounds)}`,
+    ).toBe(true);
+  }
+  for (const [label, bounds] of [
+    ["bus", busGlyphBounds],
+    ["metro", metroGlyphBounds],
+  ] as const) {
+    expect(
+      bounds.count >= 4,
+      `Fit ${label} glyph CSS center: ${JSON.stringify(bounds)}`,
+    ).toBe(true);
+  }
+  expectBusGlyphPattern(busCrop, fitTileCssPx);
+  expectMetroGlyphPattern(metroCrop, fitTileCssPx);
+}
+
+/** Real UI construction, with the same independent pixel probes in both renderers. */
+export async function expectTransitSpriteScene(
+  page: Page,
+  renderer: "webgpu" | "canvas2d",
+): Promise<void> {
+  const canvas = await buildTransitSpriteScene(page, renderer);
 
   // Opaque ballast at the edge of the real 192px straight/corner assets.
   const seamProbes: PixelProbe[] = [
@@ -129,33 +486,28 @@ export async function expectTransitSpriteScene(
       `no phantom rail: ${pixels[6]}`,
     ).toBe(true);
   };
-  const fit = await sampleFrameTransform(page);
-  expect(fit!.scale * 32).toBeLessThan(16);
+  // Keep the original default-viewport Fit seam oracle before the larger
+  // reference viewport resize below.
   await checkSeams();
-  // At Large Fit each badge is only ~5 device pixels wide; rim and face
-  // texels blend, so test their distinctive colors rather than native RGB.
-  const [busRim, busFace, metroRim, metroFace] = await sampleTilePixels(page, [
-    { tile: stops[0], dx: -6, dy: 0 },
-    { tile: stops[0], dx: 0, dy: 0 },
-    { tile: stations[0], dx: 3, dy: -6 },
-    { tile: stations[0], dx: 0, dy: 0 },
-  ]);
-  expect(
-    closeToColor(busRim!, [196, 153, 116], 22),
-    `Fit bus rim: ${busRim}`,
-  ).toBe(true);
-  expect(
-    closeToColor(busFace!, [175, 148, 132], 22),
-    `Fit bus face: ${busFace}`,
-  ).toBe(true);
-  expect(
-    closeToColor(metroRim!, [119, 140, 163], 22),
-    `Fit metro rim: ${metroRim}`,
-  ).toBe(true);
-  expect(
-    closeToColor(metroFace!, [145, 133, 125], 22),
-    `Fit metro face: ${metroFace}`,
-  ).toBe(true);
+  // HPA-979's legibility contract uses the 1440×900 Large-map Fit
+  // (~13.7 CSS px/tile), not the smaller default Playwright viewport. Apply it
+  // only for this measurement so the long interaction flow keeps the cheaper
+  // original canvas size.
+  const originalViewport = page.viewportSize();
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await settleLayout(page);
+  await page.getByTestId("map-zoom-fit").click();
+  await settleLayout(page);
+  const fit = await sampleFrameTransform(page);
+  await checkSeams();
+  const fitTileCssPx = fit!.scale * tileSize;
+  expect(fitTileCssPx).toBeGreaterThan(13.5);
+  expect(fitTileCssPx).toBeLessThan(14);
+  await expectFitBadgePixels(page, fitTileCssPx);
+  if (originalViewport !== null) {
+    await page.setViewportSize(originalViewport);
+    await settleLayout(page);
+  }
   await page.evaluate(() => {
     const runtime = (
       window as unknown as {
@@ -175,6 +527,51 @@ export async function expectTransitSpriteScene(
   const transform = await sampleFrameTransform(page);
   expect(transform!.scale * 32).toBeCloseTo(96, 1);
   await checkSeams();
+
+  // Max zoom alone does not prove badge scale: measure both tinted rim axes.
+  // The opaque rim diameter is 144 of 192 source texels (72 CSS px), with the
+  // antialiased alpha bbox reaching 75 CSS px.
+  for (const [label, tile, matches] of [
+    ["bus", stops[0], redRim],
+    ["metro", stations[0], blueRim],
+  ] as const) {
+    const axes = await sampleBadgeDeviceAxes(page, tile, 40);
+    const width = axisSpanCss(axes.horizontal, matches, axes.dpr);
+    const height = axisSpanCss(axes.vertical, matches, axes.dpr);
+    for (const [axis, measured] of [
+      ["width", width],
+      ["height", height],
+    ] as const) {
+      expect(
+        measured >= 72 && measured <= 76,
+        `max-zoom ${label} rim ${axis}: ${measured} CSS px`,
+      ).toBe(true);
+    }
+    expect(
+      Math.abs(width - height) <= 2,
+      `max-zoom ${label} rim axes: ${width}x${height} CSS px`,
+    ).toBe(true);
+  }
+  // The quad ends exactly at the tile boundary. One world pixel beyond it,
+  // neighboring empty tiles still show flat grass rather than rim bleed.
+  const adjacentClear = await sampleTilePixels(page, [
+    { tile: { x: 6, y: 9 }, dx: 15, dy: 0 },
+    { tile: { x: 8, y: 9 }, dx: -15, dy: 0 },
+    { tile: { x: 7, y: 5 }, dx: 0, dy: 15 },
+    { tile: { x: 7, y: 7 }, dx: 0, dy: -15 },
+  ]);
+  const adjacentTiles = [
+    { x: 6, y: 9 },
+    { x: 8, y: 9 },
+    { x: 7, y: 5 },
+    { x: 7, y: 7 },
+  ];
+  for (const [index, pixel] of adjacentClear.entries()) {
+    expect(
+      closeToColor(pixel, grassRgb(adjacentTiles[index]!), 12),
+      `adjacent badge tile ${index}: ${pixel}`,
+    ).toBe(true);
+  }
 
   // Place the join at N+0.6 device pixels so pixel N's center lies 0.1px
   // inside the straight's east edge, where linear filtering sees its gutter.
