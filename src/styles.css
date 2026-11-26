@@ -28,6 +28,10 @@
 
   /* Signal palette */
   --accent: #0f8a70;
+
+  /* Darkened accent for filled action cards: --surface-raised text on it
+     must clear WCAG AA 4.5:1 (#0f8a70 only reaches ~4.22:1). */
+  --accent-deep: #0d7a63;
   --accent-warm: #c4633f;
   --warning: #a86f0e;
   --danger: #bd4a3f;
@@ -2592,7 +2596,7 @@ body {
 }
 
 .city-library-continue {
-  background: var(--accent);
+  background: var(--accent-deep);
   border-color: var(--accent);
   color: var(--surface-raised);
 
@@ -2615,6 +2619,13 @@ body {
   min-width: 0;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* The shared hint's 0.8 opacity would dim the saved timestamp to ~3.9:1 on
+   the filled card; the timestamp needs the same full-opacity contrast as the
+   label (>=4.5:1 on --accent-deep). */
+.city-library-continue .city-library-action-hint {
+  opacity: 1;
 }
 
 .city-library-continue:hover:not(:disabled) {

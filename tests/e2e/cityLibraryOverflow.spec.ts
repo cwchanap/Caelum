@@ -106,5 +106,17 @@ test("library list scrolls inside a viewport-bounded card at 1024Ã—768 and 1440Ã
     const rowBox = (await lastRow.boundingBox())!;
     expect(rowBox.y).toBeGreaterThanOrEqual(0);
     expect(rowBox.y + rowBox.height).toBeLessThanOrEqual(viewport.height);
+
+    // The bottom row stays operable by keyboard: its pencil takes focus and
+    // Enter opens the name editor with the input focused, not merely painted.
+    const lastPencil = lastRow.getByRole("button", {
+      name: /^Rename City /,
+    });
+    await lastPencil.focus();
+    await lastPencil.press("Enter");
+    const lastEditor = lastRow.getByRole("textbox", { name: /^Rename City / });
+    await expect(lastEditor).toBeFocused();
+    await lastEditor.press("Escape");
+    await expect(lastRow.getByRole("textbox")).toHaveCount(0);
   }
 });

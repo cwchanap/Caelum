@@ -669,6 +669,15 @@ describe("createCanvas2dRenderer", () => {
       vehicles: [],
     });
     const context = contexts[0]!;
+    // Interleaved painter order across stages, not filtered per-kind: clear,
+    // sprite draw, overSprites fill, marker draw, overMarkers fill.
+    expect(context.ops.map((op) => op.op)).toEqual([
+      "fillRect",
+      "drawImage",
+      "fill",
+      "drawImage",
+      "fill",
+    ]);
     const draws = context.ops.filter(
       (op): op is Extract<RecordedOp, { op: "drawImage" }> =>
         op.op === "drawImage",
@@ -678,6 +687,16 @@ describe("createCanvas2dRenderer", () => {
       expect([draw.sx, draw.sy, draw.sw, draw.sh]).toEqual([0, 0, 96, 192]);
       expect([draw.dx, draw.dy, draw.dw, draw.dh]).toEqual([-8, -16, 16, 32]);
       expect(draw.state.ctm[1]).toBeCloseTo(25);
+    }
+    // Each over-stage solid fills from a reset identity transform at full
+    // alpha — no sprite transform or tint leaks across stage boundaries.
+    const stageFills = fills([context]);
+    expect(stageFills).toHaveLength(2);
+    expect(stageFills[0]!.state.fillStyle).toBe("rgb(0,0,255)");
+    expect(stageFills[1]!.state.fillStyle).toBe("rgb(255,0,0)");
+    for (const fill of stageFills) {
+      expect(fill.state.ctm).toEqual([1, 0, 0, 1, 0, 0]);
+      expect(fill.state.globalAlpha).toBe(1);
     }
     expect(stats.spriteInstances).toBe(2);
     expect(stats.solidVertices).toBe(36);

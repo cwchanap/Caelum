@@ -44,15 +44,24 @@
   // land inside the same formatted minute, so a per-row ordinal backs up
   // the timestamp when the formatted contexts still collide.
   const contexts = $derived.by(() => {
+    // Accessible-name computation collapses whitespace runs and trims, so
+    // "North  Point" and "North Point" announce identically. Duplicate
+    // detection and generated-name collision checks run on the normalized
+    // form; the saved name itself is never changed.
+    const accessible = (name: string) => name.replace(/\s+/g, " ").trim();
     // A city may literally be named like a generated label
     // ("Riverside saved <time> (1)"), so suffixes are chosen against every
     // reserved literal name and every label already assigned, not just the
     // colliding base.
-    const literalNames = new Set(cities.map((city) => city.name));
+    const literalNames = new Set(cities.map((city) => accessible(city.name)));
     const bases = cities.map((city) =>
-      cities.some((other) => other !== city && other.name === city.name)
-        ? `${city.name} saved ` + savedAtFormat.format(new Date(city.savedAt))
-        : city.name,
+      cities.some(
+        (other) =>
+          other !== city && accessible(other.name) === accessible(city.name),
+      )
+        ? `${accessible(city.name)} saved ` +
+          savedAtFormat.format(new Date(city.savedAt))
+        : accessible(city.name),
     );
     const assigned: string[] = [];
     return bases.map((base, index) => {

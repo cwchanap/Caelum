@@ -21,7 +21,12 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   expect(faviconHref).toMatch(/app-icon\.png/);
   const faviconResponse = await page.request.get(faviconHref ?? "");
   expect(faviconResponse.ok()).toBe(true);
-  expect((await faviconResponse.body()).length).toBeGreaterThan(0);
+  // The served asset is a real PNG: image/png MIME plus the 8-byte signature.
+  expect(faviconResponse.headers()["content-type"]).toMatch(/image\/png/);
+  const faviconBody = await faviconResponse.body();
+  expect([...faviconBody.subarray(0, 8)]).toEqual([
+    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a,
+  ]);
 
   await expect(page.getByTestId("game-shell")).toBeVisible();
   const topbar = page.getByTestId("topbar");
