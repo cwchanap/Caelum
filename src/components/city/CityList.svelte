@@ -44,17 +44,32 @@
   // land inside the same formatted minute, so a per-row ordinal backs up
   // the timestamp when the formatted contexts still collide.
   const contexts = $derived.by(() => {
+    // A city may literally be named like a generated label
+    // ("Riverside saved <time> (1)"), so suffixes are chosen against every
+    // reserved literal name and every label already assigned, not just the
+    // colliding base.
+    const literalNames = new Set(cities.map((city) => city.name));
     const bases = cities.map((city) =>
       cities.some((other) => other !== city && other.name === city.name)
         ? `${city.name} saved ` +
           savedAtFormat.format(new Date(city.savedAt))
         : city.name,
     );
+    const assigned: string[] = [];
     return bases.map((base, index) => {
-      if (bases.filter((other) => other === base).length <= 1) return base;
-      const ordinal =
+      if (bases.filter((other) => other === base).length <= 1) {
+        assigned.push(base);
+        return base;
+      }
+      let ordinal =
         bases.slice(0, index).filter((other) => other === base).length + 1;
-      return `${base} (${ordinal})`;
+      let candidate = `${base} (${ordinal})`;
+      while (literalNames.has(candidate) || assigned.includes(candidate)) {
+        ordinal += 1;
+        candidate = `${base} (${ordinal})`;
+      }
+      assigned.push(candidate);
+      return candidate;
     });
   });
 

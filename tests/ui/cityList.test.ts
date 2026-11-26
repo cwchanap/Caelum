@@ -322,13 +322,24 @@ describe("CityList", () => {
 
   it("keeps control names unique for same-minute duplicate saves", () => {
     // Two saves in the same formatted minute share the timestamp label, so
-    // a per-row ordinal must still disambiguate every control.
+    // a per-row ordinal must still disambiguate every control — and a city
+    // literally named like a generated label reserves that label, pushing
+    // the duplicates to the next free suffixes.
+    const stamp = new Intl.DateTimeFormat("en-US", {
+      dateStyle: "medium",
+      timeStyle: "short",
+    }).format(new Date(CITIES[0].savedAt));
     const riversideA = { ...CITIES[0], id: "river-a", name: "Riverside" };
     const riversideB = { ...CITIES[1], id: "river-b", name: "Riverside" };
     riversideB.savedAt = riversideA.savedAt;
+    const literalCollision = {
+      ...CITIES[0],
+      id: "river-c",
+      name: `Riverside saved ${stamp} (1)`,
+    };
     render(CityList, {
       props: {
-        cities: [riversideA, riversideB],
+        cities: [riversideA, riversideB, literalCollision],
         activeCityId: null,
         busy: false,
         onLoad: vi.fn(),
@@ -337,12 +348,30 @@ describe("CityList", () => {
       },
     });
 
+    // The literal row keeps its own name as context; the generated
+    // "...(1)" label belongs to it, so the dups move to (2) and (3).
+    expect(
+      screen.getByRole("button", {
+        name: `Load Riverside saved ${stamp} (1)`,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: `Load Riverside saved ${stamp} (2)`,
+      }),
+    ).toBeVisible();
+    expect(
+      screen.getByRole("button", {
+        name: `Load Riverside saved ${stamp} (3)`,
+      }),
+    ).toBeVisible();
+
     const names = [
       ...screen.getAllByRole("button", { name: /^Rename / }),
       ...screen.getAllByRole("button", { name: /^Load / }),
       ...screen.getAllByRole("button", { name: /^Delete / }),
     ].map((button) => button.getAttribute("aria-label"));
-    expect(names).toHaveLength(6);
+    expect(names).toHaveLength(9);
     expect(new Set(names).size).toBe(names.length);
   });
 
