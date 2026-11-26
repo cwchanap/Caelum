@@ -223,6 +223,12 @@ function cursorBadgeText(
     }
     case "track": {
       const label = "⦿ Track";
+      if (roadMutationForUi(state, ui) === null) {
+        return {
+          text: `${label} · Drag at least two tiles`,
+          a11yText: "Track, Drag at least two tiles",
+        };
+      }
       if (staleHeldPreview) {
         return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
       }

@@ -88,7 +88,6 @@ const ROAD_MUTATION_INTENT_TYPES = new Set<GameIntent["type"]>([
   "layRoadLine",
   "cycleRoadDirection",
   "placeRoundabout",
-  "layTrack",
   "layTrackLine",
   "removeAtTile",
   "removeAtTiles",
@@ -1609,9 +1608,6 @@ export async function createGameRuntime(
     if (ui.activeTool === "metroStation") {
       return { type: "addMetroStation", point };
     }
-    if (ui.activeTool === "track") {
-      return { type: "layTrack", point };
-    }
     if (ui.activeTool === "remove") {
       return { type: "removeAtTile", point };
     }
@@ -1923,7 +1919,10 @@ export async function createGameRuntime(
             roadClickIntent(state, points[0], roadPreset),
           );
         }
-        const intent = intentForToolClick(points[0]);
+        // Track is drag-only: a click, same-tile jitter, or a stroke
+        // retracted back to its start commits no intent.
+        const intent =
+          gesture.tool === "track" ? null : intentForToolClick(points[0]);
         return intent === null ? commit(state, ui) : enqueueDispatch(intent);
       }
       if (gesture.tool === "remove") {

@@ -4,7 +4,6 @@ import { createWebGpuRenderer } from "../../src/render/webgpu/renderer";
 import {
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
-  VEHICLE_LANE_OFFSET_PX,
   type RenderFrame,
 } from "../../src/render/gameplayRenderer";
 import {
@@ -282,15 +281,10 @@ describe("createWebGpuRenderer", () => {
     expect(clipHalfExtent).toBeLessThan(0.02);
   });
 
-  it("offsets the vehicle body by a fixed lane offset with the enlarged extents", () => {
-    // Canvas-era parity, adapted for HPA-678: the old 2D renderer drew
-    // fillRect(-7, -14, 14, 8) after translate+rotate — a body offset
-    // perpendicular off the path centerline so it is not invisible inside the
-    // same-colored route line (WKWebView parity bug). The offset is now the
-    // fixed VEHICLE_LANE_OFFSET_PX, decoupled from the half-width so a wider
-    // body does not slide into neighbouring tiles. Evaluate the real WGSL
-    // local transform (captured from createShaderModule) at the quad
-    // corners; rotation is rigid, so the pre-rotation frame pins the shape.
+  it("centres the vehicle body on the sampled route position with the enlarged extents", () => {
+    // The instance origin is already the presented corridor lane. Evaluate
+    // the real WGSL local transform (captured from createShaderModule) at the
+    // quad corners; rotation is rigid, so the pre-rotation frame pins the shape.
     const { device, shaders } = createFakeDevice();
     createWebGpuRenderer(device, "bgra8unorm");
     const components = /let local = vec2f\(\s*([^;]+?)\s*\);/
@@ -324,11 +318,11 @@ describe("createWebGpuRenderer", () => {
     const corners = cornersFor(extents);
     expect(Math.min(...corners.map(([x]) => x))).toBe(-9);
     expect(Math.max(...corners.map(([x]) => x))).toBe(9);
-    expect(Math.min(...corners.map(([, y]) => y))).toBe(-13);
-    expect(Math.max(...corners.map(([, y]) => y))).toBe(-3);
+    expect(Math.min(...corners.map(([, y]) => y))).toBe(-5);
+    expect(Math.max(...corners.map(([, y]) => y))).toBe(5);
     const wider = cornersFor({ x: extents.x, y: extents.y + 4 });
-    expect(bodyCenterY(wider)).toBe(-VEHICLE_LANE_OFFSET_PX);
-    expect(bodyCenterY(corners)).toBe(-VEHICLE_LANE_OFFSET_PX);
+    expect(bodyCenterY(wider)).toBe(0);
+    expect(bodyCenterY(corners)).toBe(0);
   });
 
   it("carries the white body rim inside the one instanced vehicle pass", () => {

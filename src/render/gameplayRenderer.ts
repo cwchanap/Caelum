@@ -103,9 +103,5 @@ export const VEHICLE_INSTANCE_FLOATS = 11;
  *  uv scale (x, y), texture layer, two trailing host clip-scale slots. */
 export const SPRITE_INSTANCE_FLOATS = 10;
 
-/** Perpendicular world-px offset of a vehicle body center off its path
- *  centerline; every renderer offsets the body identically. */
-export const VEHICLE_LANE_OFFSET_PX = 8;
-
 /** White outline width (world px) around each vehicle body. */
 export const VEHICLE_RIM_PX = 1.5;

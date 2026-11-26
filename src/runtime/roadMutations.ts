@@ -75,9 +75,7 @@ export function roadMutationForUi(
         : { type: "removeAtTiles", points };
     }
     if (gesture.tool === "track") {
-      return points.length === 1
-        ? { type: "layTrack", point: points[0] }
-        : { type: "layTrackLine", points };
+      return points.length < 2 ? null : { type: "layTrackLine", points };
     }
     return points.length === 1
       ? roadClickMutation(state, points[0], candidate.roadPreset)
@@ -86,9 +84,6 @@ export function roadMutationForUi(
   if (candidate.hoverTile === null) return null;
   if (candidate.activeTool === "road") {
     return roadClickMutation(state, candidate.hoverTile, candidate.roadPreset);
-  }
-  if (candidate.activeTool === "track") {
-    return { type: "layTrack", point: candidate.hoverTile };
   }
   if (candidate.activeTool === "roundabout") {
     return {
@@ -126,8 +121,6 @@ function mutationIdentity(mutation: RoadMutation): {
         key: `placeRoundabout:${mutation.size}`,
         points: [mutation.origin],
       };
-    case "layTrack":
-      return { key: "layTrack", points: [mutation.point] };
     case "layTrackLine":
       return { key: "layTrackLine", points: mutation.points };
     case "removeAtTile":

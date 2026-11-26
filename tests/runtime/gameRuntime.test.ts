@@ -762,15 +762,6 @@ function applyIntent(
       },
     };
   }
-  if (intent.type === "layTrack") {
-    return {
-      ...snapshot,
-      map: updateTile(snapshot.map, intent.point, (tile) => ({
-        ...tile,
-        hasTrack: true,
-      })),
-    };
-  }
   if (intent.type === "removeAtTile") {
     return {
       ...snapshot,
@@ -1514,7 +1505,8 @@ describe("Game Runtime", () => {
     ).toBe("⦿ Road · $100");
 
     runtime.setTool("track");
-    runtime.setHoverTile({ x: 8, y: 5 });
+    runtime.startDrag({ x: 8, y: 5 });
+    runtime.setDragCurrent({ x: 9, y: 5 });
     const pendingTrack = runtime.getSnapshot();
     expect(pendingTrack.ui.roadMutationPreview).toBeNull();
     expect(
@@ -2101,7 +2093,7 @@ describe("Game Runtime", () => {
     expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(false);
   });
 
-  it("requests the shared mutation preview for a track hover and drag", async () => {
+  it("requests no track preview for hover or a short drag, then previews a multi-tile drag", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
     const mutations: RoadMutation[] = [];
     const backend: GameBackend = {
@@ -2119,12 +2111,17 @@ describe("Game Runtime", () => {
 
     runtime.setTool("track");
     runtime.setHoverTile({ x: 5, y: 5 });
-    expect(mutations.at(-1)).toEqual({
-      type: "layTrack",
-      point: { x: 5, y: 5 },
-    });
-
     runtime.startDrag({ x: 5, y: 5 });
+    expect(mutations).toHaveLength(0);
+    expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
+    expect(runtime.getSnapshot().ui.roadMutationPreviewPending).toBe(false);
+    expect(
+      selectMapTextOverlayItems(
+        runtime.getSnapshot().state,
+        runtime.getSnapshot().ui,
+      ).find((item) => item.kind === "cursorBadge")?.text,
+    ).toBe("⦿ Track · Drag at least two tiles");
+
     runtime.setDragCurrent({ x: 8, y: 6 });
     expect(mutations.at(-1)).toEqual({
       type: "layTrackLine",
@@ -2137,7 +2134,7 @@ describe("Game Runtime", () => {
     });
   });
 
-  it("retains the resolved track preview across pointer-down on the same tile", async () => {
+  it("keeps a valid multi-tile track preview across pointer movement within the stroke", async () => {
     const previews = deferredPreviewBackend(fullRustSnapshot());
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
@@ -2146,31 +2143,35 @@ describe("Game Runtime", () => {
     });
 
     runtime.setTool("track");
-    runtime.setHoverTile({ x: 5, y: 5 });
-    previews.resolveRoad(1, {
-      generation: 1,
-      changedTiles: [{ x: 5, y: 5 }],
+    runtime.startDrag({ x: 5, y: 5 });
+    runtime.setDragCurrent({ x: 6, y: 5 });
+    const generation = runtime.getSnapshot().ui.roadPreviewGeneration;
+    previews.resolveRoad(generation, {
+      generation,
+      changedTiles: [
+        { x: 5, y: 5 },
+        { x: 6, y: 5 },
+      ],
       authoredTiles: [],
       generatedStructures: [],
-      cost: 500,
+      cost: 1_000,
       skippedTiles: [],
       routeImpacts: [],
       warnings: [],
       rejection: null,
     });
     await flushPromises();
-    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(1);
 
-    runtime.startDrag({ x: 5, y: 5 });
+    runtime.setDragCurrent({ x: 7, y: 5 });
     const snap = runtime.getSnapshot();
     expect(snap.ui.drag?.tool).toBe("track");
-    expect(snap.ui.roadMutationPreview?.generation).toBe(1);
+    expect(snap.ui.roadMutationPreview?.generation).toBe(generation);
     expect(staleHeldRoadPreview(snap.state, snap.ui)).toBe(false);
     expect(
       selectMapTextOverlayItems(snap.state, snap.ui).find(
         (item) => item.kind === "cursorBadge",
       )?.text,
-    ).toBe("⦿ Track · $500");
+    ).toBe("⦿ Track · $1,000");
   });
 
   it("keeps a held track verdict only while it prefixes the drag stroke", async () => {
@@ -2219,6 +2220,16 @@ describe("Game Runtime", () => {
         (item) => item.kind === "cursorBadge",
       )?.text,
     ).toBe("⦿ Track …");
+
+    runtime.setDragCurrent({ x: 4, y: 5 });
+    snap = runtime.getSnapshot();
+    expect(snap.ui.roadMutationPreview).toBeNull();
+    expect(snap.ui.roadMutationPreviewPending).toBe(false);
+    expect(
+      selectMapTextOverlayItems(snap.state, snap.ui).find(
+        (item) => item.kind === "cursorBadge",
+      )?.text,
+    ).toBe("⦿ Track · Drag at least two tiles");
   });
 
   it("drops a stale-generation track response instead of repopulating the preview", async () => {
@@ -2230,37 +2241,51 @@ describe("Game Runtime", () => {
     });
 
     runtime.setTool("track");
-    runtime.setHoverTile({ x: 5, y: 5 });
-    runtime.setHoverTile({ x: 6, y: 5 });
+    runtime.startDrag({ x: 5, y: 5 });
+    runtime.setDragCurrent({ x: 6, y: 5 });
+    const firstGeneration = runtime.getSnapshot().ui.roadPreviewGeneration;
+    runtime.setDragCurrent({ x: 7, y: 5 });
+    const secondGeneration = runtime.getSnapshot().ui.roadPreviewGeneration;
 
-    previews.resolveRoad(1, {
-      generation: 1,
-      changedTiles: [{ x: 5, y: 5 }],
+    previews.resolveRoad(firstGeneration, {
+      generation: firstGeneration,
+      changedTiles: [
+        { x: 5, y: 5 },
+        { x: 6, y: 5 },
+      ],
       authoredTiles: [],
       generatedStructures: [],
-      cost: 500,
+      cost: 1_000,
       skippedTiles: [],
       routeImpacts: [],
       warnings: [],
       rejection: null,
     });
     await flushPromises();
-    expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(2);
+    expect(runtime.getSnapshot().ui.roadPreviewGeneration).toBe(
+      secondGeneration,
+    );
     expect(runtime.getSnapshot().ui.roadMutationPreview).toBeNull();
 
-    previews.resolveRoad(2, {
-      generation: 2,
-      changedTiles: [{ x: 6, y: 5 }],
+    previews.resolveRoad(secondGeneration, {
+      generation: secondGeneration,
+      changedTiles: [
+        { x: 5, y: 5 },
+        { x: 6, y: 5 },
+        { x: 7, y: 5 },
+      ],
       authoredTiles: [],
       generatedStructures: [],
-      cost: 500,
+      cost: 1_500,
       skippedTiles: [],
       routeImpacts: [],
       warnings: [],
       rejection: null,
     });
     await flushPromises();
-    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(2);
+    expect(runtime.getSnapshot().ui.roadMutationPreview?.generation).toBe(
+      secondGeneration,
+    );
   });
 
   it("surfaces a rejected track preview against its attempted footprint", async () => {
@@ -2272,10 +2297,15 @@ describe("Game Runtime", () => {
     });
 
     runtime.setTool("track");
-    runtime.setHoverTile({ x: 5, y: 5 });
-    previews.resolveRoad(1, {
-      generation: 1,
-      changedTiles: [{ x: 5, y: 5 }],
+    runtime.startDrag({ x: 5, y: 5 });
+    runtime.setDragCurrent({ x: 6, y: 5 });
+    const generation = runtime.getSnapshot().ui.roadPreviewGeneration;
+    previews.resolveRoad(generation, {
+      generation,
+      changedTiles: [
+        { x: 5, y: 5 },
+        { x: 6, y: 5 },
+      ],
       authoredTiles: [],
       generatedStructures: [],
       cost: 0,
@@ -8550,12 +8580,15 @@ describe("fake backend applyIntent coverage", () => {
 
   // Guards against regressions where a GameIntent silently falls through the
   // reducer and no-ops while the spy still reports `applied: true`.
-  it("applies layTrack and removeAtTile to the map", async () => {
+  it("applies layTrackLine and removeAtTile to the map", async () => {
     const backend = backendSpy();
 
     const laid = await backend.dispatch({
-      type: "layTrack",
-      point: { x: 2, y: 3 },
+      type: "layTrackLine",
+      points: [
+        { x: 2, y: 3 },
+        { x: 3, y: 3 },
+      ],
     });
     expect(laid.applied).toBe(true);
     expect(tileAt(backend.snapshotInternal(), 2, 3)?.hasTrack).toBe(true);
@@ -8647,7 +8680,7 @@ describe("fake backend applyIntent coverage", () => {
     });
   });
 
-  it("dispatches layTrack through handleTileClick with the track tool", async () => {
+  it("does not dispatch or dirty the city when clicking with the track tool", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
@@ -8655,11 +8688,12 @@ describe("fake backend applyIntent coverage", () => {
       backend,
     });
     runtime.setTool("track");
+    const before = runtime.getSnapshot();
     await runtime.handleTileClick({ x: 2, y: 3 });
-    expect(backend.intents).toContainEqual({
-      type: "layTrack",
-      point: { x: 2, y: 3 },
-    });
+    const after = runtime.getSnapshot();
+    expect(backend.intents).toHaveLength(0);
+    expect(after.state).toBe(before.state);
+    expect(after.persistence.dirty).toBe(before.persistence.dirty);
   });
 
   it("dispatches removeAtTile through handleTileClick with the remove tool", async () => {
@@ -8690,7 +8724,7 @@ describe("fake backend applyIntent coverage", () => {
     expect(after.ui).toBe(before.ui);
   });
 
-  it("commits a zero-length track drag as a single layTrack intent", async () => {
+  it("commits no intent for zero-length, jittered, or retracted track drags", async () => {
     const backend = backendSpy();
     const runtime = await createGameRuntime({
       createHost: createFakeGameHost,
@@ -8698,12 +8732,24 @@ describe("fake backend applyIntent coverage", () => {
       backend,
     });
     runtime.setTool("track");
+    const before = runtime.getSnapshot();
+
     runtime.startDrag({ x: 3, y: 3 });
     await runtime.commitDrag();
-    expect(backend.intents).toContainEqual({
-      type: "layTrack",
-      point: { x: 3, y: 3 },
-    });
+    runtime.startDrag({ x: 4, y: 4 });
+    runtime.setDragCurrent({ x: 4, y: 4 });
+    await runtime.commitDrag();
+    runtime.startDrag({ x: 5, y: 5 });
+    runtime.setDragCurrent({ x: 7, y: 5 });
+    runtime.setDragCurrent({ x: 5, y: 5 });
+    await runtime.commitDrag();
+
+    const after = runtime.getSnapshot();
+    expect(backend.intents).toHaveLength(0);
+    expect(after.state).toBe(before.state);
+    expect(after.persistence.dirty).toBe(before.persistence.dirty);
+    expect(after.ui.roadMutationPreview).toBeNull();
+    expect(after.ui.roadMutationPreviewPending).toBe(false);
   });
 
   it("commits a multi-tile track drag as a layTrackLine intent", async () => {

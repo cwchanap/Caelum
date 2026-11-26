@@ -695,7 +695,7 @@ describe("createCanvas2dRenderer", () => {
       solids: [],
       vehicles: [
         {
-          // Dimmed bus: body center rides the shared 8px lane offset.
+          // Dimmed bus: body center rides the sampled route center.
           instances: (() => {
             const a = vehicleRow(
               [0, 0],
@@ -794,13 +794,13 @@ describe("createCanvas2dRenderer", () => {
         { x: -1, y: 5 },
       ],
     ]);
-    expect(tiny!.state.ctm).toEqual([50, 0, 0, 25, 50, -150]);
+    expect(tiny!.state.ctm).toEqual([50, 0, 0, 25, 50, 50]);
 
-    // The lane offset applies in the rotated frame: the rotated bus's
-    // transform origin lands 8 local px off-center through angle π/2
-    // (float32-stored, hence the loose precision).
+    // No extra lane offset applies in the rotated frame: the rotated bus's
+    // transform origin is exactly its sampled center (float32-stored, hence
+    // the loose precision).
     const m = rotatedRing!.state.ctm;
-    expect(m[4]).toBeCloseTo(550, 4);
+    expect(m[4]).toBeCloseTo(150, 4);
     expect(m[5]).toBeCloseTo(25, 4);
 
     // The rotated bus's interior body keeps its own full alpha.

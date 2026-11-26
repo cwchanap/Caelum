@@ -3,10 +3,7 @@ import {
   pickMapTarget,
   type MapPickTargets,
 } from "../../src/render/webgpu/pickMapTarget";
-import {
-  VEHICLE_INSTANCE_FLOATS,
-  VEHICLE_LANE_OFFSET_PX,
-} from "../../src/render/gameplayRenderer";
+import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
 import {
   VEHICLE_HALF_LENGTH,
   VEHICLE_HALF_WIDTH,
@@ -263,18 +260,14 @@ describe("pickMapTarget", () => {
     );
 
     expect(
-      pickMapTarget(
-        targets,
-        { x: origin.x, y: origin.y - VEHICLE_LANE_OFFSET_PX },
-        { x: 9, y: 8 },
-      ),
+      pickMapTarget(targets, { x: origin.x, y: origin.y }, { x: 9, y: 8 }),
     ).toEqual({ vehicleId: "vehicle-001", lineId: null });
     expect(
       pickMapTarget(
         targets,
         {
           x: origin.x + VEHICLE_HALF_LENGTH - 2,
-          y: origin.y - VEHICLE_LANE_OFFSET_PX - VEHICLE_HALF_WIDTH + 1,
+          y: origin.y - VEHICLE_HALF_WIDTH + 1,
         },
         { x: 9, y: 8 },
       ),
@@ -292,7 +285,7 @@ describe("pickMapTarget", () => {
         targets,
         {
           x: origin.x,
-          y: origin.y - VEHICLE_LANE_OFFSET_PX - VEHICLE_HALF_WIDTH,
+          y: origin.y - VEHICLE_HALF_WIDTH,
         },
         { x: 9, y: 7 },
       ),

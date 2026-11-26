@@ -3,7 +3,6 @@ import { SOLID_VERTEX_FLOATS, parseColor } from "./primitives";
 import {
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
-  VEHICLE_LANE_OFFSET_PX,
   VEHICLE_RIM_PX,
   type BatchRole,
   type CapturedFrame,
@@ -80,13 +79,11 @@ fn vsMain(
   // as clip units would draw it fullscreen.
   let cos = cos(angle);
   let sin = sin(angle);
-  // Canvas-era parity: the old 2D renderer drew fillRect(-7, -14, 14, 8).
-  // The body spans
-  // double the half-extents and its center sits at a fixed lane offset
-  // perpendicular off the path centerline, decoupled from the half-width.
+  // The body spans double the half-extents, centered on the sampled route
+  // position. Corridor lane placement is already baked into that origin.
   let local = vec2f(
     corner.x * (extents.x * 2.0),
-    corner.y * (extents.y * 2.0) - ${wgslFloat(VEHICLE_LANE_OFFSET_PX)},
+    corner.y * (extents.y * 2.0),
   );
   let rotated = vec2f(
     local.x * cos - local.y * sin,

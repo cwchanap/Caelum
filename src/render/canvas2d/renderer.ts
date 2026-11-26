@@ -2,7 +2,6 @@ import { colors } from "../colors";
 import {
   SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
-  VEHICLE_LANE_OFFSET_PX,
   VEHICLE_RIM_PX,
   type CapturedFrame,
   type GameplayRenderer,
@@ -249,7 +248,6 @@ export function createCanvas2dRenderer(
           const ey = -instances[i + 10]! * halfHeight;
           ctx.setTransform(ex, 0, 0, ey, cx, cy);
           ctx.rotate(instances[i + 2]!);
-          ctx.translate(0, -VEHICLE_LANE_OFFSET_PX);
           const alpha = instances[i + 8]!;
           const hx = instances[i + 3]!;
           const hy = instances[i + 4]!;

@@ -465,6 +465,21 @@ describe("selectMapTextOverlayItems", () => {
       roadMutationPreviewPending: true,
     };
     expect(itemsOfKind(tracked, trackUi, "cursorBadge")[0]).toMatchObject({
+      text: "⦿ Track · Drag at least two tiles",
+      a11yText: "Track, Drag at least two tiles",
+    });
+
+    const validTrackDrag: UiState = {
+      ...trackUi,
+      drag: {
+        tool: "track",
+        start: { x: 2, y: 2 },
+        current: { x: 4, y: 2 },
+      },
+    };
+    expect(
+      itemsOfKind(tracked, validTrackDrag, "cursorBadge")[0],
+    ).toMatchObject({
       text: "⦿ Track …",
       a11yText: "Track, preview pending",
     });
@@ -500,8 +515,8 @@ describe("selectMapTextOverlayItems", () => {
       roadPreviewGeneration: 1,
     };
     expect(itemsOfKind(tracked, trackUi, "cursorBadge")[0]).toMatchObject({
-      text: "⦿ Track",
-      a11yText: "Track",
+      text: "⦿ Track · Drag at least two tiles",
+      a11yText: "Track, Drag at least two tiles",
     });
 
     const heldStaleUi: UiState = {
@@ -681,7 +696,7 @@ describe("selectMapTextOverlayItems", () => {
       ).toBe("⦿ Road …");
     });
 
-    it("labels the track tool and pends over existing track", () => {
+    it("labels idle track hover with the two-tile drag cue", () => {
       const state = createTestGameState();
       const ui: UiState = {
         ...createUiState(),
@@ -690,11 +705,12 @@ describe("selectMapTextOverlayItems", () => {
         roadMutationPreviewPending: true,
       };
 
-      expect(itemsOfKind(state, ui, "cursorBadge")[0]?.text).toBe("⦿ Track …");
-      expect(
-        itemsOfKind(withTracks(state, [{ x: 2, y: 2 }]), ui, "cursorBadge")[0]
-          ?.text,
-      ).toBe("⦿ Track …");
+      for (const candidate of [state, withTracks(state, [{ x: 2, y: 2 }])]) {
+        expect(itemsOfKind(candidate, ui, "cursorBadge")[0]).toMatchObject({
+          text: "⦿ Track · Drag at least two tiles",
+          a11yText: "Track, Drag at least two tiles",
+        });
+      }
     });
 
     it("labels the stop and station tools with their catalog prices", () => {
@@ -1272,14 +1288,15 @@ describe("selectMapTextOverlayItems", () => {
       expect(items[0]?.tone).toBe("warning");
     });
 
-    it("lets a track preview drive the track badge with cost and warnings", () => {
+    it("shows the two-tile cue instead of a stale purchase quote for a short track gesture", () => {
       const items = itemsOfKind(
         createTestGameState(),
         {
           ...createUiState(),
           activeTool: "track" as const,
           hoverTile: { x: 2, y: 2 },
-          roadPreviewGeneration: 1,
+          roadPreviewGeneration: 2,
+          roadMutationPreviewPending: true,
           roadMutationPreview: previewResponse({
             generation: 1,
             changedTiles: [{ x: 2, y: 2 }],
@@ -1289,7 +1306,42 @@ describe("selectMapTextOverlayItems", () => {
         "cursorBadge",
       );
 
-      expect(items[0]?.text).toBe("⦿ Track · $500");
+      expect(items[0]?.text).toBe("⦿ Track · Drag at least two tiles");
+      expect(items[0]?.text).not.toContain("$500");
+      expect(items[0]?.a11yText).toBe("Track, Drag at least two tiles");
+      expect(items[0]?.tone).toBeUndefined();
+    });
+
+    it("lets a valid multi-tile track preview drive the track badge with cost and warnings", () => {
+      const points = [
+        { x: 2, y: 2 },
+        { x: 3, y: 2 },
+      ];
+      const items = itemsOfKind(
+        createTestGameState(),
+        {
+          ...createUiState(),
+          activeTool: "track" as const,
+          hoverTile: { x: 3, y: 2 },
+          drag: {
+            tool: "track" as const,
+            start: points[0],
+            current: points[1],
+          },
+          roadPreviewGeneration: 1,
+          roadMutationPreview: {
+            ...previewResponse({
+              generation: 1,
+              changedTiles: points,
+              cost: 1000,
+            }),
+            mutation: { type: "layTrackLine" as const, points },
+          },
+        },
+        "cursorBadge",
+      );
+
+      expect(items[0]?.text).toBe("⦿ Track · $1,000");
       expect(items[0]?.tone).toBeUndefined();
     });
 
@@ -1299,7 +1351,12 @@ describe("selectMapTextOverlayItems", () => {
         {
           ...createUiState(),
           activeTool: "track" as const,
-          hoverTile: { x: 2, y: 2 },
+          hoverTile: { x: 3, y: 2 },
+          drag: {
+            tool: "track" as const,
+            start: { x: 2, y: 2 },
+            current: { x: 3, y: 2 },
+          },
           roadPreviewGeneration: 1,
           roadMutationPreview: previewResponse({
             generation: 1,
