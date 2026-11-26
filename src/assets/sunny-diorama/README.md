@@ -58,6 +58,16 @@ Trees use deep canopy `#3c6b35` as the base with lighter leaf facets. Avoid pure
 - Trees: 192×192 source, canopy cropped **edge to edge** with no size-setting transparent padding; the renderer scales the canopy to the existing deterministic **12–18 world-px diameter** (not a full tile).
 - Readability target: 42/21/14 CSS px/tile Fit at 1440×900 and 96 CSS px/tile maximum zoom (192 device px on a 2× display).
 
+## Transit markers (HPA-979)
+
+The `markers/` folder contains six transparent 192×192 WebPs with no baked shadows.
+
+- `bus-stop.webp` and `bus-stop-ring.webp` are the circular bus badge face and rim.
+- `metro-station.webp` and `metro-station-ring.webp` are the rounded-square M badge face and rim.
+- `track-straight.webp` connects west to east. `track-corner.webp` connects west to north. Rotate the tiles in 90° steps to use their matching edge profiles.
+
+Draw each rim over its badge face at the same tile origin and scale. The rim is pure white wherever it has alpha. Multiply its RGB by the line colour and preserve its alpha for clean edges. The badge face keeps its original colours.
+
 ## Reusable prompt prefix
 
 Use this prefix verbatim for every future map sprite/tree prompt, then append the item suffix:
