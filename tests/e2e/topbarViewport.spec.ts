@@ -560,6 +560,8 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
 test("clock cluster stays centred through pause, speed and dock changes", async ({
   page,
 }) => {
+  // Two city creations (short and long names) per matrix viewport.
+  test.setTimeout(180_000);
   const failures: string[] = [];
 
   const measure = async (
@@ -581,32 +583,39 @@ test("clock cluster stays centred through pause, speed and dock changes", async 
 
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
-    await createDefaultCity(page, "E2E City");
-    await expect(page.getByTestId("topbar-save-status")).toHaveText(
-      /^Saved \d+ (s|min) ago$/,
-    );
-    await measure(viewport, "short city name");
+    for (const cityName of ["E2E City", LONG_CITY_NAME] as const) {
+      const nameKind = cityName === LONG_CITY_NAME ? "long" : "short";
+      await createDefaultCity(page, cityName);
+      await expect(page.getByTestId("topbar-save-status")).toHaveText(
+        /^Saved \d+ (s|min) ago$/,
+      );
+      await measure(viewport, `${nameKind} city name`);
 
-    // The sandbox starts paused, so the first click resumes.
-    const pause = page.locator('[data-action="pause"]');
-    await expect(pause).toHaveAccessibleName("Resume");
-    await pause.click();
-    await expect(pause).toHaveAccessibleName("Pause");
-    await measure(viewport, "resumed");
-    await pause.click();
-    await expect(pause).toHaveAccessibleName("Resume");
-    await measure(viewport, "paused again");
+      // The sandbox starts paused, so the first click resumes.
+      const pause = page.locator('[data-action="pause"]');
+      await expect(pause).toHaveAccessibleName("Resume");
+      await pause.click();
+      await expect(pause).toHaveAccessibleName("Pause");
+      await measure(viewport, `${nameKind} name resumed`);
+      await pause.click();
+      await expect(pause).toHaveAccessibleName("Resume");
+      await measure(viewport, `${nameKind} name paused again`);
 
-    for (const speed of ["2x", "4x", "1x"] as const) {
-      await page.getByRole("button", { name: speed }).click();
-      await measure(viewport, `speed ${speed}`);
+      for (const speed of ["2x", "4x", "1x"] as const) {
+        const speedButton = page.getByRole("button", { name: speed });
+        await speedButton.click();
+        // Speed selection is asynchronous; wait until it takes effect so the
+        // settled layout is what gets measured.
+        await expect(speedButton).toHaveAttribute("aria-pressed", "true");
+        await measure(viewport, `${nameKind} name speed ${speed}`);
+      }
+
+      await openCommandDestination(page, "build");
+      await measure(viewport, `${nameKind} name dock open`);
+      await page.getByRole("button", { name: "Close Build" }).click();
+      await expect(page.getByTestId("workspace-dock")).toHaveCount(0);
+      await measure(viewport, `${nameKind} name dock closed`);
     }
-
-    await openCommandDestination(page, "build");
-    await measure(viewport, "dock open");
-    await page.getByRole("button", { name: "Close Build" }).click();
-    await expect(page.getByTestId("workspace-dock")).toHaveCount(0);
-    await measure(viewport, "dock closed");
   }
 
   expect(failures).toEqual([]);
@@ -618,9 +627,7 @@ test("real failed save keeps one focusable Retry chip at supported widths", asyn
   await installOneShotCitySaveFailure(page);
   const failures: string[] = [];
 
-  for (const viewport of viewports.filter(
-    (candidate) => candidate.width === 1024 || candidate.width === 1440,
-  )) {
+  for (const viewport of viewports) {
     await page.setViewportSize(viewport);
     await createDefaultCity(page, LONG_CITY_NAME);
     await applyDirtyFixture(page);
@@ -637,6 +644,9 @@ test("real failed save keeps one focusable Retry chip at supported widths", asyn
 
     const geometry = await topbarGeometry(page);
     failures.push(...collectRetryFailures(viewport, geometry));
+    failures.push(
+      ...collectCenteringFailures(viewport, geometry, "failed-save Retry"),
+    );
 
     const retry = status.getByRole("button", { name: "Retry", exact: true });
     await retry.focus();
