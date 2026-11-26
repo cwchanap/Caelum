@@ -1,8 +1,14 @@
 import { expect, type Page } from "@playwright/test";
-import { runtimeSnapshot, sampleTilePixels, type PixelProbe } from "./helpers";
+import {
+  runtimeSnapshot,
+  sampleFrameTransform,
+  sampleTilePixels,
+  type PixelProbe,
+} from "./helpers";
 
 // Opaque texels in bus-stop.webp at (96,108) and (80,80), and the white
-// bus-stop-ring.webp at (30,96)/(162,96). The quad is 14 world px wide.
+// bus-stop-ring.webp at (30,96)/(162,96)/(96,30)/(96,162). The quad is
+// 14 world px wide.
 const faceDarkRgb = [76, 58, 52] as const;
 const faceCreamRgb = [255, 248, 238] as const;
 
@@ -74,22 +80,46 @@ export async function expectRoadsideStopAnchors(
 
   const inset = (16 * 14) / 192;
   const rim = (66 * 14) / 192;
-  const offsets = [
-    { dx: 0, dy: (12 * 14) / 192 },
-    { dx: -inset, dy: -inset },
-    { dx: -rim, dy: 0 },
-    { dx: rim, dy: 0 },
-  ];
+  const probeCount = 4;
   const rimRgb = [1, 3, 5].map((index) =>
     parseInt(rimColor.slice(index, index + 2), 16),
   );
-  const probes: PixelProbe[] = anchors.flatMap(({ passenger, road }) =>
-    [passenger, road].flatMap((tile) =>
-      offsets.map((offset) => ({ tile, ...offset })),
-    ),
-  );
   await expect
     .poll(async () => {
+      const transform = await sampleFrameTransform(page);
+      if (transform === null) {
+        return {
+          passengerFaces: false,
+          passengerRims: false,
+          roadMarkers: false,
+        };
+      }
+      // sampleTilePixels rounds indices; select the nearest pixel center.
+      const adjust = 0.5 / (transform.scale * transform.dpr);
+      const probes: PixelProbe[] = anchors.flatMap(({ passenger, road }) => {
+        const dx = road.x - passenger.x;
+        const dy = road.y - passenger.y;
+        const distance = Math.hypot(dx, dy);
+        if (distance === 0) throw new Error("Stop and road anchors coincide");
+        // Probe the mask perpendicular to the access indicator and connector.
+        const normal = {
+          dx: (-dy / distance) * rim,
+          dy: (dx / distance) * rim,
+        };
+        const offsets = [
+          { dx: 0, dy: (12 * 14) / 192 },
+          { dx: -inset, dy: -inset },
+          normal,
+          { dx: -normal.dx, dy: -normal.dy },
+        ];
+        return [passenger, road].flatMap((tile) =>
+          offsets.map(({ dx, dy }) => ({
+            tile,
+            dx: dx - adjust,
+            dy: dy - adjust,
+          })),
+        );
+      });
       const samples = await sampleTilePixels(page, probes);
       const near = (
         sample: [number, number, number] | null,
@@ -100,20 +130,25 @@ export async function expectRoadsideStopAnchors(
         Math.abs(sample[0] - rgb[0]) <= tolerance &&
         Math.abs(sample[1] - rgb[1]) <= tolerance &&
         Math.abs(sample[2] - rgb[2]) <= tolerance;
-      const markerBlobAt = (index: number) =>
+      const markerFaceAt = (index: number) =>
         near(samples[index]!, faceDarkRgb) &&
-        near(samples[index + 1]!, faceCreamRgb) &&
+        near(samples[index + 1]!, faceCreamRgb);
+      const markerRimAt = (index: number) =>
         samples
-          .slice(index + 2, index + offsets.length)
+          .slice(index + 2, index + probeCount)
           .some((sample) => near(sample, rimRgb, 50));
       return {
-        passengerMarkers: anchors.every((_, anchorIndex) =>
-          markerBlobAt(anchorIndex * offsets.length * 2),
+        passengerFaces: anchors.every((_, anchorIndex) =>
+          markerFaceAt(anchorIndex * probeCount * 2),
         ),
-        roadMarkers: anchors.some((_, anchorIndex) =>
-          markerBlobAt(anchorIndex * offsets.length * 2 + offsets.length),
+        passengerRims: anchors.every((_, anchorIndex) =>
+          markerRimAt(anchorIndex * probeCount * 2),
         ),
+        roadMarkers: anchors.some((_, anchorIndex) => {
+          const index = anchorIndex * probeCount * 2 + probeCount;
+          return markerFaceAt(index) && markerRimAt(index);
+        }),
       };
     })
-    .toEqual({ passengerMarkers: true, roadMarkers: false });
+    .toEqual({ passengerFaces: true, passengerRims: true, roadMarkers: false });
 }
