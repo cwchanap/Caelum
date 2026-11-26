@@ -230,10 +230,12 @@ test("radio groups default, preview and arrow keys choose on the New City screen
     economyGroup.getByRole("radio", { name: "Standard" }),
   ).toBeChecked();
 
-  // The illustrated preview follows the selected template immediately,
+  // The illustrated preview and caption follow each selection immediately,
   // without invoking Rust.
   const preview = page.getByTestId("new-city-preview");
+  const caption = page.getByTestId("new-city-caption");
   await expect(preview).toHaveAttribute("src", /crossroads/);
+  await expect(caption).toHaveText("Crossroads · 28×18 · Standard");
   await templateGroup.getByRole("radio", { name: "Blank Grid" }).check();
   await expect(
     templateGroup.getByRole("radio", { name: "Blank Grid" }),
@@ -242,13 +244,20 @@ test("radio groups default, preview and arrow keys choose on the New City screen
     templateGroup.getByRole("radio", { name: "Crossroads" }),
   ).not.toBeChecked();
   await expect(preview).toHaveAttribute("src", /blankGrid/);
+  await expect(caption).toHaveText("Blank Grid · 28×18 · Standard");
 
   await sizeGroup.getByRole("radio", { name: "Medium" }).check();
   await expect(sizeGroup.getByRole("radio", { name: "Medium" })).toBeChecked();
-  await economyGroup.getByRole("radio", { name: "Creative" }).check();
+  await expect(caption).toHaveText("Blank Grid · 56×36 · Standard");
+
+  // Clicking the visible card selects its hidden native radio.
+  await economyGroup
+    .locator(".choice-tile", { hasText: "Creative" })
+    .click();
   await expect(
     economyGroup.getByRole("radio", { name: "Creative" }),
   ).toBeChecked();
+  await expect(caption).toHaveText("Blank Grid · 56×36 · Creative");
 
   // Native radio arrow keys move the checked choice. Template tiles are
   // ordered Blank Grid, Crossroads, Small Town.
@@ -260,6 +269,16 @@ test("radio groups default, preview and arrow keys choose on the New City screen
   await expect(
     templateGroup.getByRole("radio", { name: "Blank Grid" }),
   ).not.toBeChecked();
+  await expect(caption).toHaveText("Small Town · 56×36 · Creative");
+
+  // The untouched prefilled name submits as Riverside with the selections.
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  const snapshot = await runtimeSnapshot(page);
+  expect(snapshot.persistence.activeCity).toMatchObject({
+    name: "Riverside",
+    templateId: "smallTown",
+  });
 });
 
 test("gates Create on a trimmed name and trims it into the saved city", async ({

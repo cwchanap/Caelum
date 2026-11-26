@@ -65,6 +65,13 @@
     if (!(await flushHeaderName())) return;
     onSave();
   }
+
+  // The armed second Delete press also suppresses the header editor's blur
+  // commit: CityList already flushed its row drafts, so the confirmed click
+  // must run the same header flush before the delete can unmount it.
+  async function handleListDelete(cityId: string): Promise<void> {
+    if (await flushHeaderName()) onDelete(cityId);
+  }
 </script>
 
 <div class="hud-panel" data-testid="panel-city">
@@ -167,7 +174,7 @@
           activeNameReadOnly
           onLoad={handleListLoad}
           {onRename}
-          {onDelete}
+          onDelete={handleListDelete}
         />
       </section>
     {/if}

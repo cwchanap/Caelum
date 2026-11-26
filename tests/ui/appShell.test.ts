@@ -767,21 +767,29 @@ describe("App command shell", () => {
       "Old Harbour",
     );
 
-    const del = within(row).getByRole("button", { name: "Delete" });
+    const del = within(row).getByRole("button", { name: /^Delete / });
     await fireEvent.click(del);
     await fireEvent.click(del);
-    expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
-      "city-old",
+    await waitFor(() =>
+      expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
+        "city-old",
+      ),
     );
   });
 
-  it("waits for an in-flight rename before loading the city", async () => {
+  it("refuses a busy Load click and loads only on a fresh click", async () => {
     const harness = createRuntimeHarness({
       persistence: { activeCity: null, busy: false, dirty: false },
       cities: [CITY_NEW, CITY_OLD],
     });
     const renameDone = deferred<{ ok: true; value: CitySummary }>();
-    harness.runtime.persistence.renameCity = vi.fn(() => renameDone.promise);
+    harness.runtime.persistence.renameCity = vi.fn(async () => {
+      // The real write holds the persistence gate for its whole duration.
+      harness.setPersistence({ busy: true });
+      const result = await renameDone.promise;
+      harness.setPersistence({ busy: false });
+      return result;
+    });
     render(App, { props: { runtime: harness.runtime } });
 
     await fireEvent.click(
@@ -795,17 +803,23 @@ describe("App command shell", () => {
       "Old Harbour",
     );
 
-    // The Load click lands while the rename still holds the persistence
-    // gate; the load must wait for it rather than be refused as busy.
-    await fireEvent.click(
-      screen.getByRole("button", { name: "Load Harbour City" }),
-    );
+    // The Load press lands while the rename still holds the gate: the
+    // button is disabled, so the click is refused and nothing is queued.
+    const loadButton = () =>
+      within(screen.getByTestId("city-row-city-old")).getByRole("button", {
+        name: /^Load /,
+      });
+    expect(loadButton()).toBeDisabled();
     expect(harness.runtime.persistence.load).not.toHaveBeenCalled();
 
     renameDone.resolve({
       ok: true,
       value: { ...CITY_OLD, name: "Old Harbour" },
     });
+    // The gate release replays nothing; only a fresh click loads the city.
+    await waitFor(() => expect(loadButton()).toBeEnabled());
+    expect(harness.runtime.persistence.load).not.toHaveBeenCalled();
+    await fireEvent.click(loadButton());
     await waitFor(() =>
       expect(harness.runtime.persistence.load).toHaveBeenCalledWith("city-old"),
     );
@@ -1040,9 +1054,14 @@ describe("App command shell", () => {
     render(App, { props: { runtime: harness.runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     const row = await screen.findByTestId("city-row-city-new");
-    const del = within(row).getByRole("button", { name: "Delete" });
+    const del = within(row).getByRole("button", { name: /^Delete / });
     await fireEvent.click(del);
     await fireEvent.click(del);
+    await waitFor(() =>
+      expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
+        "city-new",
+      ),
+    );
 
     harness.setPersistence({ activeCity: null, busy: false, dirty: false });
     expect(await screen.findByTestId("city-library-screen")).toBeVisible();
@@ -1082,11 +1101,13 @@ describe("App command shell", () => {
       expect(harness.runtime.persistence.listCities).toHaveBeenCalledTimes(2),
     );
 
-    const del = within(row).getByRole("button", { name: "Delete" });
+    const del = within(row).getByRole("button", { name: /^Delete / });
     await fireEvent.click(del);
     await fireEvent.click(del);
-    expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
-      "city-new",
+    await waitFor(() =>
+      expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
+        "city-new",
+      ),
     );
 
     older.resolve({ ok: true, value: [CITY_NEW, CITY_OLD] });
@@ -1118,9 +1139,14 @@ describe("App command shell", () => {
     render(App, { props: { runtime: harness.runtime } });
     await fireEvent.click(screen.getByTestId("command-destination-city"));
     const row = await screen.findByTestId("city-row-city-new");
-    const del = within(row).getByRole("button", { name: "Delete" });
+    const del = within(row).getByRole("button", { name: /^Delete / });
     await fireEvent.click(del);
     await fireEvent.click(del);
+    await waitFor(() =>
+      expect(harness.runtime.persistence.deleteCity).toHaveBeenCalledWith(
+        "city-new",
+      ),
+    );
 
     harness.setPersistence({ activeCity: null, busy: false, dirty: false });
     expect(await screen.findByTestId("city-library-screen")).toBeVisible();
