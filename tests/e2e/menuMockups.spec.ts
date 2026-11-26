@@ -145,6 +145,10 @@ test.describe("New City reference composition", () => {
         { selector: "input[name='template']", count: 3 },
         { selector: "input[name='mapSize']", count: 3 },
         { selector: "input[name='economy']", count: 2 },
+        // The radios are visually hidden; their card labels are the visible
+        // controls and must also fit the composition.
+        { selector: ".choice-tile--template", count: 3 },
+        { selector: ".choice-tile", count: 8 },
         { selector: "input[autocomplete='off']", count: 1 },
         { selector: "button[type='submit']", count: 1 },
         // The standalone screen renders only Create; Cancel exists solely in
@@ -185,9 +189,12 @@ test.describe("City Library reference composition", () => {
       await expect(library).toBeVisible();
       await expect(library).toHaveCSS("background-image", /city-library\.webp/);
       await expect(library.locator("img[src*='app-icon']")).toBeVisible();
-      await expect(library.locator(".city-library-continue")).toHaveText(
-        /^Continue /,
-      );
+      const continueCard = library.locator(".city-library-continue");
+      await expect(continueCard).toHaveText(/^\s*Continue /);
+      // The Continue card names the newest saved city and its saved time.
+      await expect(continueCard).toContainText("Library Shot C");
+      await expect(continueCard.locator("time[datetime]")).toHaveCount(1);
+      await expect(library.getByText("Your cities")).toBeVisible();
       // After a fresh reload no session is active, so every row carries a
       // Load button.
       await assertCompositionFits(page, [
@@ -198,8 +205,10 @@ test.describe("City Library reference composition", () => {
         { selector: ".city-library-actions button", count: 2 },
         { selector: "[data-testid^='city-row-']", count: 3 },
         { selector: "[data-testid='city-avatar']", count: 3 },
-        { selector: "input.city-name", count: 3 },
-        { selector: "time[datetime]", count: 3 },
+        { selector: ".inline-name-value", count: 3 },
+        { selector: ".inline-name-pencil", count: 3 },
+        // One saved-time per row plus the Continue card timestamp.
+        { selector: "time[datetime]", count: 4 },
         { selector: "button[aria-label^='Load ']", count: 3 },
         { selector: "[data-testid^='city-delete-']", count: 3 },
       ]);

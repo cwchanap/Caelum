@@ -269,7 +269,9 @@ test("gates Create on a trimmed name and trims it into the saved city", async ({
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
 
   const create = page.getByRole("button", { name: "Create City" });
-  await expect(create).toBeDisabled();
+  // The name field is prefilled with an editable valid name.
+  await expect(page.getByLabel("City name")).toHaveValue("Riverside");
+  await expect(create).toBeEnabled();
   await page.getByLabel("City name").fill("   ");
   await expect(create).toBeDisabled();
 

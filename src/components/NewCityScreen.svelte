@@ -1,4 +1,5 @@
 <script lang="ts">
+  import keyArt from "../assets/sunny-diorama/menu/city-library.webp";
   import blankGridArt from "../assets/sunny-diorama/templates/blankGrid.webp";
   import crossroadsArt from "../assets/sunny-diorama/templates/crossroads.webp";
   import smallTownArt from "../assets/sunny-diorama/templates/smallTown.webp";
@@ -19,7 +20,7 @@
   }
 
   let { busy, error, onCreate, onCancel }: Props = $props();
-  let name = $state("");
+  let name = $state("Riverside");
   let economyPreset = $state<EconomyPreset>("standard");
   let templateId = $state<SandboxTemplateId>("crossroads");
   let mapSize = $state<SandboxMapSize>("small");
@@ -29,21 +30,25 @@
   const templateChoices: {
     id: SandboxTemplateId;
     label: string;
+    note: string;
     art: string;
   }[] = [
     {
       id: "blankGrid",
       label: SANDBOX_TEMPLATE_LABELS.blankGrid,
+      note: "An empty map",
       art: blankGridArt,
     },
     {
       id: "crossroads",
       label: SANDBOX_TEMPLATE_LABELS.crossroads,
+      note: "Streets already placed",
       art: crossroadsArt,
     },
     {
       id: "smallTown",
       label: SANDBOX_TEMPLATE_LABELS.smallTown,
+      note: "Homes and jobs placed",
       art: smallTownArt,
     },
   ];
@@ -55,6 +60,11 @@
     templateChoices.find((choice) => choice.id === templateId)?.art ??
       crossroadsArt,
   );
+  const previewCaption = $derived(
+    `${SANDBOX_TEMPLATE_LABELS[templateId]} · ` +
+      `${MAP_SIZES[mapSize].width}×${MAP_SIZES[mapSize].height} · ` +
+      `${economyChoices.find((choice) => choice.id === economyPreset)?.label}`,
+  );
   const canCreate = $derived(!busy && name.trim().length > 0);
 
   function submit(event: SubmitEvent): void {
@@ -65,7 +75,11 @@
   }
 </script>
 
-<main class="new-city-screen" data-testid="new-city-screen">
+<main
+  class="new-city-screen"
+  data-testid="new-city-screen"
+  style={`background-image: url(${keyArt})`}
+>
   <form class="card new-city-card" onsubmit={submit}>
     <h1>New City</h1>
 
@@ -89,6 +103,7 @@
                 />
                 <img src={choice.art} alt="" />
                 <span>{choice.label}</span>
+                <span class="choice-detail">{choice.note}</span>
               </label>
             {/each}
           </div>
@@ -150,6 +165,9 @@
 
       <div class="new-city-preview">
         <img data-testid="new-city-preview" src={previewArt} alt="" />
+        <p class="new-city-caption" data-testid="new-city-caption">
+          {previewCaption}
+        </p>
       </div>
     </div>
   </form>

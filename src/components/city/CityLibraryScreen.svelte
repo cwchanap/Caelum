@@ -33,6 +33,11 @@
   let cityList: { flushCityNames: () => Promise<boolean> } | null =
     $state(null);
 
+  const savedAtFormat = new Intl.DateTimeFormat("en-US", {
+    dateStyle: "medium",
+    timeStyle: "short",
+  });
+
   // Continue/New City use the same prevented-mousedown contract as a row's
   // Load: it keeps a blur-commit's busy flip from eating the click, so the
   // click itself must flush any row-name draft before the action replaces
@@ -74,7 +79,7 @@
       {#if cities === null}
         <p>Loading cities…</p>
       {:else if cities.length > 0}
-        <div class="city-library-actions">
+        <div class="city-library-actions city-library-actions--column">
           <button
             type="button"
             class="btn city-library-continue"
@@ -82,18 +87,55 @@
             onmousedown={(event) => event.preventDefault()}
             onclick={() => void flushThen(() => onContinue(cities[0].id))}
           >
-            Continue
-            <span class="city-library-continue-name">{cities[0].name}</span>
+            <svg
+              class="city-library-action-icon"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <path d="M3.5 2.5v11l9-5.5z" />
+            </svg>
+            <span class="city-library-action-body">
+              <span class="city-library-action-label">
+                Continue
+                <span class="city-library-continue-name">{cities[0].name}</span>
+              </span>
+              <span class="city-library-action-hint">
+                Saved
+                <time datetime={cities[0].savedAt}>
+                  {savedAtFormat.format(new Date(cities[0].savedAt))}
+                </time>
+              </span>
+            </span>
           </button>
           <button
             type="button"
+            class="btn city-library-new"
             disabled={busy}
             onmousedown={(event) => event.preventDefault()}
             onclick={() => void flushThen(onNewCity)}
           >
-            New City
+            <svg
+              class="city-library-action-icon"
+              viewBox="0 0 16 16"
+              aria-hidden="true"
+            >
+              <path
+                d="M8 2v12M2 8h12"
+                fill="none"
+                stroke="currentColor"
+                stroke-width="2"
+              />
+            </svg>
+            <span class="city-library-action-body">
+              <span class="city-library-action-label">New City</span>
+              <span class="city-library-action-hint">Crossroads · Small</span>
+            </span>
           </button>
         </div>
+        <h2 class="city-library-list-head">
+          Your cities
+          <span class="city-library-count">{cities.length}</span>
+        </h2>
         <CityList
           bind:this={cityList}
           {cities}

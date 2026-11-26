@@ -46,6 +46,14 @@ function renderList(busy = false, dirty = false, activeNameReadOnly = false) {
   return { onLoad, onRename, onDelete };
 }
 
+/** Activate a row's pencil-activated name editor and return its input. */
+async function openRowEditor(cityId: string, name: string) {
+  await fireEvent.click(
+    screen.getByRole("button", { name: `Rename ${name}` }),
+  );
+  return screen.getByTestId(`city-name-${cityId}`) as HTMLInputElement;
+}
+
 describe("CityList", () => {
   it("marks the active row and loads an inactive city by ID", async () => {
     const { onLoad } = renderList();
@@ -62,7 +70,21 @@ describe("CityList", () => {
     await fireEvent.click(
       within(inactive).getByRole("button", { name: "Load Harbour City" }),
     );
-    expect(onLoad).toHaveBeenCalledWith("city-old");
+    await waitFor(() => expect(onLoad).toHaveBeenCalledWith("city-old"));
+  });
+
+  it("shows the city name as row text with a pencil, not an always-open input", () => {
+    renderList();
+    const row = screen.getByTestId("city-row-city-old");
+
+    // The name is visible text; the editor opens only through the pencil.
+    expect(within(row).getByTestId("city-name-city-old")).toHaveTextContent(
+      "Harbour City",
+    );
+    expect(
+      within(row).getByRole("button", { name: "Rename Harbour City" }),
+    ).toBeVisible();
+    expect(within(row).queryByRole("textbox")).toBeNull();
   });
 
   it("renders a colored initial avatar in every row", () => {
@@ -132,7 +154,7 @@ describe("CityList", () => {
 
   it("trims an inline rename and commits once on Enter followed by blur", async () => {
     const { onRename } = renderList();
-    const input = screen.getByTestId("city-name-city-new");
+    const input = await openRowEditor("city-new", "Maple Junction");
 
     await fireEvent.input(input, { target: { value: "  Maple Central  " } });
     await fireEvent.keyDown(input, { key: "Enter" });
@@ -140,38 +162,43 @@ describe("CityList", () => {
 
     expect(onRename).toHaveBeenCalledTimes(1);
     expect(onRename).toHaveBeenCalledWith("city-new", "Maple Central");
+    expect(screen.queryByRole("textbox")).toBeNull();
   });
 
   it("rejects a whitespace-only city name", async () => {
     const { onRename } = renderList();
-    const input = screen.getByTestId("city-name-city-new");
+    const input = await openRowEditor("city-new", "Maple Junction");
 
     await fireEvent.input(input, { target: { value: "   " } });
     await fireEvent.blur(input);
 
     expect(onRename).not.toHaveBeenCalled();
-    expect(input).toHaveValue("Maple Junction");
+    expect(screen.getByTestId("city-name-city-new")).toHaveTextContent(
+      "Maple Junction",
+    );
   });
 
   it("restores the canonical city name and contains Escape", async () => {
     const { onRename } = renderList();
-    const input = screen.getByTestId("city-name-city-new");
+    const input = await openRowEditor("city-new", "Maple Junction");
     const parentEscape = vi.fn();
     window.addEventListener("keydown", parentEscape);
 
     await fireEvent.input(input, { target: { value: "Unsaved name" } });
     await fireEvent.keyDown(input, { key: "Escape" });
 
-    expect(input).toHaveValue("Maple Junction");
     expect(onRename).not.toHaveBeenCalled();
     expect(parentEscape).not.toHaveBeenCalled();
-    expect(document.activeElement).not.toBe(input);
+    expect(screen.queryByRole("textbox")).toBeNull();
+    expect(screen.getByTestId("city-name-city-new")).toHaveTextContent(
+      "Maple Junction",
+    );
     window.removeEventListener("keydown", parentEscape);
   });
 
   it("commits a pending rename before loading the city", async () => {
     const { onLoad, onRename } = renderList();
-    const input = screen.getByTestId("city-name-city-old");
+    const input = await openRowEditor("city-old", "Harbour City");
 
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
     // mousedown.preventDefault keeps the press from blur-committing the
@@ -197,21 +224,25 @@ describe("CityList", () => {
         onDelete: vi.fn(),
       },
     });
-    const input = screen.getByTestId("city-name-city-old");
+    const input = await openRowEditor("city-old", "Harbour City");
 
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
     await fireEvent.click(
       screen.getByRole("button", { name: "Load Harbour City" }),
     );
 
-    // The refused rename re-arms the draft so a retry can commit it; the
+    // The refused rename re-opens the draft so a retry can commit it; the
     // load must not discard it by replacing the library.
-    await waitFor(() => expect(input).toHaveValue("Harbour Reef"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Rename Harbour City" }),
+      ).toHaveValue("Harbour Reef"),
+    );
     expect(onRename).toHaveBeenCalledWith("city-old", "Harbour Reef");
     expect(onLoad).not.toHaveBeenCalled();
   });
 
-  it("re-arms the draft when a blur-committed rename is refused", async () => {
+  it("re-opens the draft when a blur-committed rename is refused", async () => {
     const onRename = vi.fn(async () => false);
     render(CityList, {
       props: {
@@ -223,13 +254,17 @@ describe("CityList", () => {
         onDelete: vi.fn(),
       },
     });
-    const input = screen.getByTestId("city-name-city-old");
+    const input = await openRowEditor("city-old", "Harbour City");
 
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
     await fireEvent.blur(input);
 
     expect(onRename).toHaveBeenCalledWith("city-old", "Harbour Reef");
-    await waitFor(() => expect(input).toHaveValue("Harbour Reef"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Rename Harbour City" }),
+      ).toHaveValue("Harbour Reef"),
+    );
   });
 
   it("requires two Delete clicks", async () => {
@@ -241,7 +276,7 @@ describe("CityList", () => {
     expect(del).toHaveTextContent("Delete?");
     expect(onDelete).not.toHaveBeenCalled();
     await fireEvent.click(del);
-    expect(onDelete).toHaveBeenCalledWith("city-old");
+    await waitFor(() => expect(onDelete).toHaveBeenCalledWith("city-old"));
   });
 
   it("disables city mutations while persistence is busy", () => {
@@ -249,8 +284,8 @@ describe("CityList", () => {
     expect(
       screen.getByRole("button", { name: "Load Harbour City" }),
     ).toBeDisabled();
-    for (const input of screen.getAllByRole("textbox", { name: /^Rename / })) {
-      expect(input).toBeDisabled();
+    for (const pencil of screen.getAllByRole("button", { name: /^Rename / })) {
+      expect(pencil).toBeDisabled();
     }
     for (const button of screen.getAllByRole("button", { name: "Delete" })) {
       expect(button).toBeDisabled();
@@ -272,13 +307,18 @@ describe("CityList", () => {
       const rowName = within(activeRow).getByTestId("city-name-city-new");
       expect(rowName).toHaveTextContent("Maple Junction");
       expect(within(activeRow).queryByRole("textbox")).toBeNull();
+      expect(
+        within(activeRow).queryByRole("button", {
+          name: "Rename Maple Junction",
+        }),
+      ).toBeNull();
       expect(within(activeRow).getByText("Playing")).toBeVisible();
       expect(within(activeRow).queryByText("Active")).toBeNull();
 
-      // Inactive rows keep the editable input, Load and Delete controls.
+      // Inactive rows keep the pencil-activated editor, Load and Delete.
       const inactiveRow = screen.getByTestId("city-row-city-old");
       expect(
-        within(inactiveRow).getByRole("textbox", {
+        within(inactiveRow).getByRole("button", {
           name: "Rename Harbour City",
         }),
       ).toBeVisible();
@@ -338,16 +378,33 @@ describe("CityLibraryScreen", () => {
     return { onContinue, onNewCity };
   }
 
+  it("renders the Continue card with name and saved time, plus Your cities count", () => {
+    renderLibrary(vi.fn(async () => true));
+
+    const continueButton = screen.getByRole("button", {
+      name: /^Continue Maple Junction/,
+    });
+    expect(continueButton).toBeVisible();
+    expect(
+      continueButton.querySelector("time[datetime]"),
+    ).toHaveAttribute("datetime", CITIES[0].savedAt);
+    expect(screen.getByText("Your cities")).toBeVisible();
+    expect(screen.getByText("Your cities")).toHaveTextContent("2");
+    expect(
+      screen.getByRole("button", { name: /^New City/ }),
+    ).toBeVisible();
+  });
+
   it("commits a pending row rename before continuing", async () => {
     const onRename = vi.fn(async () => true);
     const { onContinue } = renderLibrary(onRename);
-    const input = screen.getByTestId("city-name-city-new");
+    const input = await openRowEditor("city-new", "Maple Junction");
 
     await fireEvent.input(input, { target: { value: "Maple Central" } });
     // Continue uses the same prevented mousedown as a row Load, so the click
     // itself flushes the draft before the continue swaps out the library.
     await fireEvent.click(
-      screen.getByRole("button", { name: "Continue Maple Junction" }),
+      screen.getByRole("button", { name: /^Continue Maple Junction/ }),
     );
 
     expect(onRename).toHaveBeenCalledWith("city-new", "Maple Central");
@@ -360,11 +417,11 @@ describe("CityLibraryScreen", () => {
       () => new Promise<boolean>((done) => (resolveRename = done)),
     );
     const { onContinue } = renderLibrary(onRename);
-    const input = screen.getByTestId("city-name-city-old");
+    const input = await openRowEditor("city-old", "Harbour City");
 
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
     await fireEvent.click(
-      screen.getByRole("button", { name: "Continue Maple Junction" }),
+      screen.getByRole("button", { name: /^Continue Maple Junction/ }),
     );
     expect(onContinue).not.toHaveBeenCalled();
 
@@ -375,12 +432,16 @@ describe("CityLibraryScreen", () => {
   it("keeps the draft and skips New City when the rename is refused", async () => {
     const onRename = vi.fn(async () => false);
     const { onNewCity } = renderLibrary(onRename);
-    const input = screen.getByTestId("city-name-city-old");
+    const input = await openRowEditor("city-old", "Harbour City");
 
     await fireEvent.input(input, { target: { value: "Harbour Reef" } });
-    await fireEvent.click(screen.getByRole("button", { name: "New City" }));
+    await fireEvent.click(screen.getByRole("button", { name: /^New City/ }));
 
-    await waitFor(() => expect(input).toHaveValue("Harbour Reef"));
+    await waitFor(() =>
+      expect(
+        screen.getByRole("textbox", { name: "Rename Harbour City" }),
+      ).toHaveValue("Harbour Reef"),
+    );
     expect(onNewCity).not.toHaveBeenCalled();
   });
 
@@ -403,7 +464,7 @@ describe("CityLibraryScreen", () => {
       "Could not rename city.",
     );
     expect(
-      screen.getByRole("button", { name: "Continue Maple Junction" }),
+      screen.getByRole("button", { name: /^Continue Maple Junction/ }),
     ).toBeVisible();
     // Live brand wordmark and the shipped brand icon on the key-art card.
     expect(screen.getByText("Caelum", { exact: true })).toBeVisible();
@@ -413,10 +474,10 @@ describe("CityLibraryScreen", () => {
       screen.getByRole("button", { name: "Load Harbour City" }),
     ).toBeVisible();
     expect(
-      screen.getByRole("textbox", { name: "Rename Maple Junction" }),
+      screen.getByRole("button", { name: "Rename Maple Junction" }),
     ).toBeVisible();
     expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
-    expect(screen.getByRole("button", { name: "New City" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /^New City/ })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Retry city list" }),
     ).toBeNull();
