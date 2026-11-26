@@ -122,12 +122,18 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
 
   await cityPanel.getByRole("button", { name: "New City" }).click();
   await page.getByLabel("City name").fill("Browser Smoke B");
+  // A different template than city A's Crossroads so a defaulted or
+  // misassigned templateId cannot pass the row-label checks below.
+  await page.getByRole("radio", { name: "Small Town" }).check();
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   await openCommandDestination(page, "city");
   await expect(page.getByTestId("active-city-name")).toHaveText(
     "Browser Smoke B",
   );
+  const cityBSavedAt = (await runtimeSnapshot(page)).persistence.activeCity
+    ?.savedAt;
+  expect(cityBSavedAt).toBeTruthy();
 
   await page.reload();
 
@@ -166,8 +172,21 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
   const avatarA = page.getByTestId(rowAId!).getByTestId("city-avatar");
   await expect(avatarA).toHaveText("B");
   await expect(rowB.getByTestId("city-avatar")).toHaveText("B");
+  // Each row carries its own template label: A was created on Crossroads,
+  // B on Small Town, so a metadata default or wrong-row assignment fails.
+  await expect(rowA.locator(".city-template")).toHaveText("Crossroads");
+  await expect(rowB.locator(".city-template")).toHaveText("Small Town");
   await expect(rowA.locator("time")).toBeVisible();
   await expect(rowB.locator("time")).toBeVisible();
+  // The Continue card names and timestamps the newest save — the actual
+  // savedAt recorded before the reload, not just any visible time.
+  const continueCard = library.getByRole("button", {
+    name: /^Continue Browser Smoke B/,
+  });
+  await expect(continueCard.locator("time[datetime]")).toHaveAttribute(
+    "datetime",
+    cityBSavedAt!,
+  );
 
   // Renaming updates the initial, but the avatar color stays derived from
   // the stable city id, not the editable name.

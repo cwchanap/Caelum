@@ -375,6 +375,51 @@ describe("CityList", () => {
     expect(new Set(names).size).toBe(names.length);
   });
 
+  it("disambiguates names that differ only in whitespace runs", () => {
+    // "North  Point" and "North Point" are distinct saved names, but
+    // accessible-name computation collapses the whitespace so their bare
+    // Load/Rename/Delete controls would announce identically.
+    const spacedA = { ...CITIES[0], id: "north-a", name: "North Point" };
+    const spacedB = {
+      ...CITIES[1],
+      id: "north-b",
+      name: "North  Point",
+      savedAt: "2026-08-11T09:30:00.000Z",
+    };
+    render(CityList, {
+      props: {
+        cities: [spacedA, spacedB],
+        activeCityId: null,
+        busy: false,
+        onLoad: vi.fn(),
+        onRename: vi.fn(async () => true),
+        onDelete: vi.fn(),
+      },
+    });
+
+    // Both rows fall back to the saved-timestamp context; every control's
+    // accessible name stays unique.
+    const names = [
+      ...screen.getAllByRole("button", { name: /^Rename / }),
+      ...screen.getAllByRole("button", { name: /^Load / }),
+      ...screen.getAllByRole("button", { name: /^Delete / }),
+    ].map((button) => button.getAttribute("aria-label"));
+    expect(names).toHaveLength(6);
+    for (const name of names) {
+      expect(name).toContain("North Point saved ");
+    }
+    expect(new Set(names).size).toBe(names.length);
+
+    // The saved names themselves render untouched (raw textContent keeps the
+    // double space; toHaveTextContent would normalize it away).
+    expect(screen.getByTestId("city-name-north-a").textContent).toBe(
+      "North Point",
+    );
+    expect(screen.getByTestId("city-name-north-b").textContent).toBe(
+      "North  Point",
+    );
+  });
+
   it("disables city mutations while persistence is busy", () => {
     renderList(true);
     expect(

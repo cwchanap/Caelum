@@ -1438,11 +1438,13 @@ test("requires a two-tile track drag and charges only laid tiles", async ({
   const startingBudget = (await runtimeSnapshot(page)).state.budget;
 
   // A plain click, same-tile pointer jitter, and a stroke retracted back to
-  // its start are explicit no-ops: no intent, charge, or stale purchase quote.
+  // its start are explicit no-ops: no intent, charge, or stale purchase
+  // quote — and none of them may dirty the clean active save.
   await clickMapTile(canvas, strokeStart);
   await drainGameplayQueue(page);
   expect(await hasTrack(strokeStart)).toBe(false);
   expect((await runtimeSnapshot(page)).state.budget).toBe(startingBudget);
+  expect((await runtimeSnapshot(page)).persistence.dirty).toBe(false);
 
   const startPoint = await mapTileViewportPoint(canvas, strokeStart);
   const endPoint = await mapTileViewportPoint(canvas, strokeEnd);
@@ -1453,6 +1455,7 @@ test("requires a two-tile track drag and charges only laid tiles", async ({
   await drainGameplayQueue(page);
   expect(await hasTrack(strokeStart)).toBe(false);
   expect((await runtimeSnapshot(page)).state.budget).toBe(startingBudget);
+  expect((await runtimeSnapshot(page)).persistence.dirty).toBe(false);
 
   await page.mouse.move(startPoint.x, startPoint.y);
   await page.mouse.down();
@@ -1465,6 +1468,7 @@ test("requires a two-tile track drag and charges only laid tiles", async ({
   await drainGameplayQueue(page);
   expect(await hasTrack(strokeStart)).toBe(false);
   expect((await runtimeSnapshot(page)).state.budget).toBe(startingBudget);
+  expect((await runtimeSnapshot(page)).persistence.dirty).toBe(false);
 
   await page.mouse.move(startPoint.x, startPoint.y);
   await page.mouse.down();
@@ -1520,4 +1524,22 @@ test("requires a two-tile track drag and charges only laid tiles", async ({
     .toEqual([true, true, true, true, true]);
   expect((await runtimeSnapshot(page)).state.budget).toBe(115_000);
   await expect(feedback).toHaveCount(0);
+
+  // A short gesture after a valid stroke is still a no-op: it must not
+  // consume or corrupt the undo stack — the stroke stays undoable and the
+  // undo refunds the full $2,000 charge.
+  await clickMapTile(canvas, { x: 13, y: 10 });
+  await drainGameplayQueue(page);
+  expect((await runtimeSnapshot(page)).state.budget).toBe(115_000);
+  await page.keyboard.press("Control+Z");
+  await expect
+    .poll(async () => (await runtimeSnapshot(page)).state.budget)
+    .toBe(117_000);
+  // Tiles unique to the undone stroke lose their track; x=14 was already
+  // laid by the first stroke and is outside this assertion on purpose.
+  await expect
+    .poll(async () =>
+      Promise.all([12, 13, 15, 16].map((x) => hasTrack({ x, y: 10 }))),
+    )
+    .toEqual([false, false, false, false]);
 });
