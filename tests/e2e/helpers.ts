@@ -105,7 +105,10 @@ export async function createDefaultCity(
   const libraryNewCityButton = page
     .getByTestId("city-library-screen")
     .getByRole("button", { name: /^New City/ });
-  await expect(newCityScreen.or(libraryNewCityButton)).toBeVisible();
+  // The initial screen waits for WASM, sprite decoding, and IndexedDB.
+  await expect(newCityScreen.or(libraryNewCityButton)).toBeVisible({
+    timeout: 15_000,
+  });
   if (await libraryNewCityButton.isVisible()) {
     await libraryNewCityButton.click();
   }
