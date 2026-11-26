@@ -1119,7 +1119,7 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(hasVertexNear(vertices, "#e04f39", 48, 48)).toBe(false);
   });
 
-  it("pushes corridor-displaced node cues out to the marker perimeter", () => {
+  it("positions displaced bus cues against the opaque sprite silhouette", () => {
     const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
     const route = { ...base.transit.routes[0] };
     const state = {
@@ -1134,11 +1134,11 @@ describe("buildTransitBatch nodes and cues", () => {
     };
     const { vertices, sprites } = buildTransitBatch(state, createUiState(), 1);
 
-    // The shared corridor gives each route a ±2px offset that would sink
-    // inside the radius-5 white fill; cues land just outside the radius-7
-    // silhouette on their corridor side instead.
-    expect(hasVertexNear(vertices, "#111111", 48, 39)).toBe(true);
-    expect(hasVertexNear(vertices, "#222222", 48, 57)).toBe(true);
+    // The opaque rim ends about 72 texels from center in a 192px image,
+    // displayed at 14 world px. The ±2px corridor offsets leave the
+    // radius-3 cues slightly overlapping that visible silhouette.
+    expect(hasVertexNear(vertices, "#111111", 48, 48 - 5.25 - 2)).toBe(true);
+    expect(hasVertexNear(vertices, "#222222", 48, 48 + 5.25 + 2)).toBe(true);
     expect(hasVertexNear(vertices, "#111111", 48, 46)).toBe(false);
     expectTint(
       markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
@@ -1147,6 +1147,107 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(
       markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
     ).toEqual([1, 1, 1, 1]);
+  });
+
+  it("positions displaced metro cues against the opaque station silhouette", () => {
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const trackPath: TransitPath = {
+      kind: "track",
+      totalTravelSeconds: 1,
+      steps: [
+        {
+          position: { x: 1, y: 1 },
+          heading: "east",
+          travelSeconds: 1,
+          geometry: { kind: "line", from: { x: 1, y: 1 }, to: { x: 2, y: 1 } },
+        },
+      ],
+    };
+    const state: GameState = {
+      ...base,
+      transit: {
+        ...base.transit,
+        stops: [],
+        stations: base.transit.stops.map(({ id, position }) => ({
+          id,
+          position,
+          status: "present",
+          platforms: [],
+        })),
+        routes: [],
+        metroLines: ["#111111", "#222222"].map((color, index) => ({
+          id: `metro-000${index + 1}`,
+          name: "Metro",
+          color,
+          stationIds: ["a", "b"],
+          vehicleIds: [],
+          active: true,
+          pattern: "loop",
+          revision: 1,
+          legs: [routeLeg("a", "b", "connected", trackPath)],
+          pathBroken: false,
+          targetHeadwaySeconds: null,
+          serviceMetrics: null,
+        })),
+      },
+    };
+    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+
+    expect(hasVertexNear(vertices, "#111111", 48, 48 - 5.25 - 2)).toBe(true);
+    expect(hasVertexNear(vertices, "#222222", 48, 48 + 5.25 + 2)).toBe(true);
+
+    const diagonalPath: TransitPath = {
+      kind: "track",
+      totalTravelSeconds: 4,
+      steps: [
+        {
+          position: { x: 1, y: 1 },
+          heading: "east",
+          travelSeconds: 4,
+          geometry: {
+            kind: "line",
+            from: { x: 1, y: 1 },
+            to: { x: 5, y: 5 },
+          },
+        },
+      ],
+    };
+    const diagonal: GameState = {
+      ...state,
+      transit: {
+        ...state.transit,
+        stations: state.transit.stations.map((station, index) => ({
+          ...station,
+          position: { x: index + 1, y: index + 1 },
+        })),
+        metroLines: state.transit.metroLines.map((line) => ({
+          ...line,
+          legs: [routeLeg("a", "b", "connected", diagonalPath)],
+        })),
+      },
+    };
+    const diagonalVertices = buildTransitBatch(
+      diagonal,
+      createUiState(),
+      1,
+    ).vertices;
+    const component = ((88 * 14) / 192 + 2) / Math.SQRT2;
+    expect(
+      hasVertexNear(
+        diagonalVertices,
+        "#111111",
+        48 + component,
+        48 - component,
+      ),
+    ).toBe(true);
+    expect(
+      hasVertexNear(
+        diagonalVertices,
+        "#222222",
+        48 - component,
+        48 + component,
+      ),
+    ).toBe(true);
   });
 
   it("emits one dimmed station rim and an opaque face", () => {

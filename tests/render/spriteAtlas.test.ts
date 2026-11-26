@@ -21,6 +21,8 @@ interface FakeDraw {
   kind: "clearRect" | "drawImage";
   width: number;
   height: number;
+  source?: CanvasImageSource;
+  args?: number[];
 }
 
 interface Fake2dContext {
@@ -28,13 +30,7 @@ interface Fake2dContext {
   calls: FakeDraw[];
   imageSmoothingQuality: string;
   clearRect(x: number, y: number, w: number, h: number): void;
-  drawImage(
-    image: CanvasImageSource,
-    dx: number,
-    dy: number,
-    dw: number,
-    dh: number,
-  ): void;
+  drawImage(image: CanvasImageSource, ...args: number[]): void;
 }
 
 /** Asset URL → decoded native dimensions; a URL with no entry rejects
@@ -85,8 +81,14 @@ beforeEach(() => {
             height: _y + h,
           });
         },
-        drawImage(_image, _dx, _dy, dw, dh) {
-          context.calls.push({ kind: "drawImage", width: dw, height: dh });
+        drawImage(image, ...args) {
+          context.calls.push({
+            kind: "drawImage",
+            source: image,
+            args,
+            width: args.at(-2)!,
+            height: args.at(-1)!,
+          });
         },
       };
       contexts.push(context);
@@ -234,6 +236,50 @@ describe("loadSpriteImages", () => {
 });
 
 describe("createSpriteAtlasTexture", () => {
+  it("extrudes only the straight rail east edge into its gutter at every mip", async () => {
+    registerShippedDimensions();
+    const { device, textureUploads } = createFakeDevice();
+    const images = await loadSpriteImages();
+
+    createSpriteAtlasTexture(device, images);
+
+    const context = contexts[0]!;
+    const extrusions = context.calls.filter(
+      (call) => call.source === context.canvas,
+    );
+    expect(extrusions).toHaveLength(SPRITE_MIP_LEVEL_COUNT);
+    for (let level = 0; level < SPRITE_MIP_LEVEL_COUNT; level += 1) {
+      const width = 192 >> level;
+      const height = 192 >> level;
+      expect(extrusions[level]!.args).toEqual([
+        width - 1,
+        0,
+        1,
+        height,
+        width,
+        0,
+        1,
+        height,
+      ]);
+      const callIndex = context.calls.indexOf(extrusions[level]!);
+      expect(context.calls[callIndex - 1]).toMatchObject({
+        kind: "drawImage",
+        source: images[TRANSIT_SPRITE_LAYERS.trackStraight],
+        width,
+        height,
+      });
+    }
+    for (const upload of textureUploads) {
+      const source = images[upload.originZ!]!;
+      const width = source.naturalWidth >> upload.mipLevel;
+      expect(upload.width).toBe(
+        width +
+          (upload.originZ === TRANSIT_SPRITE_LAYERS.trackStraight ? 1 : 0),
+      );
+      expect(upload.height).toBe(source.naturalHeight >> upload.mipLevel);
+    }
+  });
+
   it("uploads one rgba8unorm 576x384x21 mipmapped 2d-array texture", async () => {
     registerShippedDimensions();
     const { device, textures, textureUploads } = createFakeDevice();
@@ -260,7 +306,7 @@ describe("createSpriteAtlasTexture", () => {
     }
   });
 
-  it("uploads only the source-sized mip crop into each layer", async () => {
+  it("uploads the source-sized mip crop into unchanged layers", async () => {
     registerShippedDimensions();
     const { device, textureUploads } = createFakeDevice();
 
@@ -321,12 +367,15 @@ describe("createSpriteAtlasTexture", () => {
     // Canvas keeps its fixed atlas size throughout: never resized per mip.
     expect(context.canvas.width).toBe(SPRITE_ATLAS_WIDTH);
     expect(context.canvas.height).toBe(SPRITE_ATLAS_HEIGHT);
-    expect(context.calls).toHaveLength(
+    const sourceCalls = context.calls.filter(
+      (call) => call.source !== context.canvas,
+    );
+    expect(sourceCalls).toHaveLength(
       SPRITE_LAYER_COUNT * SPRITE_MIP_LEVEL_COUNT * 2,
     );
-    for (let i = 0; i < context.calls.length; i += 2) {
-      const clear = context.calls[i]!;
-      const draw = context.calls[i + 1]!;
+    for (let i = 0; i < sourceCalls.length; i += 2) {
+      const clear = sourceCalls[i]!;
+      const draw = sourceCalls[i + 1]!;
       expect(clear.kind).toBe("clearRect");
       expect(clear.width).toBe(SPRITE_ATLAS_WIDTH);
       expect(clear.height).toBe(SPRITE_ATLAS_HEIGHT);
@@ -334,8 +383,8 @@ describe("createSpriteAtlasTexture", () => {
     }
     // Mip draw sizes shrink per level (top-left scaled crop); the first
     // layer is a 192px tree whose level-4 draw is 192>>4 px wide.
-    expect(context.calls[1]!.width).toBe(192);
-    expect(context.calls[SPRITE_MIP_LEVEL_COUNT * 2 - 1]!.width).toBe(
+    expect(sourceCalls[1]!.width).toBe(192);
+    expect(sourceCalls[SPRITE_MIP_LEVEL_COUNT * 2 - 1]!.width).toBe(
       192 >> (SPRITE_MIP_LEVEL_COUNT - 1),
     );
   });

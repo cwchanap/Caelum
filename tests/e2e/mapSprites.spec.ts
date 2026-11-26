@@ -61,6 +61,13 @@ test("all six shipped transit sprites decode to nonempty 192px art and white mas
           transparent,
           colors: colors.size,
           nonWhite,
+          rimSamples: [
+            [167, 96],
+            [170, 96],
+            [146, 146],
+            [157, 157],
+            [160, 160],
+          ].map(([x, y]) => data[(y! * canvas.width + x!) * 4 + 3]),
         };
       }),
     );
@@ -73,6 +80,12 @@ test("all six shipped transit sprites decode to nonempty 192px art and white mas
       expect(asset.nonWhite, asset.name).toBe(0);
     else expect(asset.colors, asset.name).toBeGreaterThan(2);
   }
+  expect(
+    assets.find((asset) => asset.name === "bus-stop-ring")!.rimSamples,
+  ).toEqual([255, 0, 250, 0, 0]);
+  expect(
+    assets.find((asset) => asset.name === "metro-station-ring")!.rimSamples,
+  ).toEqual([255, 0, 0, 255, 0]);
 });
 
 test("transit art joins rails and colors physical badges on WebGPU", async ({

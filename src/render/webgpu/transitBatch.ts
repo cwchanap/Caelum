@@ -46,11 +46,11 @@ const STATION_MARKER_COLOR = parseColor(colors.metro);
 const ACCESS_INDICATOR_COLOR = parseColor(colors.hover);
 const STOP_MARKER_RADIUS = 7;
 const STATION_MARKER_HALF = 7;
-const STATION_MARKER_CORNER = 3;
 const NODE_CUE_RADIUS = 3;
-const STATION_MARKER_BOUND =
-  (STATION_MARKER_HALF - STATION_MARKER_CORNER) * Math.SQRT2 +
-  STATION_MARKER_CORNER;
+// Opaque rim extents in the 192px masks: 72px along an axis, 88px on
+// the station's diagonal. Both badges are rendered in a 14px quad.
+const MARKER_RIM_AXIS = (72 * 14) / 192;
+const STATION_RIM_DIAGONAL = (88 * 14) / 192;
 
 function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
@@ -518,7 +518,12 @@ function drawRouteNodeCues(
       const dist = Math.hypot(dx, dy);
       if (dist < 1e-6) continue;
       const bound =
-        line.mode === "metro" ? STATION_MARKER_BOUND : STOP_MARKER_RADIUS;
+        line.mode === "metro"
+          ? Math.min(
+              STATION_RIM_DIAGONAL,
+              (MARKER_RIM_AXIS * dist) / Math.max(Math.abs(dx), Math.abs(dy)),
+            )
+          : MARKER_RIM_AXIS;
       g.circle(
         {
           x: nodeCenter.x + (dx / dist) * (bound + dist),
