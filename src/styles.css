@@ -326,8 +326,32 @@ body {
   padding: 0;
   border-radius: 50%;
   background: var(--surface-sunk);
-  font-size: 14px;
-  line-height: 1;
+}
+
+/* Pause/resume is painted geometry, not a text glyph: the Unicode ⏸/▶
+   codepoints render as empty rectangles on platforms without a symbols
+   font. Both shapes inherit currentColor so hover/paused recolors stay
+   identical to the old glyph. */
+.ctrl-pause-icon {
+  display: block;
+  flex-shrink: 0;
+  width: 14px;
+  height: 16px;
+
+  /* Pause: two 5px bars with a 4px gap. */
+  background: linear-gradient(
+    to right,
+    currentColor 0 5px,
+    transparent 5px 9px,
+    currentColor 9px 14px
+  );
+}
+
+/* Resume: a right-pointing play triangle via clip-path. */
+.ctrl-pause-icon--play {
+  width: 13px;
+  background: currentColor;
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
 }
 
 .speed-group--paused {
@@ -1907,10 +1931,6 @@ body {
     font-size: 10px;
   }
 
-  .ctrl-pause {
-    font-size: 12px;
-  }
-
   .topbar .readout-label {
     font-size: 8px;
     letter-spacing: 0.14em;
@@ -2290,7 +2310,10 @@ body {
   place-items: center;
   width: 100vw;
   height: 100vh;
-  padding: 48px;
+
+  /* Shrink on short viewports so the card keeps room for the whole form;
+     the desktop mockup's 48px still applies at >=1200px vmin. */
+  padding: clamp(16px, 4vmin, 48px);
   background-color: #c3d99a;
   background-size: cover;
   background-position: center;
@@ -2317,10 +2340,11 @@ body {
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
 
   /* Bounded rows let the form column's overflow-y:auto win when the card
-     is capped by the small-viewport max-height. */
+     is capped by the small-viewport max-height. Items stretch (default),
+     which is what actually bounds the column: align-items:start sized the
+     form to content and scrollHeight never exceeded clientHeight. */
   grid-auto-rows: minmax(0, 1fr);
   gap: 24px;
-  align-items: start;
   min-height: 0;
 }
 
@@ -2410,13 +2434,22 @@ body {
 }
 
 .choice-tile--template {
+  /* Equal thirds keep all three illustrated choices on one row instead of
+     wrapping the third tile under the pair and doubling the group height. */
+  flex: 1 1 0;
+  min-width: 0;
   align-items: stretch;
   padding: 8px;
 }
 
 .choice-tile--template img {
-  width: 96px;
-  height: 64px;
+  width: 100%;
+  height: auto;
+
+  /* The source WebPs are 512x512 with a baked cream letterbox; the map
+     occupies the inner 512x331 band, so this aspect makes cover crop
+     exactly onto the letterbox (same crop as the large preview). */
+  aspect-ratio: 512 / 331;
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--line-faint);
@@ -2451,21 +2484,25 @@ body {
 }
 
 .new-city-preview {
-  align-self: stretch;
+  align-self: start;
   display: grid;
-  grid-template-rows: minmax(0, 1fr) auto;
+  grid-template-rows: auto auto;
   gap: 8px;
   min-height: 0;
 }
 
-/* The template WebPs are square with a cream border frame; cover at the
-   frame's aspect crops that letterbox edge instead of letterboxing the
-   preview again or stretching the map. */
+/* The template WebPs are 512x512 squares whose map sits in the inner
+   512x331 band (measured: y 90..420 in all three assets). Fixing the frame
+   to that aspect-ratio makes object-fit:cover's symmetric crop land exactly
+   on the baked cream letterbox, filling the frame with map content without
+   distortion or new art. */
 .new-city-preview img {
   width: 100%;
-  height: 100%;
+  height: auto;
   min-height: 0;
+  aspect-ratio: 512 / 331;
   object-fit: cover;
+  object-position: center;
   border: 1px solid var(--line);
   border-radius: 12px;
   background: var(--surface-sunk);

@@ -10,6 +10,22 @@ import type { SandboxTemplateId } from "../../src/domain/types";
 import { SANDBOX_TEMPLATE_LABELS } from "../../src/domain/catalog/sandboxTemplates";
 import type { BuildGroup } from "../../src/domain/catalog/buildGroups";
 import type { CommandDestination } from "../../src/ui/uiState";
+import { PNG } from "playwright-core/lib/utilsBundle";
+
+export interface DecodedPng {
+  width: number;
+  height: number;
+  /** RGBA bytes, 4 per pixel, row-major. */
+  data: Uint8Array;
+}
+
+/** Decode a real painted browser screenshot into RGBA pixels so tests can
+ *  assert on observable output. pngjs ships inside playwright-core's
+ *  bundled utils, so this adds no new dependency. */
+export function decodePng(buffer: Uint8Array): DecodedPng {
+  const png = PNG.sync.read(buffer);
+  return { width: png.width, height: png.height, data: png.data };
+}
 
 export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
   return page.evaluate(() => {

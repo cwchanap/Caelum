@@ -1,5 +1,10 @@
 import { expect, test } from "@playwright/test";
-import { createDefaultCity } from "./helpers";
+import {
+  createDefaultCity,
+  decodePng,
+  openCommandDestination,
+  type DecodedPng,
+} from "./helpers";
 
 interface RequiredControl {
   /** CSS selector matching the required controls. */
@@ -114,8 +119,43 @@ const VIEWPORTS = [
   { width: 1440, height: 900 },
 ];
 
+/** The New City composition must also hold at 1280x720, the second V1
+ *  acceptance viewport where the actions previously fell below the fold. */
+const NEW_CITY_VIEWPORTS = [
+  { width: 1024, height: 768 },
+  { width: 1280, height: 720 },
+  { width: 1440, height: 900 },
+];
+
+/** The template WebPs bake a wide cream letterbox around the map. Match the
+ *  measured cream tone (r>230, g>225, b>200) so its remaining share of the
+ *  painted preview frame can be counted. */
+function isCreamPixel(r: number, g: number, b: number): boolean {
+  return r > 230 && g > 225 && b > 200;
+}
+
+/** Share of a painted frame that is still letterbox cream, plus a rough
+ *  content check so a blank/broken image cannot pass. */
+function paintedPreviewStats(png: DecodedPng): {
+  creamFraction: number;
+  distinctColors: number;
+} {
+  const colors = new Set<number>();
+  let cream = 0;
+  const total = png.width * png.height;
+  for (let i = 0; i < total; i += 1) {
+    const offset = i * 4;
+    const r = png.data[offset]!;
+    const g = png.data[offset + 1]!;
+    const b = png.data[offset + 2]!;
+    if (isCreamPixel(r, g, b)) cream += 1;
+    colors.add(((r >> 4) << 8) | ((g >> 4) << 4) | (b >> 4));
+  }
+  return { creamFraction: cream / total, distinctColors: colors.size };
+}
+
 test.describe("New City reference composition", () => {
-  for (const viewport of VIEWPORTS) {
+  for (const viewport of NEW_CITY_VIEWPORTS) {
     test(`fits and captures at ${viewport.width}x${viewport.height}`, async ({
       page,
     }, testInfo) => {
@@ -163,6 +203,35 @@ test.describe("New City reference composition", () => {
         return image === null || image.complete;
       });
       expect(previewLoaded).toBe(true);
+
+      // The preview must be filled with map content for every template:
+      // decode the painted frame and measure the baked cream letterbox
+      // instead of trusting object-fit declarations.
+      const preview = page.getByTestId("new-city-preview");
+      for (const templateName of ["Blank Grid", "Crossroads", "Small Town"]) {
+        await page
+          .getByRole("group", { name: "Template" })
+          .getByRole("radio", { name: templateName })
+          .check();
+        await expect
+          .poll(async () =>
+            preview.evaluate((image: HTMLImageElement) => image.complete),
+          )
+          .toBe(true);
+        const stats = paintedPreviewStats(
+          decodePng(await preview.screenshot()),
+        );
+        expect(
+          stats.creamFraction,
+          `${templateName} preview cream letterbox at ` +
+            `${viewport.width}x${viewport.height}`,
+        ).toBeLessThan(0.02);
+        expect(
+          stats.distinctColors,
+          `${templateName} preview painted content`,
+        ).toBeGreaterThan(16);
+      }
+
       await page.screenshot({
         path: testInfo.outputPath(
           `new-city-${viewport.width}x${viewport.height}.png`,
@@ -170,6 +239,56 @@ test.describe("New City reference composition", () => {
       });
     });
   }
+
+  // When New City is opened over gameplay both actions exist; at the V1
+  // acceptance viewport both must still be inside the card and viewport.
+  test("keeps Create and Cancel in bounds at 1280x720 from gameplay", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1280, height: 720 });
+    await createDefaultCity(page, "New City Actions");
+    await openCommandDestination(page, "city");
+    await page
+      .getByTestId("panel-city")
+      .getByRole("button", { name: "New City", exact: true })
+      .click();
+    await expect(page.getByTestId("new-city-screen")).toBeVisible();
+    await assertCompositionFits(page, [
+      { selector: ".choice-tile", count: 8 },
+      { selector: ".new-city-actions button", count: 2 },
+    ]);
+  });
+
+  // Below the card's fit threshold the form column must scroll internally
+  // (never overflow the card or document) and every action stays reachable.
+  // body pins min-width:1024, so the tight case is a short viewport.
+  test("scrolls internally and keeps actions reachable at 1024x560", async ({
+    page,
+  }) => {
+    await page.setViewportSize({ width: 1024, height: 560 });
+    await page.goto("/");
+    await expect(page.getByTestId("new-city-screen")).toBeVisible();
+    const overflow = await page.evaluate(() => {
+      const root = document.documentElement;
+      return {
+        horizontal: root.scrollWidth > root.clientWidth,
+        vertical: root.scrollHeight > root.clientHeight,
+      };
+    });
+    expect(overflow.horizontal).toBe(false);
+    expect(overflow.vertical).toBe(false);
+    const cardBox = await page.locator(".new-city-card").boundingBox();
+    expect(cardBox).not.toBeNull();
+    const create = page.getByRole("button", { name: "Create City" });
+    await create.scrollIntoViewIfNeeded();
+    const buttonBox = await create.boundingBox();
+    expect(buttonBox).not.toBeNull();
+    // Reachable means fully inside the card, not just technically scrollable.
+    expect(buttonBox!.y).toBeGreaterThanOrEqual(cardBox!.y);
+    expect(buttonBox!.y + buttonBox!.height).toBeLessThanOrEqual(
+      cardBox!.y + cardBox!.height,
+    );
+  });
 });
 
 test.describe("City Library reference composition", () => {
