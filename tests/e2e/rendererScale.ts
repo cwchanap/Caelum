@@ -7,6 +7,7 @@ import {
 import { createCanvas2dRenderer } from "../../src/render/canvas2d/renderer";
 import { createWebGpuRenderer } from "../../src/render/webgpu/renderer";
 import {
+  SPRITE_INSTANCE_FLOATS,
   VEHICLE_INSTANCE_FLOATS,
   type GameplayRenderer,
   type RenderFrame,
@@ -43,6 +44,8 @@ export interface RendererScaleResult {
   vehicleUploadBytes: number;
   solidDraws: number;
   spriteInstances: number;
+  structuralSpriteInstances: number;
+  markerSpriteInstances: number;
   spriteDraws: number;
   vehicleDraws: number;
   medianCpuMs: number;
@@ -127,10 +130,16 @@ let lastStats: RenderStats = {
   vehicleInstances: 0,
   vehicleDraws: 0,
 };
+let structuralSpriteInstances = 0;
+let markerSpriteInstances = 0;
 const recordingOf = (renderer: GameplayRenderer): GameplayRenderer => ({
   ...renderer,
   render: (frame: RenderFrame) => {
     lastStats = renderer.render(frame);
+    structuralSpriteInstances =
+      (frame.sprites?.instances.length ?? 0) / SPRITE_INSTANCE_FLOATS;
+    markerSpriteInstances =
+      (frame.markerSprites?.instances.length ?? 0) / SPRITE_INSTANCE_FLOATS;
     return lastStats;
   },
 });
@@ -258,6 +267,8 @@ window.__caelumRendererScale = {
           : 0,
       solidDraws: lastStats.solidBatches,
       spriteInstances: lastStats.spriteInstances,
+      structuralSpriteInstances,
+      markerSpriteInstances,
       spriteDraws: lastStats.spriteDraws,
       vehicleDraws: lastStats.vehicleDraws,
       medianCpuMs: median(samples),

@@ -9,6 +9,78 @@ import {
   expectRotatedLargeHouseFootprint,
   shadowedGrassRgb,
 } from "./spriteFootprint";
+import { expectTransitSpriteScene } from "./transitSpriteScene";
+
+test("all six shipped transit sprites decode to nonempty 192px art and white masks", async ({
+  page,
+}) => {
+  await page.goto("/");
+  const assets = await page.evaluate(async () => {
+    const names = [
+      "bus-stop",
+      "bus-stop-ring",
+      "metro-station",
+      "metro-station-ring",
+      "track-straight",
+      "track-corner",
+    ];
+    return Promise.all(
+      names.map(async (name) => {
+        const image = new Image();
+        image.src = `/src/assets/sunny-diorama/markers/${name}.webp`;
+        await image.decode();
+        const canvas = document.createElement("canvas");
+        canvas.width = image.naturalWidth;
+        canvas.height = image.naturalHeight;
+        const context = canvas.getContext("2d")!;
+        context.drawImage(image, 0, 0);
+        const data = context.getImageData(
+          0,
+          0,
+          canvas.width,
+          canvas.height,
+        ).data;
+        let opaque = 0;
+        let transparent = 0;
+        let nonWhite = 0;
+        const colors = new Set<string>();
+        for (let i = 0; i < data.length; i += 4) {
+          if (data[i + 3] === 0) transparent += 1;
+          if (data[i + 3]! >= 250) {
+            opaque += 1;
+            colors.add(`${data[i]},${data[i + 1]},${data[i + 2]}`);
+            if (data[i] !== 255 || data[i + 1] !== 255 || data[i + 2] !== 255)
+              nonWhite += 1;
+          }
+        }
+        return {
+          name,
+          width: image.naturalWidth,
+          height: image.naturalHeight,
+          opaque,
+          transparent,
+          colors: colors.size,
+          nonWhite,
+        };
+      }),
+    );
+  });
+  for (const asset of assets) {
+    expect([asset.width, asset.height], asset.name).toEqual([192, 192]);
+    expect(asset.opaque, asset.name).toBeGreaterThan(100);
+    expect(asset.transparent, asset.name).toBeGreaterThan(100);
+    if (asset.name.endsWith("-ring"))
+      expect(asset.nonWhite, asset.name).toBe(0);
+    else expect(asset.colors, asset.name).toBeGreaterThan(2);
+  }
+});
+
+test("transit art joins rails and colors physical badges on WebGPU", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await expectTransitSpriteScene(page, "webgpu");
+});
 
 test("rotated largeHouse sprite stays in its 2x3 footprint with transparent insets", async ({
   page,

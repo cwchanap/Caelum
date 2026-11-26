@@ -49,7 +49,13 @@ export type FakePassOp =
       offset: number;
     }
   | { kind: "setBindGroup"; slot: number; bindGroup: FakeBindGroup }
-  | { kind: "draw"; vertexCount: number; instanceCount: number };
+  | {
+      kind: "draw";
+      vertexCount: number;
+      instanceCount: number;
+      firstVertex: number;
+      firstInstance: number;
+    };
 
 export interface FakePass {
   ops: FakePassOp[];
@@ -209,8 +215,19 @@ export function createFakeDevice(): FakeHarness {
             setBindGroup(slot: number, bindGroup: FakeBindGroup) {
               pass.ops.push({ kind: "setBindGroup", slot, bindGroup });
             },
-            draw(vertexCount: number, instanceCount = 1) {
-              pass.ops.push({ kind: "draw", vertexCount, instanceCount });
+            draw(
+              vertexCount: number,
+              instanceCount = 1,
+              firstVertex = 0,
+              firstInstance = 0,
+            ) {
+              pass.ops.push({
+                kind: "draw",
+                vertexCount,
+                instanceCount,
+                firstVertex,
+                firstInstance,
+              });
             },
             end() {},
           } as unknown as GPURenderPassEncoder;

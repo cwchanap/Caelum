@@ -133,8 +133,8 @@ export type CreateGameHost = (context: GameHostContext) => Promise<GameHost>;
  *  emphasis. */
 interface BatchCache {
   key: string;
-  map: GameMap | null;
   vertices: Float32Array<ArrayBuffer>;
+  sprites: Float32Array<ArrayBuffer>;
 }
 
 /** One scene cache entry holds both the solid vertices and the sprite
@@ -205,7 +205,7 @@ export function createGameHostWithRenderer(
     cancelPendingFrame();
     activeDetach?.();
     activeDetach = null;
-    projectedSpritesCache = null;
+    projectedSpritesCache = [null, null];
     // Destroy the renderer's GPU resources and, when the host owns the
     // device, the device too. The resulting deliberate "destroyed" loss is
     // ignored by the lost handler.
@@ -233,14 +233,18 @@ export function createGameHostWithRenderer(
   // to clip space are applied per draw.
   let sceneCache: SceneBatch | null = null;
   let routeCache: BatchCache | null = null;
-  let projectedSpritesCache: {
+  type ProjectedSprites = {
     source: Float32Array<ArrayBuffer>;
     sx: number;
     ox: number;
     sy: number;
     oy: number;
     projected: Float32Array<ArrayBuffer>;
-  } | null = null;
+  };
+  let projectedSpritesCache: [
+    ProjectedSprites | null,
+    ProjectedSprites | null,
+  ] = [null, null];
 
   let transform: ClipTransform | null = null;
 
@@ -322,20 +326,17 @@ export function createGameHostWithRenderer(
     return sceneCache;
   };
 
-  const routeVertices = (
+  const routeBatch = (
     state: GameState,
     ui: UiState,
     revision: number,
-  ): Float32Array<ArrayBuffer> => {
+  ): BatchCache => {
     const key = routeStyleKeyFor(ui, revision);
     if (routeCache === null || routeCache.key !== key) {
-      routeCache = {
-        key,
-        map: null,
-        vertices: buildTransitBatch(state, ui, revision).vertices,
-      };
+      const { vertices, sprites } = buildTransitBatch(state, ui, revision);
+      routeCache = { key, vertices, sprites };
     }
-    return routeCache.vertices;
+    return routeCache;
   };
 
   const sameDevicePixelSize = (
@@ -391,12 +392,22 @@ export function createGameHostWithRenderer(
       map,
       ctx.getCamera(),
     );
-    transform = {
+    const nextTransform = {
       sx: (2 * board.scale * dpr) / pixelWidth,
       ox: (2 * board.offsetX * dpr) / pixelWidth - 1,
       sy: -(2 * board.scale * dpr) / pixelHeight,
       oy: 1 - (2 * board.offsetY * dpr) / pixelHeight,
     };
+    if (
+      transform === null ||
+      transform.sx !== nextTransform.sx ||
+      transform.ox !== nextTransform.ox ||
+      transform.sy !== nextTransform.sy ||
+      transform.oy !== nextTransform.oy
+    ) {
+      projectedSpritesCache = [null, null];
+    }
+    transform = nextTransform;
     renderer.resize(pixelWidth, pixelHeight);
     return board;
   };
@@ -466,7 +477,7 @@ export function createGameHostWithRenderer(
 
   /** One projection loop for both instanced kinds: project the origin into
    *  clip space and write the world→clip factors into the row's two trailing
-   *  slots (offset 9 for 11-float vehicles, offset 8 for 10-float sprites);
+   *  slots (offset 9 for vehicles, offset 12 for sprites);
    *  angle, world-px extents, and color/uv/layer pass through in place. */
   const projectInstances = (
     instances: Float32Array<ArrayBuffer>,
@@ -497,23 +508,25 @@ export function createGameHostWithRenderer(
 
   const transformSpriteInstances = (
     instances: Float32Array<ArrayBuffer>,
+    slot: 0 | 1,
   ): Float32Array<ArrayBuffer> => {
     const t = transform;
     if (t === null || instances.length === 0) {
       return instances;
     }
+    const cached = projectedSpritesCache[slot];
     if (
-      projectedSpritesCache !== null &&
-      projectedSpritesCache.source === instances &&
-      projectedSpritesCache.sx === t.sx &&
-      projectedSpritesCache.ox === t.ox &&
-      projectedSpritesCache.sy === t.sy &&
-      projectedSpritesCache.oy === t.oy
+      cached !== null &&
+      cached.source === instances &&
+      cached.sx === t.sx &&
+      cached.ox === t.ox &&
+      cached.sy === t.sy &&
+      cached.oy === t.oy
     ) {
-      return projectedSpritesCache.projected;
+      return cached.projected;
     }
     const projected = projectInstances(instances, SPRITE_INSTANCE_FLOATS);
-    projectedSpritesCache = {
+    projectedSpritesCache[slot] = {
       source: instances,
       sx: t.sx,
       ox: t.ox,
@@ -544,6 +557,7 @@ export function createGameHostWithRenderer(
     const overlays = buildOverlayRanges(latest, ui);
     const map = latest.map;
     const scene = sceneBatch(latest, revision, gridMode);
+    const route = routeBatch(latest, ui, revision);
     const { instances, vehicleIds } = encodeVehicleInstances({
       previous,
       latest,
@@ -568,17 +582,19 @@ export function createGameHostWithRenderer(
     });
     return {
       frame: {
-        // Painter stages: structural solids, then the one textured sprite
-        // draw, then route/draft overlays, vehicles, and route handles.
+        // Structural sprites, committed routes, markers, draft, vehicles, handles.
         solids: [solidBatch("structural", scene.vertices)],
         sprites: {
-          instances: transformSpriteInstances(scene.sprites),
+          instances: transformSpriteInstances(scene.sprites, 0),
         },
         overSprites: [
           solidBatch("dynamic", overlays.underRoutes),
-          solidBatch("route", routeVertices(latest, ui, revision)),
-          solidBatch("dynamic", overlays.routeDraft),
+          solidBatch("route", route.vertices),
         ],
+        markerSprites: {
+          instances: transformSpriteInstances(route.sprites, 1),
+        },
+        overMarkers: [solidBatch("dynamic", overlays.routeDraft)],
         vehicles: [{ instances: projectedVehicles }],
         overVehicles: [solidBatch("dynamic", overlays.overVehicles)],
       },

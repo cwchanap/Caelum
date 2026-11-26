@@ -28,6 +28,12 @@ test("paints vehicle centers on their presented samples and pick targets", async
   }
 
   for (const result of results) {
+    for (const [index, expected] of [217, 134, 0].entries()) {
+      expect(
+        Math.abs(result.routeOverChevronRgb[index]! - expected),
+        `${result.renderer}/${result.motion} route paints over the road chevron`,
+      ).toBeLessThanOrEqual(8);
+    }
     expect(
       result.vehicles.map((vehicle) => vehicle.id),
       `${result.renderer}/${result.motion} captures every fixture vehicle`,

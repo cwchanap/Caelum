@@ -23,6 +23,12 @@ import {
   withAlpha,
   type Rgba,
 } from "./primitives";
+import {
+  SPRITE_ATLAS_HEIGHT,
+  SPRITE_ATLAS_WIDTH,
+  SPRITE_TEXELS_PER_TILE,
+  TRANSIT_SPRITE_LAYERS,
+} from "./spriteAtlas";
 
 /** Alpha applied to route geometry when a different route is emphasized. */
 export const UNRELATED_ROUTE_OPACITY = 0.42;
@@ -45,8 +51,6 @@ const NODE_CUE_RADIUS = 3;
 const STATION_MARKER_BOUND =
   (STATION_MARKER_HALF - STATION_MARKER_CORNER) * Math.SQRT2 +
   STATION_MARKER_CORNER;
-const MARKER_RIM_WIDTH = 2;
-const MARKER_FILL_COLOR = parseColor("#ffffff");
 
 function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
@@ -442,43 +446,6 @@ function drawStopAccessIndicators(g: SolidGeometry, state: GameState): void {
   }
 }
 
-function roundedSquare(
-  g: SolidGeometry,
-  center: TripPosition,
-  half: number,
-  cornerRadius: number,
-  color: Rgba,
-): void {
-  const inner = half - cornerRadius;
-  g.rect(center.x - inner, center.y - inner, inner * 2, inner * 2, color);
-  g.rect(center.x - inner, center.y - half, inner * 2, cornerRadius, color);
-  g.rect(center.x - inner, center.y + inner, inner * 2, cornerRadius, color);
-  g.rect(center.x - half, center.y - inner, cornerRadius, inner * 2, color);
-  g.rect(center.x + inner, center.y - inner, cornerRadius, inner * 2, color);
-  for (const dx of [-1, 1]) {
-    for (const dy of [-1, 1]) {
-      const corner = { x: center.x + dx * inner, y: center.y + dy * inner };
-      const start = Math.atan2(dy, dx) - Math.PI / 4;
-      for (let segment = 0; segment < 2; segment += 1) {
-        const a0 = start + (segment * Math.PI) / 4;
-        const a1 = start + ((segment + 1) * Math.PI) / 4;
-        g.triangle(
-          corner,
-          {
-            x: corner.x + Math.cos(a0) * cornerRadius,
-            y: corner.y + Math.sin(a0) * cornerRadius,
-          },
-          {
-            x: corner.x + Math.cos(a1) * cornerRadius,
-            y: corner.y + Math.sin(a1) * cornerRadius,
-          },
-          color,
-        );
-      }
-    }
-  }
-}
-
 function markerColors(
   lines: readonly RenderableLine[],
   emphasizedIds: ReadonlySet<string>,
@@ -589,7 +556,11 @@ export function buildTransitBatch(
   state: GameState,
   ui: UiState,
   sceneRevision: number,
-): { vertices: Float32Array<ArrayBuffer>; routeStyleKey: string } {
+): {
+  vertices: Float32Array<ArrayBuffer>;
+  sprites: Float32Array<ArrayBuffer>;
+  routeStyleKey: string;
+} {
   const editedId = editedRouteId(ui);
   const routeStyleKey = routeStyleKeyFor(ui, sceneRevision);
   const emphasizedIds = new Set(
@@ -598,6 +569,7 @@ export function buildTransitBatch(
     ),
   );
   const g = new SolidGeometry();
+  const sprites: number[] = [];
   const lines = renderableLines(state);
   const corridors = corridorsFor(state);
   const nodes = nodePositionMap(state);
@@ -642,28 +614,62 @@ export function buildTransitBatch(
     emphasizedIds.size === 0
       ? STATION_MARKER_COLOR
       : withAlpha(STATION_MARKER_COLOR, UNRELATED_ROUTE_OPACITY);
+  const marker = (
+    point: TripPosition,
+    half: number,
+    face: number,
+    rimLayer: number,
+    rim: Rgba,
+  ): void => {
+    for (const [layer, tint] of [
+      [face, [1, 1, 1, 1]],
+      [rimLayer, rim],
+    ] as const) {
+      sprites.push(
+        point.x,
+        point.y,
+        0,
+        half,
+        half,
+        SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_WIDTH,
+        SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_HEIGHT,
+        layer,
+        ...tint,
+        0,
+        0,
+      );
+    }
+  };
   for (const stop of state.transit.stops) {
     if (stop.status !== "present") continue;
     const point = tileCenter(stop.position);
     const rim = markerColorsByWaypoint.get(stop.id) ?? defaultStopRim;
-    g.circle(point, STOP_MARKER_RADIUS, rim);
-    g.circle(point, STOP_MARKER_RADIUS - MARKER_RIM_WIDTH, MARKER_FILL_COLOR);
+    marker(
+      point,
+      STOP_MARKER_RADIUS,
+      TRANSIT_SPRITE_LAYERS.busStop,
+      TRANSIT_SPRITE_LAYERS.busStopRing,
+      rim,
+    );
   }
   for (const station of state.transit.stations) {
     if (station.status !== "present") continue;
     const point = tileCenter(station.position);
     const rim = markerColorsByWaypoint.get(station.id) ?? defaultStationRim;
-    roundedSquare(g, point, STATION_MARKER_HALF, STATION_MARKER_CORNER, rim);
-    roundedSquare(
-      g,
+    marker(
       point,
-      STATION_MARKER_HALF - MARKER_RIM_WIDTH,
-      STATION_MARKER_CORNER - MARKER_RIM_WIDTH,
-      MARKER_FILL_COLOR,
+      STATION_MARKER_HALF,
+      TRANSIT_SPRITE_LAYERS.metroStation,
+      TRANSIT_SPRITE_LAYERS.metroStationRing,
+      rim,
     );
   }
 
-  return { vertices: g.toFloat32Array(), routeStyleKey };
+  return {
+    vertices: g.toFloat32Array(),
+    sprites: new Float32Array(sprites),
+    routeStyleKey,
+  };
 }
 
 /**

@@ -36,9 +36,9 @@ export interface VehicleBatch {
   instances: Float32Array<ArrayBuffer>;
 }
 
-/** Instanced textured sprite batch (trees + buildings). Instance layout per
+/** Instanced textured sprite batch. Instance layout per
  *  SPRITE_INSTANCE_FLOATS below: world origin (x, y), angle, world
- *  half-extents (x, y), uv scale (x, y), texture layer, host clip factors. */
+ *  half-extents (x, y), uv scale (x, y), texture layer, tint RGBA, host clip factors. */
 export interface SpriteBatch {
   instances: Float32Array<ArrayBuffer>;
 }
@@ -48,8 +48,12 @@ export interface RenderFrame {
   solids: readonly SolidBatch[];
   /** One instanced textured draw after the structural solids. */
   sprites?: SpriteBatch;
-  /** Solid batches drawn after sprites (underRoutes, routes, drafts). */
+  /** Solid batches drawn after structural sprites (underRoutes, routes). */
   overSprites?: readonly SolidBatch[];
+  /** Badge face and rim sprites, after committed routes. */
+  markerSprites?: SpriteBatch;
+  /** Solid batches drawn after markers (route draft). */
+  overMarkers?: readonly SolidBatch[];
   /** Instanced vehicle batches, concatenated into one upload in frame order. */
   vehicles: readonly VehicleBatch[];
   /** Solid batches drawn after vehicles (route handles), in painter order. */
@@ -98,10 +102,11 @@ export interface GameplayRenderer {
 /** Interleaved vehicle instance layout (see VehicleBatch). */
 export const VEHICLE_INSTANCE_FLOATS = 11;
 
-/** Interleaved sprite instance layout (see SpriteBatch, emitted by
- *  mapBatch.ts): world origin (x, y), angle, world half-extents (x, y),
- *  uv scale (x, y), texture layer, two trailing host clip-scale slots. */
-export const SPRITE_INSTANCE_FLOATS = 10;
+/** Sprite row offsets: origin 0, angle 2, extents 3, UV scale 5, layer 7,
+ *  tint 8, and host clip-scale 12. */
+export const SPRITE_TINT_OFFSET = 8;
+export const SPRITE_CLIP_OFFSET = 12;
+export const SPRITE_INSTANCE_FLOATS = 14;
 
 /** White outline width (world px) around each vehicle body. */
 export const VEHICLE_RIM_PX = 1.5;

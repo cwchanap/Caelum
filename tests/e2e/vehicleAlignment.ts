@@ -52,6 +52,7 @@ export interface AlignmentProbeResult {
   renderer: AlignmentRenderer;
   motion: AlignmentMotion;
   vehicles: AlignmentVehicleResult[];
+  routeOverChevronRgb: [number, number, number];
 }
 
 declare global {
@@ -522,6 +523,16 @@ async function probe(
   const pixelHeight = shot.height;
   const clipOx = (2 * board.offsetX * dpr) / pixelWidth - 1;
   const clipOy = 1 - (2 * board.offsetY * dpr) / pixelHeight;
+  // Tile (14,8) contains an eastbound road chevron and a route stroke;
+  // the nearest vehicle is more than a tile away.
+  const probeX = Math.floor((board.offsetX + 14.5 * 32 * board.scale) * dpr);
+  const probeY = Math.floor((board.offsetY + 8.5 * 32 * board.scale) * dpr);
+  const probeOffset = (probeY * shot.width + probeX) * 4;
+  const routeOverChevronRgb: [number, number, number] = [
+    shot.pixels[probeOffset]!,
+    shot.pixels[probeOffset + 1]!,
+    shot.pixels[probeOffset + 2]!,
+  ];
   const rows = vehicleRows(frame);
   const vehicles = state.transit.vehicles;
   if (rows.length !== vehicles.length) {
@@ -590,6 +601,7 @@ async function probe(
     renderer: request.renderer,
     motion: request.motion,
     vehicles: results,
+    routeOverChevronRgb,
   };
 }
 
