@@ -37,6 +37,10 @@ export type MapTextOverlayItem =
   | {
       kind: "cursorBadge";
       anchor: Point;
+      /** Normalized safe-viewport position that takes precedence over the
+       *  map-space `anchor`: x/y are fractions of the HUD-inset board area.
+       *  Used only for guidance that has no cursor tile to follow. */
+      viewportAnchor?: Point;
       text: string;
       /** Spoken form of `text`: decorative glyphs (⦿, ⊘, …) are dropped or
        *  spelled out so the mirrored readout announces words, not symbols. */
@@ -489,10 +493,12 @@ export function selectMapTextOverlayItems(
   if (badge !== null) {
     items.push({
       kind: "cursorBadge",
-      // A touch-track cue without a hover tile is board guidance rather than
-      // cursor feedback; park it on the top-centre tile so it remains visible
-      // and leaves the map interaction itself unobstructed.
+      // A touch-track cue without a hover tile is viewport guidance rather
+      // than cursor feedback. Keep a neutral map anchor for the shared item
+      // shape, but give the DOM overlay a viewport anchor so zoom/pan cannot
+      // carry the instruction out of the clipped board.
       anchor: cursor ?? { x: (state.map.width - 1) / 2, y: 0 },
+      ...(cursor === null ? { viewportAnchor: { x: 0.5, y: 0 } } : {}),
       ...badge,
     });
   }

@@ -169,6 +169,7 @@ describe("selectMapTextOverlayItems", () => {
       {
         kind: "cursorBadge",
         anchor: { x: (state.map.width - 1) / 2, y: 0 },
+        viewportAnchor: { x: 0.5, y: 0 },
         text: "⦿ Track · Drag at least two tiles",
         a11yText: "Track, Drag at least two tiles",
       },

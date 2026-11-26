@@ -75,9 +75,18 @@
       return [] as PlacedItem[];
     }
     const boardWidth = box?.width ?? 0;
+    const safeHeight = Math.max(
+      0,
+      (box?.height ?? 0) - HUD_INSET.top - HUD_INSET.bottom,
+    );
     return items.map((item): PlacedItem => {
+      const viewportAnchor =
+        item.kind === "cursorBadge" ? item.viewportAnchor : undefined;
       const left =
-        transform.offsetX + (item.anchor.x + 0.5) * tileSize * transform.scale;
+        viewportAnchor === undefined
+          ? transform.offsetX +
+            (item.anchor.x + 0.5) * tileSize * transform.scale
+          : viewportAnchor.x * boardWidth;
       if (item.kind === "routeWaypoint") {
         // Centered inside the GPU-drawn handle circle.
         return {
@@ -94,11 +103,15 @@
       // Labels hover above their tile, flipping below it on the top visible
       // row, or lower when tiles are too short to hold the label's rise.
       const tileTop =
-        transform.offsetY + item.anchor.y * tileSize * transform.scale;
+        viewportAnchor === undefined
+          ? transform.offsetY + item.anchor.y * tileSize * transform.scale
+          : HUD_INSET.top + viewportAnchor.y * safeHeight;
       const below =
-        tileTop <
-        Math.max(transform.offsetY, HUD_INSET.top) +
-          Math.max(tileSize * transform.scale, LABEL_RISE_PX);
+        viewportAnchor !== undefined
+          ? true
+          : tileTop <
+            Math.max(transform.offsetY, HUD_INSET.top) +
+              Math.max(tileSize * transform.scale, LABEL_RISE_PX);
       // The nowrap label cannot wrap and the overlay clips overflow, so the
       // flip is by *estimated fit*, not board thirds: center when the whole
       // label fits around the anchor, otherwise the side with the most room.
@@ -122,7 +135,10 @@
       return {
         ...item,
         left,
-        top: below ? tileTop + tileSize * transform.scale : tileTop,
+        top: below
+          ? tileTop +
+            (viewportAnchor === undefined ? tileSize * transform.scale : 0)
+          : tileTop,
         below,
         side,
         maxWidth,

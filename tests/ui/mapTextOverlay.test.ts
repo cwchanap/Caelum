@@ -78,6 +78,25 @@ describe("MapTextOverlay", () => {
     expect(badge.style.maxWidth).toBe("144px");
   });
 
+  it("anchors the no-hover track cue to the safe viewport, not the map", async () => {
+    await renderOverlay(
+      createTestGameState(),
+      { activeTool: "track" },
+      { zoom: 2, center: { x: 7, y: 6.5 } },
+    );
+
+    const badge = document.querySelector(
+      '.map-text-item[data-kind="cursorBadge"]',
+    ) as HTMLElement;
+    expect(badge.textContent).toBe("⦿ Track · Drag at least two tiles");
+    expect(badge.style.left).toBe(`${14 * tileSize}px`);
+    expect(badge.style.top).toBe(`${HUD_INSET.top}px`);
+    expect(badge.classList.contains("map-text-below")).toBe(true);
+    expect(screen.getByTestId("map-text-cursor-readout").textContent).toBe(
+      "Track, Drag at least two tiles",
+    );
+  });
+
   it("flips the badge below the tile on the top row", async () => {
     await renderOverlay(createTestGameState(), {
       activeTool: "road",
