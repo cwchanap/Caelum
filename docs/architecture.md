@@ -165,9 +165,11 @@ no multi-window workflow, so persistence needs no ownership handoff or
 cross-runtime coordination.
 
 The browser persistence adapter is `indexedDbCitySaveStore.ts`: one fresh
-`caelum-city-saves-v8` IndexedDB database (version `8`), one `cities` object
+`caelum-city-saves-v9` IndexedDB database (version `9`), one `cities` object
 store, and full
-`CitySaveRecord` values keyed by opaque city ID. It implements the six
+`CitySaveRecord` values keyed by opaque city ID. City identity metadata
+(`id`, `name`, `createdAt`, `templateId`) is stored once at create time and
+projected into every `CitySummary`; the snapshot stays opaque. It implements the six
 `CitySaveStore` operations directly, derives/sorts list summaries from the same
 records, lets IndexedDB clone values at `add`/`put`, and has no metadata index,
 migration layer, recovery model, or multi-tab ownership. Multi-request
@@ -176,7 +178,7 @@ transaction remains active.
 
 The native persistence adapter is `tauriCitySaveStore.ts`: six narrow Tauri
 commands own application-data JSON files under
-`<app_data_dir>/cities-v8/city-<hex-id>.json`. Create payloads are written to a
+`<app_data_dir>/cities-v9/city-<hex-id>.json`. Create payloads are written to a
 sibling temporary file first and committed with a create-only hard link;
 update and rename payloads are likewise temp-first and replace the committed
 file only after the complete payload is written. Listing ignores malformed,
@@ -207,7 +209,7 @@ Tauri startup:
   createTauriBackend
   -> createTauriCitySaveStore
        -> city_store_* Tauri commands
-       -> <app_data_dir>/cities-v8/city-<hex-id>.json
+       -> <app_data_dir>/cities-v9/city-<hex-id>.json
   -> same city-list/create-city/runtime flow
 ```
 

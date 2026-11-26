@@ -35,6 +35,7 @@ const ACTIVE_CITY: CitySummary = {
   id: "city-active",
   name: "Active City",
   createdAt: "2026-08-08T09:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-08T10:00:00.000Z",
 };
 
@@ -303,6 +304,7 @@ describe("working save runtime city lists", () => {
       id: "city-other",
       name: "Other City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:00:00.000Z",
     };
     await seed(store, record(ACTIVE_CITY));
@@ -787,6 +789,7 @@ describe("working save runtime save status", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T07:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T09:15:00.000Z",
     };
     const failures = createMemoryCitySaveStoreFailureControls();
@@ -813,6 +816,7 @@ describe("working save runtime loads", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:30:00.000Z",
     };
     const loadedSnapshot = createRustSnapshot({ budget: 321_000 });
@@ -856,6 +860,7 @@ describe("working save runtime loads", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:30:00.000Z",
     };
     const fixture = createRuntimeFixture();
@@ -881,6 +886,7 @@ describe("working save runtime loads", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:30:00.000Z",
     };
     const delegate = createMemoryCitySaveStore();
@@ -936,6 +942,7 @@ describe("working save runtime loads", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:30:00.000Z",
     };
     const delegate = createMemoryCitySaveStore();
@@ -982,6 +989,7 @@ describe("working save runtime loads", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:30:00.000Z",
     };
     const loadedSnapshot = createRustSnapshot({ budget: 321_000 });
@@ -1030,6 +1038,7 @@ describe("working save runtime new cities", () => {
         name: "New City",
         createdAt: NEXT_SAVED_AT,
         savedAt: NEXT_SAVED_AT,
+        templateId: "blankGrid",
       },
     });
     expect(events.filter((event) => event !== "awaitGameplayIdle")).toEqual([
@@ -1041,7 +1050,12 @@ describe("working save runtime new cities", () => {
     await expect(delegate.readCity("city-new")).resolves.toMatchObject({
       ok: true,
       value: {
-        city: { id: "city-new", name: "New City", createdAt: NEXT_SAVED_AT },
+        city: {
+          id: "city-new",
+          name: "New City",
+          createdAt: NEXT_SAVED_AT,
+          templateId: "blankGrid",
+        },
         savedAt: NEXT_SAVED_AT,
       },
     });
@@ -1102,6 +1116,7 @@ describe("working save runtime new cities", () => {
         id: "city-new",
         name: "Existing City",
         createdAt: "2026-08-08T07:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-08T08:00:00.000Z",
       }),
     );
@@ -1235,6 +1250,7 @@ describe("working save runtime drain-race guard", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T11:30:00.000Z",
     };
     const fixture = createRuntimeFixture({
@@ -1299,6 +1315,7 @@ describe("working save runtime city library mutations", () => {
       id: "city-inactive",
       name: "Inactive City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T09:00:00.000Z",
     };
     const fixture = createRuntimeFixture();
@@ -1345,6 +1362,7 @@ describe("working save runtime city library mutations", () => {
       id: "city-inactive",
       name: "Inactive City",
       createdAt: "2026-08-08T08:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-08T09:00:00.000Z",
     };
     const fixture = createRuntimeFixture();

@@ -29,6 +29,7 @@ const ACTIVE_CITY: CitySummary = {
   id: "city-001",
   name: "Test City",
   createdAt: "2026-08-08T09:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-08T09:30:00.000Z",
 };
 
@@ -36,6 +37,7 @@ const OTHER_CITY: CitySummary = {
   id: "city-002",
   name: "Other City",
   createdAt: "2026-08-08T08:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-08T09:45:00.000Z",
 };
 
@@ -43,6 +45,7 @@ const LOADED_CITY: CitySummary = {
   id: "city-loaded",
   name: "Loaded City",
   createdAt: "2026-08-08T07:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-08T09:15:00.000Z",
 };
 
@@ -305,6 +308,7 @@ describe("runtime working-save integration", () => {
         id: "city-new",
         name: "New City",
         createdAt: "2026-08-08T10:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-08T10:00:00.000Z",
       },
     });
@@ -317,6 +321,52 @@ describe("runtime working-save integration", () => {
     });
   });
 
+  it("keeps the created template across save, rename, and reload", async () => {
+    const store = createMemoryCitySaveStore();
+    const runtime = await runtimeWithStore(store, { initialCity: null });
+
+    await expect(
+      runtime.persistence.createCity({
+        name: "Template City",
+        economyPreset: "standard",
+        templateId: "smallTown",
+        mapSize: "small",
+      }),
+    ).resolves.toMatchObject({ ok: true, value: { templateId: "smallTown" } });
+    expect(runtime.getSnapshot().persistence.activeCity?.templateId).toBe(
+      "smallTown",
+    );
+
+    const saved = await runtime.persistence.save();
+    expect(saved).toMatchObject({
+      ok: true,
+      value: { templateId: "smallTown" },
+    });
+
+    const renamed = await runtime.persistence.renameCity(
+      "city-new",
+      "Renamed Template City",
+    );
+    expect(renamed).toMatchObject({
+      ok: true,
+      value: { templateId: "smallTown" },
+    });
+
+    const stored = await store.readCity("city-new");
+    expect(stored).toMatchObject({
+      ok: true,
+      value: { city: { templateId: "smallTown" } },
+    });
+
+    await expect(runtime.persistence.load("city-new")).resolves.toMatchObject({
+      ok: true,
+      value: { templateId: "smallTown" },
+    });
+    expect(runtime.getSnapshot().persistence.activeCity?.templateId).toBe(
+      "smallTown",
+    );
+  });
+
   it("keeps the current city after a create conflict or definite activation failure", async () => {
     const conflictStore = createMemoryCitySaveStore();
     await seed(conflictStore, record(ACTIVE_CITY));
@@ -326,6 +376,7 @@ describe("runtime working-save integration", () => {
         id: "city-new",
         name: "Existing City",
         createdAt: "2026-08-08T08:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-08T08:30:00.000Z",
       }),
     );

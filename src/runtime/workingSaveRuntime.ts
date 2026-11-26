@@ -340,7 +340,12 @@ export function createWorkingSaveRuntime(
       const cityId = host.createCityId();
       const created = await callStore("createCity", cityId, () =>
         saveStore.createCity({
-          city: { id: cityId, name: request.name, createdAt },
+          city: {
+            id: cityId,
+            name: request.name,
+            createdAt,
+            templateId: request.templateId,
+          },
           savedAt: createdAt,
           snapshot: candidate.snapshot,
         }),

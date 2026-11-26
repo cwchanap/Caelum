@@ -23,6 +23,7 @@ const activeCity = {
   id: "city-1",
   name: "Harbour Loop",
   createdAt: "2026-08-10T12:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-10T13:00:00.000Z",
 } satisfies CitySummary;
 
@@ -30,6 +31,7 @@ const inactiveCity = {
   id: "city-2",
   name: "Dockside",
   createdAt: "2026-08-09T12:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-09T13:00:00.000Z",
 } satisfies CitySummary;
 
@@ -104,7 +106,9 @@ describe("CityPanel", () => {
       "Saved 12 s ago",
     );
     expect(screen.getByText("Standard Sandbox")).toBeVisible();
-    expect(screen.getByText("Crossroads")).toBeVisible();
+    expect(
+      screen.getByText("Crossroads", { selector: ".dispatch-val" }),
+    ).toBeVisible();
     expect(screen.getByText("Running")).toBeVisible();
     expect(screen.getByText("128")).toBeVisible();
     expect(screen.getByText("3")).toBeVisible();

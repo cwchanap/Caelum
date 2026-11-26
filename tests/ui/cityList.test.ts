@@ -15,12 +15,14 @@ const CITIES = [
     id: "city-new",
     name: "Maple Junction",
     createdAt: "2026-08-10T12:00:00.000Z",
+    templateId: "crossroads",
     savedAt: "2026-08-10T13:00:00.000Z",
   },
   {
     id: "city-old",
     name: "Harbour City",
     createdAt: "2026-08-09T12:00:00.000Z",
+    templateId: "blankGrid",
     savedAt: "2026-08-09T13:00:00.000Z",
   },
 ] satisfies CitySummary[];
@@ -51,6 +53,8 @@ describe("CityList", () => {
     const inactive = screen.getByTestId("city-row-city-old");
 
     expect(within(active).getByText("Active")).toBeVisible();
+    expect(within(active).getByText("Crossroads")).toBeVisible();
+    expect(within(inactive).getByText("Blank Grid")).toBeVisible();
     expect(
       within(active).queryByRole("button", { name: "Load Maple Junction" }),
     ).toBeNull();

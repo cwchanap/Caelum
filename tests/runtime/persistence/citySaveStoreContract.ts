@@ -37,6 +37,7 @@ export function makeCitySaveRecord(
     createdAt?: string;
     savedAt?: string;
     snapshot?: unknown;
+    templateId?: CitySaveRecord["city"]["templateId"];
   } = {},
 ): CitySaveRecord {
   return {
@@ -44,6 +45,7 @@ export function makeCitySaveRecord(
       id,
       name,
       createdAt: overrides.createdAt ?? "2026-08-01T10:00:00.000Z",
+      templateId: overrides.templateId ?? "crossroads",
     },
     savedAt: overrides.savedAt ?? "2026-08-01T10:00:00.000Z",
     snapshot: overrides.snapshot ?? { budget: 120_000 },
@@ -70,6 +72,7 @@ export function defineCitySaveStoreContract(
         name: "First",
         createdAt: "2026-08-01T10:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
+        templateId: "crossroads",
       });
 
       const listed = await expectCitySaveStoreOk(store.listCities());
@@ -139,6 +142,7 @@ export function defineCitySaveStoreContract(
       const store = createStore();
       const record = makeCitySaveRecord("city-1", "First", {
         createdAt: "2026-07-01T09:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-01T10:00:00.000Z",
         snapshot: { budget: 120_000 },
       });
@@ -156,6 +160,7 @@ export function defineCitySaveStoreContract(
         name: "First",
         createdAt: "2026-07-01T09:00:00.000Z",
         savedAt: "2026-08-02T11:00:00.000Z",
+        templateId: "crossroads",
       });
 
       const read = await expectCitySaveStoreOk(store.readCity("city-1"));
@@ -163,7 +168,36 @@ export function defineCitySaveStoreContract(
         id: "city-1",
         name: "First",
         createdAt: "2026-07-01T09:00:00.000Z",
+        templateId: "crossroads",
       });
+    });
+
+    it("keeps the stored template across update and rename", async () => {
+      const store = createStore();
+      await expectCitySaveStoreOk(
+        store.createCity(
+          makeCitySaveRecord("city-1", "First", { templateId: "smallTown" }),
+        ),
+      );
+
+      const updated = await expectCitySaveStoreOk(
+        store.updateCity("city-1", {
+          savedAt: "2026-08-02T11:00:00.000Z",
+          snapshot: { budget: 90_000 },
+        }),
+      );
+      expect(updated.templateId).toBe("smallTown");
+
+      const renamed = await expectCitySaveStoreOk(
+        store.renameCity("city-1", "Renamed"),
+      );
+      expect(renamed.templateId).toBe("smallTown");
+
+      const read = await expectCitySaveStoreOk(store.readCity("city-1"));
+      expect(read.city.templateId).toBe("smallTown");
+
+      const listed = await expectCitySaveStoreOk(store.listCities());
+      expect(listed.map((city) => city.templateId)).toEqual(["smallTown"]);
     });
 
     it("does not revert a committed rename during update", async () => {
@@ -173,6 +207,7 @@ export function defineCitySaveStoreContract(
         store.createCity(
           makeCitySaveRecord("city-1", "Original", {
             createdAt: originalCreatedAt,
+            templateId: "crossroads",
             savedAt: "2026-08-01T10:00:00.000Z",
             snapshot: { budget: 120_000 },
           }),
@@ -195,6 +230,7 @@ export function defineCitySaveStoreContract(
       const store = createStore();
       const record = makeCitySaveRecord("city-1", "First", {
         createdAt: "2026-07-01T09:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-01T10:00:00.000Z",
         snapshot: { budget: 120_000 },
       });
@@ -208,6 +244,7 @@ export function defineCitySaveStoreContract(
         name: "North Loop",
         createdAt: "2026-07-01T09:00:00.000Z",
         savedAt: "2026-08-01T10:00:00.000Z",
+        templateId: "crossroads",
       });
 
       const read = await expectCitySaveStoreOk(store.readCity("city-1"));
@@ -217,6 +254,7 @@ export function defineCitySaveStoreContract(
           id: "city-1",
           name: "North Loop",
           createdAt: record.city.createdAt,
+          templateId: record.city.templateId,
         },
       });
     });
@@ -273,18 +311,21 @@ export function defineCitySaveStoreContract(
         id: "city-z",
         name: "Newest",
         createdAt: "2026-08-01T09:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-01T11:00:00.000Z",
       };
       const tiedA: CitySummary = {
         id: "city-a",
         name: "A",
         createdAt: "2026-08-01T09:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-01T10:00:00.000Z",
       };
       const tiedB: CitySummary = {
         id: "city-b",
         name: "B",
         createdAt: "2026-08-01T09:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-01T10:00:00.000Z",
       };
       // Input order is deliberately not the sorted order.

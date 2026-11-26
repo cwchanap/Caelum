@@ -17,6 +17,7 @@ const record: CitySaveRecord = {
     id: "city-1",
     name: "First",
     createdAt: "2026-08-01T10:00:00.000Z",
+    templateId: "crossroads",
   },
   savedAt: "2026-08-01T11:00:00.000Z",
   snapshot: { budget: 120_000 },
@@ -31,6 +32,7 @@ const summary: CitySummary = {
   id: record.city.id,
   name: record.city.name,
   createdAt: record.city.createdAt,
+  templateId: "crossroads",
   savedAt: record.savedAt,
 };
 
@@ -81,18 +83,21 @@ describe("Tauri CitySaveStore", () => {
       id: "city-z",
       name: "Newest",
       createdAt: "2026-08-01T09:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-08-01T11:00:00.000Z",
     };
     const tiedB: CitySummary = {
       id: "city-b",
       name: "B",
       createdAt: "2026-08-01T09:00:00.000Z",
+      templateId: "crossroads",
       savedAt: tiedAt,
     };
     const tiedA: CitySummary = {
       id: "city-a",
       name: "A",
       createdAt: "2026-08-01T09:00:00.000Z",
+      templateId: "crossroads",
       savedAt: tiedAt,
     };
     invokeMock.mockResolvedValue([tiedB, newest, tiedA]);

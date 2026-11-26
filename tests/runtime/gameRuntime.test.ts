@@ -2420,6 +2420,7 @@ describe("Game Runtime", () => {
       id: "city-loaded",
       name: "Loaded City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T10:00:00.000Z",
     };
     const loadedSnapshot = fullRustSnapshot({ budget: 99_000 });
@@ -2428,6 +2429,7 @@ describe("Game Runtime", () => {
         id: loadedCity.id,
         name: loadedCity.name,
         createdAt: loadedCity.createdAt,
+        templateId: "crossroads" as const,
       },
       savedAt: loadedCity.savedAt,
       snapshot: loadedSnapshot,
@@ -2763,10 +2765,16 @@ describe("Game Runtime", () => {
         id: "city-debounce-busy",
         name: "Debounce Busy",
         createdAt: "2026-08-08T09:00:00.000Z",
+        templateId: "crossroads" as const,
         savedAt: "2026-08-08T09:30:00.000Z",
       };
       await delegate.createCity({
-        city: { id: city.id, name: city.name, createdAt: city.createdAt },
+        city: {
+          id: city.id,
+          name: city.name,
+          createdAt: city.createdAt,
+          templateId: city.templateId,
+        },
         savedAt: "2026-08-08T09:30:00.000Z",
         snapshot: initial,
       });
@@ -3104,6 +3112,7 @@ describe("Game Runtime", () => {
       id: "city-reset",
       name: "Reset City",
       createdAt: "2026-08-01T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-01T09:30:00.000Z",
     };
     const runtime = await createGameRuntime({
@@ -3338,10 +3347,16 @@ describe("Game Runtime", () => {
         id: "city-raf",
         name: "RAF City",
         createdAt: "2026-08-08T09:00:00.000Z",
+        templateId: "crossroads" as const,
         savedAt: "2026-08-08T09:30:00.000Z",
       };
       await delegate.createCity({
-        city: { id: city.id, name: city.name, createdAt: city.createdAt },
+        city: {
+          id: city.id,
+          name: city.name,
+          createdAt: city.createdAt,
+          templateId: city.templateId,
+        },
         savedAt: city.savedAt,
         snapshot: initial,
       });
@@ -3999,10 +4014,16 @@ describe("Game Runtime", () => {
       id: "city-busy-pick",
       name: "Busy City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T09:30:00.000Z",
     };
     await delegate.createCity({
-      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      city: {
+        id: city.id,
+        name: city.name,
+        createdAt: city.createdAt,
+        templateId: city.templateId,
+      },
       savedAt: city.savedAt,
       snapshot: initial,
     });
@@ -4228,10 +4249,16 @@ describe("runtime undoLastBuild", () => {
       id: "city-undo-busy",
       name: "Undo Busy City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T09:30:00.000Z",
     };
     await delegate.createCity({
-      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      city: {
+        id: city.id,
+        name: city.name,
+        createdAt: city.createdAt,
+        templateId: city.templateId,
+      },
       savedAt: city.savedAt,
       snapshot: initial,
     });
@@ -6084,6 +6111,7 @@ describe("route creation and management", () => {
         id: "city-route-save",
         name: "Route Save City",
         createdAt: "2026-08-08T09:00:00.000Z",
+        templateId: "crossroads" as const,
         savedAt: "2026-08-08T09:30:00.000Z",
       },
     });
@@ -7047,6 +7075,7 @@ describe("route creation and management", () => {
       id: "city-route-save",
       name: "Route Save City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T09:30:00.000Z",
     };
     const runtime = await createGameRuntime({
@@ -7090,6 +7119,7 @@ describe("route creation and management", () => {
       id: "city-route-save",
       name: "Route Save City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T09:30:00.000Z",
     };
     const { runtime } = await withTwoStops(backend, city);
@@ -7173,6 +7203,7 @@ describe("route creation and management", () => {
       id: "city-route-save",
       name: "Route Save City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T09:30:00.000Z",
     };
     const { runtime } = await withTwoStops(backend, city);
@@ -7383,10 +7414,16 @@ describe("route creation and management", () => {
       id: "city-route-draft",
       name: "Route Draft City",
       createdAt: "2026-08-08T09:00:00.000Z",
+      templateId: "crossroads" as const,
       savedAt: "2026-08-08T09:30:00.000Z",
     };
     await delegate.createCity({
-      city: { id: city.id, name: city.name, createdAt: city.createdAt },
+      city: {
+        id: city.id,
+        name: city.name,
+        createdAt: city.createdAt,
+        templateId: city.templateId,
+      },
       savedAt: city.savedAt,
       snapshot: initial,
     });

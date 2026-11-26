@@ -13,6 +13,7 @@ function summary(
     id,
     name: overrides.name ?? id,
     createdAt: overrides.createdAt ?? "2026-08-01T09:00:00.000Z",
+    templateId: "crossroads",
     savedAt,
   };
 }

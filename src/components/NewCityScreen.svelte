@@ -8,6 +8,7 @@
     SandboxTemplateId,
   } from "../domain/types";
   import { MAP_SIZES } from "../scenario/sandbox";
+  import { SANDBOX_TEMPLATE_LABELS } from "../domain/catalog/sandboxTemplates";
   import type { NewCityRequest } from "../runtime/workingSaveRuntime";
 
   interface Props {
@@ -30,9 +31,21 @@
     label: string;
     art: string;
   }[] = [
-    { id: "blankGrid", label: "Blank Grid", art: blankGridArt },
-    { id: "crossroads", label: "Crossroads", art: crossroadsArt },
-    { id: "smallTown", label: "Small Town", art: smallTownArt },
+    {
+      id: "blankGrid",
+      label: SANDBOX_TEMPLATE_LABELS.blankGrid,
+      art: blankGridArt,
+    },
+    {
+      id: "crossroads",
+      label: SANDBOX_TEMPLATE_LABELS.crossroads,
+      art: crossroadsArt,
+    },
+    {
+      id: "smallTown",
+      label: SANDBOX_TEMPLATE_LABELS.smallTown,
+      art: smallTownArt,
+    },
   ];
   const economyChoices: { id: EconomyPreset; label: string; note: string }[] = [
     { id: "standard", label: "Standard", note: "Money matters" },
