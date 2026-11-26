@@ -1,10 +1,13 @@
 /** The six-operation city save store contract consumed by the runtime. */
 
+import type { SandboxTemplateId } from "../domain/types";
+
 export interface CitySaveRecord {
   city: {
     id: string;
     name: string;
     createdAt: string;
+    templateId: SandboxTemplateId;
   };
   savedAt: string;
   snapshot: unknown;
@@ -15,6 +18,7 @@ export interface CitySummary {
   name: string;
   createdAt: string;
   savedAt: string;
+  templateId: SandboxTemplateId;
 }
 
 export interface CitySaveUpdate {
@@ -76,6 +80,7 @@ export function citySummaryFromRecord(record: CitySaveRecord): CitySummary {
     name: record.city.name,
     createdAt: record.city.createdAt,
     savedAt: record.savedAt,
+    templateId: record.city.templateId,
   };
 }
 

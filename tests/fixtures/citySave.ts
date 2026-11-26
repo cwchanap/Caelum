@@ -11,7 +11,12 @@ export function record(
   snapshot: RustGameSnapshot = createRustSnapshot({ paused: true }),
 ): CitySaveRecord {
   return {
-    city: { id: city.id, name: city.name, createdAt: city.createdAt },
+    city: {
+      id: city.id,
+      name: city.name,
+      createdAt: city.createdAt,
+      templateId: city.templateId,
+    },
     savedAt: city.savedAt,
     snapshot,
   };

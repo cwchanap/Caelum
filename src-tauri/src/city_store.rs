@@ -6,10 +6,11 @@ use std::{
     path::PathBuf,
 };
 
+use caelum_core::model::SandboxTemplateId;
 use serde::{Deserialize, Serialize};
 use tauri::Manager;
 
-const CITY_DIRECTORY: &str = "cities-v8";
+const CITY_DIRECTORY: &str = "cities-v9";
 const CITY_PREFIX: &str = "city-";
 const CITY_SUFFIX: &str = ".json";
 const TEMP_SUFFIX: &str = ".tmp";
@@ -24,6 +25,7 @@ pub(crate) struct CityIdentity {
     id: String,
     name: String,
     created_at: String,
+    template_id: SandboxTemplateId,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -48,6 +50,7 @@ pub(crate) struct CitySummary {
     name: String,
     created_at: String,
     saved_at: String,
+    template_id: SandboxTemplateId,
 }
 
 #[derive(Debug, Deserialize)]
@@ -103,6 +106,7 @@ fn summary(record: &CitySaveRecord) -> CitySummary {
         name: record.city.name.clone(),
         created_at: record.city.created_at.clone(),
         saved_at: record.saved_at.clone(),
+        template_id: record.city.template_id,
     }
 }
 
@@ -174,6 +178,7 @@ impl CityFileStore {
                 name: record.city.name,
                 created_at: record.city.created_at,
                 saved_at: record.saved_at,
+                template_id: record.city.template_id,
             });
         }
 
@@ -366,6 +371,7 @@ mod tests {
                 id: id.into(),
                 name: name.into(),
                 created_at: "2026-08-11T18:00:00.000Z".into(),
+                template_id: SandboxTemplateId::Crossroads,
             },
             saved_at: "2026-08-11T19:00:00.000Z".into(),
             snapshot: json!({ "id": id }),
@@ -398,7 +404,8 @@ mod tests {
                 "id": "city-ipc",
                 "name": "IPC City",
                 "createdAt": "2026-08-11T18:00:00.000Z",
-                "savedAt": "2026-08-11T19:00:00.000Z"
+                "savedAt": "2026-08-11T19:00:00.000Z",
+                "templateId": "crossroads"
             })
         );
         assert_eq!(
@@ -407,7 +414,8 @@ mod tests {
                 "city": {
                     "id": "city-ipc",
                     "name": "IPC City",
-                    "createdAt": "2026-08-11T18:00:00.000Z"
+                    "createdAt": "2026-08-11T18:00:00.000Z",
+                    "templateId": "crossroads"
                 },
                 "savedAt": "2026-08-11T19:00:00.000Z",
                 "snapshot": { "id": "city-ipc" }
@@ -676,23 +684,23 @@ mod tests {
     }
 
     #[test]
-    fn from_app_uses_app_data_schema_v8_cities_child() {
+    fn from_app_uses_app_data_schema_v9_cities_child() {
         let app = tauri::test::mock_app();
         let expected = app
             .handle()
             .path()
             .app_data_dir()
             .expect("app data dir")
-            .join("cities-v8");
+            .join("cities-v9");
 
         let store = CityFileStore::from_app(app.handle()).expect("store path");
         assert_eq!(store.root, expected);
     }
 
     #[test]
-    fn schema_v8_store_ignores_the_prior_cities_directory() {
+    fn schema_v9_store_ignores_the_prior_cities_directory() {
         let temp = tempdir().expect("temp dir");
-        let legacy = CityFileStore::new(temp.path().join("cities-v7"));
+        let legacy = CityFileStore::new(temp.path().join("cities-v8"));
         legacy
             .create_city(record("legacy", "Legacy"))
             .expect("seed legacy");

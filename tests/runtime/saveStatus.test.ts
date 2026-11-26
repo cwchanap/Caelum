@@ -7,6 +7,7 @@ const view: RuntimePersistenceView = {
     id: "1",
     name: "City",
     createdAt: "2026-01-01T00:00:00.000Z",
+    templateId: "crossroads",
     savedAt: "2026-01-01T00:00:00.000Z",
   },
   busy: false,

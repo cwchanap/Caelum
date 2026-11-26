@@ -1,5 +1,6 @@
 <script lang="ts">
   import type { CitySummary } from "../../persistence/citySaveStore";
+  import { SANDBOX_TEMPLATE_LABELS } from "../../domain/catalog/sandboxTemplates";
 
   interface Props {
     cities: CitySummary[];
@@ -164,6 +165,9 @@
             }}
           />
         {/if}
+        <span class="city-template">
+          {SANDBOX_TEMPLATE_LABELS[city.templateId]}
+        </span>
         <span>
           Saved
           <time datetime={city.savedAt}>

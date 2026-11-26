@@ -5,13 +5,13 @@ import type {
   MetroLine,
   Route,
   RouteLegPath,
-  SandboxTemplateId,
   Tile,
   Tool,
   Point,
   WaitingLocationView,
 } from "../domain/types";
 import { AREA_LABELS, GROWTH_AREA_KINDS } from "../domain/catalog/areas";
+import { SANDBOX_TEMPLATE_LABELS } from "../domain/catalog/sandboxTemplates";
 import { BUILDING_CATALOG } from "../domain/catalog/buildings";
 import {
   METRO_STATION_COVERAGE_RADIUS,
@@ -48,12 +48,6 @@ import type {
   ShellZoneInspectorState,
   ShellZoneRunningHint,
 } from "./types";
-
-const SANDBOX_TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
-  blankGrid: "Blank Grid",
-  crossroads: "Crossroads",
-  smallTown: "Small Town",
-};
 
 const budgetFormat = new Intl.NumberFormat("en-US");
 

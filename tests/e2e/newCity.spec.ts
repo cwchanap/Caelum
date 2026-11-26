@@ -1,6 +1,10 @@
 import { expect, test } from "@playwright/test";
 import { SNAPSHOT_SCHEMA_VERSION } from "../../src/domain/types";
 import {
+  DATABASE_VERSION,
+  DEFAULT_DATABASE_NAME,
+} from "../../src/persistence/indexedDbCitySaveStore";
+import {
   clickMapTile,
   createDefaultCity,
   mapTileViewportPoint,
@@ -14,7 +18,7 @@ import {
 } from "./helpers";
 
 interface StoredCityRecord {
-  city: { id: string; name: string };
+  city: { id: string; name: string; templateId: string };
   snapshot: { budget: number; schemaVersion: number };
 }
 
@@ -50,9 +54,9 @@ test("creates a default city through real WASM and IndexedDB", async ({
 
   const cityId = after.persistence.activeCity!.id;
   const stored = await page.evaluate(
-    async ({ cityId, cityName }) => {
+    async ({ cityId, cityName, databaseName, databaseVersion }) => {
       const database = await new Promise<IDBDatabase>((resolve, reject) => {
-        const request = indexedDB.open("caelum-city-saves-v8", 8);
+        const request = indexedDB.open(databaseName, databaseVersion);
         request.onsuccess = () => resolve(request.result);
         request.onerror = () => reject(request.error);
       });
@@ -72,11 +76,18 @@ test("creates a default city through real WASM and IndexedDB", async ({
         ) ?? null
       );
     },
-    { cityId, cityName },
+    {
+      cityId,
+      cityName,
+      databaseName: DEFAULT_DATABASE_NAME,
+      databaseVersion: DATABASE_VERSION,
+    },
   );
 
   expect(stored).not.toBeNull();
-  expect(stored!).toMatchObject({ city: { id: cityId, name: cityName } });
+  expect(stored!).toMatchObject({
+    city: { id: cityId, name: cityName, templateId: "crossroads" },
+  });
   expect(stored!.snapshot.budget).toBe(after.state.budget);
   expect(stored!.snapshot.schemaVersion).toBe(SNAPSHOT_SCHEMA_VERSION);
 });

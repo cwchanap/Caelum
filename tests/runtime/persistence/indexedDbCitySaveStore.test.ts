@@ -27,13 +27,14 @@ const summary = {
   id: "city-1",
   name: "First",
   createdAt: "2026-08-01T10:00:00.000Z",
+  templateId: "crossroads" as const,
   savedAt: "2026-08-01T10:00:00.000Z",
 };
 
 defineCitySaveStoreContract("IndexedDbCitySaveStore", () => createStore());
 
 describe("IndexedDbCitySaveStore persistence", () => {
-  it("uses a fresh v8 namespace instead of reading the prior city database", async () => {
+  it("uses a fresh v9 namespace instead of reading the prior city database", async () => {
     const legacyRequest = fakeIndexedDB.open("caelum-city-saves-v1", 1);
     const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
       legacyRequest.onupgradeneeded = () => {

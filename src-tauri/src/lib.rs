@@ -441,7 +441,8 @@ mod tests {
             "city": {
                 "id": "city-ipc",
                 "name": "IPC City",
-                "createdAt": "2026-08-11T18:00:00.000Z"
+                "createdAt": "2026-08-11T18:00:00.000Z",
+                "templateId": "crossroads"
             },
             "savedAt": "2026-08-11T19:00:00.000Z",
             "snapshot": { "revision": 1 }
@@ -453,7 +454,8 @@ mod tests {
                 "id": "city-ipc",
                 "name": "IPC City",
                 "createdAt": "2026-08-11T18:00:00.000Z",
-                "savedAt": "2026-08-11T19:00:00.000Z"
+                "savedAt": "2026-08-11T19:00:00.000Z",
+                "templateId": "crossroads"
             })
         );
 

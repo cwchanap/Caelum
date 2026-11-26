@@ -85,6 +85,7 @@ function createRuntimeHarness(
       id: "city-1",
       name: "Harbour City",
       createdAt: "2026-01-01T00:00:00.000Z",
+      templateId: "crossroads",
       savedAt: "2026-01-01T00:00:00.000Z",
     },
     busy: false,
@@ -97,6 +98,7 @@ function createRuntimeHarness(
     id: "city-fallback",
     name: "Fallback City",
     createdAt: "2026-01-01T00:00:00.000Z",
+    templateId: "crossroads",
     savedAt: "2026-01-01T00:00:00.000Z",
   };
   const defaultCities =
@@ -303,6 +305,7 @@ const CITY_NEW: CitySummary = {
   id: "city-new",
   name: "Maple Junction",
   createdAt: "2026-08-10T12:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-10T13:00:00.000Z",
 };
 
@@ -310,6 +313,7 @@ const CITY_OLD: CitySummary = {
   id: "city-old",
   name: "Harbour City",
   createdAt: "2026-08-09T12:00:00.000Z",
+  templateId: "crossroads",
   savedAt: "2026-08-09T13:00:00.000Z",
 };
 
@@ -611,6 +615,7 @@ describe("App command shell", () => {
         id: "city-new",
         name: "Maple Junction",
         createdAt: "2026-08-10T17:00:00.000Z",
+        templateId: "crossroads",
         savedAt: "2026-08-10T17:00:00.000Z",
       },
       busy: false,

@@ -7,6 +7,7 @@ import {
 } from "../../src/render/boardTransform";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
 import type { SandboxTemplateId } from "../../src/domain/types";
+import { SANDBOX_TEMPLATE_LABELS } from "../../src/domain/catalog/sandboxTemplates";
 import type { BuildGroup } from "../../src/domain/catalog/buildGroups";
 import type { CommandDestination } from "../../src/ui/uiState";
 
@@ -23,12 +24,6 @@ export async function runtimeSnapshot(page: Page): Promise<RuntimeSnapshot> {
     return runtime.getSnapshot();
   });
 }
-
-const TEMPLATE_LABELS: Record<SandboxTemplateId, string> = {
-  crossroads: "Crossroads",
-  blankGrid: "Blank Grid",
-  smallTown: "Small Town",
-};
 
 interface IdbPutFailureHarness {
   armed: boolean;
@@ -98,7 +93,9 @@ export async function createDefaultCity(
   }
   await expect(newCityScreen).toBeVisible();
   await page.getByLabel("City name").fill(name);
-  await page.getByRole("radio", { name: TEMPLATE_LABELS[templateId] }).check();
+  await page
+    .getByRole("radio", { name: SANDBOX_TEMPLATE_LABELS[templateId] })
+    .check();
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   await expect(
