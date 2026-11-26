@@ -81,6 +81,7 @@ export async function createDefaultCity(
   name = "E2E City",
   templateId: SandboxTemplateId = "crossroads",
   expectedRenderer: "webgpu" | "canvas2d" = "webgpu",
+  mapSize: "small" | "large" = "small",
 ): Promise<void> {
   await page.goto("/");
   const newCityScreen = page.getByTestId("new-city-screen");
@@ -96,6 +97,9 @@ export async function createDefaultCity(
   await page
     .getByRole("radio", { name: SANDBOX_TEMPLATE_LABELS[templateId] })
     .check();
+  if (mapSize === "large") {
+    await page.getByRole("radio", { name: "Large 84×54" }).check();
+  }
   await page.getByRole("button", { name: "Create City" }).click();
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   await expect(

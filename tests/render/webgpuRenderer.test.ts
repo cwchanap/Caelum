@@ -200,9 +200,8 @@ describe("createWebGpuRenderer", () => {
         .descriptor.vertex.buffers ?? [],
     ).find((buffer) => buffer?.stepMode === "instance");
     expect(instanceBuffer).toBeDefined();
-    // 10 floats: world origin(x,y) angle extents(x,y) uvScale(x,y) layer,
-    // plus the two trailing clip-scale slots the host projection fills.
-    expect(instanceBuffer!.arrayStride).toBe(40);
+    // 14 floats: origin, angle, extents, UV, layer, tint and clip factors.
+    expect(instanceBuffer!.arrayStride).toBe(56);
     expect(instanceBuffer!.arrayStride).toBe(SPRITE_INSTANCE_FLOATS * 4);
     expect(Array.from(instanceBuffer!.attributes!)).toEqual([
       { shaderLocation: 1, offset: 0, format: "float32x2" }, // world origin
@@ -210,7 +209,8 @@ describe("createWebGpuRenderer", () => {
       { shaderLocation: 3, offset: 12, format: "float32x2" }, // world half-extents
       { shaderLocation: 4, offset: 20, format: "float32x2" }, // uv scale
       { shaderLocation: 5, offset: 28, format: "float32" }, // texture layer
-      { shaderLocation: 6, offset: 32, format: "float32x2" }, // clip factors
+      { shaderLocation: 6, offset: 32, format: "float32x4" }, // tint
+      { shaderLocation: 7, offset: 48, format: "float32x2" }, // clip factors
     ]);
   });
 
@@ -349,6 +349,8 @@ describe("createWebGpuRenderer", () => {
       "output.uv = (corner + vec2f(0.5, 0.5)) * uvScale",
     );
     expect(shader).toContain("output.layer = layer");
+    expect(shader).toContain("texel.rgb * output.tint.rgb * output.tint.a");
+    expect(shader).toContain("texel.a * output.tint.a");
 
     // Evaluate the real WGSL rotation at the quad corners: a native 3x2
     // building (half-extents 1.5x1 tiles) at 90° must span 2 tiles wide x 3
@@ -665,6 +667,123 @@ describe("createWebGpuRenderer", () => {
     expect(bigger.spriteDraws).toBe(1);
   });
 
+  it("packs structural and marker sprites before two ordered draws", () => {
+    const { device, passes, writes } = createFakeDevice();
+    const renderer = createWebGpuRenderer(
+      device,
+      "bgra8unorm",
+      spriteAtlasTexture(device),
+    );
+    renderer.configure(createFakeCanvas().canvas);
+    const structural = spriteInstances(2);
+    const markers = spriteInstances(3);
+    structural[0] = 11;
+    markers[0] = 22;
+    const stats = renderer.render({
+      solids: [],
+      sprites: { instances: structural },
+      overSprites: [{ role: "dynamic", vertices: solidVertices(3) }],
+      markerSprites: { instances: markers },
+      overMarkers: [{ role: "dynamic", vertices: solidVertices(6) }],
+      vehicles: [],
+    });
+    expect(stats.spriteInstances).toBe(5);
+    expect(stats.spriteDraws).toBe(2);
+    expect(stats.solidVertices).toBe(9 * SOLID_VERTEX_FLOATS);
+    const spriteWrite = writes.find(
+      (write) => write.data.length === 5 * SPRITE_INSTANCE_FLOATS,
+    )!;
+    expect(spriteWrite.offset).toBe(0);
+    expect(spriteWrite.data[0]).toBe(11);
+    expect(spriteWrite.data[2 * SPRITE_INSTANCE_FLOATS]).toBe(22);
+    const dynamicWrites = writes.filter(
+      (write) =>
+        write.data.length === 3 * SOLID_VERTEX_FLOATS ||
+        write.data.length === 6 * SOLID_VERTEX_FLOATS,
+    );
+    expect(dynamicWrites).toHaveLength(2);
+    expect(dynamicWrites[0]!.buffer).toBe(dynamicWrites[1]!.buffer);
+    expect(dynamicWrites.map((write) => write.offset)).toEqual([
+      0,
+      3 * SOLID_VERTEX_FLOATS * 4,
+    ]);
+    const spriteDraws = passes[0]!.ops.filter(
+      (op) =>
+        op.kind === "draw" && op.vertexCount === 6 && op.instanceCount > 1,
+    );
+    expect(spriteDraws).toEqual([
+      {
+        kind: "draw",
+        vertexCount: 6,
+        instanceCount: 2,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+      {
+        kind: "draw",
+        vertexCount: 6,
+        instanceCount: 3,
+        firstVertex: 0,
+        firstInstance: 2,
+      },
+    ]);
+  });
+
+  it("draws marker-only frames from instance zero and reuses the buffer without stale rows", () => {
+    const { device, passes, writes } = createFakeDevice();
+    const renderer = createWebGpuRenderer(
+      device,
+      "bgra8unorm",
+      spriteAtlasTexture(device),
+    );
+    renderer.configure(createFakeCanvas().canvas);
+    const structural = spriteInstances(3);
+    const markers = spriteInstances(2);
+    structural[0] = 7;
+    markers[0] = 42;
+    renderer.render({
+      solids: [],
+      sprites: { instances: structural },
+      markerSprites: { instances: markers },
+      vehicles: [],
+    });
+    const buffer = writes.at(-1)!.buffer;
+    const stats = renderer.render({
+      solids: [],
+      markerSprites: { instances: markers },
+      vehicles: [],
+    });
+    expect(stats.spriteInstances).toBe(2);
+    expect(stats.spriteDraws).toBe(1);
+    expect(writes.at(-1)!.buffer).toBe(buffer);
+    expect(writes.at(-1)!.offset).toBe(0);
+    expect(writes.at(-1)!.data[0]).toBe(42);
+    expect(passes[1]!.ops.filter((op) => op.kind === "draw")).toEqual([
+      {
+        kind: "draw",
+        vertexCount: 6,
+        instanceCount: 2,
+        firstVertex: 0,
+        firstInstance: 0,
+      },
+    ]);
+    expect(
+      passes[1]!.ops.filter(
+        (op) => op.kind === "setVertexBuffer" && op.slot === 1,
+      )[0],
+    ).toMatchObject({ buffer, offset: 0 });
+    const writeCount = writes.length;
+    expect(
+      renderer.render({
+        solids: [],
+        sprites: { instances: spriteInstances(0) },
+        markerSprites: { instances: spriteInstances(0) },
+        vehicles: [],
+      }).spriteDraws,
+    ).toBe(0);
+    expect(writes).toHaveLength(writeCount);
+  });
+
   it("unconfigures the canvas context without destroying cached GPU resources", () => {
     const { device, buffers } = createFakeDevice();
     const texture = spriteAtlasTexture(device);
@@ -897,8 +1016,9 @@ describe("createWebGpuRenderer", () => {
           overSprites: [
             { role: "dynamic", vertices: overlay.underRoutes },
             { role: "route", vertices: route.vertices },
-            { role: "dynamic", vertices: overlay.routeDraft },
           ],
+          markerSprites: { instances: route.sprites },
+          overMarkers: [{ role: "dynamic", vertices: overlay.routeDraft }],
           vehicles: [{ instances }],
           overVehicles: [{ role: "dynamic", vertices: overlay.overVehicles }],
         },
@@ -940,7 +1060,7 @@ describe("createWebGpuRenderer", () => {
             continue;
           }
           if (activePipeline === spritePipeline) {
-            stages.push("sprites");
+            stages.push(op.firstInstance === 0 ? "sprites" : "markerSprites");
             continue;
           }
           const binding = slots.get(0)!;
@@ -961,7 +1081,7 @@ describe("createWebGpuRenderer", () => {
       return write!.buffer;
     }
 
-    it("draws the seven gameplay stages in painter order", () => {
+    it("draws all gameplay stages in painter order", () => {
       const { device, pipelines, passes, writes } = createFakeDevice();
       const spriteTexture = spriteAtlasTexture(device);
       const renderer = createWebGpuRenderer(
@@ -1004,6 +1124,7 @@ describe("createWebGpuRenderer", () => {
         "sprites",
         "underRoutes",
         "routes",
+        "markerSprites",
         "routeDraft",
         "vehicles",
         "overVehicles",
@@ -1037,9 +1158,16 @@ describe("createWebGpuRenderer", () => {
       expect(bufferFor(writes, second.structural)).toBe(
         bufferFor(writes, first.structural),
       );
-      expect(bufferFor(writes, second.sprites)).toBe(
-        bufferFor(writes, first.sprites),
+      const spriteWrites = writes.filter(
+        (write) =>
+          write.data.length ===
+          first.sprites.length + first.route.sprites.length,
       );
+      expect(spriteWrites).toHaveLength(2);
+      expect(spriteWrites[1]!.buffer).toBe(spriteWrites[0]!.buffer);
+      expect(
+        Array.from(spriteWrites[1]!.data.slice(0, second.sprites.length)),
+      ).toEqual(Array.from(second.sprites));
       expect(bufferFor(writes, second.route.vertices)).toBe(
         bufferFor(writes, first.route.vertices),
       );

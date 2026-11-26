@@ -17,6 +17,7 @@ import {
   SPRITE_ATLAS_HEIGHT,
   SPRITE_ATLAS_WIDTH,
   SPRITE_TEXELS_PER_TILE,
+  TRANSIT_SPRITE_LAYERS,
   spriteLayerFor,
   treeSpriteLayer,
 } from "./spriteAtlas";
@@ -52,9 +53,6 @@ const LOT_GAP_LENGTH = 4;
 const CURB_WIDTH = 2;
 const CURB_INSET = 2;
 const CURB_END_INSET = 3;
-const SLEEPER_WIDTH = 1.5;
-const SLEEPER_HALF_LENGTH = 5;
-const SLEEPER_POSITIONS = [0.4, 0.8] as const;
 const ROOF_SHADOW_OFFSET = 3;
 const TREE_RATE = 0.12;
 const TREE_JITTER_PX = 10;
@@ -74,7 +72,6 @@ const ONE_WAY_ARROW = parseColor(colors.oneWayArrow);
 const ROUNDABOUT_ISLAND = parseColor(colors.roundaboutIsland);
 const BUILDING_SHADOW = parseColor(BUILDING_SHADOW_COLOR);
 const CURB = parseColor(colors.roadCurb);
-const SLEEPER = parseColor(colors.trackSleeper);
 
 const areaFills: Record<AreaKind, Rgba> = {
   residential: parseColor(areaColors.residential),
@@ -447,7 +444,52 @@ function drawLotPerimeters(
   }
 }
 
-function drawTracks(g: SolidGeometry, state: GameState): void {
+type TrackPiece = {
+  kind: "straight" | "corner" | "half";
+  rotation: 0 | 90 | 180 | 270;
+};
+
+/** N=1, E=2, S=4, W=8; art begins west–east or west–north. */
+export const TRACK_PIECES: readonly (readonly TrackPiece[])[] = [
+  [],
+  [{ kind: "half", rotation: 90 }],
+  [{ kind: "half", rotation: 180 }],
+  [{ kind: "corner", rotation: 90 }],
+  [{ kind: "half", rotation: 270 }],
+  [{ kind: "straight", rotation: 90 }],
+  [{ kind: "corner", rotation: 180 }],
+  [
+    { kind: "straight", rotation: 90 },
+    { kind: "half", rotation: 180 },
+  ],
+  [{ kind: "half", rotation: 0 }],
+  [{ kind: "corner", rotation: 0 }],
+  [{ kind: "straight", rotation: 0 }],
+  [
+    { kind: "straight", rotation: 0 },
+    { kind: "half", rotation: 90 },
+  ],
+  [{ kind: "corner", rotation: 270 }],
+  [
+    { kind: "straight", rotation: 90 },
+    { kind: "half", rotation: 0 },
+  ],
+  [
+    { kind: "straight", rotation: 0 },
+    { kind: "half", rotation: 270 },
+  ],
+  [
+    { kind: "straight", rotation: 0 },
+    { kind: "half", rotation: 90 },
+    { kind: "half", rotation: 270 },
+  ],
+];
+
+function drawTracks(
+  g: SolidGeometry,
+  sprites: number[],
+  state: GameState,
+): void {
   const trackKeys = new Set(
     state.map.tiles
       .filter((tile) => tile.hasTrack === true)
@@ -458,37 +500,37 @@ function drawTracks(g: SolidGeometry, state: GameState): void {
   for (const tile of state.map.tiles) {
     if (tile.hasTrack !== true) continue;
     const tileCenter = center(tile);
-    let connected = false;
-    for (const { offset } of CARDINAL_OFFSETS) {
-      if (!trackKeys.has(`${tile.x + offset.x},${tile.y + offset.y}`)) {
-        continue;
-      }
-      connected = true;
-      const endpoint = {
-        x: tileCenter.x + (offset.x * tileSize) / 2,
-        y: tileCenter.y + (offset.y * tileSize) / 2,
-      };
-      for (const t of SLEEPER_POSITIONS) {
-        const px = tileCenter.x + (endpoint.x - tileCenter.x) * t;
-        const py = tileCenter.y + (endpoint.y - tileCenter.y) * t;
-        g.thickLine(
-          {
-            x: px - offset.y * SLEEPER_HALF_LENGTH,
-            y: py - offset.x * SLEEPER_HALF_LENGTH,
-          },
-          {
-            x: px + offset.y * SLEEPER_HALF_LENGTH,
-            y: py + offset.x * SLEEPER_HALF_LENGTH,
-          },
-          SLEEPER_WIDTH,
-          SLEEPER,
-        );
-      }
-      g.thickLine(tileCenter, endpoint, TRACK_WIDTH, TRACK);
+    let mask = 0;
+    for (const [index, { offset }] of CARDINAL_OFFSETS.entries()) {
+      if (trackKeys.has(`${tile.x + offset.x},${tile.y + offset.y}`))
+        mask |= 1 << index;
     }
-    if (!connected) {
+    if (mask === 0) {
       // Canvas strokes an arc (radius 4, lineWidth 4): a ring band 2..6.
       g.ring(tileCenter, 4 + TRACK_WIDTH / 2, TRACK_WIDTH, TRACK);
+    }
+    for (const piece of TRACK_PIECES[mask]!) {
+      const angle = (piece.rotation * Math.PI) / 180;
+      const half = piece.kind === "half";
+      const shift = half ? tileSize / 4 : 0;
+      sprites.push(
+        tileCenter.x - Math.cos(angle) * shift,
+        tileCenter.y - Math.sin(angle) * shift,
+        angle,
+        half ? tileSize / 4 : tileSize / 2,
+        tileSize / 2,
+        (SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_WIDTH) * (half ? 0.5 : 1),
+        SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_HEIGHT,
+        piece.kind === "corner"
+          ? TRANSIT_SPRITE_LAYERS.trackCorner
+          : TRANSIT_SPRITE_LAYERS.trackStraight,
+        1,
+        1,
+        1,
+        1,
+        0,
+        0,
+      );
     }
   }
 }
@@ -540,6 +582,10 @@ function drawTrees(
       SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_WIDTH,
       SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_HEIGHT,
       variant,
+      1,
+      1,
+      1,
+      1,
       0,
       0,
     );
@@ -549,14 +595,9 @@ function drawTrees(
 /**
  * Tessellates the structural map scene — tile fills/grid, vacant-lot
  * perimeters, tree shadows, curbs, roads, automatic junctions, roundabouts,
- * track with sleepers, one-way arrows, and one footprint shadow per
- * sprite-bearing building — in the same painter order as the former
- * renderMap + renderBuildings. Buildings and trees draw as textured sprites:
- * the flat roofs, outlines, and canopy fills are gone, and busStop and
- * metroStation keep only their procedural transitBatch markers. Returns the
- * solid triangle vertex buffer in world pixels (tileSize grid) plus one
- * sprite instance row per tree and sprite-bearing building (trees first,
- * then buildings), both cached under `scene:<rev>:<gridMode>`.
+ * isolated-track indicators, one-way arrows, and building shadows. Trees,
+ * buildings and connected rails emit structural sprite rows. Transit-node
+ * markers are emitted separately above routes by transitBatch.
  */
 export function buildMapBatch(
   state: GameState,
@@ -616,9 +657,7 @@ export function buildMapBatch(
   drawLotPerimeters(g, state.map, tileByKey, tileOwners);
   drawTrees(g, sprites, state.map, islandKeys, tileOwners, transitNodeKeys);
 
-  // Sprite rows: trees first (pushed above), then one instance per
-  // sprite-bearing building. busStop/metroStation keep their procedural
-  // transit markers and emit no sprite.
+  // Trees precede buildings; transit nodes use the later marker range.
   for (const building of state.buildings) {
     const layer = spriteLayerFor(building.type);
     if (layer === undefined) continue;
@@ -638,6 +677,10 @@ export function buildMapBatch(
       sourceWidth / SPRITE_ATLAS_WIDTH,
       sourceHeight / SPRITE_ATLAS_HEIGHT,
       layer,
+      1,
+      1,
+      1,
+      1,
       0,
       0,
     );
@@ -674,7 +717,7 @@ export function buildMapBatch(
     }
   }
 
-  drawTracks(g, state);
+  drawTracks(g, sprites, state);
 
   for (const tile of state.map.tiles) {
     if (tile.kind === "road" && tile.oneWay !== undefined) {
@@ -685,7 +728,7 @@ export function buildMapBatch(
   // One footprint shadow per sprite-bearing building (rotated size, same
   // +3/+3 offset as before). Flat roofs and outlines are gone — the textured
   // sprite pass draws the buildings — and busStop/metroStation are skipped
-  // entirely: their procedural transitBatch markers stay alone over terrain.
+  // entirely: transitBatch markers stay alone over terrain.
   for (const building of state.buildings) {
     if (spriteLayerFor(building.type) === undefined) continue;
     const rotated = getRotatedFootprintSize(building.type, building.rotation);

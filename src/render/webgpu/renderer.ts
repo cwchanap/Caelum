@@ -119,6 +119,7 @@ struct VertexOutput {
   @builtin(position) position: vec4f,
   @location(0) uv: vec2f,
   @location(1) @interpolate(flat) layer: f32,
+  @location(2) @interpolate(flat) tint: vec4f,
 };
 
 @group(0) @binding(0) var spriteSampler: sampler;
@@ -132,7 +133,8 @@ fn vsMain(
   @location(3) extents: vec2f,
   @location(4) uvScale: vec2f,
   @location(5) layer: f32,
-  @location(6) clipScale: vec2f,
+  @location(6) tint: vec4f,
+  @location(7) clipScale: vec2f,
 ) -> VertexOutput {
   // Same y-down world rotation and per-instance world→clip scale as the
   // vehicle shader: rotate in world space, project with separate clip
@@ -155,13 +157,15 @@ fn vsMain(
   // top after the clip y-flip.
   output.uv = (corner + vec2f(0.5, 0.5)) * uvScale;
   output.layer = layer;
+  output.tint = tint;
   return output;
 }
 
 @fragment
 fn fsMain(output: VertexOutput) -> @location(0) vec4f {
   let layer = i32(output.layer + 0.5);
-  return textureSample(spriteLayers, spriteSampler, output.uv, layer);
+  let texel = textureSample(spriteLayers, spriteSampler, output.uv, layer);
+  return vec4f(texel.rgb * output.tint.rgb * output.tint.a, texel.a * output.tint.a);
 }
 `;
 
@@ -285,7 +289,8 @@ export function createWebGpuRenderer(
             { shaderLocation: 3, offset: 12, format: "float32x2" },
             { shaderLocation: 4, offset: 20, format: "float32x2" },
             { shaderLocation: 5, offset: 28, format: "float32" },
-            { shaderLocation: 6, offset: 32, format: "float32x2" },
+            { shaderLocation: 6, offset: 32, format: "float32x4" },
+            { shaderLocation: 7, offset: 48, format: "float32x2" },
           ],
         },
       ],
@@ -395,6 +400,7 @@ export function createWebGpuRenderer(
     };
     totalize(frame.solids);
     totalize(frame.overSprites ?? []);
+    totalize(frame.overMarkers ?? []);
     totalize(frame.overVehicles ?? []);
     for (const [role, floats] of roleTotals) {
       acquireBuffer(role, floats);
@@ -428,30 +434,43 @@ export function createWebGpuRenderer(
       }
     };
 
-    drawSolids(frame.solids);
-
-    let spriteInstances = 0;
+    const structural = frame.sprites?.instances;
+    const markers = frame.markerSprites?.instances;
+    const structuralFloats = structural?.length ?? 0;
+    const markerFloats = markers?.length ?? 0;
+    const spriteFloats = structuralFloats + markerFloats;
+    const structuralCount = structuralFloats / SPRITE_INSTANCE_FLOATS;
+    const markerCount = markerFloats / SPRITE_INSTANCE_FLOATS;
+    const spriteInstances = structuralCount + markerCount;
     let spriteDraws = 0;
-    const spriteFloats = frame.sprites?.instances.length ?? 0;
+    let spriteBuffer: GPUBuffer | null = null;
     if (spriteFloats > 0) {
       if (spriteBindGroup === null) {
         throw new Error(
           "sprite batch requires a sprite texture (createWebGpuRenderer third argument)",
         );
       }
-      const instances = frame.sprites!.instances;
-      const buffer = acquireBuffer("sprite", spriteFloats);
-      device.queue.writeBuffer(buffer, 0, instances, 0, instances.length);
-      spriteInstances = spriteFloats / SPRITE_INSTANCE_FLOATS;
-      pass.setPipeline(spritePipeline);
-      pass.setBindGroup(0, spriteBindGroup);
-      pass.setVertexBuffer(0, quad, 0);
-      pass.setVertexBuffer(1, buffer, 0);
-      pass.draw(6, spriteInstances);
-      spriteDraws = 1;
+      const combined = new Float32Array(spriteFloats);
+      if (structural) combined.set(structural);
+      if (markers) combined.set(markers, structuralFloats);
+      spriteBuffer = acquireBuffer("sprite", spriteFloats);
+      device.queue.writeBuffer(spriteBuffer, 0, combined, 0, combined.length);
     }
+    const drawSprites = (count: number, firstInstance: number): void => {
+      if (count === 0) return;
+      pass.setPipeline(spritePipeline);
+      pass.setBindGroup(0, spriteBindGroup!);
+      pass.setVertexBuffer(0, quad, 0);
+      pass.setVertexBuffer(1, spriteBuffer!, 0);
+      pass.draw(6, count, 0, firstInstance);
+      spriteDraws += 1;
+    };
 
+    drawSolids(frame.solids);
+    drawSprites(structuralCount, 0);
     drawSolids(frame.overSprites ?? []);
+    drawSprites(markerCount, structuralCount);
+    drawSolids(frame.overMarkers ?? []);
 
     let vehicleInstances = 0;
     let vehicleDraws = 0;

@@ -1,6 +1,8 @@
 import { colors } from "../colors";
 import {
   SPRITE_INSTANCE_FLOATS,
+  SPRITE_CLIP_OFFSET,
+  SPRITE_TINT_OFFSET,
   VEHICLE_INSTANCE_FLOATS,
   VEHICLE_RIM_PX,
   type CapturedFrame,
@@ -8,8 +10,10 @@ import {
   type RenderFrame,
   type RenderStats,
   type SolidBatch,
+  type SpriteBatch,
 } from "../gameplayRenderer";
 import { parseColor } from "../webgpu/primitives";
+import { SPRITE_ATLAS_HEIGHT, SPRITE_ATLAS_WIDTH } from "../webgpu/spriteAtlas";
 
 function rgbString(r: number, g: number, b: number): string {
   return `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(
@@ -24,7 +28,7 @@ const VEHICLE_RIM_COLOR = rgbString(1, 1, 1);
 /**
  * Limited Canvas2D fallback gameplay renderer (HPA-1144): paints the same
  * already-projected `RenderFrame` as the WebGPU renderer, in the same
- * painter order `solids → sprites → overSprites → vehicles →
+ * painter order `solids → sprites → overSprites → markerSprites → overMarkers → vehicles →
  * overVehicles`. Constructed with the validated sprite images from
  * `loadSpriteImages()`; every sprite row's layer must index `images`.
  *
@@ -35,11 +39,9 @@ const VEHICLE_RIM_COLOR = rgbString(1, 1, 1);
  * per-instance device-px-per-world-px scale (the y factor flips sign back).
  *
  * Solid triangles fill as runs of consecutive same-RGBA triangles with one
- * normalized winding, so shared edges never double-blend or cancel. Sprites
- * draw the whole validated image
- * (`drawImage(image, 0, 0, image.naturalWidth, image.naturalHeight, …)`):
- * deriving the source rect from float32 uvScale would overshoot the image
- * (192.0000057 exceeds 192 pixels). An invalid sprite layer throws instead
+ * normalized winding, so shared edges never double-blend or cancel. Sprite
+ * UV scales are rounded and clamped to the decoded image dimensions.
+ * An invalid sprite layer throws instead
  * of silently omitting the object.
  *
  * A backing-store resize resets all Canvas2D context state, so every
@@ -56,6 +58,7 @@ export function createCanvas2dRenderer(
   // Cleared by destroy() so the validated Image elements release with the
   // renderer; drawing after destroy() throws on the missing context first.
   let activeImages = images;
+  const tintCache = new Map<string, HTMLCanvasElement>();
   let canvas: HTMLCanvasElement | null = null;
   let context: CanvasRenderingContext2D | null = null;
 
@@ -175,15 +178,12 @@ export function createCanvas2dRenderer(
 
     const solids = drawSolids(frame.solids, halfWidth, halfHeight);
 
-    // drawSolids leaves globalAlpha at its last run's alpha; the GPU sprite
-    // shader composites sprites at full alpha regardless of solid colors.
-    ctx.globalAlpha = 1;
     let spriteInstances = 0;
     let spriteDraws = 0;
-    const spriteFloats = frame.sprites?.instances.length ?? 0;
-    if (spriteFloats > 0) {
-      const instances = frame.sprites!.instances;
-      spriteInstances = spriteFloats / SPRITE_INSTANCE_FLOATS;
+    const drawSprites = (batch: SpriteBatch | undefined): void => {
+      const instances = batch?.instances;
+      if (instances === undefined) return;
+      spriteInstances += instances.length / SPRITE_INSTANCE_FLOATS;
       for (let i = 0; i < instances.length; i += SPRITE_INSTANCE_FLOATS) {
         const layer = instances[i + 7]!;
         if (
@@ -198,22 +198,50 @@ export function createCanvas2dRenderer(
           );
         }
         const image = activeImages[layer]!;
+        const r = instances[i + SPRITE_TINT_OFFSET]!;
+        const g = instances[i + SPRITE_TINT_OFFSET + 1]!;
+        const b = instances[i + SPRITE_TINT_OFFSET + 2]!;
+        let source: CanvasImageSource = image;
+        if (r !== 1 || g !== 1 || b !== 1) {
+          const color = rgbString(r, g, b);
+          const key = `${layer}:${color}`;
+          let tinted = tintCache.get(key);
+          if (tinted === undefined) {
+            tinted = document.createElement("canvas");
+            tinted.width = image.naturalWidth;
+            tinted.height = image.naturalHeight;
+            const tintContext = tinted.getContext("2d");
+            if (tintContext === null)
+              throw new Error("sprite tint requires a 2d canvas context");
+            tintContext.drawImage(image, 0, 0);
+            tintContext.globalCompositeOperation = "source-in";
+            tintContext.fillStyle = color;
+            tintContext.fillRect(0, 0, tinted.width, tinted.height);
+            tintCache.set(key, tinted);
+          }
+          source = tinted;
+        }
         const cx = (instances[i]! + 1) * halfWidth;
         const cy = (1 - instances[i + 1]!) * halfHeight;
-        const ex = instances[i + 8]! * halfWidth;
-        const ey = -instances[i + 9]! * halfHeight;
+        const ex = instances[i + SPRITE_CLIP_OFFSET]! * halfWidth;
+        const ey = -instances[i + SPRITE_CLIP_OFFSET + 1]! * halfHeight;
         ctx.setTransform(ex, 0, 0, ey, cx, cy);
         ctx.rotate(instances[i + 2]!);
-        // Source rect = the whole validated image; never reverse-project
-        // the float32 uvScale (192.0000057 exceeds a 192px image).
+        ctx.globalAlpha = instances[i + SPRITE_TINT_OFFSET + 3]!;
         const hx = instances[i + 3]!;
         const hy = instances[i + 4]!;
         ctx.drawImage(
-          image,
+          source,
           0,
           0,
-          image.naturalWidth,
-          image.naturalHeight,
+          Math.min(
+            image.naturalWidth,
+            Math.round(instances[i + 5]! * SPRITE_ATLAS_WIDTH),
+          ),
+          Math.min(
+            image.naturalHeight,
+            Math.round(instances[i + 6]! * SPRITE_ATLAS_HEIGHT),
+          ),
           -hx,
           -hy,
           hx * 2,
@@ -221,12 +249,18 @@ export function createCanvas2dRenderer(
         );
         spriteDraws += 1;
       }
-    }
-
-    ctx.setTransform(1, 0, 0, 1, 0, 0);
-    ctx.globalAlpha = 1;
+      ctx.setTransform(1, 0, 0, 1, 0, 0);
+      ctx.globalAlpha = 1;
+    };
+    drawSprites(frame.sprites);
     const overSprites = drawSolids(
       frame.overSprites ?? [],
+      halfWidth,
+      halfHeight,
+    );
+    drawSprites(frame.markerSprites);
+    const overMarkers = drawSolids(
+      frame.overMarkers ?? [],
       halfWidth,
       halfHeight,
     );
@@ -288,8 +322,13 @@ export function createCanvas2dRenderer(
     );
 
     return {
-      solidBatches: solids.runs + overSprites.runs + overVehicles.runs,
-      solidVertices: solids.floats + overSprites.floats + overVehicles.floats,
+      solidBatches:
+        solids.runs + overSprites.runs + overMarkers.runs + overVehicles.runs,
+      solidVertices:
+        solids.floats +
+        overSprites.floats +
+        overMarkers.floats +
+        overVehicles.floats,
       spriteInstances,
       spriteDraws,
       vehicleInstances,
@@ -340,6 +379,7 @@ export function createCanvas2dRenderer(
       canvas = null;
       context = null;
       activeImages = [];
+      tintCache.clear();
     },
   };
 }

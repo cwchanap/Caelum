@@ -3045,6 +3045,34 @@ describe("createGameHost device loss", () => {
 });
 
 describe("createGameHost frame contents", () => {
+  it("independently caches structural and marker projections across style and camera changes", () => {
+    const fx = createFixture({ state: unpaused(stateWithVehicleForFrame()) });
+    fx.host.start();
+    fx.fireFrame(16);
+    fx.fireFrame(33);
+    const [first, second] = fx.renderer.frames.slice(-2);
+    expect(second!.sprites!.instances).toBe(first!.sprites!.instances);
+    expect(second!.markerSprites!.instances.length).toBeGreaterThan(0);
+    expect(second!.markerSprites!.instances).toBe(
+      first!.markerSprites!.instances,
+    );
+    fx.setUi({ selectedRouteId: "route-001" });
+    fx.fireFrame(50);
+    const selected = fx.renderer.frames.at(-1)!;
+    expect(selected.sprites!.instances).toBe(second!.sprites!.instances);
+    expect(selected.markerSprites!.instances).not.toBe(
+      second!.markerSprites!.instances,
+    );
+    fx.callbacks.onCameraChange({ zoom: 2, center: { x: 14, y: 9 } });
+    fx.fireFrame(66);
+    const moved = fx.renderer.frames.at(-1)!;
+    expect(moved.sprites!.instances).not.toBe(selected.sprites!.instances);
+    expect(moved.markerSprites!.instances).not.toBe(
+      selected.markerSprites!.instances,
+    );
+    fx.host.stop();
+  });
+
   it("draws solid ranges and vehicle instances in painter order", () => {
     const fx = createFixture({ state: stateWithVehicleForFrame() });
     fx.host.start();
@@ -3060,8 +3088,11 @@ describe("createGameHost frame contents", () => {
     expect(frame.overSprites!.map((batch) => batch.role)).toEqual([
       "dynamic",
       "route",
-      "dynamic",
     ]);
+    expect(frame.markerSprites!.instances.length).toBe(
+      4 * SPRITE_INSTANCE_FLOATS,
+    );
+    expect(frame.overMarkers!.map((batch) => batch.role)).toEqual(["dynamic"]);
     expect(frame.vehicles.length).toBe(1);
     expect(frame.vehicles[0]!.instances.length).toBe(VEHICLE_INSTANCE_FLOATS);
     // No route editor open: the over-vehicles range emits an empty batch.
@@ -3098,7 +3129,7 @@ describe("createGameHost frame contents", () => {
     expect(instances[10]).toBeCloseTo(-2 / 736, 9);
 
     // Sprite rows share the same one projection loop: the trailing clip
-    // slots (offsets 8/9 of the 10-float stride) carry the same factors,
+    // slots (offsets 12/13 of the 14-float stride) carry the same factors,
     // while the world origin slot stays in projected clip units.
     const sprites = fx.renderer.frames.at(-1)!.sprites!.instances;
     expect(sprites.length).toBeGreaterThan(0);
@@ -3107,8 +3138,8 @@ describe("createGameHost frame contents", () => {
       offset < sprites.length;
       offset += SPRITE_INSTANCE_FLOATS
     ) {
-      expect(sprites[offset + 8]).toBeCloseTo(2 / 896, 9);
-      expect(sprites[offset + 9]).toBeCloseTo(-2 / 736, 9);
+      expect(sprites[offset + 12]).toBeCloseTo(2 / 896, 9);
+      expect(sprites[offset + 13]).toBeCloseTo(-2 / 736, 9);
       // Angle and extents pass through raw, like vehicle rows.
       expect(sprites[offset + 2]).toBeCloseTo(0, 9);
       expect(sprites[offset + 3]).toBeGreaterThan(0);

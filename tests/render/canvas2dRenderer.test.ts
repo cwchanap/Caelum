@@ -20,6 +20,8 @@ import {
   SPRITE_LAYER_COUNT,
   SPRITE_TEXELS_PER_TILE,
   TREE_SPRITE_URLS,
+  TRANSIT_SPRITE_URLS,
+  TRANSIT_SPRITE_LAYERS,
   type SpriteBuildingType,
 } from "../../src/render/webgpu/spriteAtlas";
 
@@ -102,6 +104,7 @@ class Recording2dContext {
   private subpaths: PathPoint[][] = [];
   private current: PathPoint[] | null = null;
   globalAlpha = 1;
+  globalCompositeOperation = "source-over";
   fillStyle = "#000";
   imageSmoothingEnabled = true;
   imageSmoothingQuality = "low";
@@ -261,6 +264,7 @@ function makeImages(): HTMLImageElement[] {
         BUILDING_CATALOG[type].height * SPRITE_TEXELS_PER_TILE,
       ),
     ),
+    ...Object.values(TRANSIT_SPRITE_URLS).map(() => fakeImage(192, 192)),
   ];
 }
 
@@ -281,8 +285,7 @@ function solid(
   };
 }
 
-/** Sprite instance row: origin, angle, half-extents, uv scale, layer, and
- *  trailing world→clip factors — the host's projected 10-float layout. */
+/** Sprite instance row with identity tint and projected clip factors. */
 function spriteRow(
   origin: readonly [number, number],
   angle: number,
@@ -301,6 +304,10 @@ function spriteRow(
     uvScale[0],
     uvScale[1],
     layer,
+    1,
+    1,
+    1,
+    1,
     clipScale[0],
     clipScale[1],
   ];
@@ -620,6 +627,98 @@ describe("createCanvas2dRenderer", () => {
       vehicleInstances: 0,
       vehicleDraws: 0,
     });
+  });
+
+  it("crops a rotated west-half rail in both sprite ranges", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 200;
+    canvas.height = 100;
+    const renderer = createCanvas2dRenderer(makeImages());
+    renderer.configure(canvas);
+    const half = spriteRow(
+      [0, 0],
+      Math.PI / 2,
+      8,
+      16,
+      [96 / 576, 192 / 384],
+      0,
+      [0.5, -0.5],
+    );
+    const stats = renderer.render({
+      solids: [],
+      sprites: half,
+      overSprites: [
+        solid("dynamic", BLUE, [
+          [
+            [-1, 1],
+            [1, 1],
+            [1, -1],
+          ],
+        ]),
+      ],
+      markerSprites: half,
+      overMarkers: [
+        solid("dynamic", RED, [
+          [
+            [-1, 1],
+            [1, 1],
+            [1, -1],
+          ],
+        ]),
+      ],
+      vehicles: [],
+    });
+    const context = contexts[0]!;
+    const draws = context.ops.filter(
+      (op): op is Extract<RecordedOp, { op: "drawImage" }> =>
+        op.op === "drawImage",
+    );
+    expect(draws).toHaveLength(2);
+    for (const draw of draws) {
+      expect([draw.sx, draw.sy, draw.sw, draw.sh]).toEqual([0, 0, 96, 192]);
+      expect([draw.dx, draw.dy, draw.dw, draw.dh]).toEqual([-8, -16, 16, 32]);
+      expect(draw.state.ctm[1]).toBeCloseTo(25);
+    }
+    expect(stats.spriteInstances).toBe(2);
+    expect(stats.solidVertices).toBe(36);
+  });
+
+  it("caches white-rim tint by layer and RGB while applying opacity per draw", () => {
+    const canvas = document.createElement("canvas");
+    canvas.width = 200;
+    canvas.height = 100;
+    const renderer = createCanvas2dRenderer(makeImages());
+    renderer.configure(canvas);
+    const rim = spriteRow(
+      [0, 0],
+      0,
+      7,
+      7,
+      [192 / 576, 192 / 384],
+      TRANSIT_SPRITE_LAYERS.busStopRing,
+      [0.5, -0.5],
+    );
+    rim.instances.set([0.2, 0.4, 0.6, 0.42], 8);
+    const frame = { solids: [], markerSprites: rim, vehicles: [] };
+    renderer.render(frame);
+    renderer.render(frame);
+    expect(contexts).toHaveLength(2);
+    const tinted = contexts[1]!;
+    expect(tinted.globalCompositeOperation).toBe("source-in");
+    expect(tinted.ops.filter((op) => op.op === "drawImage")).toHaveLength(1);
+    expect(tinted.ops.filter((op) => op.op === "fillRect")).toHaveLength(1);
+    const draws = contexts[0]!.ops.filter(
+      (op): op is Extract<RecordedOp, { op: "drawImage" }> =>
+        op.op === "drawImage",
+    );
+    expect(draws).toHaveLength(2);
+    expect(draws[0]!.image).toBe(tinted.canvas);
+    expect(draws[1]!.image).toBe(tinted.canvas);
+    expect(draws[0]!.state.globalAlpha).toBeCloseTo(0.42);
+    expect([draws[0]!.sw, draws[0]!.sh]).toEqual([192, 192]);
+    renderer.destroy();
+    renderer.configure(canvas);
+    expect(() => renderer.render(frame)).toThrow(/invalid sprite layer/);
   });
 
   it("draws sprites at full alpha after translucent solids", () => {

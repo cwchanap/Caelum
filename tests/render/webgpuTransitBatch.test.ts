@@ -15,6 +15,8 @@ import {
 } from "../../src/render/webgpu/primitives";
 import { UNRELATED_ROUTE_OPACITY } from "../../src/render/webgpu/transitBatch";
 import { colors } from "../../src/render/colors";
+import { SPRITE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
+import { TRANSIT_SPRITE_LAYERS } from "../../src/render/webgpu/spriteAtlas";
 import { createUiState } from "../../src/ui/uiState";
 import { createDraft } from "../../src/ui/routeDraft";
 import { createTestGameState } from "../helpers/gameState";
@@ -28,6 +30,26 @@ function rowsOf(data: Float32Array): number[][] {
     rows.push(Array.from(data.slice(offset, offset + SOLID_VERTEX_FLOATS)));
   }
   return rows;
+}
+
+function markerRow(
+  data: Float32Array,
+  x: number,
+  y: number,
+  layer: number,
+): number[] {
+  for (let i = 0; i < data.length; i += SPRITE_INSTANCE_FLOATS) {
+    const row = Array.from(data.slice(i, i + SPRITE_INSTANCE_FLOATS));
+    if (row[0] === x && row[1] === y && row[7] === layer) return row;
+  }
+  throw new Error(`missing marker at ${x},${y} layer ${layer}`);
+}
+
+function expectTint(row: number[], color: string, alpha = 1): void {
+  const expected = parseColor(color);
+  [...expected.slice(0, 3), alpha].forEach((value, i) =>
+    expect(row[8 + i]).toBeCloseTo(value, 5),
+  );
 }
 
 function colorOf(css: string): number[] {
@@ -732,7 +754,25 @@ describe("buildTransitBatch emphasis", () => {
 });
 
 describe("buildTransitBatch nodes and cues", () => {
-  it("draws white-rimmed stop discs and rounded-square stations", () => {
+  it("emits untinted faces and route-tinted rims for present stops", () => {
+    const state = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const { sprites } = buildTransitBatch(state, createUiState(), 1);
+    const face = Array.from(sprites.slice(0, SPRITE_INSTANCE_FLOATS));
+    const rim = Array.from(
+      sprites.slice(SPRITE_INSTANCE_FLOATS, SPRITE_INSTANCE_FLOATS * 2),
+    );
+    expect(face.slice(0, 5)).toEqual([48, 48, 0, 7, 7]);
+    expect(face[7]).toBe(TRANSIT_SPRITE_LAYERS.busStop);
+    expect(face.slice(8, 12)).toEqual([1, 1, 1, 1]);
+    expect(rim[7]).toBe(TRANSIT_SPRITE_LAYERS.busStopRing);
+    rim
+      .slice(8, 12)
+      .forEach((value, i) =>
+        expect(value).toBeCloseTo(parseColor("#e04f39")[i], 5),
+      );
+  });
+
+  it("draws unserved stop and station faces with their default rims", () => {
     const base = createTestGameState();
     const state = {
       ...base,
@@ -757,19 +797,25 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(state, createUiState(), 1);
-
-    // Unserved stop disc (80,80): white fill at the fan center, bus-mode rim
-    // out to radius 7 — no solid 10x10 square.
-    expect(hasVertexNear(vertices, "#ffffff", 80, 80)).toBe(true);
-    expect(hasVertexNear(vertices, colors.bus, 87, 80)).toBe(true);
-    expect(hasVertexNear(vertices, colors.bus, 75, 75)).toBe(false);
-    // Station rounded square (144,80): white fill inside a metro-mode rim
-    // whose rounded silhouette leaves the sharp (137,73) corner empty.
-    expect(hasVertexNear(vertices, "#ffffff", 140, 85)).toBe(true);
-    expect(hasVertexNear(vertices, colors.metro, 137, 76)).toBe(true);
-    expect(hasVertexNear(vertices, colors.metro, 137, 73)).toBe(false);
-    expect(hasVertexNear(vertices, colors.metro, 144, 80)).toBe(false);
+    const { sprites } = buildTransitBatch(state, createUiState(), 1);
+    expect(sprites.length).toBe(4 * SPRITE_INSTANCE_FLOATS);
+    expect(
+      markerRow(sprites, 80, 80, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
+    ).toEqual([1, 1, 1, 1]);
+    expectTint(
+      markerRow(sprites, 80, 80, TRANSIT_SPRITE_LAYERS.busStopRing),
+      colors.bus,
+    );
+    expect(
+      markerRow(sprites, 144, 80, TRANSIT_SPRITE_LAYERS.metroStation).slice(
+        8,
+        12,
+      ),
+    ).toEqual([1, 1, 1, 1]);
+    expectTint(
+      markerRow(sprites, 144, 80, TRANSIT_SPRITE_LAYERS.metroStationRing),
+      colors.metro,
+    );
   });
 
   it("rims served markers in the serving line's color", () => {
@@ -805,13 +851,21 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(state, createUiState(), 1);
-
-    expect(hasVertexNear(vertices, "#33cc77", 55, 48)).toBe(true);
-    expect(hasVertexNear(vertices, colors.bus, 55, 48)).toBe(false);
-    expect(hasVertexNear(vertices, "#3366cc", 137, 140)).toBe(true);
-    expect(hasVertexNear(vertices, colors.metro, 137, 140)).toBe(false);
-    expect(hasVertexNear(vertices, "#ffffff", 140, 140)).toBe(true);
+    const { sprites } = buildTransitBatch(state, createUiState(), 1);
+    expectTint(
+      markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
+      "#33cc77",
+    );
+    expectTint(
+      markerRow(sprites, 144, 144, TRANSIT_SPRITE_LAYERS.metroStationRing),
+      "#3366cc",
+    );
+    expect(
+      markerRow(sprites, 144, 144, TRANSIT_SPRITE_LAYERS.metroStation).slice(
+        8,
+        12,
+      ),
+    ).toEqual([1, 1, 1, 1]);
   });
 
   it("dims unserved stops when a route is emphasized", () => {
@@ -832,7 +886,7 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(
+    const { sprites } = buildTransitBatch(
       state,
       { ...createUiState(), selectedRouteId: "route-001" },
       1,
@@ -840,16 +894,14 @@ describe("buildTransitBatch nodes and cues", () => {
 
     // Unserved stop at (9*32 + 16, 9*32 + 16) = (304, 304).
     // Its rim should be dimmed with UNRELATED_ROUTE_OPACITY.
-    const busRgb = colorOf(colors.bus).slice(0, 3);
-    const unservedRimRows = rowsOf(vertices).filter(
-      (row) =>
-        Math.hypot(row[0] - 304, row[1] - 304) <= 8 &&
-        row
-          .slice(2, 5)
-          .every((val, idx) => Math.abs(val - busRgb[idx]) < EPSILON),
+    expectTint(
+      markerRow(sprites, 304, 304, TRANSIT_SPRITE_LAYERS.busStopRing),
+      colors.bus,
+      UNRELATED_ROUTE_OPACITY,
     );
-    expect(unservedRimRows.length).toBeGreaterThan(0);
-    expect(unservedRimRows[0][5]).toBeCloseTo(UNRELATED_ROUTE_OPACITY, 4);
+    expect(
+      markerRow(sprites, 304, 304, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
+    ).toEqual([1, 1, 1, 1]);
   });
 
   it("rims a shared marker with the emphasized serving line's color", () => {
@@ -866,25 +918,105 @@ describe("buildTransitBatch nodes and cues", () => {
       },
     };
 
-    const plain = buildTransitBatch(state, createUiState(), 1).vertices;
-    expect(hasVertexNear(plain, "#e04f39", 55, 48)).toBe(true);
+    const plain = buildTransitBatch(state, createUiState(), 1).sprites;
+    expectTint(
+      markerRow(plain, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
+      "#e04f39",
+    );
 
     const selected = buildTransitBatch(
       state,
       { ...createUiState(), selectedRouteId: "route-002" },
       1,
-    ).vertices;
-    expect(hasVertexNear(selected, "#2f9e44", 55, 48)).toBe(true);
-    const routeOneRgb = colorOf("#e04f39").slice(0, 3);
-    const rimRows = rowsOf(selected).filter(
-      (row) =>
-        Math.abs(row[0] - 55) < 0.01 &&
-        Math.abs(row[1] - 48) < 0.01 &&
-        row
-          .slice(2, 5)
-          .every((value, index) => Math.abs(value - routeOneRgb[index]) < 1e-4),
+    ).sprites;
+    expectTint(
+      markerRow(selected, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
+      "#2f9e44",
     );
-    expect(rimRows).toEqual([]);
+  });
+
+  it("updates rims for editing, recolor, deletion, tombstones and rebuilding", () => {
+    const base = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
+    const route = base.transit.routes[0]!;
+    const state = {
+      ...base,
+      transit: {
+        ...base.transit,
+        routes: [route, { ...route, id: "route-002", color: "#2867b2" }],
+      },
+    };
+    const editing = {
+      ...createUiState(),
+      routeDraft: {
+        ...emptyLineDraft(),
+        source: {
+          kind: "edit" as const,
+          routeId: "route-002",
+          expectedRevision: 1,
+        },
+      },
+    };
+    const edited = buildTransitBatch(state, editing, 1);
+    expectTint(
+      markerRow(edited.sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
+      "#2867b2",
+    );
+    expect(edited.routeStyleKey).not.toBe(
+      buildTransitBatch(state, createUiState(), 1).routeStyleKey,
+    );
+
+    const recolored = {
+      ...state,
+      transit: {
+        ...state.transit,
+        routes: [route, { ...state.transit.routes[1]!, color: "#2e9e5b" }],
+      },
+    };
+    const recoloredBatch = buildTransitBatch(recolored, editing, 2);
+    expectTint(
+      markerRow(
+        recoloredBatch.sprites,
+        48,
+        48,
+        TRANSIT_SPRITE_LAYERS.busStopRing,
+      ),
+      "#2e9e5b",
+    );
+    expect(recoloredBatch.routeStyleKey).not.toBe(edited.routeStyleKey);
+    const deleted = {
+      ...recolored,
+      transit: { ...recolored.transit, routes: [] },
+    };
+    expectTint(
+      markerRow(
+        buildTransitBatch(deleted, createUiState(), 3).sprites,
+        48,
+        48,
+        TRANSIT_SPRITE_LAYERS.busStopRing,
+      ),
+      colors.bus,
+    );
+    const missing = {
+      ...recolored,
+      transit: {
+        ...recolored.transit,
+        stops: recolored.transit.stops.map((stop) =>
+          stop.id === "a" ? { ...stop, status: "missing" as const } : stop,
+        ),
+      },
+    };
+    expect(buildTransitBatch(missing, editing, 3).sprites.length).toBe(
+      2 * SPRITE_INSTANCE_FLOATS,
+    );
+    expectTint(
+      markerRow(
+        buildTransitBatch(recolored, editing, 4).sprites,
+        48,
+        48,
+        TRANSIT_SPRITE_LAYERS.busStopRing,
+      ),
+      "#2e9e5b",
+    );
   });
 
   it("draws the passenger-to-road access indicator", () => {
@@ -938,10 +1070,11 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+    const { vertices, sprites } = buildTransitBatch(state, createUiState(), 1);
 
     expect(verticesOfColor(vertices, colors.bus)).toEqual([]);
     expect(verticesOfColor(vertices, colors.metro)).toEqual([]);
+    expect(sprites).toHaveLength(0);
     // The missing stop's roadAccess must not emit an indicator either.
     expect(verticesOfColor(vertices, colors.hover)).toEqual([]);
   });
@@ -965,20 +1098,25 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+    const { vertices, sprites } = buildTransitBatch(state, createUiState(), 1);
 
     expect(verticesOfColor(vertices, colors.hover)).toEqual([]);
     // The stop marker itself still renders.
-    expect(hasVertexNear(vertices, colors.bus, 151, 144)).toBe(true);
-    expect(hasVertexNear(vertices, "#ffffff", 144, 144)).toBe(true);
+    expectTint(
+      markerRow(sprites, 144, 144, TRANSIT_SPRITE_LAYERS.busStopRing),
+      colors.bus,
+    );
+    expect(
+      markerRow(sprites, 144, 144, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
+    ).toEqual([1, 1, 1, 1]);
   });
 
-  it("draws route node cues on the presented path", () => {
+  it("does not emit a displaced cue when the presented path is centered", () => {
     const state = stateWithLegs([routeLeg("a", "b", "connected", linePath())]);
     const { vertices } = buildTransitBatch(state, createUiState(), 1);
 
-    // Cue circle at stop a's center (48,48), radius 3, route color.
-    expect(hasVertexNear(vertices, "#e04f39", 48, 48)).toBe(true);
+    // Centered paths have no displaced node cue.
+    expect(hasVertexNear(vertices, "#e04f39", 48, 48)).toBe(false);
   });
 
   it("pushes corridor-displaced node cues out to the marker perimeter", () => {
@@ -994,7 +1132,7 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(state, createUiState(), 1);
+    const { vertices, sprites } = buildTransitBatch(state, createUiState(), 1);
 
     // The shared corridor gives each route a ±2px offset that would sink
     // inside the radius-5 white fill; cues land just outside the radius-7
@@ -1002,12 +1140,16 @@ describe("buildTransitBatch nodes and cues", () => {
     expect(hasVertexNear(vertices, "#111111", 48, 39)).toBe(true);
     expect(hasVertexNear(vertices, "#222222", 48, 57)).toBe(true);
     expect(hasVertexNear(vertices, "#111111", 48, 46)).toBe(false);
-    // The marker's rim and white centre stay intact.
-    expect(hasVertexNear(vertices, "#111111", 55, 48)).toBe(true);
-    expect(hasVertexNear(vertices, "#ffffff", 48, 48)).toBe(true);
+    expectTint(
+      markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStopRing),
+      "#111111",
+    );
+    expect(
+      markerRow(sprites, 48, 48, TRANSIT_SPRITE_LAYERS.busStop).slice(8, 12),
+    ).toEqual([1, 1, 1, 1]);
   });
 
-  it("tessellates the dimmed station rim without overlapping parts", () => {
+  it("emits one dimmed station rim and an opaque face", () => {
     const base = createTestGameState();
     const state = {
       ...base,
@@ -1039,35 +1181,24 @@ describe("buildTransitBatch nodes and cues", () => {
         ],
       },
     };
-    const { vertices } = buildTransitBatch(
+    const { sprites } = buildTransitBatch(
       state,
       { ...createUiState(), selectedRouteId: "route-unrelated" },
       1,
     );
 
-    const rgb = colorOf("#3366cc").slice(0, 3);
-    const rimRows = rowsOf(vertices).filter(
-      (row) =>
-        row
-          .slice(2, 5)
-          .every((value, index) => Math.abs(value - rgb[index]) < EPSILON) &&
-        Math.abs(row[5] - UNRELATED_ROUTE_OPACITY) < EPSILON,
+    expect(sprites.length).toBe(2 * SPRITE_INSTANCE_FLOATS);
+    expectTint(
+      markerRow(sprites, 144, 144, TRANSIT_SPRITE_LAYERS.metroStationRing),
+      "#3366cc",
+      UNRELATED_ROUTE_OPACITY,
     );
-    let covered = 0;
-    for (let index = 0; index + 2 < rimRows.length; index += 3) {
-      const a = rimRows[index];
-      const b = rimRows[index + 1];
-      const c = rimRows[index + 2];
-      covered +=
-        Math.abs(
-          (b[0] - a[0]) * (c[1] - a[1]) - (c[0] - a[0]) * (b[1] - a[1]),
-        ) / 2;
-    }
-    // The rim silhouette (half 7, corner 3) covers 14²-4·3²+π·3² ≈ 188.3;
-    // overlapping primitives would overstate that area.
-    const silhouette = 14 * 14 - 4 * 3 * 3 + Math.PI * 3 * 3;
-    expect(covered).toBeGreaterThan(silhouette * 0.95);
-    expect(covered).toBeLessThanOrEqual(silhouette + 0.5);
+    expect(
+      markerRow(sprites, 144, 144, TRANSIT_SPRITE_LAYERS.metroStation).slice(
+        8,
+        12,
+      ),
+    ).toEqual([1, 1, 1, 1]);
   });
 });
 

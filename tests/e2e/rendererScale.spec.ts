@@ -52,10 +52,15 @@ test("records WebGPU and Canvas2D renderer scale rows", async ({ page }) => {
     // The real-host frames always carry scene sprites (the fixtures place a
     // bus terminal and houses), so the textured pass must have drawn.
     expect(result.spriteInstances).toBeGreaterThan(0);
+    expect(result.structuralSpriteInstances).toBeGreaterThan(0);
+    expect(result.markerSpriteInstances).toBeGreaterThan(0);
+    expect(result.spriteInstances).toBe(
+      result.structuralSpriteInstances + result.markerSpriteInstances,
+    );
     expect(result.medianCpuMs).toBeGreaterThan(0);
     expect(result.p95CpuMs).toBeGreaterThanOrEqual(result.medianCpuMs);
     if (result.renderer === "webgpu") {
-      expect(result.spriteDraws).toBe(1);
+      expect(result.spriteDraws).toBe(2);
       expect(result.vehicleDraws).toBe(1);
       expect(result.mapSize).toBe("small");
       expect(result.vehicleUploadBytes).toBe(result.encodedInstances * 11 * 4);

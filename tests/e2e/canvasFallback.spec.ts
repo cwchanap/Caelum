@@ -13,6 +13,7 @@ import {
 } from "./helpers";
 import { expectRoadsideStopAnchors } from "./stopAnchors";
 import { expectRotatedLargeHouseFootprint } from "./spriteFootprint";
+import { expectTransitSpriteScene } from "./transitSpriteScene";
 
 // colors.road #5f6d75 — the exact opaque road tile fill (tileFillColor in
 // mapBatch.ts), recomputed here to keep the oracle independent of render
@@ -38,6 +39,14 @@ async function hideWebGpu(page: Page): Promise<void> {
     });
   });
 }
+
+test("transit art joins rails and colors physical badges on Canvas2D", async ({
+  page,
+}) => {
+  test.setTimeout(180_000);
+  await hideWebGpu(page);
+  await expectTransitSpriteScene(page, "canvas2d");
+});
 
 async function roadTileKinds(page: Page): Promise<Array<string | null>> {
   const snapshot = await runtimeSnapshot(page);

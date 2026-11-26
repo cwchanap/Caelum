@@ -7,6 +7,7 @@ import {
   TREE_CANOPY_SEGMENTS,
   TREE_MIN_RADIUS,
   TREE_RADIUS_SPAN,
+  TRACK_PIECES,
   buildMapBatch,
   gridModeForTool,
   gridModeForUi,
@@ -19,6 +20,7 @@ import {
   SPRITE_TEXELS_PER_TILE,
   TREE_SPRITE_LAYER_BASE,
   TREE_SPRITE_URLS,
+  TRANSIT_SPRITE_LAYERS,
 } from "../../src/render/webgpu/spriteAtlas";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import {
@@ -467,20 +469,28 @@ describe("buildMapBatch road furniture", () => {
     ).toBe(true);
   });
 
-  it("adds sleeper ticks across connected track but not isolated dots", () => {
+  it("uses half rail art for connected endpoints, not an isolated tile", () => {
     const state = withTracks(createTestGameState(), [
       { x: 8, y: 8 },
       { x: 9, y: 8 },
     ]);
-    const batch = buildMapBatch(state, "hidden").vertices;
-
-    const sleepers = verticesOfColor(batch, colors.trackSleeper);
-    expect(sleepers.length).toBeGreaterThan(0);
-    expect(
-      sleepers.some(
-        ([vx, vy]) => Math.abs(vx - 278.4) < 1.6 && Math.abs(vy - 267) <= 5.5,
-      ),
-    ).toBe(true);
+    const rows = spriteRowsOf(buildMapBatch(state, "hidden").sprites).filter(
+      (row) => row[7] === TRANSIT_SPRITE_LAYERS.trackStraight,
+    );
+    expect(rows).toHaveLength(2);
+    expect(rows.map((row) => row.slice(0, 2))).toEqual([
+      [280, 272],
+      [296, 272],
+    ]);
+    expect(rows[0]![2]).toBeCloseTo(Math.PI);
+    expect(rows[1]![2]).toBe(0);
+    for (const row of rows) {
+      expect(row[3]).toBe(8);
+      expect(row[4]).toBe(16);
+      expect(row[5]).toBeCloseTo(96 / SPRITE_ATLAS_WIDTH);
+      expect(row[6]).toBeCloseTo(192 / SPRITE_ATLAS_HEIGHT);
+      expect(row.slice(8, 12)).toEqual([1, 1, 1, 1]);
+    }
 
     const isolated = buildMapBatch(
       withTracks(createTestGameState(), [{ x: 10, y: 10 }]),
@@ -710,21 +720,87 @@ describe("buildMapBatch roundabout layer", () => {
 });
 
 describe("buildMapBatch track layer", () => {
-  it("draws spokes between adjacent track tiles and a dot ring for isolated tiles", () => {
+  it("has precisely the neighboring arms and only adjacent corners for every mask", () => {
+    expect(TRACK_PIECES).toHaveLength(16);
+    for (let mask = 0; mask < 16; mask += 1) {
+      let arms = 0;
+      for (const piece of TRACK_PIECES[mask]!) {
+        const rotate = (bit: number) => {
+          for (let n = 0; n < piece.rotation / 90; n += 1) {
+            bit = bit === 8 ? 1 : bit << 1;
+          }
+          return bit;
+        };
+        const pieceArms =
+          piece.kind === "half" ? 8 : piece.kind === "straight" ? 8 | 2 : 8 | 1;
+        if (piece.kind === "corner") expect([3, 6, 9, 12]).toContain(mask);
+        for (const bit of [1, 2, 4, 8])
+          if (pieceArms & bit) arms |= rotate(bit);
+      }
+      expect(arms).toBe(mask);
+    }
+  });
+
+  it("joins adjacent endpoint sprites at their shared edge and retains isolated rings", () => {
     const state = withTracks(createTestGameState(), [
       { x: 2, y: 2 },
       { x: 3, y: 2 },
       { x: 10, y: 10 },
     ]);
-    const batch = buildMapBatch(state).vertices;
-
-    // Spokes meet at the shared edge midpoint (96,80) with track color.
-    expect(hasVertexNear(batch, colors.track, 96, 78)).toBe(true);
-    expect(hasVertexNear(batch, colors.track, 96, 82)).toBe(true);
+    const batch = buildMapBatch(state);
+    const rails = spriteRowsOf(batch.sprites).filter(
+      (row) => row[7] === TRANSIT_SPRITE_LAYERS.trackStraight,
+    );
+    expect(rails).toHaveLength(2);
+    expect(rails[0]![0] + rails[0]![3]).toBe(96);
+    expect(rails[1]![0] - rails[1]![3]).toBe(96);
     // Isolated tile (10,10): a stroked dot at its center (336,336) with
     // radius 4 and lineWidth 4 -> a ring band of radii 2..6.
-    expect(hasVertexNear(batch, colors.track, 336 + 2, 336)).toBe(true);
-    expect(hasVertexNear(batch, colors.track, 336, 336 - 6)).toBe(true);
+    expect(hasVertexNear(batch.vertices, colors.track, 336 + 2, 336)).toBe(
+      true,
+    );
+    expect(hasVertexNear(batch.vertices, colors.track, 336, 336 - 6)).toBe(
+      true,
+    );
+  });
+
+  it("emits the west-north corner and a three-arm junction with matching rotations", () => {
+    const state = withTracks(createTestGameState(), [
+      { x: 5, y: 5 },
+      { x: 4, y: 5 },
+      { x: 5, y: 4 },
+      { x: 10, y: 10 },
+      { x: 9, y: 10 },
+      { x: 11, y: 10 },
+      { x: 10, y: 9 },
+    ]);
+    const rows = spriteRowsOf(buildMapBatch(state, "hidden").sprites);
+    const corner = rows.find(
+      (row) =>
+        row[0] === 176 &&
+        row[1] === 176 &&
+        row[7] === TRANSIT_SPRITE_LAYERS.trackCorner,
+    )!;
+    expect(corner).toBeDefined();
+    expect(corner.slice(2, 5)).toEqual([0, 16, 16]);
+    expect(corner[5]).toBeCloseTo(192 / SPRITE_ATLAS_WIDTH);
+    expect(corner[6]).toBeCloseTo(192 / SPRITE_ATLAS_HEIGHT);
+    const junction = rows.find(
+      (row) =>
+        row[0] === 336 &&
+        row[1] === 336 &&
+        row[7] === TRANSIT_SPRITE_LAYERS.trackStraight,
+    )!;
+    const northHalf = rows.find(
+      (row) =>
+        row[0] === 336 &&
+        row[1] === 328 &&
+        row[7] === TRANSIT_SPRITE_LAYERS.trackStraight,
+    )!;
+    expect(junction.slice(2, 5)).toEqual([0, 16, 16]);
+    expect(northHalf[2]).toBeCloseTo(Math.PI / 2);
+    expect(northHalf.slice(3, 5)).toEqual([8, 16]);
+    expect(northHalf[5]).toBeCloseTo(96 / SPRITE_ATLAS_WIDTH);
   });
 });
 
@@ -896,13 +972,29 @@ describe("buildMapBatch sprite instances", () => {
     expect(rows).toHaveLength(treeRowCount(batch.sprites));
     expect(treeRows.length).toBeGreaterThan(0);
     expect(new Set(treeRows.map((row) => row[7]))).toEqual(new Set([0, 1, 2]));
-    for (const [x, y, angle, hx, hy, su, sv, , cx, cy] of treeRows) {
+    for (const [
+      x,
+      y,
+      angle,
+      hx,
+      hy,
+      su,
+      sv,
+      ,
+      r,
+      g,
+      b,
+      a,
+      cx,
+      cy,
+    ] of treeRows) {
       expect(angle).toBe(0);
       expect(hx).toBeGreaterThanOrEqual(TREE_MIN_RADIUS);
       expect(hx).toBeLessThanOrEqual(TREE_MIN_RADIUS + TREE_RADIUS_SPAN);
       expect(hy).toBe(hx);
       expect(su).toBeCloseTo(192 / SPRITE_ATLAS_WIDTH, 6);
       expect(sv).toBeCloseTo(192 / SPRITE_ATLAS_HEIGHT, 6);
+      expect([r, g, b, a]).toEqual([1, 1, 1, 1]);
       // Trailing clip-scale slots belong to the host projection.
       expect(cx).toBe(0);
       expect(cy).toBe(0);

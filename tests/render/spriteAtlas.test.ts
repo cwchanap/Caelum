@@ -8,6 +8,8 @@ import {
   SPRITE_MIP_LEVEL_COUNT,
   SPRITE_TEXELS_PER_TILE,
   TREE_SPRITE_URLS,
+  TRANSIT_SPRITE_URLS,
+  TRANSIT_SPRITE_LAYERS,
   createSpriteAtlasTexture,
   loadSpriteImages,
   type SpriteBuildingType,
@@ -113,6 +115,9 @@ function registerShippedDimensions(): void {
       height: BUILDING_CATALOG[type].height * SPRITE_TEXELS_PER_TILE,
     });
   }
+  for (const url of Object.values(TRANSIT_SPRITE_URLS)) {
+    imageDimensions.set(url, { width: 192, height: 192 });
+  }
 }
 
 const SPRITE_TEXTURE_USAGE = 0x04 | 0x02 | 0x10;
@@ -148,21 +153,30 @@ describe("sprite atlas table", () => {
     }
   });
 
-  it("lays out fifteen stable layers: trees first, then buildings in catalog order", () => {
+  it("lays out stable layers: trees first, then buildings in catalog order", () => {
     const buildingTypes = Object.keys(BUILDING_CATALOG).filter(
       (type) => type !== "busStop" && type !== "metroStation",
     );
-    expect(SPRITE_LAYER_COUNT).toBe(15);
+    expect(SPRITE_LAYER_COUNT).toBe(21);
     for (const [index, type] of buildingTypes.entries()) {
       expect(BUILDING_SPRITE_LAYERS[type as SpriteBuildingType]).toBe(
         TREE_SPRITE_URLS.length + index,
       );
     }
   });
+
+  it("appends six transit layers without moving the existing layers", () => {
+    expect(SPRITE_LAYER_COUNT).toBe(21);
+    expect(BUILDING_SPRITE_LAYERS.busTerminal).toBe(3);
+    expect(BUILDING_SPRITE_LAYERS.parkPlaza).toBe(14);
+    expect(Object.values(TRANSIT_SPRITE_LAYERS)).toEqual([
+      15, 16, 17, 18, 19, 20,
+    ]);
+  });
 });
 
 describe("loadSpriteImages", () => {
-  it("decodes all fifteen sprites in stable layer order with validated dimensions", async () => {
+  it("decodes all sprites in stable layer order with validated dimensions", async () => {
     registerShippedDimensions();
 
     const images = await loadSpriteImages();
@@ -184,6 +198,14 @@ describe("loadSpriteImages", () => {
       expect(images[layer]!.naturalHeight).toBe(
         BUILDING_CATALOG[type].height * SPRITE_TEXELS_PER_TILE,
       );
+    }
+    for (const [type, layer] of Object.entries(TRANSIT_SPRITE_LAYERS) as [
+      keyof typeof TRANSIT_SPRITE_URLS,
+      number,
+    ][]) {
+      expect(images[layer]!.src).toBe(TRANSIT_SPRITE_URLS[type]);
+      expect(images[layer]!.naturalWidth).toBe(192);
+      expect(images[layer]!.naturalHeight).toBe(192);
     }
   });
 
@@ -212,7 +234,7 @@ describe("loadSpriteImages", () => {
 });
 
 describe("createSpriteAtlasTexture", () => {
-  it("uploads one rgba8unorm 576x384x15 five-mip 2d-array texture", async () => {
+  it("uploads one rgba8unorm 576x384x21 mipmapped 2d-array texture", async () => {
     registerShippedDimensions();
     const { device, textures, textureUploads } = createFakeDevice();
 
@@ -228,7 +250,7 @@ describe("createSpriteAtlasTexture", () => {
       mipLevelCount: SPRITE_MIP_LEVEL_COUNT,
       usage: SPRITE_TEXTURE_USAGE,
     });
-    // Fifteen layers, five mips each: one source-sized upload per mip.
+    // One source-sized upload per layer and mip.
     expect(textureUploads).toHaveLength(
       SPRITE_LAYER_COUNT * SPRITE_MIP_LEVEL_COUNT,
     );

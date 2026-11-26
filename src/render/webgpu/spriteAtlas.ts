@@ -15,9 +15,14 @@ import businessParkUrl from "../../assets/sunny-diorama/buildings/businessPark.w
 import clinicUrl from "../../assets/sunny-diorama/buildings/clinic.webp";
 import schoolUrl from "../../assets/sunny-diorama/buildings/school.webp";
 import parkPlazaUrl from "../../assets/sunny-diorama/buildings/parkPlaza.webp";
+import busStopUrl from "../../assets/sunny-diorama/markers/bus-stop.webp";
+import busStopRingUrl from "../../assets/sunny-diorama/markers/bus-stop-ring.webp";
+import metroStationUrl from "../../assets/sunny-diorama/markers/metro-station.webp";
+import metroStationRingUrl from "../../assets/sunny-diorama/markers/metro-station-ring.webp";
+import trackStraightUrl from "../../assets/sunny-diorama/markers/track-straight.webp";
+import trackCornerUrl from "../../assets/sunny-diorama/markers/track-corner.webp";
 
-/** Building types with a sprite; busStop/metroStation keep their procedural
- *  transitBatch markers and never get a texture layer or instance. */
+/** Building types with a structural sprite; transit nodes use marker layers. */
 export type SpriteBuildingType = Exclude<
   BuildingType,
   "busStop" | "metroStation"
@@ -43,6 +48,15 @@ export const BUILDING_SPRITE_URLS: Record<SpriteBuildingType, string> = {
 /** Stable tree-variant order; layers 0-2 of the atlas array. */
 export const TREE_SPRITE_URLS = [tree01Url, tree02Url, tree03Url] as const;
 
+export const TRANSIT_SPRITE_URLS = {
+  busStop: busStopUrl,
+  busStopRing: busStopRingUrl,
+  metroStation: metroStationUrl,
+  metroStationRing: metroStationRingUrl,
+  trackStraight: trackStraightUrl,
+  trackCorner: trackCornerUrl,
+} as const;
+
 export const SPRITE_TEXELS_PER_TILE = 192;
 export const SPRITE_ATLAS_WIDTH = 576;
 export const SPRITE_ATLAS_HEIGHT = 384;
@@ -51,7 +65,9 @@ export const SPRITE_ATLAS_HEIGHT = 384;
 export const SPRITE_MIP_LEVEL_COUNT = 8;
 export const TREE_SPRITE_LAYER_BASE = 0;
 export const SPRITE_LAYER_COUNT =
-  TREE_SPRITE_URLS.length + Object.keys(BUILDING_SPRITE_URLS).length;
+  TREE_SPRITE_URLS.length +
+  Object.keys(BUILDING_SPRITE_URLS).length +
+  Object.keys(TRANSIT_SPRITE_URLS).length;
 
 /** Resolves a [0, 1) hash fraction to a tree layer index in the atlas. */
 export function treeSpriteLayer(fraction: number): number {
@@ -71,8 +87,15 @@ export const BUILDING_SPRITE_LAYERS = Object.fromEntries(
   ]),
 ) as Record<SpriteBuildingType, number>;
 
+export const TRANSIT_SPRITE_LAYERS = Object.fromEntries(
+  Object.keys(TRANSIT_SPRITE_URLS).map((type, index) => [
+    type,
+    TREE_SPRITE_URLS.length + Object.keys(BUILDING_SPRITE_URLS).length + index,
+  ]),
+) as Record<keyof typeof TRANSIT_SPRITE_URLS, number>;
+
 /** The sprite layer of a sprite-bearing building type, or undefined for
- *  busStop/metroStation (which keep only their procedural markers). */
+ *  transit nodes, which use separate marker layers. */
 export function spriteLayerFor(type: BuildingType): number | undefined {
   return (BUILDING_SPRITE_LAYERS as Record<string, number | undefined>)[type];
 }
@@ -98,6 +121,12 @@ const SPRITE_LAYER_SOURCES: readonly SpriteLayerSource[] = [
     url,
     width: BUILDING_CATALOG[type].width * SPRITE_TEXELS_PER_TILE,
     height: BUILDING_CATALOG[type].height * SPRITE_TEXELS_PER_TILE,
+  })),
+  ...Object.entries(TRANSIT_SPRITE_URLS).map(([name, url]) => ({
+    name,
+    url,
+    width: SPRITE_TEXELS_PER_TILE,
+    height: SPRITE_TEXELS_PER_TILE,
   })),
 ];
 
@@ -136,9 +165,9 @@ async function decodeSpriteImage(
 }
 
 /**
- * Decodes all fifteen shipped sprites and validates their dimensions (one
+ * Decodes all shipped sprites and validates their dimensions (one
  * texel per footprint tile, 192x192 trees), returning them in the stable
- * 15-layer order (trees, then buildings in catalog order). Throws on any
+ * layer order (trees, buildings in catalog order, then transit art). Throws on any
  * bad load, so callers fail startup loudly instead of drawing a broken
  * atlas. The Canvas2D fallback consumes the same validated images directly.
  */

@@ -99,7 +99,7 @@ describe("buildMapBatch on an actual Small Town snapshot", () => {
     expect(state.buildings).toHaveLength(6);
 
     const batch = buildMapBatch(state, "hidden");
-    expect(batch.sprites.length % 10).toBe(0);
+    expect(batch.sprites.length % SPRITE_INSTANCE_FLOATS).toBe(0);
     const rows = spriteRowsOf(batch.sprites);
     const treeRows = rows.filter((row) => row[7]! < 3);
     const buildingRows = rows.filter((row) => row[7]! >= 3);
@@ -115,13 +115,14 @@ describe("buildMapBatch on an actual Small Town snapshot", () => {
     // 12-18px diameter extents, uv scale, and trailing clip-scale slots.
     const byTile = new Map<number, number[]>();
     for (const row of treeRows) {
-      const [x, y, angle, hx, hy, su, sv, , cx, cy] = row;
+      const [x, y, angle, hx, hy, su, sv, , r, g, b, a, cx, cy] = row;
       expect(angle).toBe(0);
       expect(hy).toBe(hx);
       expect(hx).toBeGreaterThanOrEqual(TREE_MIN_RADIUS);
       expect(hx).toBeLessThanOrEqual(TREE_MIN_RADIUS + TREE_RADIUS_SPAN);
       expect(su).toBeCloseTo(SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_WIDTH, 6);
       expect(sv).toBeCloseTo(SPRITE_TEXELS_PER_TILE / SPRITE_ATLAS_HEIGHT, 6);
+      expect([r, g, b, a]).toEqual([1, 1, 1, 1]);
       expect(cx).toBe(0);
       expect(cy).toBe(0);
       const tileX = Math.round((x! - TILE_SIZE / 2) / TILE_SIZE);
@@ -159,8 +160,8 @@ describe("buildMapBatch on an actual Small Town snapshot", () => {
     expect(buildingRows).toHaveLength(6);
     for (const row of buildingRows) {
       expect(row[7]).toBeGreaterThanOrEqual(3);
-      expect(row[8]).toBe(0);
-      expect(row[9]).toBe(0);
+      expect(row.slice(8, 12)).toEqual([1, 1, 1, 1]);
+      expect(row.slice(12, 14)).toEqual([0, 0]);
     }
   });
 });
