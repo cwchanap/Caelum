@@ -175,9 +175,7 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
     (element) => element.style.backgroundColor,
   );
   expect(colorBeforeRename).not.toBe("");
-  await page
-    .getByRole("button", { name: "Rename Browser Smoke A" })
-    .click();
+  await page.getByRole("button", { name: "Rename Browser Smoke A" }).click();
   const renameA = page.getByRole("textbox", { name: "Rename Browser Smoke A" });
   await renameA.fill("Zephyr Smoke");
   await renameA.press("Enter");
