@@ -828,3 +828,45 @@ test("pause and resume paint deterministic icon geometry, not a font glyph", asy
     "pause icon gap between bars",
   ).toBe(true);
 });
+
+/** Windows High Contrast / forced-colors: gradients are stripped and
+ *  author colors are forced, so a glyph painted only via CSS gradient or
+ *  a forced matching fill disappears. The icon must still paint
+ *  discernible geometry measured from real screenshots. */
+test("pause and resume keep a painted icon under forced colors", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Forced Colors Icon");
+  await page.emulateMedia({ forcedColors: "active" });
+  const pause = page.locator('[data-action="pause"]');
+
+  await expect(pause).toHaveAccessibleName("Resume");
+  const play = await pauseIconProfile(page);
+  const playPainted = play.columns.filter((f) => f > 0.5).length;
+  expect(
+    playPainted,
+    "resume icon paints something under forced colors",
+  ).toBeGreaterThanOrEqual(3);
+  expect(
+    Math.max(...play.columns) - Math.min(...play.columns),
+    "resume icon is a discernible shape, not a solid block",
+  ).toBeGreaterThan(0.3);
+
+  await pause.click();
+  await expect(pause).toHaveAccessibleName("Pause");
+  const bars = await pauseIconProfile(page);
+  const runs: Array<{ painted: boolean; length: number }> = [];
+  for (const fraction of bars.columns) {
+    const painted = fraction > 0.5;
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.painted === painted) {
+      last.length += 1;
+    } else {
+      runs.push({ painted, length: 1 });
+    }
+  }
+  expect(
+    runs.filter((run) => run.painted).length,
+    "pause icon still paints two bars under forced colors",
+  ).toBe(2);
+});
