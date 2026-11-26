@@ -1,4 +1,5 @@
 import { expect, type Page } from "@playwright/test";
+import { tileSize } from "../../src/render/boardTransform";
 import {
   runtimeSnapshot,
   sampleFrameTransform,
@@ -7,8 +8,8 @@ import {
 } from "./helpers";
 
 // Opaque texels in bus-stop.webp at (96,108) and (80,80), and the white
-// bus-stop-ring.webp at (30,96)/(162,96)/(96,30)/(96,162). The quad is
-// 14 world px wide.
+// bus-stop-ring.webp at (30,96)/(162,96)/(96,30)/(96,162). The quad spans
+// one map tile, matching the art's 192 source px per tile.
 const faceDarkRgb = [76, 58, 52] as const;
 const faceCreamRgb = [255, 248, 238] as const;
 
@@ -78,8 +79,8 @@ export async function expectRoadsideStopAnchors(
     };
   });
 
-  const inset = (16 * 14) / 192;
-  const rim = (66 * 14) / 192;
+  const inset = (16 * tileSize) / 192;
+  const rim = (66 * tileSize) / 192;
   const probeCount = 4;
   const rimRgb = [1, 3, 5].map((index) =>
     parseInt(rimColor.slice(index, index + 2), 16),
@@ -107,7 +108,7 @@ export async function expectRoadsideStopAnchors(
           dy: (dx / distance) * rim,
         };
         const offsets = [
-          { dx: 0, dy: (12 * 14) / 192 },
+          { dx: 0, dy: (12 * tileSize) / 192 },
           { dx: -inset, dy: -inset },
           normal,
           { dx: -normal.dx, dy: -normal.dy },

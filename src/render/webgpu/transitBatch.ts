@@ -44,13 +44,21 @@ const METRO_LINE_WIDTH = 8;
 const STOP_MARKER_COLOR = parseColor(colors.bus);
 const STATION_MARKER_COLOR = parseColor(colors.metro);
 const ACCESS_INDICATOR_COLOR = parseColor(colors.hover);
-const STOP_MARKER_RADIUS = 7;
-const STATION_MARKER_HALF = 7;
+// One tile keeps marker faces legible at Fit and undistorted at max zoom.
+const MARKER_WORLD_SIZE = tileSize;
+const STOP_MARKER_RADIUS = MARKER_WORLD_SIZE / 2;
+const STATION_MARKER_HALF = MARKER_WORLD_SIZE / 2;
 const NODE_CUE_RADIUS = 3;
-// Opaque rim extents in the 192px masks: 72px along an axis, 88px on
-// the station's diagonal. Both badges are rendered in a 14px quad.
-const MARKER_RIM_AXIS = (72 * 14) / 192;
-const STATION_RIM_DIAGONAL = (88 * 14) / 192;
+// Overlap the rim so displaced cues remain attached to the marker.
+const NODE_CUE_RIM_OVERLAP = 1;
+// Fan same-side cues without wrapping them onto the opposite side.
+const NODE_CUE_ARC_STEP = 0.5;
+const NODE_CUE_MAX_ARC = (2 * Math.PI) / 3;
+const NODE_CUE_RESOLVE_STEP = 0.125;
+const NODE_CUE_SIDE_HALF_ARC = Math.PI / 2;
+// Opaque rim extents in the 192px masks: 72px axial, 88px diagonal.
+const MARKER_RIM_AXIS = (72 * MARKER_WORLD_SIZE) / 192;
+const STATION_RIM_DIAGONAL = (88 * MARKER_WORLD_SIZE) / 192;
 
 function sameTripPosition(a: TripPosition, b: TripPosition): boolean {
   return a.x === b.x && a.y === b.y;
@@ -487,6 +495,24 @@ function waypointGeometry(
   return null;
 }
 
+function cueFanTangent(
+  unitX: number,
+  unitY: number,
+  canonicalTangent: TripPosition,
+): TripPosition {
+  const fallback = { x: -unitY, y: unitX };
+  const canonicalLength = Math.hypot(canonicalTangent.x, canonicalTangent.y);
+  if (canonicalLength < 1e-9) return fallback;
+  const canonicalX = canonicalTangent.x / canonicalLength;
+  const canonicalY = canonicalTangent.y / canonicalLength;
+  const normalComponent = canonicalX * unitX + canonicalY * unitY;
+  const tangentX = canonicalX - unitX * normalComponent;
+  const tangentY = canonicalY - unitY * normalComponent;
+  const tangentLength = Math.hypot(tangentX, tangentY);
+  if (tangentLength < 1e-9) return fallback;
+  return { x: tangentX / tangentLength, y: tangentY / tangentLength };
+}
+
 function drawRouteNodeCues(
   g: SolidGeometry,
   state: GameState,
@@ -494,6 +520,20 @@ function drawRouteNodeCues(
   corridors: CorridorGroups,
   emphasizedIds: ReadonlySet<string>,
 ): void {
+  const cues: Array<{
+    lineId: string;
+    mode: "bus" | "metro";
+    color: Rgba;
+    nodeCenter: TripPosition;
+    canonicalTangent: TripPosition;
+    dx: number;
+    dy: number;
+    dist: number;
+    groupKey: string;
+    fanAngle: number;
+    x: number;
+    y: number;
+  }> = [];
   for (const line of lines) {
     const cueColor = withAlpha(
       parseColor(line.color),
@@ -517,22 +557,148 @@ function drawRouteNodeCues(
       const dy = cueCenter.y - nodeCenter.y;
       const dist = Math.hypot(dx, dy);
       if (dist < 1e-6) continue;
-      const bound =
-        line.mode === "metro"
-          ? Math.min(
-              STATION_RIM_DIAGONAL,
-              (MARKER_RIM_AXIS * dist) / Math.max(Math.abs(dx), Math.abs(dy)),
-            )
-          : MARKER_RIM_AXIS;
-      g.circle(
-        {
-          x: nodeCenter.x + (dx / dist) * (bound + dist),
-          y: nodeCenter.y + (dy / dist) * (bound + dist),
-        },
-        NODE_CUE_RADIUS,
-        cueColor,
+      const primitive = canonicalCorridorPrimitive(geometry);
+      const canonicalLength = Math.hypot(
+        primitive.canonicalTangent.x,
+        primitive.canonicalTangent.y,
       );
+      const corridorNormal =
+        canonicalLength < 1e-9
+          ? { x: 0, y: 1 }
+          : {
+              x: -primitive.canonicalTangent.y / canonicalLength,
+              y: primitive.canonicalTangent.x / canonicalLength,
+            };
+      const side =
+        dx * corridorNormal.x + dy * corridorNormal.y < 0
+          ? "negative"
+          : "positive";
+      const corridorKey = `${line.mode}:${nodeCenter.x},${nodeCenter.y}:${primitive.key}`;
+      cues.push({
+        lineId: line.id,
+        mode: line.mode,
+        color: cueColor,
+        nodeCenter,
+        canonicalTangent: primitive.canonicalTangent,
+        dx,
+        dy,
+        dist,
+        groupKey: `${corridorKey}:${side}`,
+        fanAngle: 0,
+        x: 0,
+        y: 0,
+      });
     }
+  }
+
+  const groups = new Map<string, typeof cues>();
+  for (const cue of cues) {
+    const group = groups.get(cue.groupKey);
+    if (group === undefined) {
+      groups.set(cue.groupKey, [cue]);
+    } else {
+      group.push(cue);
+    }
+  }
+  for (const group of groups.values()) {
+    // Match corridor offset order to keep the fan deterministic.
+    const ordered = [...group].sort((left, right) =>
+      left.lineId.localeCompare(right.lineId),
+    );
+    const step =
+      ordered.length <= 1
+        ? 0
+        : Math.min(NODE_CUE_ARC_STEP, NODE_CUE_MAX_ARC / (ordered.length - 1));
+    for (const [index, cue] of ordered.entries()) {
+      cue.fanAngle = (index - (ordered.length - 1) / 2) * step;
+    }
+  }
+
+  const positionCue = (cue: (typeof cues)[number]): void => {
+    const normalX = cue.dx / cue.dist;
+    const normalY = cue.dy / cue.dist;
+    const tangent = cueFanTangent(normalX, normalY, cue.canonicalTangent);
+    const cos = Math.cos(cue.fanAngle);
+    const sin = Math.sin(cue.fanAngle);
+    const rayX = normalX * cos + tangent.x * sin;
+    const rayY = normalY * cos + tangent.y * sin;
+    const bound =
+      cue.mode === "metro"
+        ? Math.min(
+            STATION_RIM_DIAGONAL,
+            MARKER_RIM_AXIS / Math.max(Math.abs(rayX), Math.abs(rayY)),
+          )
+        : MARKER_RIM_AXIS;
+    const centerInset = tileSize / 2 - NODE_CUE_RADIUS;
+    const tileBound = Math.min(
+      rayX === 0 ? Number.POSITIVE_INFINITY : centerInset / Math.abs(rayX),
+      rayY === 0 ? Number.POSITIVE_INFINITY : centerInset / Math.abs(rayY),
+    );
+    const cueDistance = Math.min(
+      bound + NODE_CUE_RADIUS - NODE_CUE_RIM_OVERLAP,
+      tileBound,
+    );
+    cue.x = cue.nodeCenter.x + rayX * cueDistance;
+    cue.y = cue.nodeCenter.y + rayY * cueDistance;
+  };
+  for (const cue of cues) positionCue(cue);
+
+  // shortcut: saturated hubs can overlap cues; group indicators if disjointness is required.
+  const byNode = new Map<string, typeof cues>();
+  for (const cue of cues) {
+    const key = `${cue.nodeCenter.x},${cue.nodeCenter.y}`;
+    const nodeCues = byNode.get(key);
+    if (nodeCues === undefined) byNode.set(key, [cue]);
+    else nodeCues.push(cue);
+  }
+  for (const nodeCues of byNode.values()) {
+    const ordered = [...nodeCues].sort((left, right) =>
+      left.lineId.localeCompare(right.lineId),
+    );
+    const placed: typeof cues = [];
+    for (const cue of ordered) {
+      const baseAngle = cue.fanAngle;
+      const preferredDirection = baseAngle < 0 ? -1 : 1;
+      let bestAngle = baseAngle;
+      let bestClearance = Number.NEGATIVE_INFINITY;
+      let foundDisjoint = false;
+      const maxStep =
+        Math.ceil(
+          (NODE_CUE_SIDE_HALF_ARC + Math.abs(baseAngle)) /
+            NODE_CUE_RESOLVE_STEP,
+        ) + 1;
+      for (let step = 0; step <= maxStep && !foundDisjoint; step += 1) {
+        const directions =
+          step === 0 ? [0] : [preferredDirection, -preferredDirection];
+        for (const direction of directions) {
+          const angle = baseAngle + direction * step * NODE_CUE_RESOLVE_STEP;
+          if (Math.abs(angle) >= NODE_CUE_SIDE_HALF_ARC) continue;
+          cue.fanAngle = angle;
+          positionCue(cue);
+          const clearance = placed.reduce(
+            (minimum, other) =>
+              Math.min(minimum, Math.hypot(cue.x - other.x, cue.y - other.y)),
+            Number.POSITIVE_INFINITY,
+          );
+          if (clearance > bestClearance) {
+            bestClearance = clearance;
+            bestAngle = angle;
+          }
+          if (clearance >= NODE_CUE_RADIUS * 2) {
+            bestAngle = angle;
+            foundDisjoint = true;
+            break;
+          }
+        }
+      }
+      cue.fanAngle = bestAngle;
+      positionCue(cue);
+      placed.push(cue);
+    }
+  }
+
+  for (const cue of cues) {
+    g.circle({ x: cue.x, y: cue.y }, NODE_CUE_RADIUS, cue.color);
   }
 }
 

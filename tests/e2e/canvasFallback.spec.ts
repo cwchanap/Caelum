@@ -14,6 +14,10 @@ import {
 import { expectRoadsideStopAnchors } from "./stopAnchors";
 import { expectRotatedLargeHouseFootprint } from "./spriteFootprint";
 import { expectTransitSpriteScene } from "./transitSpriteScene";
+import {
+  expectMixedCorridorCuePixels,
+  expectSharedCuePixels,
+} from "./transitCues";
 
 // colors.road #5f6d75 — the exact opaque road tile fill (tileFillColor in
 // mapBatch.ts), recomputed here to keep the oracle independent of render
@@ -46,6 +50,20 @@ test("transit art joins rails and colors physical badges on Canvas2D", async ({
   test.setTimeout(180_000);
   await hideWebGpu(page);
   await expectTransitSpriteScene(page, "canvas2d");
+});
+
+test("shared transit cue colors stay visible on Canvas2D", async ({ page }) => {
+  test.setTimeout(180_000);
+  await hideWebGpu(page);
+  await expectSharedCuePixels(page, "canvas2d");
+});
+
+test("mixed-corridor transit cue colors stay visible on Canvas2D", async ({
+  page,
+}) => {
+  test.setTimeout(150_000);
+  await hideWebGpu(page);
+  await expectMixedCorridorCuePixels(page, "canvas2d");
 });
 
 async function roadTileKinds(page: Page): Promise<Array<string | null>> {
@@ -197,9 +215,8 @@ test("Canvas2D fallback drives real WASM gameplay: mutation, seam, stop markers,
   // and reused verbatim under the fallback (no cloned routes flow: the
   // markers render from the stops alone). Zoom to the camera clamp first:
   // the oracle's rim probes sit ~1 world px inside the marker's outer edge,
-  // which Canvas2D path antialiasing can graze at fit zoom — at the 96 CSS
-  // px/tile clamp they clear the antialiased band by ≥3 device px. WebGPU
-  // has no path antialiasing and passes at any zoom.
+  // which Canvas2D sprite filtering can graze at fit zoom — at the 96 CSS
+  // px/tile clamp they clear the filtered edge band by ≥3 device px.
   await selectBuildLeaf(page, "transit", "busStop");
   for (let step = 0; step < 24; step += 1) {
     await page.evaluate(() => {
