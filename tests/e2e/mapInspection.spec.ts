@@ -6,10 +6,7 @@ import {
   tileSize,
 } from "../../src/render/boardTransform";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
-import {
-  VEHICLE_INSTANCE_FLOATS,
-  VEHICLE_LANE_OFFSET_PX,
-} from "../../src/render/gameplayRenderer";
+import { VEHICLE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
 import { encodeVehicleInstances } from "../../src/render/webgpu/vehicleInstances";
 import type { Point } from "../../src/domain/types";
 import type { RuntimeSnapshot } from "../../src/runtime/types";
@@ -65,11 +62,8 @@ function pausedVehicleSamples(
   }));
 }
 
-function renderedBodyCenter(sample: { point: Point; angle: number }): Point {
-  return {
-    x: sample.point.x + Math.sin(sample.angle) * VEHICLE_LANE_OFFSET_PX,
-    y: sample.point.y - Math.cos(sample.angle) * VEHICLE_LANE_OFFSET_PX,
-  };
+function renderedBodyCenter(sample: { point: Point }): Point {
+  return sample.point;
 }
 
 /** Geometry proof that the Inspector arrow actually renders: probe the

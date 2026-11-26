@@ -8,7 +8,7 @@ import {
 import { axisLockedLine, rectanglePoints } from "../../src/ui/roadDrag";
 import { createUiState } from "../../src/ui/uiState";
 import { createTestGameState } from "../helpers/gameState";
-import { withRoads, withTracks } from "../helpers/mapFixtures";
+import { withRoads } from "../helpers/mapFixtures";
 
 describe("rectanglePoints", () => {
   const expected = [
@@ -176,20 +176,17 @@ describe("road click preset gating", () => {
 });
 
 describe("track mutation derivation", () => {
-  it("derives layTrack for a track hover, even over existing track", () => {
-    const state = withTracks(createTestGameState(), [{ x: 5, y: 5 }]);
+  it("derives no mutation for a track hover, even over empty land", () => {
+    const state = createTestGameState();
     const ui = {
       ...createUiState(),
       activeTool: "track" as const,
       hoverTile: { x: 5, y: 5 },
     };
-    expect(roadMutationForUi(state, ui)).toEqual({
-      type: "layTrack",
-      point: { x: 5, y: 5 },
-    });
+    expect(roadMutationForUi(state, ui)).toBeNull();
   });
 
-  it("derives layTrack for a single-tile track drag", () => {
+  it("derives no mutation for a single-tile track drag", () => {
     const state = createTestGameState();
     const ui = {
       ...createUiState(),
@@ -200,10 +197,7 @@ describe("track mutation derivation", () => {
         current: { x: 3, y: 3 },
       },
     };
-    expect(roadMutationForUi(state, ui)).toEqual({
-      type: "layTrack",
-      point: { x: 3, y: 3 },
-    });
+    expect(roadMutationForUi(state, ui)).toBeNull();
   });
 
   it("derives layTrackLine with the same axis-locked points as a road stroke", () => {
@@ -233,11 +227,17 @@ describe("track held-preview identity", () => {
   const stroke = (points: Array<{ x: number; y: number }>) =>
     ({ type: "layTrackLine", points }) as const;
 
-  it("prefixes identical single-tile mutations for drag-start retention", () => {
+  it("prefixes an identical track stroke for drag-start retention", () => {
     expect(
       roadMutationIsPrefix(
-        { type: "layTrack", point: { x: 5, y: 5 } },
-        { type: "layTrack", point: { x: 5, y: 5 } },
+        stroke([
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ]),
+        stroke([
+          { x: 5, y: 5 },
+          { x: 6, y: 5 },
+        ]),
       ),
     ).toBe(true);
   });
@@ -277,7 +277,7 @@ describe("track held-preview identity", () => {
   it("never prefixes across mutation kinds", () => {
     expect(
       roadMutationIsPrefix(
-        { type: "layTrack", point: { x: 5, y: 5 } },
+        { type: "layRoad", point: { x: 5, y: 5 } },
         stroke([
           { x: 5, y: 5 },
           { x: 6, y: 5 },

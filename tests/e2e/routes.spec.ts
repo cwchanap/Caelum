@@ -664,9 +664,7 @@ test("create a metro line on laid track", async ({ page }) => {
 
   // Lay a 5-tile track run on empty ground.
   await selectBuildLeaf(page, "transit", "track");
-  for (let x = 8; x <= 12; x += 1) {
-    await clickMapTile(canvas, { x, y: 2 });
-  }
+  await dragMapTiles(page, canvas, { x: 8, y: 2 }, { x: 12, y: 2 });
 
   // Stations on the track ends (Metro Station building requires track).
   await selectBuildLeaf(page, "transit", "metroStation");
@@ -1682,9 +1680,7 @@ test("starts a Metro service with Save & run and tunes its target headway", asyn
 
   // Lay the same short connected track used by the Metro route flow.
   await selectBuildLeaf(page, "transit", "track");
-  for (let x = 8; x <= 12; x += 1) {
-    await clickMapTile(canvas, { x, y: 2 });
-  }
+  await dragMapTiles(page, canvas, { x: 8, y: 2 }, { x: 12, y: 2 });
 
   // Place stations at both ends of the track.
   await selectBuildLeaf(page, "transit", "metroStation");

@@ -499,6 +499,7 @@ function drawTrees(
   map: GameMap,
   islandKeys: ReadonlySet<string>,
   tileOwners: ReadonlyMap<string, number>,
+  transitNodeKeys: ReadonlySet<string>,
 ): void {
   for (const tile of map.tiles) {
     if (
@@ -507,7 +508,8 @@ function drawTrees(
       tile.hasTrack === true ||
       tile.roadStructureId !== undefined ||
       islandKeys.has(keyOf(tile)) ||
-      tileOwners.has(keyOf(tile))
+      tileOwners.has(keyOf(tile)) ||
+      transitNodeKeys.has(keyOf(tile))
     ) {
       continue;
     }
@@ -567,6 +569,11 @@ export function buildMapBatch(
   const sprites: number[] = [];
   const islandKeys = protectedIslandKeys(state);
   const tileOwners = occupiedTileOwners(state);
+  const transitNodeKeys = new Set(
+    [...state.transit.stops, ...state.transit.stations]
+      .filter((node) => node.status === "present")
+      .map((node) => keyOf(node.position)),
+  );
   const tileByKey = new Map(state.map.tiles.map((tile) => [keyOf(tile), tile]));
 
   const roadTiles: Tile[] = [];
@@ -607,7 +614,7 @@ export function buildMapBatch(
   }
 
   drawLotPerimeters(g, state.map, tileByKey, tileOwners);
-  drawTrees(g, sprites, state.map, islandKeys, tileOwners);
+  drawTrees(g, sprites, state.map, islandKeys, tileOwners, transitNodeKeys);
 
   // Sprite rows: trees first (pushed above), then one instance per
   // sprite-bearing building. busStop/metroStation keep their procedural

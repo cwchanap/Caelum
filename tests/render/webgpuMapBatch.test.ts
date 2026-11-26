@@ -29,7 +29,12 @@ import {
 } from "../../src/render/webgpu/primitives";
 import { colors } from "../../src/render/colors";
 import { tileSize } from "../../src/render/boardTransform";
-import { createTestGameState, placeTestBuilding } from "../helpers/gameState";
+import {
+  addTestBusStop,
+  addTestMetroStation,
+  createTestGameState,
+  placeTestBuilding,
+} from "../helpers/gameState";
 import {
   pointsOnRow,
   withAreas,
@@ -292,6 +297,106 @@ describe("buildMapBatch decorative trees", () => {
       expect(tile.area).toBeUndefined();
       expect(tile.hasTrack).not.toBe(true);
     }
+  });
+
+  function treeTiles(batch: { sprites: Float32Array }): Point[] {
+    return spriteRowsOf(batch.sprites)
+      .filter((row) => row[7]! < 3)
+      .map((row) => ({
+        x: Math.floor(row[0]! / tileSize),
+        y: Math.floor(row[1]! / tileSize),
+      }));
+  }
+
+  function shadowCount(batch: { vertices: Float32Array }): number {
+    return verticesOfRgba(batch.vertices, TREE_SHADOW).length;
+  }
+
+  it("suppresses canopy and shadow at present stop and station tiles, not road access or tombstones", () => {
+    const state = createTestGameState();
+    const baseline = buildMapBatch(state, "hidden");
+    const [stopTile, accessTile, stationTile] = treeTiles(baseline);
+    expect(stopTile).toBeDefined();
+    expect(accessTile).toBeDefined();
+    expect(stationTile).toBeDefined();
+
+    let stopped = addTestBusStop(state, stopTile!);
+    stopped = {
+      ...stopped,
+      transit: {
+        ...stopped.transit,
+        stops: stopped.transit.stops.map((stop) => ({
+          ...stop,
+          roadAccess: { roadPoint: accessTile! },
+        })),
+      },
+    };
+    const stopBatch = buildMapBatch(stopped, "hidden");
+    const stopTrees = treeTiles(stopBatch);
+    expect(stopTrees).not.toContainEqual(stopTile);
+    expect(stopTrees).toContainEqual(accessTile);
+    expect(shadowCount(stopBatch)).toBe(
+      shadowCount(baseline) - TREE_CANOPY_SEGMENTS * 3,
+    );
+
+    const missing = {
+      ...stopped,
+      transit: {
+        ...stopped.transit,
+        stops: stopped.transit.stops.map((stop) => ({
+          ...stop,
+          status: "missing" as const,
+        })),
+      },
+    };
+    expect(treeTiles(buildMapBatch(missing, "hidden"))).toContainEqual(
+      stopTile,
+    );
+
+    const stationed = buildMapBatch(
+      addTestMetroStation(state, stationTile!),
+      "hidden",
+    );
+    expect(treeTiles(stationed)).not.toContainEqual(stationTile);
+    expect(shadowCount(stationed)).toBe(
+      shadowCount(baseline) - TREE_CANOPY_SEGMENTS * 3,
+    );
+  });
+
+  it("suppresses trees across a multi-tile building footprint and restores them when removed", () => {
+    const state = createTestGameState();
+    const baseline = buildMapBatch(state, "hidden");
+    const baselineTiles = treeTiles(baseline);
+    const origin = baselineTiles.find(
+      (point) => point.x <= 23 && point.y <= 14,
+    );
+    expect(origin).toBeDefined();
+    const footprint = rectOf(origin!.x, origin!.y, 3, 2);
+    const obstructed = footprint.filter((point) =>
+      baselineTiles.some((tree) => tree.x === point.x && tree.y === point.y),
+    );
+    expect(obstructed.length).toBeGreaterThan(0);
+
+    const builtState = placeTestBuilding(state, "largeHouse", origin!, 0);
+    const built = buildMapBatch(builtState, "hidden");
+    const builtTiles = treeTiles(built);
+    for (const point of obstructed) {
+      expect(builtTiles).not.toContainEqual(point);
+    }
+    // Each tree canopy shadow is a fan of TREE_CANOPY_SEGMENTS triangles;
+    // the building itself contributes one six-vertex footprint shadow.
+    expect(shadowCount(built)).toBe(
+      shadowCount(baseline) - obstructed.length * TREE_CANOPY_SEGMENTS * 3 + 6,
+    );
+
+    // Removal is the previous immutable state: the deterministic seed puts
+    // exactly the same canopy and shadow rows back on eligible land.
+    const removed = buildMapBatch(state, "hidden");
+    expect(removed.sprites).toEqual(baseline.sprites);
+    expect(shadowCount(removed)).toBe(shadowCount(baseline));
+
+    const rebuilt = buildMapBatch(builtState, "hidden");
+    expect(rebuilt.sprites).toEqual(built.sprites);
   });
 });
 
