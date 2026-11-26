@@ -295,7 +295,7 @@ test("Save Now persists changed gameplay through reload and Continue", async ({
       exact: true,
     }),
   });
-  const deleteB = rowBPanel.getByRole("button", { name: /^Delete / });
+  const deleteB = rowBPanel.getByRole("button", { name: /delete/i });
   await deleteB.click();
   await expect(deleteB).toHaveText("Delete?");
   await deleteB.click();
@@ -331,7 +331,7 @@ test("renames the active city from the City dock and deletes it with two clicks"
     .filter({ hasText: "Playing" });
   await expect(playingRow).toHaveCount(1);
   await expect(playingRow.locator("input")).toHaveCount(0);
-  const deleteActive = playingRow.getByRole("button", { name: /^Delete / });
+  const deleteActive = playingRow.getByRole("button", { name: /delete/i });
   await deleteActive.click();
   await expect(deleteActive).toHaveText("Delete?");
   await deleteActive.click();
