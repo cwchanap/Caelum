@@ -40,20 +40,26 @@
 
   // Several cities can share a name (repeated "Riverside" saves); the row
   // controls then append the saved timestamp to their accessible name so
-  // Rename/Load/Delete stay distinguishable per city.
-  const nameCounts = $derived(
-    cities.reduce((counts, city) => {
-      counts.set(city.name, (counts.get(city.name) ?? 0) + 1);
-      return counts;
-    }, new Map<string, number>()),
-  );
+  // Rename/Load/Delete stay distinguishable per city. Two saves can also
+  // land inside the same formatted minute, so a per-row ordinal backs up
+  // the timestamp when the formatted contexts still collide.
+  const contexts = $derived.by(() => {
+    const bases = cities.map((city) =>
+      cities.some((other) => other !== city && other.name === city.name)
+        ? `${city.name} saved ` +
+          savedAtFormat.format(new Date(city.savedAt))
+        : city.name,
+    );
+    return bases.map((base, index) => {
+      if (bases.filter((other) => other === base).length <= 1) return base;
+      const ordinal =
+        bases.slice(0, index).filter((other) => other === base).length + 1;
+      return `${base} (${ordinal})`;
+    });
+  });
 
-  function controlContext(city: CitySummary): string {
-    if ((nameCounts.get(city.name) ?? 0) > 1) {
-      return `${city.name} saved ` +
-        savedAtFormat.format(new Date(city.savedAt));
-    }
-    return city.name;
+  function controlContext(index: number): string {
+    return contexts[index] ?? "";
   }
 
   // Sunny Diorama material hues; the initial must stay legible on all of them.
@@ -99,7 +105,7 @@
 </script>
 
 <div class="city-list" data-testid="city-list">
-  {#each cities as city (city.id)}
+  {#each cities as city, index (city.id)}
     <article class="city-list-row" data-testid={`city-row-${city.id}`}>
       <div class="city-list-meta">
         <span
@@ -118,7 +124,7 @@
             <InlineNameEditor
               bind:this={nameEditors[city.id]}
               value={city.name}
-              label={`Rename ${controlContext(city)}`}
+              label={`Rename ${controlContext(index)}`}
               disabled={busy}
               testId={`city-name-${city.id}`}
               entityId={city.id}
@@ -146,7 +152,7 @@
           <button
             type="button"
             class="btn"
-            aria-label={`Load ${controlContext(city)}`}
+            aria-label={`Load ${controlContext(index)}`}
             disabled={busy || dirty}
             onmousedown={(event) => event.preventDefault()}
             onclick={async () => {
@@ -159,7 +165,9 @@
           type="button"
           class="btn"
           class:city-delete--armed={pendingDeleteId === city.id}
-          aria-label={`Delete ${controlContext(city)}`}
+          aria-label={pendingDeleteId === city.id
+            ? `Confirm delete ${controlContext(index)}`
+            : `Delete ${controlContext(index)}`}
           data-testid={`city-delete-${city.id}`}
           disabled={busy}
           onmousedown={(event) => event.preventDefault()}

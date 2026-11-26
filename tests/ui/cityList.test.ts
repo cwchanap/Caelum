@@ -274,8 +274,13 @@ describe("CityList", () => {
 
     await fireEvent.click(del);
     expect(del).toHaveTextContent("Delete?");
+    // Arming also moves the accessible name so the confirm press is
+    // announced instead of reading as a plain "Delete" button.
+    expect(del).toHaveAccessibleName("Confirm delete Harbour City");
     expect(onDelete).not.toHaveBeenCalled();
-    await fireEvent.click(del);
+    await fireEvent.click(
+      within(row).getByRole("button", { name: "Confirm delete Harbour City" }),
+    );
     await waitFor(() => expect(onDelete).toHaveBeenCalledWith("city-old"));
   });
 
@@ -313,6 +318,32 @@ describe("CityList", () => {
     expect(
       screen.getAllByRole("button", { name: /^Delete Riverside saved / }),
     ).toHaveLength(2);
+  });
+
+  it("keeps control names unique for same-minute duplicate saves", () => {
+    // Two saves in the same formatted minute share the timestamp label, so
+    // a per-row ordinal must still disambiguate every control.
+    const riversideA = { ...CITIES[0], id: "river-a", name: "Riverside" };
+    const riversideB = { ...CITIES[1], id: "river-b", name: "Riverside" };
+    riversideB.savedAt = riversideA.savedAt;
+    render(CityList, {
+      props: {
+        cities: [riversideA, riversideB],
+        activeCityId: null,
+        busy: false,
+        onLoad: vi.fn(),
+        onRename: vi.fn(async () => true),
+        onDelete: vi.fn(),
+      },
+    });
+
+    const names = [
+      ...screen.getAllByRole("button", { name: /^Rename / }),
+      ...screen.getAllByRole("button", { name: /^Load / }),
+      ...screen.getAllByRole("button", { name: /^Delete / }),
+    ].map((button) => button.getAttribute("aria-label"));
+    expect(names).toHaveLength(6);
+    expect(new Set(names).size).toBe(names.length);
   });
 
   it("disables city mutations while persistence is busy", () => {
