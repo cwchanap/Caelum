@@ -158,6 +158,23 @@ describe("selectMapTextOverlayItems", () => {
     expect(items).toHaveLength(0);
   });
 
+  it("keeps the two-tile track instruction available without a hover tile", () => {
+    const state = createTestGameState();
+    const items = itemsOfKind(
+      state,
+      { ...createUiState(), activeTool: "track" as const },
+      "cursorBadge",
+    );
+    expect(items).toEqual([
+      {
+        kind: "cursorBadge",
+        anchor: { x: (state.map.width - 1) / 2, y: 0 },
+        text: "⦿ Track · Drag at least two tiles",
+        a11yText: "Track, Drag at least two tiles",
+      },
+    ]);
+  });
+
   it("numbers route draft waypoint handles at their node positions", () => {
     let state = createTestGameState();
     state = addTestBusStop(state, { x: 3, y: 3 });

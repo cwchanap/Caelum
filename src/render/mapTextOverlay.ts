@@ -112,6 +112,13 @@ function pendingOrNeutralBadge(label: string, pending: boolean): CursorBadge {
     : { text: label, a11yText: a11yLabel(label) };
 }
 
+function trackDragCue(): CursorBadge {
+  return {
+    text: "⦿ Track · Drag at least two tiles",
+    a11yText: "Track, Drag at least two tiles",
+  };
+}
+
 function previewBadge(
   label: string,
   state: GameState,
@@ -159,7 +166,12 @@ function cursorBadgeText(
 ): CursorBadge | null {
   const cursor = cursorTile(ui);
   if (cursor === null) {
-    return null;
+    // Touch input has no persistent hover. Track still needs its gesture
+    // instruction after a tap/no-op, even when there is no cursor tile to
+    // anchor the normal hover cue to.
+    return ui.activeTool === "track" && ui.selectedBuilding === null
+      ? trackDragCue()
+      : null;
   }
   // A held preview belongs to the request that produced it. During a drag
   // that request still describes the in-progress stroke, so a held accepted
@@ -224,10 +236,7 @@ function cursorBadgeText(
     case "track": {
       const label = "⦿ Track";
       if (roadMutationForUi(state, ui) === null) {
-        return {
-          text: `${label} · Drag at least two tiles`,
-          a11yText: "Track, Drag at least two tiles",
-        };
+        return trackDragCue();
       }
       if (staleHeldPreview) {
         return pendingOrNeutralBadge(label, ui.roadMutationPreviewPending);
@@ -477,10 +486,13 @@ export function selectMapTextOverlayItems(
   const cursor = cursorTile(ui);
   const preview = buildRoadMutationPreview(state, ui);
   const badge = cursorBadgeText(state, ui, preview);
-  if (cursor !== null && badge !== null) {
+  if (badge !== null) {
     items.push({
       kind: "cursorBadge",
-      anchor: cursor,
+      // A touch-track cue without a hover tile is board guidance rather than
+      // cursor feedback; park it on the top-centre tile so it remains visible
+      // and leaves the map interaction itself unobstructed.
+      anchor: cursor ?? { x: (state.map.width - 1) / 2, y: 0 },
       ...badge,
     });
   }
