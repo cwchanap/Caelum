@@ -69,10 +69,11 @@
       type="button"
       class="btn ctrl-pause"
       data-action="pause"
+      aria-label={paused ? "Resume" : "Pause"}
       aria-pressed={paused}
       onclick={onTogglePause}
     >
-      <span data-button-label>{paused ? "Resume" : "Pause"}</span>
+      <span aria-hidden="true">{paused ? "▶" : "⏸"}</span>
     </button>
 
     <div class="readout readout--clock">

@@ -13,6 +13,7 @@ import {
 
 const viewports = [
   { width: 1024, height: 768 },
+  { width: 1280, height: 720 },
   { width: 1280, height: 800 },
   { width: 1440, height: 900 },
 ] as const;
@@ -44,6 +45,8 @@ interface TopbarGeometry {
   city: ClusterBox;
   clock: ClusterBox;
   stats: ClusterBox;
+  clockCenterX: number;
+  topbarCenterX: number;
   readouts: Array<{
     label?: string;
     value?: string;
@@ -119,10 +122,18 @@ async function topbarGeometry(
     const retryButton = saveChip.querySelector<HTMLButtonElement>("button");
     const retryBox = retryButton?.getBoundingClientRect() ?? null;
 
+    const topbarBox = topbar.getBoundingClientRect();
+    const clockBox = topbar
+      .querySelector<HTMLElement>(".topbar-cluster--clock")
+      ?.getBoundingClientRect();
+    if (clockBox === undefined) throw new Error("Clock cluster is missing");
+
     return {
       city: clusterBox(".topbar-cluster--city"),
       clock: clusterBox(".topbar-cluster--clock"),
       stats: clusterBox(".topbar-cluster--stats"),
+      clockCenterX: clockBox.left + clockBox.width / 2,
+      topbarCenterX: topbarBox.left + topbarBox.width / 2,
       readouts,
       cityNameWidth: cityNameBox.width,
       cityNameRight: cityNameBox.right,
@@ -262,6 +273,20 @@ function collectOverlapFailures(
     }
   }
   return failures;
+}
+
+function collectCenteringFailures(
+  viewport: (typeof viewports)[number],
+  geometry: TopbarGeometry,
+  label: string,
+): string[] {
+  const offset = geometry.clockCenterX - geometry.topbarCenterX;
+  if (Math.abs(offset) > 1) {
+    return [
+      `${viewport.width}px ${label} clock cluster is off-centre by ${offset.toFixed(2)}px: ${JSON.stringify(geometry)}`,
+    ];
+  }
+  return [];
 }
 
 function collectRetryFailures(
@@ -499,6 +524,9 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
 
     const geometry = await topbarGeometry(page);
     failures.push(...collectOverlapFailures(viewport, geometry));
+    failures.push(
+      ...collectCenteringFailures(viewport, geometry, "long city name"),
+    );
     expect(geometry.cityNameTitle).toBe(LONG_CITY_NAME);
 
     await applyDirtyFixture(page);
@@ -513,10 +541,72 @@ test("topbar clusters and readouts stay readable at supported desktop widths", a
     );
     expect(stressed.saveStatus).toMatch(/^Saved \d+ (s|min) ago$/);
     failures.push(...collectOverlapFailures(viewport, stressed));
+    failures.push(
+      ...collectCenteringFailures(
+        viewport,
+        stressed,
+        "stressed long city name",
+      ),
+    );
     expect(
       stressed.cityNameWidth,
       `${viewport.width}px city name keeps a usable ellipsized width: ${JSON.stringify(stressed)}`,
     ).toBeGreaterThanOrEqual(40);
+  }
+
+  expect(failures).toEqual([]);
+});
+
+test("clock cluster stays centred through pause, speed and dock changes", async ({
+  page,
+}) => {
+  const failures: string[] = [];
+
+  const measure = async (
+    viewport: (typeof viewports)[number],
+    label: string,
+  ): Promise<void> => {
+    // Cluster entrance animations run with `backwards` fill; settle them
+    // before measuring centres.
+    await page.getByTestId("topbar").evaluate(async (topbar) => {
+      await Promise.all(
+        topbar
+          .getAnimations({ subtree: true })
+          .map((animation) => animation.finished.catch(() => undefined)),
+      );
+    });
+    const geometry = await topbarGeometry(page);
+    failures.push(...collectCenteringFailures(viewport, geometry, label));
+  };
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await createDefaultCity(page, "E2E City");
+    await expect(page.getByTestId("topbar-save-status")).toHaveText(
+      /^Saved \d+ (s|min) ago$/,
+    );
+    await measure(viewport, "short city name");
+
+    // The sandbox starts paused, so the first click resumes.
+    const pause = page.locator('[data-action="pause"]');
+    await expect(pause).toHaveAccessibleName("Resume");
+    await pause.click();
+    await expect(pause).toHaveAccessibleName("Pause");
+    await measure(viewport, "resumed");
+    await pause.click();
+    await expect(pause).toHaveAccessibleName("Resume");
+    await measure(viewport, "paused again");
+
+    for (const speed of ["2x", "4x", "1x"] as const) {
+      await page.getByRole("button", { name: speed }).click();
+      await measure(viewport, `speed ${speed}`);
+    }
+
+    await openCommandDestination(page, "build");
+    await measure(viewport, "dock open");
+    await page.getByRole("button", { name: "Close Build" }).click();
+    await expect(page.getByTestId("workspace-dock")).toHaveCount(0);
+    await measure(viewport, "dock closed");
   }
 
   expect(failures).toEqual([]);
