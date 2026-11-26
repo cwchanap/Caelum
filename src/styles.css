@@ -2730,13 +2730,13 @@ body {
   background: var(--surface);
   color: var(--ink);
   font-family: var(--font-body);
-  font-size: 11px;
+  font-size: 13px;
   letter-spacing: 0.02em;
 }
 
 .city-section .city-name-field .inline-name-value,
 .city-section .city-name-field .inline-name-input {
-  font-size: 11px;
+  font-size: 13px;
   letter-spacing: 0.02em;
 }
 
@@ -2815,6 +2815,106 @@ body {
 .city-list-meta > .city-name,
 .city-list-meta > span:not(.city-avatar) {
   grid-column: 2;
+}
+
+/* Compact horizontal rows in the narrow dock only; the library screen keeps
+   the roomier card treatment below. */
+.city-section .city-list {
+  gap: 6px;
+}
+
+.city-section .city-list-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.city-section .city-list-meta {
+  flex: 1 1 auto;
+  min-width: 0;
+  column-gap: 6px;
+  row-gap: 1px;
+}
+
+.city-section .city-list-meta > .city-avatar {
+  grid-column: 1;
+  grid-row: 1 / span 3;
+  width: 24px;
+  height: 24px;
+  border-radius: 7px;
+  font-size: 11px;
+}
+
+.city-section .city-list-meta > .city-name-field,
+.city-section .city-list-meta > .city-name {
+  grid-column: 2;
+  grid-row: 1;
+  line-height: 1.25;
+}
+
+.city-section .city-list-meta > .city-template {
+  grid-column: 2;
+  grid-row: 2;
+}
+
+.city-section .city-list-meta > span:last-child {
+  grid-column: 2;
+  grid-row: 3;
+}
+
+.city-section .city-list-meta > .city-template,
+.city-section .city-list-meta > span:last-child {
+  overflow: visible;
+  min-width: 0;
+  color: var(--ink-mid);
+  font-size: 11px;
+  line-height: 1.25;
+  overflow-wrap: break-word;
+  white-space: normal;
+}
+
+.city-section .city-list-meta > .city-name--readonly {
+  overflow: hidden;
+  padding: 1px 0;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.city-section .city-name-field .inline-name-input {
+  flex: 1 1 auto;
+}
+
+.city-section .city-list-actions {
+  flex: 0 0 auto;
+  flex-wrap: nowrap;
+  gap: 4px;
+  min-width: 0;
+}
+
+.city-section .city-list-actions button {
+  padding: 4px 7px;
+  white-space: nowrap;
+  font-size: 11px;
+  line-height: 1.2;
+}
+
+/* Small pill text keeps AA contrast over the lightened tint. */
+.city-section .city-list-active {
+  display: inline-flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 3px 7px;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--accent) 5%, transparent);
+  color: color-mix(in srgb, var(--accent-deep) 84%, #000);
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
 }
 
 /* Enlarged library cards: scoped to the library screen so the shared

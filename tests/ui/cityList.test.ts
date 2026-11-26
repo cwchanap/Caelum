@@ -420,6 +420,33 @@ describe("CityList", () => {
     );
   });
 
+  it("marks row name text dir=auto so RTL names ellipsize the right end", () => {
+    // An RTL city name inside an LTR ellipsized container clips the wrong
+    // end unless the name element carries dir="auto" itself.
+    render(CityList, {
+      props: {
+        cities: [
+          { ...CITIES[0], id: "city-rtl", name: "الرياض المركزية" },
+          CITIES[1],
+        ],
+        activeCityId: null,
+        busy: false,
+        onLoad: vi.fn(),
+        onRename: vi.fn(async () => true),
+        onDelete: vi.fn(),
+      },
+    });
+
+    expect(screen.getByTestId("city-name-city-rtl")).toHaveAttribute(
+      "dir",
+      "auto",
+    );
+    expect(screen.getByTestId("city-name-city-old")).toHaveAttribute(
+      "dir",
+      "auto",
+    );
+  });
+
   it("disables city mutations while persistence is busy", () => {
     renderList(true);
     expect(
@@ -480,6 +507,24 @@ describe("CityList", () => {
       expect(onDelete).not.toHaveBeenCalled();
       await fireEvent.click(del);
       expect(onDelete).toHaveBeenCalledWith("city-new");
+    });
+
+    it("marks the read-only active name dir=auto for RTL city names", () => {
+      render(CityList, {
+        props: {
+          cities: [{ ...CITIES[0], name: "الرياض المركزية" }, CITIES[1]],
+          activeCityId: "city-new",
+          busy: false,
+          activeNameReadOnly: true,
+          onLoad: vi.fn(),
+          onRename: vi.fn(async () => true),
+          onDelete: vi.fn(),
+        },
+      });
+
+      const rowName = screen.getByTestId("city-name-city-new");
+      expect(rowName).toHaveTextContent("الرياض المركزية");
+      expect(rowName).toHaveAttribute("dir", "auto");
     });
 
     it("keeps the read-only name and Delete available while busy only disables Delete", () => {

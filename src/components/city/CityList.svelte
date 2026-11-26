@@ -140,6 +140,7 @@
         {#if activeNameReadOnly && city.id === activeCityId}
           <span
             class="city-name city-name--readonly"
+            dir="auto"
             data-testid={`city-name-${city.id}`}>{city.name}</span
           >
         {:else}
