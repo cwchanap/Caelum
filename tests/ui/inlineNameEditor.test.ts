@@ -133,6 +133,36 @@ describe("InlineNameEditor", () => {
     window.removeEventListener("keydown", windowEscape);
   });
 
+  it("returns focus to the Rename pencil on Escape but not on commit", async () => {
+    const { onCommit, input } = await openEditor();
+    expect(document.activeElement).toBe(input);
+
+    // Cancelling unmounts the focused input; without restoration focus
+    // would drop to <body>.
+    await fireEvent.keyDown(input, { key: "Escape" });
+    const pencil = screen.getByRole("button", { name: "Rename Harbour Bus" });
+    expect(document.activeElement).toBe(pencil);
+
+    // Re-open and commit a changed name: the Enter/blur path must not
+    // steal focus to the pencil that remounts in place of the input.
+    await fireEvent.click(pencil);
+    const reopened = screen.getByRole("textbox", {
+      name: "Rename Harbour Bus",
+    });
+    await fireEvent.input(reopened, { target: { value: "Harbour Express" } });
+    await fireEvent.keyDown(reopened, { key: "Enter" });
+    await fireEvent.blur(reopened);
+    expect(onCommit).toHaveBeenCalledWith("Harbour Express");
+    expect(screen.queryByRole("textbox")).toBeNull();
+
+    // The closing input is replaced by a freshly mounted pencil node.
+    const remounted = screen.getByRole("button", {
+      name: "Rename Harbour Bus",
+    });
+    expect(remounted).not.toBe(pencil);
+    expect(document.activeElement).not.toBe(remounted);
+  });
+
   it("disables the pencil and never opens the editor when disabled", async () => {
     const { onCommit } = renderEditor({ disabled: true });
     const pencil = screen.getByRole("button", { name: "Rename Harbour Bus" });
@@ -336,6 +366,11 @@ describe("InlineNameEditor", () => {
     await rerender({ disabled: false });
     expect(onCommit).not.toHaveBeenCalled();
     expect(screen.queryByRole("textbox")).toBeNull();
+    // The remounted pencil was disabled while busy, so Escape could not
+    // return focus to it — focus is not left on the pencil.
+    expect(document.activeElement).not.toBe(
+      screen.getByRole("button", { name: "Rename Harbour Bus" }),
+    );
   });
 
   it("never applies a busy-era keystroke after the component unmounts", async () => {

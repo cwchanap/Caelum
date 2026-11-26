@@ -1,4 +1,8 @@
-import { expect, test } from "@playwright/test";
+import { expect, test, type Locator, type Page } from "@playwright/test";
+import {
+  DATABASE_VERSION,
+  DEFAULT_DATABASE_NAME,
+} from "../../src/persistence/indexedDbCitySaveStore";
 import {
   armOneShotCitySaveFailure,
   clickMapTile,
@@ -12,6 +16,69 @@ import {
   selectBuildLeaf,
   settleLayout,
 } from "./helpers";
+
+const DOCK_WIDE_DATE_ROW_ID = "dock-overflow-wide";
+const DOCK_LAST_ROW_ID = "dock-overflow-01";
+
+// Minimal CitySaveRecords: the dock list reads only city metadata, never the
+// snapshot, so stub snapshots are enough to exercise real overflow layout.
+async function seedDockOverflowCities(page: Page): Promise<void> {
+  await page.evaluate(
+    async ({ databaseName, databaseVersion }) => {
+      const database = await new Promise<IDBDatabase>((resolve, reject) => {
+        const request = indexedDB.open(databaseName, databaseVersion);
+        request.onupgradeneeded = () => {
+          request.result.createObjectStore("cities");
+        };
+        request.onsuccess = () => resolve(request.result);
+        request.onerror = () => reject(request.error);
+      });
+      await new Promise<void>((resolve, reject) => {
+        const transaction = database.transaction("cities", "readwrite");
+        const store = transaction.objectStore("cities");
+        // Local noon keeps the wide Sep 30/12:59 label stable across timezones.
+        const rows = [
+          {
+            id: "dock-overflow-wide",
+            name: `WideDate${"w".repeat(48)}`,
+            savedAt: new Date(2020, 8, 30, 12, 59).toISOString(),
+          },
+          ...Array.from({ length: 3 }, (_, offset) => {
+            const index = offset + 1;
+            const savedAt = new Date(Date.UTC(2020, 0, index)).toISOString();
+            return {
+              id: `dock-overflow-${String(index).padStart(2, "0")}`,
+              name: `DockOverflow${"o".repeat(48)}${index}`,
+              savedAt,
+            };
+          }),
+        ];
+        for (const row of rows) {
+          store.put(
+            {
+              city: {
+                id: row.id,
+                name: row.name,
+                createdAt: row.savedAt,
+                templateId: "crossroads",
+              },
+              savedAt: row.savedAt,
+              snapshot: {},
+            },
+            row.id,
+          );
+        }
+        transaction.oncomplete = () => resolve();
+        transaction.onerror = () => reject(transaction.error);
+      });
+      database.close();
+    },
+    {
+      databaseName: DEFAULT_DATABASE_NAME,
+      databaseVersion: DATABASE_VERSION,
+    },
+  );
+}
 
 test("a very long unbroken city name ellipsizes inside the Continue button", async ({
   page,
@@ -356,6 +423,512 @@ test("renames the active city from the City dock and deletes it with two clicks"
   // Deleting the final active city lands back on New City.
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
   await expect(page.getByTestId("panel-city")).toHaveCount(0);
+});
+
+test("dock city rows keep long names and actions side-by-side at 1440×900 and 1280×720", async ({
+  page,
+}) => {
+  test.setTimeout(60_000);
+  const longName = `Harbour${"x".repeat(72)}`;
+  const activeRtlName = `مدينة${"م".repeat(64)}`;
+  const renamedLongName = `RenamedHarbour${"y".repeat(72)}`;
+  // Boot once with an empty store, seed controlled overflow rows, then let the
+  // normal creation flow reopen through the library as in the overflow spec.
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await seedDockOverflowCities(page);
+  await createDefaultCity(page, longName);
+  // Use the dock's own New City path for the second save: it avoids a full
+  // page reload while exercising the same player flow the rows live in.
+  await openCommandDestination(page, "city");
+  await page
+    .getByTestId("panel-city")
+    .getByRole("button", { name: "New City" })
+    .click();
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.getByLabel("City name").fill(activeRtlName);
+  await page.getByRole("radio", { name: "Blank Grid" }).check();
+  await page.getByRole("button", { name: "Create City" }).click();
+  await expect(page.getByTestId("game-canvas-host")).toBeVisible();
+  await openCommandDestination(page, "city");
+
+  const rows = page
+    .getByTestId("panel-city")
+    .locator("[data-testid^='city-row-']");
+  const inactiveRowMatch = rows.filter({
+    has: page.getByRole("button", {
+      name: `Rename ${longName}`,
+      exact: true,
+    }),
+  });
+  const activeRow = rows.filter({ hasText: "Playing" });
+  await expect(inactiveRowMatch).toHaveCount(1);
+  await expect(activeRow).toHaveCount(1);
+  const inactiveRowTestId = await inactiveRowMatch.getAttribute("data-testid");
+  expect(inactiveRowTestId).toMatch(/^city-row-/);
+  // The pencil disappears while its editor is open, so editor geometry uses
+  // the row's stable test id rather than the rename-button-filtered locator.
+  const inactiveRow = page.getByTestId(inactiveRowTestId!);
+  const wideDateRow = page.getByTestId(`city-row-${DOCK_WIDE_DATE_ROW_ID}`);
+  const lastRow = page.getByTestId(`city-row-${DOCK_LAST_ROW_ID}`);
+  // The dock keeps active-city rename in the header: the compact Playing row
+  // has no row input or rename pencil.
+  await expect(activeRow.locator("input")).toHaveCount(0);
+  await expect(activeRow.getByRole("button", { name: /^Rename / })).toHaveCount(
+    0,
+  );
+
+  const measureRow = async (row: Locator) =>
+    row.evaluate((element) => {
+      const boxOf = (target: Element) => {
+        const rect = target.getBoundingClientRect();
+        return {
+          left: rect.left,
+          right: rect.right,
+          top: rect.top,
+          bottom: rect.bottom,
+          width: rect.width,
+          height: rect.height,
+        };
+      };
+      const required = (selector: string): HTMLElement => {
+        const found = element.querySelector<HTMLElement>(selector);
+        if (found === null) {
+          throw new Error(`Dock city row is missing ${selector}`);
+        }
+        return found;
+      };
+      const normalize = (value: string) => value.replace(/\s+/g, " ").trim();
+      const textMetricsOf = (target: HTMLElement) => {
+        const range = document.createRange();
+        range.selectNodeContents(target);
+        const textRects = Array.from(range.getClientRects()).filter(
+          (part) => part.width > 0 && part.height > 0,
+        );
+        const style = getComputedStyle(target);
+        return {
+          ...boxOf(target),
+          clientHeight: target.clientHeight,
+          clientWidth: target.clientWidth,
+          contentBottom:
+            textRects.length === 0
+              ? 0
+              : Math.max(...textRects.map((part) => part.bottom)),
+          contentLeft:
+            textRects.length === 0
+              ? 0
+              : Math.min(...textRects.map((part) => part.left)),
+          contentRight:
+            textRects.length === 0
+              ? 0
+              : Math.max(...textRects.map((part) => part.right)),
+          contentTop:
+            textRects.length === 0
+              ? 0
+              : Math.min(...textRects.map((part) => part.top)),
+          direction: style.direction,
+          fontSize: Number.parseFloat(style.fontSize),
+          lineCount: new Set(
+            textRects.map((part) => Math.round(part.top * 2) / 2),
+          ).size,
+          overflowX: style.overflowX,
+          overflowY: style.overflowY,
+          scrollHeight: target.scrollHeight,
+          scrollWidth: target.scrollWidth,
+          text: normalize(target.innerText),
+          textOverflow: style.textOverflow,
+          textRectCount: textRects.length,
+          whiteSpace: style.whiteSpace,
+        };
+      };
+      const name = element.querySelector<HTMLElement>(
+        ".city-name-field .inline-name-value, .city-name-field .inline-name-input, .city-list-meta > .city-name",
+      );
+      if (name === null) throw new Error("Dock city row is missing its name");
+      const container = element.closest(".command-panel__body");
+      if (!(container instanceof HTMLElement)) {
+        throw new Error("Dock city row is outside the scrolling panel body");
+      }
+      const actions = required(".city-list-actions");
+      return {
+        row: boxOf(element),
+        container: boxOf(container),
+        meta: boxOf(required(".city-list-meta")),
+        name: textMetricsOf(name),
+        template: textMetricsOf(required(".city-template")),
+        saved: textMetricsOf(required(".city-list-meta > span:last-child")),
+        savedTimeText: normalize(required("time").textContent ?? ""),
+        actions: boxOf(actions),
+        controls: Array.from(actions.children).map((control) => boxOf(control)),
+      };
+    });
+
+  type RowGeometry = Awaited<ReturnType<typeof measureRow>>;
+  type MetadataGeometry = RowGeometry["saved"];
+
+  const normalizeText = (value: string) => value.replace(/\s+/g, " ").trim();
+  const expectMetadataFullyRendered = (
+    metadata: MetadataGeometry,
+    part: string,
+    expectedText: string,
+    where: string,
+  ) => {
+    expect(metadata.text, `${where} ${part} renders its complete text`).toBe(
+      normalizeText(expectedText),
+    );
+    expect(
+      metadata.fontSize,
+      `${where} ${part} stays readable`,
+    ).toBeGreaterThanOrEqual(11);
+    expect(metadata.whiteSpace, `${where} ${part} is allowed to wrap`).toBe(
+      "normal",
+    );
+    expect(metadata.textOverflow, `${where} ${part} does not ellipsize`).toBe(
+      "clip",
+    );
+    expect(
+      metadata.scrollWidth,
+      `${where} ${part} has no horizontal overflow`,
+    ).toBeLessThanOrEqual(metadata.clientWidth + 1);
+    expect(
+      metadata.scrollHeight,
+      `${where} ${part} has no vertical overflow`,
+    ).toBeLessThanOrEqual(metadata.clientHeight + 1);
+    expect(
+      metadata.textRectCount,
+      `${where} ${part} produces rendered text boxes`,
+    ).toBeGreaterThan(0);
+    expect(
+      metadata.contentLeft,
+      `${where} ${part} text starts inside its box`,
+    ).toBeGreaterThanOrEqual(metadata.left - 1);
+    expect(
+      metadata.contentRight,
+      `${where} ${part} text ends inside its box`,
+    ).toBeLessThanOrEqual(metadata.right + 1);
+    expect(
+      metadata.contentTop,
+      `${where} ${part} text starts below its top`,
+    ).toBeGreaterThanOrEqual(metadata.top - 1);
+    expect(
+      metadata.contentBottom,
+      `${where} ${part} text ends above its bottom`,
+    ).toBeLessThanOrEqual(metadata.bottom + 1);
+  };
+
+  const expectRowGeometry = async (
+    label: "active" | "inactive",
+    row: Locator,
+    viewport: { width: number; height: number },
+    state = "",
+  ) => {
+    await row.scrollIntoViewIfNeeded();
+    const geometry = await measureRow(row);
+    const where = `${label} row${state} at ${viewport.width}x${viewport.height}`;
+
+    expect(
+      geometry.row.height,
+      `${where} stays compact while allowing wrapped metadata`,
+    ).toBeLessThanOrEqual(88);
+    expect(
+      geometry.row.left,
+      `${where} stays inside the panel on the left`,
+    ).toBeGreaterThanOrEqual(geometry.container.left - 1);
+    expect(
+      geometry.row.right,
+      `${where} stays inside the panel on the right`,
+    ).toBeLessThanOrEqual(geometry.container.right + 1);
+    expect(
+      geometry.actions.right,
+      `${where} actions stay inside the row`,
+    ).toBeLessThanOrEqual(geometry.row.right + 1);
+    expect(
+      geometry.actions.top,
+      `${where} actions start inside the row`,
+    ).toBeGreaterThanOrEqual(geometry.row.top - 1);
+    expect(
+      geometry.actions.bottom,
+      `${where} actions end inside the row`,
+    ).toBeLessThanOrEqual(geometry.row.bottom + 1);
+    expect(
+      geometry.meta.right,
+      `${where} metadata ends before the actions`,
+    ).toBeLessThanOrEqual(geometry.actions.left + 1);
+
+    for (const [part, box] of [
+      ["name", geometry.name],
+      ["template", geometry.template],
+      ["saved time", geometry.saved],
+    ] as const) {
+      expect(box.width, `${where} ${part} remains visible`).toBeGreaterThan(0);
+      expect(box.height, `${where} ${part} remains visible`).toBeGreaterThan(0);
+      expect(
+        box.right,
+        `${where} ${part} does not overlap the actions`,
+      ).toBeLessThanOrEqual(geometry.actions.left + 1);
+    }
+
+    expect(geometry.name.textOverflow, `${where} long name uses ellipsis`).toBe(
+      "ellipsis",
+    );
+    expect(
+      geometry.name.whiteSpace,
+      `${where} long name stays on one line`,
+    ).toBe("nowrap");
+    expect(
+      geometry.name.overflowX,
+      `${where} long name clips its overflow`,
+    ).toBe("hidden");
+    expect(
+      geometry.name.scrollWidth,
+      `${where} long name actually overflows before ellipsizing`,
+    ).toBeGreaterThan(geometry.name.clientWidth + 1);
+    expect(
+      geometry.name.direction,
+      `${where} name uses its text direction for truncation`,
+    ).toBe(label === "active" ? "rtl" : "ltr");
+    if (label === "active") {
+      expect(
+        Math.abs(geometry.name.contentRight - geometry.name.right),
+        `${where} RTL name keeps its inline start at the right edge`,
+      ).toBeLessThanOrEqual(2);
+      expect(
+        geometry.name.contentLeft,
+        `${where} RTL name truncates toward the left end`,
+      ).toBeLessThan(geometry.name.left - 8);
+    } else {
+      expect(
+        Math.abs(geometry.name.contentLeft - geometry.name.left),
+        `${where} LTR name keeps its inline start at the left edge`,
+      ).toBeLessThanOrEqual(2);
+      expect(
+        geometry.name.contentRight,
+        `${where} LTR name truncates toward the right end`,
+      ).toBeGreaterThan(geometry.name.right + 8);
+    }
+
+    expectMetadataFullyRendered(
+      geometry.template,
+      "template",
+      label === "active" ? "Blank Grid" : "Crossroads",
+      where,
+    );
+    expectMetadataFullyRendered(
+      geometry.saved,
+      "saved time",
+      `Saved ${geometry.savedTimeText}`,
+      where,
+    );
+
+    expect(
+      geometry.controls.length,
+      `${where} keeps Playing/Delete or Load/Delete`,
+    ).toBe(2);
+    const [leadingControl, trailingControl] = geometry.controls;
+    expect(
+      leadingControl.right,
+      `${where} action controls stay side-by-side horizontally`,
+    ).toBeLessThanOrEqual(trailingControl.left + 1);
+    const verticalOverlap =
+      Math.min(leadingControl.bottom, trailingControl.bottom) -
+      Math.max(leadingControl.top, trailingControl.top);
+    expect(
+      verticalOverlap,
+      `${where} action controls share the same row`,
+    ).toBeGreaterThan(0);
+    for (const control of geometry.controls) {
+      expect(
+        control.left,
+        `${where} action controls stay horizontally reachable`,
+      ).toBeGreaterThanOrEqual(-1);
+      expect(
+        control.right,
+        `${where} action controls stay horizontally reachable`,
+      ).toBeLessThanOrEqual(viewport.width + 1);
+      expect(
+        control.top,
+        `${where} action controls stay vertically reachable`,
+      ).toBeGreaterThanOrEqual(-1);
+      expect(
+        control.bottom,
+        `${where} action controls stay vertically reachable`,
+      ).toBeLessThanOrEqual(viewport.height + 1);
+    }
+    return geometry;
+  };
+
+  const viewports = [
+    { width: 1440, height: 900 },
+    { width: 1280, height: 720 },
+  ] as const;
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await settleLayout(page);
+
+    for (const [label, row] of [
+      ["active", activeRow],
+      ["inactive", inactiveRow],
+    ] as const) {
+      await expectRowGeometry(label, row, viewport);
+    }
+
+    if (viewport.width === 1280) {
+      const wideGeometry = await expectRowGeometry(
+        "inactive",
+        wideDateRow,
+        viewport,
+        " with a controlled wide date",
+      );
+      expect(
+        wideGeometry.saved.lineCount,
+        "controlled wide saved date wraps instead of clipping at 1280x720",
+      ).toBeGreaterThan(1);
+    }
+
+    // Opening the long inactive row's editor must not push the input under
+    // Load/Delete or clip its metadata; Escape restores focus to the pencil.
+    const renamePencil = inactiveRow.getByRole("button", {
+      name: `Rename ${longName}`,
+      exact: true,
+    });
+    await expect(renamePencil).toBeVisible();
+    await renamePencil.focus();
+    await expect(renamePencil).toBeFocused();
+    await renamePencil.press("Enter");
+    const editor = inactiveRow.getByRole("textbox", {
+      name: `Rename ${longName}`,
+      exact: true,
+    });
+    await expect(editor).toBeFocused();
+    const editorGeometry = await measureRow(inactiveRow);
+    const editorWhere = `inactive row with its rename editor open at ${viewport.width}x${viewport.height}`;
+    expectMetadataFullyRendered(
+      editorGeometry.template,
+      "template",
+      "Crossroads",
+      editorWhere,
+    );
+    expectMetadataFullyRendered(
+      editorGeometry.saved,
+      "saved time",
+      `Saved ${editorGeometry.savedTimeText}`,
+      editorWhere,
+    );
+    const [editorBox, actionsBox, rowBox] = await Promise.all([
+      editor.boundingBox(),
+      inactiveRow.locator(".city-list-actions").boundingBox(),
+      inactiveRow.boundingBox(),
+    ]);
+    expect(editorBox).not.toBeNull();
+    expect(actionsBox).not.toBeNull();
+    expect(rowBox).not.toBeNull();
+    expect(
+      editorBox!.width,
+      `long-name editor at ${viewport.width}x${viewport.height} remains usable`,
+    ).toBeGreaterThan(40);
+    expect(
+      editorBox!.x + editorBox!.width,
+      `long-name editor at ${viewport.width}x${viewport.height} does not overlap the actions`,
+    ).toBeLessThanOrEqual(actionsBox!.x + 1);
+    expect(
+      actionsBox!.x + actionsBox!.width,
+      `long-name editor actions at ${viewport.width}x${viewport.height} stay inside the row`,
+    ).toBeLessThanOrEqual(rowBox!.x + rowBox!.width + 1);
+    await editor.press("Escape");
+    await expect(inactiveRow.locator(".inline-name-input")).toHaveCount(0);
+    await expect(renamePencil).toBeFocused();
+  }
+
+  // The loop ends at 1280x720. Use real wheel input over the dock: hidden
+  // overflow cannot fake a changed scroll position.
+  const panelBody = page.locator(".command-panel__body");
+  await expect(panelBody).toBeVisible();
+  await expect(rows.last()).toHaveAttribute(
+    "data-testid",
+    `city-row-${DOCK_LAST_ROW_ID}`,
+  );
+  expect(
+    await panelBody.evaluate(
+      (element) => element.scrollHeight > element.clientHeight,
+    ),
+  ).toBe(true);
+  const panelBox = await panelBody.boundingBox();
+  expect(panelBox).not.toBeNull();
+  await page.mouse.move(
+    panelBox!.x + panelBox!.width / 2,
+    panelBox!.y + panelBox!.height / 2,
+  );
+  const initialScrollTop = await panelBody.evaluate(
+    (element) => element.scrollTop,
+  );
+  await expect
+    .poll(async () => {
+      await page.mouse.wheel(0, 700);
+      return panelBody.evaluate((element) => element.scrollTop);
+    })
+    .toBeGreaterThan(initialScrollTop);
+  await expect
+    .poll(async () => {
+      await page.mouse.wheel(0, 700);
+      return panelBody.evaluate(
+        (element) =>
+          element.scrollTop + element.clientHeight >= element.scrollHeight - 1,
+      );
+    })
+    .toBe(true);
+
+  await expect(lastRow).toBeVisible();
+  const actionButtons = await lastRow
+    .locator(".city-list-actions button")
+    .all();
+  expect(actionButtons).toHaveLength(2);
+  for (const button of actionButtons) {
+    const box = await button.boundingBox();
+    expect(box).not.toBeNull();
+    expect(box!.x).toBeGreaterThanOrEqual(panelBox!.x);
+    expect(box!.x + box!.width).toBeLessThanOrEqual(
+      panelBox!.x + panelBox!.width,
+    );
+    expect(box!.y).toBeGreaterThanOrEqual(panelBox!.y);
+    expect(box!.y + box!.height).toBeLessThanOrEqual(
+      panelBox!.y + panelBox!.height,
+    );
+  }
+  for (const button of actionButtons) {
+    await button.focus();
+    await expect(button).toBeFocused();
+  }
+
+  // A committed rename replaces the long inline value in place. Re-check both
+  // rows at both sizes so metadata cannot regress only after that state.
+  await inactiveRow
+    .getByRole("button", { name: `Rename ${longName}`, exact: true })
+    .click();
+  const renameEditor = inactiveRow.getByRole("textbox", {
+    name: `Rename ${longName}`,
+    exact: true,
+  });
+  await expect(renameEditor).toBeFocused();
+  await renameEditor.fill(renamedLongName);
+  await renameEditor.press("Enter");
+  await expect(
+    inactiveRow.getByRole("button", {
+      name: `Rename ${renamedLongName}`,
+      exact: true,
+    }),
+  ).toBeVisible();
+
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await settleLayout(page);
+    for (const [label, row] of [
+      ["active", activeRow],
+      ["inactive", inactiveRow],
+    ] as const) {
+      await expectRowGeometry(label, row, viewport, " after rename");
+    }
+  }
 });
 
 test("autosaves a paused city through reload and skips a clean city", async ({

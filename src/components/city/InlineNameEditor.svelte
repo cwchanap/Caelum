@@ -23,13 +23,25 @@
   let editing = $state(false);
   let draft = $state("");
   let inputElement: HTMLInputElement | null = $state(null);
+  let pencilElement: HTMLButtonElement | null = $state(null);
+  // Escape arms this: unmounting the input drops focus to <body>, so the
+  // close effect returns it to the pencil it was opened from. Commit and
+  // blur paths deliberately leave focus alone.
+  let focusPencilOnClose = false;
   let editingForId: string | undefined;
   let editingForValue = "";
 
   // Focus the freshly mounted editor; reading inputElement keeps the effect
   // tied to the input actually being in the DOM.
   $effect(() => {
-    if (editing) inputElement?.focus();
+    if (editing) {
+      inputElement?.focus();
+    } else if (focusPencilOnClose) {
+      focusPencilOnClose = false;
+      // A busy parent renders the pencil disabled, which cannot take focus;
+      // an unmounted editor has no pencil at all. Both leave focus alone.
+      if (pencilElement && !pencilElement.disabled) pencilElement.focus();
+    }
   });
 
   // An open draft was typed for the entity/value captured at activation; if
@@ -88,6 +100,7 @@
   function cancel(
     event: KeyboardEvent & { currentTarget: HTMLInputElement },
   ): void {
+    focusPencilOnClose = true;
     editing = false;
     // Restore without triggering dock-level Escape handling.
     event.preventDefault();
@@ -100,6 +113,7 @@
     bind:this={inputElement}
     bind:value={draft}
     type="text"
+    dir="auto"
     class="inline-name-input"
     data-testid={testId}
     aria-label={label}
@@ -121,8 +135,9 @@
     onblur={commit}
   />
 {:else}
-  <span class="inline-name-value" data-testid={testId}>{value}</span>
+  <span class="inline-name-value" dir="auto" data-testid={testId}>{value}</span>
   <button
+    bind:this={pencilElement}
     type="button"
     class="inline-name-pencil"
     aria-label={label}
