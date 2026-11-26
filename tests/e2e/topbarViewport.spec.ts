@@ -3,6 +3,7 @@ import { HUD_INSET } from "../../src/render/boardTransform";
 import {
   armOneShotCitySaveFailure,
   createDefaultCity,
+  decodePng,
   debugSetBudget,
   dragMapTiles,
   installOneShotCitySaveFailure,
@@ -694,4 +695,136 @@ test("dirty browser leave asks for confirmation after user activation", async ({
   });
   await page.reload();
   expect(prompted).toBe(false);
+});
+
+/** Painted-column profile of the pause button's icon element, measured from
+ *  a real screenshot: the share of each column's rows that differ from the
+ *  button's own background. This reads painted geometry, not markup, so a
+ *  missing font glyph (empty rectangle) fails instead of passing on aria. */
+async function pauseIconProfile(
+  page: import("@playwright/test").Page,
+): Promise<{
+  columns: number[];
+  width: number;
+  height: number;
+  centerOffsetX: number;
+  centerOffsetY: number;
+}> {
+  const button = page.locator('[data-action="pause"]');
+  const icon = button.locator(".ctrl-pause-icon, span[aria-hidden='true']");
+  const buttonBox = await button.boundingBox();
+  const iconBox = await icon.boundingBox();
+  expect(buttonBox, "pause button box").not.toBeNull();
+  expect(iconBox, "pause icon box").not.toBeNull();
+  const pad = 8;
+  const png = decodePng(
+    await page.screenshot({
+      clip: {
+        x: iconBox!.x - pad,
+        y: iconBox!.y - pad,
+        width: iconBox!.width + pad * 2,
+        height: iconBox!.height + pad * 2,
+      },
+    }),
+  );
+  // The clip's padding ring can fall just outside the circular button onto
+  // the card behind it, so the button's fill is the modal color of the clip
+  // (a solid circle always dominates its 29x32 sample), not a corner sample.
+  const at = (x: number, y: number): [number, number, number] => {
+    const offset = (y * png.width + x) * 4;
+    return [png.data[offset]!, png.data[offset + 1]!, png.data[offset + 2]!];
+  };
+  const colorCounts = new Map<number, number>();
+  for (let i = 0; i < png.width * png.height; i += 1) {
+    const offset = i * 4;
+    const key =
+      (png.data[offset]! << 16) |
+      (png.data[offset + 1]! << 8) |
+      png.data[offset + 2]!;
+    colorCounts.set(key, (colorCounts.get(key) ?? 0) + 1);
+  }
+  let bgKey = 0;
+  let bgCount = 0;
+  for (const [key, count] of colorCounts) {
+    if (count > bgCount) {
+      bgKey = key;
+      bgCount = count;
+    }
+  }
+  const bg = [(bgKey >> 16) & 0xff, (bgKey >> 8) & 0xff, bgKey & 0xff];
+  const painted = (x: number, y: number): boolean => {
+    const [r, g, b] = at(x, y);
+    const distance = Math.hypot(r - bg[0]!, g - bg[1]!, b - bg[2]!);
+    return distance > 60;
+  };
+  const w = Math.round(iconBox!.width);
+  const h = Math.round(iconBox!.height);
+  const columns: number[] = [];
+  for (let x = 0; x < w; x += 1) {
+    let count = 0;
+    for (let y = 0; y < h; y += 1) {
+      if (painted(pad + x, pad + y)) count += 1;
+    }
+    columns.push(count / h);
+  }
+  return {
+    columns,
+    width: w,
+    height: h,
+    centerOffsetX:
+      iconBox!.x + iconBox!.width / 2 - (buttonBox!.x + buttonBox!.width / 2),
+    centerOffsetY:
+      iconBox!.y + iconBox!.height / 2 - (buttonBox!.y + buttonBox!.height / 2),
+  };
+}
+
+test("pause and resume paint deterministic icon geometry, not a font glyph", async ({
+  page,
+}) => {
+  await createDefaultCity(page, "Pause Icon Geometry");
+  const pause = page.locator('[data-action="pause"]');
+
+  // The sandbox starts paused: the button resumes, so it must paint a
+  // right-pointing play triangle — dense on the left, empty on the right.
+  await expect(pause).toHaveAccessibleName("Resume");
+  const play = await pauseIconProfile(page);
+  expect(Math.abs(play.centerOffsetX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(play.centerOffsetY)).toBeLessThanOrEqual(1);
+  expect(play.columns.length).toBeGreaterThanOrEqual(8);
+  const leftThird = play.columns.slice(0, 3);
+  const rightThird = play.columns.slice(-3);
+  for (const fraction of leftThird) {
+    expect(fraction, "play triangle left columns painted").toBeGreaterThan(0.5);
+  }
+  for (const fraction of rightThird) {
+    expect(fraction, "play triangle right columns empty").toBeLessThan(0.35);
+  }
+
+  // Resumed: the button pauses, so it must paint two vertical bars — two
+  // painted runs separated by an unpainted gap, all the way down.
+  await pause.click();
+  await expect(pause).toHaveAccessibleName("Pause");
+  const bars = await pauseIconProfile(page);
+  expect(Math.abs(bars.centerOffsetX)).toBeLessThanOrEqual(1);
+  expect(Math.abs(bars.centerOffsetY)).toBeLessThanOrEqual(1);
+  const runs: Array<{ painted: boolean; length: number }> = [];
+  for (const fraction of bars.columns) {
+    const painted = fraction > 0.5;
+    const last = runs[runs.length - 1];
+    if (last !== undefined && last.painted === painted) {
+      last.length += 1;
+    } else {
+      runs.push({ painted, length: 1 });
+    }
+  }
+  const paintedRuns = runs.filter((run) => run.painted);
+  const gapRuns = runs.filter((run) => !run.painted);
+  expect(paintedRuns.length, "pause icon painted bar count").toBe(2);
+  for (const run of paintedRuns) {
+    expect(run.length, "pause icon bar width").toBeGreaterThanOrEqual(3);
+  }
+  expect(
+    gapRuns.some((run) => run.length >= 2),
+    "pause icon gap between bars",
+  ).toBe(true);
 });

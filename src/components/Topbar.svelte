@@ -73,7 +73,12 @@
       aria-pressed={paused}
       onclick={onTogglePause}
     >
-      <span aria-hidden="true">{paused ? "▶" : "⏸"}</span>
+      <!-- Painted geometry, not a font glyph: U+23F8/U+25B6 render as
+           empty rectangles on platforms lacking the symbols font. -->
+      <span
+        class={["ctrl-pause-icon", { "ctrl-pause-icon--play": paused }]}
+        aria-hidden="true"
+      ></span>
     </button>
 
     <div class="readout readout--clock">
