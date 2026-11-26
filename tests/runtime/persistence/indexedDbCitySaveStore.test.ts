@@ -1,6 +1,10 @@
 import { indexedDB as fakeIndexedDB } from "fake-indexeddb";
 import { describe, expect, it } from "vitest";
-import { createIndexedDbCitySaveStore } from "../../../src/persistence/indexedDbCitySaveStore";
+import {
+  createIndexedDbCitySaveStore,
+  DATABASE_VERSION,
+  DEFAULT_DATABASE_NAME,
+} from "../../../src/persistence/indexedDbCitySaveStore";
 import { createWasmBackend } from "../../../src/runtime/backend/wasmBackend";
 import { record as citySaveRecord } from "../../fixtures/citySave";
 import {
@@ -34,8 +38,18 @@ const summary = {
 defineCitySaveStoreContract("IndexedDbCitySaveStore", () => createStore());
 
 describe("IndexedDbCitySaveStore persistence", () => {
-  it("uses a fresh v9 namespace instead of reading the prior city database", async () => {
-    const legacyRequest = fakeIndexedDB.open("caelum-city-saves-v1", 1);
+  it("uses a fresh v9 namespace instead of reading the prior v8 database", async () => {
+    // A v8-era record has no templateId; it must stay unread and untouched.
+    const legacyRecord = {
+      city: {
+        id: summary.id,
+        name: summary.name,
+        createdAt: summary.createdAt,
+      },
+      savedAt: summary.savedAt,
+      snapshot: { schemaVersion: 4 },
+    };
+    const legacyRequest = fakeIndexedDB.open("caelum-city-saves-v8", 8);
     const legacyDatabase = await new Promise<IDBDatabase>((resolve, reject) => {
       legacyRequest.onupgradeneeded = () => {
         legacyRequest.result.createObjectStore("cities");
@@ -45,10 +59,6 @@ describe("IndexedDbCitySaveStore persistence", () => {
     });
     await new Promise<void>((resolve, reject) => {
       const transaction = legacyDatabase.transaction("cities", "readwrite");
-      const legacyRecord = {
-        ...citySaveRecord(summary),
-        snapshot: { schemaVersion: 4 },
-      };
       transaction.objectStore("cities").add(legacyRecord, summary.id);
       transaction.oncomplete = () => {
         legacyDatabase.close();
@@ -59,6 +69,33 @@ describe("IndexedDbCitySaveStore persistence", () => {
 
     const store = createIndexedDbCitySaveStore({ indexedDB: fakeIndexedDB });
     expect(await expectCitySaveStoreOk(store.listCities())).toEqual([]);
+
+    // The default adapter opened the v9 database at version 9.
+    const opened = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = fakeIndexedDB.open(DEFAULT_DATABASE_NAME);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    expect(opened.name).toBe("caelum-city-saves-v9");
+    expect(opened.version).toBe(DATABASE_VERSION);
+    opened.close();
+
+    // The legacy v8 record is still present in its own database.
+    const legacyReopened = await new Promise<IDBDatabase>((resolve, reject) => {
+      const request = fakeIndexedDB.open("caelum-city-saves-v8", 8);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    const untouched = await new Promise<unknown>((resolve, reject) => {
+      const request = legacyReopened
+        .transaction("cities", "readonly")
+        .objectStore("cities")
+        .get(summary.id);
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () => reject(request.error);
+    });
+    legacyReopened.close();
+    expect(untouched).toEqual(legacyRecord);
   });
 
   it("reopens a Rust-shaped record through a second adapter instance", async () => {

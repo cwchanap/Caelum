@@ -29,7 +29,9 @@ test("loads the svelte shell and supports area painting and zoned buildings", as
   await openCommandDestination(page, "city");
   const city = page.getByTestId("panel-city");
   await expect(city.getByText("Standard Sandbox")).toBeVisible();
-  await expect(city.getByText("Crossroads")).toBeVisible();
+  await expect(
+    city.locator(".dispatch-val", { hasText: "Crossroads" }),
+  ).toBeVisible();
 
   await expect(page.getByTestId("game-canvas-host")).toBeVisible();
   const canvas = page.locator("canvas[data-runtime-canvas='true']");
