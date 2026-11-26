@@ -270,13 +270,49 @@ describe("CityList", () => {
   it("requires two Delete clicks", async () => {
     const { onDelete } = renderList();
     const row = screen.getByTestId("city-row-city-old");
-    const del = within(row).getByRole("button", { name: "Delete" });
+    const del = within(row).getByRole("button", { name: "Delete Harbour City" });
 
     await fireEvent.click(del);
     expect(del).toHaveTextContent("Delete?");
     expect(onDelete).not.toHaveBeenCalled();
     await fireEvent.click(del);
     await waitFor(() => expect(onDelete).toHaveBeenCalledWith("city-old"));
+  });
+
+  it("disambiguates duplicate city names with the saved timestamp", () => {
+    const riversideA = { ...CITIES[0], id: "river-a", name: "Riverside" };
+    const riversideB = {
+      ...CITIES[1],
+      id: "river-b",
+      name: "Riverside",
+      savedAt: "2026-08-11T09:30:00.000Z",
+    };
+    render(CityList, {
+      props: {
+        cities: [riversideA, riversideB],
+        activeCityId: null,
+        busy: false,
+        onLoad: vi.fn(),
+        onRename: vi.fn(async () => true),
+        onDelete: vi.fn(),
+      },
+    });
+
+    // Same-named cities must not share control names; the saved timestamp
+    // keeps each Rename/Load/Delete unique while the visible labels stay put.
+    const names = [
+      ...screen.getAllByRole("button", { name: /^Rename / }),
+      ...screen.getAllByRole("button", { name: /^Load / }),
+      ...screen.getAllByRole("button", { name: /^Delete / }),
+    ].map((button) => button.getAttribute("aria-label"));
+    for (const name of names) expect(name).toContain("saved");
+    expect(new Set(names).size).toBe(names.length);
+    expect(
+      screen.getAllByRole("button", { name: /^Load Riverside saved / }),
+    ).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /^Delete Riverside saved / }),
+    ).toHaveLength(2);
   });
 
   it("disables city mutations while persistence is busy", () => {
@@ -287,7 +323,7 @@ describe("CityList", () => {
     for (const pencil of screen.getAllByRole("button", { name: /^Rename / })) {
       expect(pencil).toBeDisabled();
     }
-    for (const button of screen.getAllByRole("button", { name: "Delete" })) {
+    for (const button of screen.getAllByRole("button", { name: /^Delete / })) {
       expect(button).toBeDisabled();
     }
   });
@@ -332,7 +368,7 @@ describe("CityList", () => {
 
       const del = within(screen.getByTestId("city-row-city-new")).getByRole(
         "button",
-        { name: "Delete" },
+        { name: "Delete Maple Junction" },
       );
       await fireEvent.click(del);
       expect(del).toHaveTextContent("Delete?");
@@ -350,7 +386,9 @@ describe("CityList", () => {
         within(activeRow).getByTestId("city-name-city-new"),
       ).toHaveTextContent("Maple Junction");
       expect(
-        within(activeRow).getByRole("button", { name: "Delete" }),
+        within(activeRow).getByRole("button", {
+          name: "Delete Maple Junction",
+        }),
       ).toBeDisabled();
     });
   });
@@ -476,7 +514,9 @@ describe("CityLibraryScreen", () => {
     expect(
       screen.getByRole("button", { name: "Rename Maple Junction" }),
     ).toBeVisible();
-    expect(screen.getAllByRole("button", { name: "Delete" })).toHaveLength(2);
+    expect(
+      screen.getAllByRole("button", { name: /^Delete / }),
+    ).toHaveLength(2);
     expect(screen.getByRole("button", { name: /^New City/ })).toBeVisible();
     expect(
       screen.queryByRole("button", { name: "Retry city list" }),

@@ -246,7 +246,9 @@ describe("CityPanel", () => {
     expect(rowName).toHaveTextContent("Harbour Loop");
     expect(within(activeRow).queryByRole("textbox")).toBeNull();
 
-    const del = within(activeRow).getByRole("button", { name: "Delete" });
+    const del = within(activeRow).getByRole("button", {
+      name: "Delete Harbour Loop",
+    });
     await fireEvent.click(del);
     expect(del).toHaveTextContent("Delete?");
     expect(onDelete).not.toHaveBeenCalled();
@@ -312,6 +314,84 @@ describe("CityPanel", () => {
     expect(
       screen.queryByRole("textbox", { name: "Rename Harbour Loop" }),
     ).toBeNull();
+  });
+
+  it("commits an open header rename before an armed Delete confirms", async () => {
+    const { onRename, onDelete } = renderPanel();
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+
+    // Both Delete presses suppress the header editor's blur commit, so the
+    // confirmed click must flush the header draft (after CityList's row
+    // flush) before the active city can be deleted under the open editor.
+    const del = within(screen.getByTestId("city-row-city-1")).getByRole(
+      "button",
+      { name: "Delete Harbour Loop" },
+    );
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef"),
+    );
+    await waitFor(() => expect(onDelete).toHaveBeenCalledWith("city-1"));
+  });
+
+  it("keeps the draft and refuses an armed Delete when the header rename fails", async () => {
+    const onRename = vi.fn(async () => false);
+    const { onDelete } = renderPanel({ onRename });
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Harbour Loop" }),
+    );
+    const input = screen.getByTestId("active-city-name") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour Reef" } });
+
+    const del = within(screen.getByTestId("city-row-city-1")).getByRole(
+      "button",
+      { name: "Delete Harbour Loop" },
+    );
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("city-1", "Harbour Reef"),
+    );
+    // The refused flush re-opens the draft and blocks the delete.
+    expect(
+      await screen.findByRole("textbox", { name: "Rename Harbour Loop" }),
+    ).toHaveValue("Harbour Reef");
+    expect(onDelete).not.toHaveBeenCalled();
+  });
+
+  it("refuses an armed Delete when a row rename is refused", async () => {
+    const onRename = vi.fn(async () => false);
+    const { onDelete } = renderPanel({ onRename });
+
+    await fireEvent.click(
+      screen.getByRole("button", { name: "Rename Dockside" }),
+    );
+    const input = screen.getByTestId("city-name-city-2") as HTMLInputElement;
+    await fireEvent.input(input, { target: { value: "Harbour East" } });
+
+    const del = within(screen.getByTestId("city-row-city-2")).getByRole(
+      "button",
+      { name: "Delete Dockside" },
+    );
+    await fireEvent.click(del);
+    await fireEvent.click(del);
+
+    await waitFor(() =>
+      expect(onRename).toHaveBeenCalledWith("city-2", "Harbour East"),
+    );
+    expect(
+      await screen.findByRole("textbox", { name: "Rename Dockside" }),
+    ).toHaveValue("Harbour East");
+    expect(onDelete).not.toHaveBeenCalled();
   });
 
   it("commits an open header rename before loading another city", async () => {

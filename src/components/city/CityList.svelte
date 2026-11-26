@@ -38,6 +38,24 @@
     timeStyle: "short",
   });
 
+  // Several cities can share a name (repeated "Riverside" saves); the row
+  // controls then append the saved timestamp to their accessible name so
+  // Rename/Load/Delete stay distinguishable per city.
+  const nameCounts = $derived(
+    cities.reduce((counts, city) => {
+      counts.set(city.name, (counts.get(city.name) ?? 0) + 1);
+      return counts;
+    }, new Map<string, number>()),
+  );
+
+  function controlContext(city: CitySummary): string {
+    if ((nameCounts.get(city.name) ?? 0) > 1) {
+      return `${city.name} saved ` +
+        savedAtFormat.format(new Date(city.savedAt));
+    }
+    return city.name;
+  }
+
   // Sunny Diorama material hues; the initial must stay legible on all of them.
   const AVATAR_COLORS = ["#ab5a45", "#3c6b35", "#a86f0e", "#5d6d72"];
 
@@ -100,7 +118,7 @@
             <InlineNameEditor
               bind:this={nameEditors[city.id]}
               value={city.name}
-              label={`Rename ${city.name}`}
+              label={`Rename ${controlContext(city)}`}
               disabled={busy}
               testId={`city-name-${city.id}`}
               entityId={city.id}
@@ -128,7 +146,7 @@
           <button
             type="button"
             class="btn"
-            aria-label={`Load ${city.name}`}
+            aria-label={`Load ${controlContext(city)}`}
             disabled={busy || dirty}
             onmousedown={(event) => event.preventDefault()}
             onclick={async () => {
@@ -141,6 +159,7 @@
           type="button"
           class="btn"
           class:city-delete--armed={pendingDeleteId === city.id}
+          aria-label={`Delete ${controlContext(city)}`}
           data-testid={`city-delete-${city.id}`}
           disabled={busy}
           onmousedown={(event) => event.preventDefault()}
