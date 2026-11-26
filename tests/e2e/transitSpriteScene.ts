@@ -43,17 +43,20 @@ async function expectMetroBadge(
 ): Promise<void> {
   const pixels = await sampleTilePixels(page, [
     { tile, dx: -3.5, dy: 0 },
-    { tile, dx: -4.8125, dy: 0 },
-    { tile, dx: 4.8125, dy: 0 },
+    // Mask texels (96,30) and (96,162) lie beyond the horizontal 8px stroke.
+    { tile, dx: 0, dy: -4.8125 },
+    { tile, dx: 0, dy: 4.8125 },
   ]);
   expect(
     closeToColor(pixels[0]!, [255, 248, 238], tolerance),
     `metro face: ${pixels[0]}`,
   ).toBe(true);
-  expect(
-    pixels.slice(1).some((pixel) => closeToColor(pixel, rim, tolerance)),
-    `metro rim: ${pixels.slice(1)}`,
-  ).toBe(true);
+  for (const [index, pixel] of pixels.slice(1).entries()) {
+    expect(
+      closeToColor(pixel, rim, tolerance),
+      `metro rim perpendicular probe ${index}: ${pixel}`,
+    ).toBe(true);
+  }
 }
 
 /** Real UI construction, with the same independent pixel probes in both renderers. */
