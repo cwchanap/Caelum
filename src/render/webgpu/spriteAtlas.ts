@@ -182,8 +182,8 @@ export async function loadSpriteImages(): Promise<readonly HTMLImageElement[]> {
  * `loadSpriteImages()` into a single layered `texture_2d_array`: one
  * transparent 576x384 layer per sprite, eight CPU mips generated through one
  * fixed-size 2D canvas (never resized — resizing resets image smoothing).
- * Each mip uploads only its source-sized top-left crop; the rest of every
- * layer stays transparent. Synchronous: decoding happened in
+ * Each mip uploads its source-sized top-left crop, with one extruded gutter
+ * texel at the straight rail's east edge. Synchronous: decoding happened in
  * `loadSpriteImages()`. Destroys the partially created texture and
  * rethrows on any upload failure, so callers fail startup loudly instead
  * of drawing a broken atlas.
@@ -219,6 +219,22 @@ export function createSpriteAtlasTexture(
         const height = Math.max(1, source.height >> level);
         context.clearRect(0, 0, SPRITE_ATLAS_WIDTH, SPRITE_ATLAS_HEIGHT);
         context.drawImage(image, 0, 0, width, height);
+        const railGutter =
+          layer === TRANSIT_SPRITE_LAYERS.trackStraight ? 1 : 0;
+        if (railGutter) {
+          // Linear sampling must not blend a rail's opaque end with padding.
+          context.drawImage(
+            canvas,
+            width - 1,
+            0,
+            1,
+            height,
+            width,
+            0,
+            1,
+            height,
+          );
+        }
         device.queue.copyExternalImageToTexture(
           { source: canvas },
           {
@@ -228,7 +244,7 @@ export function createSpriteAtlasTexture(
             colorSpace: "srgb",
             premultipliedAlpha: true,
           },
-          { width, height },
+          { width: width + railGutter, height },
         );
       }
     });
