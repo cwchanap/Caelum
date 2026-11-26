@@ -1,4 +1,3 @@
-import type { BuildingType } from "../../domain/types";
 import { BUILDING_CATALOG } from "../../domain/catalog/buildings";
 import tree01Url from "../../assets/sunny-diorama/trees/tree-01.webp";
 import tree02Url from "../../assets/sunny-diorama/trees/tree-02.webp";
@@ -21,12 +20,33 @@ import metroStationUrl from "../../assets/sunny-diorama/markers/metro-station.we
 import metroStationRingUrl from "../../assets/sunny-diorama/markers/metro-station-ring.webp";
 import trackStraightUrl from "../../assets/sunny-diorama/markers/track-straight.webp";
 import trackCornerUrl from "../../assets/sunny-diorama/markers/track-corner.webp";
+import {
+  BUILDING_SPRITE_TYPES,
+  SPRITE_ATLAS_HEIGHT,
+  SPRITE_ATLAS_WIDTH,
+  SPRITE_LAYER_COUNT,
+  SPRITE_MIP_LEVEL_COUNT,
+  SPRITE_TEXELS_PER_TILE,
+  TRANSIT_SPRITE_LAYERS,
+  TRANSIT_SPRITE_TYPES,
+  type SpriteBuildingType,
+  type TransitSpriteType,
+  TREE_SPRITE_COUNT,
+} from "./spriteLayers";
 
-/** Building types with a structural sprite; transit nodes use marker layers. */
-export type SpriteBuildingType = Exclude<
-  BuildingType,
-  "busStop" | "metroStation"
->;
+export {
+  BUILDING_SPRITE_LAYERS,
+  SPRITE_ATLAS_HEIGHT,
+  SPRITE_ATLAS_WIDTH,
+  SPRITE_LAYER_COUNT,
+  SPRITE_MIP_LEVEL_COUNT,
+  SPRITE_TEXELS_PER_TILE,
+  TRANSIT_SPRITE_LAYERS,
+  TREE_SPRITE_LAYER_BASE,
+  spriteLayerFor,
+  treeSpriteLayer,
+  type SpriteBuildingType,
+} from "./spriteLayers";
 
 /** Vite asset URLs; the record keys are type-checked against BuildingType so
  *  adding a sprite-bearing building cannot forget its WebP. */
@@ -46,7 +66,11 @@ export const BUILDING_SPRITE_URLS: Record<SpriteBuildingType, string> = {
 };
 
 /** Stable tree-variant order; layers 0-2 of the atlas array. */
-export const TREE_SPRITE_URLS = [tree01Url, tree02Url, tree03Url] as const;
+export const TREE_SPRITE_URLS = [
+  tree01Url,
+  tree02Url,
+  tree03Url,
+] as const satisfies { readonly length: typeof TREE_SPRITE_COUNT };
 
 export const TRANSIT_SPRITE_URLS = {
   busStop: busStopUrl,
@@ -55,50 +79,7 @@ export const TRANSIT_SPRITE_URLS = {
   metroStationRing: metroStationRingUrl,
   trackStraight: trackStraightUrl,
   trackCorner: trackCornerUrl,
-} as const;
-
-export const SPRITE_TEXELS_PER_TILE = 192;
-export const SPRITE_ATLAS_WIDTH = 576;
-export const SPRITE_ATLAS_HEIGHT = 384;
-// 8 mip levels cover 192x192 trees down to 1x1 texel (level 7), preventing
-// aliasing when Fit-scale on large maps shrinks trees below 12 px.
-export const SPRITE_MIP_LEVEL_COUNT = 8;
-export const TREE_SPRITE_LAYER_BASE = 0;
-export const SPRITE_LAYER_COUNT =
-  TREE_SPRITE_URLS.length +
-  Object.keys(BUILDING_SPRITE_URLS).length +
-  Object.keys(TRANSIT_SPRITE_URLS).length;
-
-/** Resolves a [0, 1) hash fraction to a tree layer index in the atlas. */
-export function treeSpriteLayer(fraction: number): number {
-  const index = Math.min(
-    TREE_SPRITE_URLS.length - 1,
-    Math.max(0, Math.floor(fraction * TREE_SPRITE_URLS.length)),
-  );
-  return TREE_SPRITE_LAYER_BASE + index;
-}
-
-/** Stable 15-layer order: tree variants first, then buildings in catalog
- *  order (the Record literal above mirrors BUILDING_CATALOG's key order). */
-export const BUILDING_SPRITE_LAYERS = Object.fromEntries(
-  Object.keys(BUILDING_SPRITE_URLS).map((type, index) => [
-    type,
-    TREE_SPRITE_URLS.length + index,
-  ]),
-) as Record<SpriteBuildingType, number>;
-
-export const TRANSIT_SPRITE_LAYERS = Object.fromEntries(
-  Object.keys(TRANSIT_SPRITE_URLS).map((type, index) => [
-    type,
-    TREE_SPRITE_URLS.length + Object.keys(BUILDING_SPRITE_URLS).length + index,
-  ]),
-) as Record<keyof typeof TRANSIT_SPRITE_URLS, number>;
-
-/** The sprite layer of a sprite-bearing building type, or undefined for
- *  transit nodes, which use separate marker layers. */
-export function spriteLayerFor(type: BuildingType): number | undefined {
-  return (BUILDING_SPRITE_LAYERS as Record<string, number | undefined>)[type];
-}
+} as const satisfies Record<TransitSpriteType, string>;
 
 interface SpriteLayerSource {
   name: string;
@@ -114,17 +95,15 @@ const SPRITE_LAYER_SOURCES: readonly SpriteLayerSource[] = [
     width: SPRITE_TEXELS_PER_TILE,
     height: SPRITE_TEXELS_PER_TILE,
   })),
-  ...(
-    Object.entries(BUILDING_SPRITE_URLS) as [SpriteBuildingType, string][]
-  ).map(([type, url]) => ({
+  ...BUILDING_SPRITE_TYPES.map((type) => ({
     name: type,
-    url,
+    url: BUILDING_SPRITE_URLS[type],
     width: BUILDING_CATALOG[type].width * SPRITE_TEXELS_PER_TILE,
     height: BUILDING_CATALOG[type].height * SPRITE_TEXELS_PER_TILE,
   })),
-  ...Object.entries(TRANSIT_SPRITE_URLS).map(([name, url]) => ({
+  ...TRANSIT_SPRITE_TYPES.map((name) => ({
     name,
-    url,
+    url: TRANSIT_SPRITE_URLS[name],
     width: SPRITE_TEXELS_PER_TILE,
     height: SPRITE_TEXELS_PER_TILE,
   })),

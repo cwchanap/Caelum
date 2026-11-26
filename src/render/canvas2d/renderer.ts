@@ -13,7 +13,10 @@ import {
   type SpriteBatch,
 } from "../gameplayRenderer";
 import { parseColor } from "../webgpu/primitives";
-import { SPRITE_ATLAS_HEIGHT, SPRITE_ATLAS_WIDTH } from "../webgpu/spriteAtlas";
+import {
+  SPRITE_ATLAS_HEIGHT,
+  SPRITE_ATLAS_WIDTH,
+} from "../webgpu/spriteLayers";
 
 function rgbString(r: number, g: number, b: number): string {
   return `rgb(${Math.round(r * 255)},${Math.round(g * 255)},${Math.round(
