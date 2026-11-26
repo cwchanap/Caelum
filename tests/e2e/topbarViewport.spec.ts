@@ -710,6 +710,16 @@ async function pauseIconProfile(
   centerOffsetX: number;
   centerOffsetY: number;
 }> {
+  // Cluster entrance animations run with `backwards` fill and the button can
+  // still be moving/fading in; settle them before measuring or painting
+  // (same wait as the clock-centre measurements above).
+  await page.getByTestId("topbar").evaluate(async (topbar) => {
+    await Promise.all(
+      topbar
+        .getAnimations({ subtree: true })
+        .map((animation) => animation.finished.catch(() => undefined)),
+    );
+  });
   const button = page.locator('[data-action="pause"]');
   const icon = button.locator(".ctrl-pause-icon, span[aria-hidden='true']");
   const buttonBox = await button.boundingBox();
@@ -717,7 +727,7 @@ async function pauseIconProfile(
   expect(buttonBox, "pause button box").not.toBeNull();
   expect(iconBox, "pause icon box").not.toBeNull();
   const pad = 8;
-  const png = decodePng(
+  const png = await decodePng(
     await page.screenshot({
       clip: {
         x: iconBox!.x - pad,

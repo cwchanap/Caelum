@@ -219,7 +219,7 @@ test.describe("New City reference composition", () => {
           )
           .toBe(true);
         const stats = paintedPreviewStats(
-          decodePng(await preview.screenshot()),
+          await decodePng(await preview.screenshot()),
         );
         expect(
           stats.creamFraction,
@@ -242,7 +242,9 @@ test.describe("New City reference composition", () => {
             thumb.evaluate((image: HTMLImageElement) => image.complete),
           )
           .toBe(true);
-        const stats = paintedPreviewStats(decodePng(await thumb.screenshot()));
+        const stats = paintedPreviewStats(
+          await decodePng(await thumb.screenshot()),
+        );
         expect(
           stats.creamFraction,
           `template thumbnail ${i} cream letterbox at ` +
