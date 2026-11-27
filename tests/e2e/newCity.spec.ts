@@ -301,6 +301,37 @@ test("gates Create on a trimmed name and trims it into the saved city", async ({
   expect(snapshot.persistence.activeCity?.name).toBe("Trimmed Smoke");
 });
 
+test("keeps keyboard focus distinct from the selected tile under forced colors", async ({
+  page,
+}) => {
+  await page.goto("/");
+  await expect(page.getByTestId("new-city-screen")).toBeVisible();
+  await page.emulateMedia({ forcedColors: "active" });
+
+  // Tab from the name field lands on the checked template radio, which is
+  // the selected tile. Its focus ring must differ from the selection ring.
+  await page.getByLabel("City name").focus();
+  await page.keyboard.press("Tab");
+  const selected = page.getByRole("radio", { name: "Crossroads" });
+  await expect(selected).toBeFocused();
+
+  const ring = await selected.evaluate((input) => {
+    const tile = input.closest(".choice-tile");
+    if (!(tile instanceof HTMLElement)) throw new Error("missing choice tile");
+    const style = getComputedStyle(tile);
+    return {
+      outlineStyle: style.outlineStyle,
+      outlineWidth: style.outlineWidth,
+      outlineOffset: style.outlineOffset,
+    };
+  });
+  expect(ring).toEqual({
+    outlineStyle: "dashed",
+    outlineWidth: "3px",
+    outlineOffset: "2px",
+  });
+});
+
 test("creates a Medium Creative city through the real WASM New City flow", async ({
   page,
 }) => {
