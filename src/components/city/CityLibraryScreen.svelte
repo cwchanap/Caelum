@@ -1,7 +1,9 @@
 <script lang="ts">
   import keyArt from "../../assets/sunny-diorama/menu/city-library.webp";
   import appIcon from "../../assets/sunny-diorama/brand/app-icon.png";
+  import { SANDBOX_TEMPLATE_LABELS } from "../../domain/catalog/sandboxTemplates";
   import type { CitySummary } from "../../persistence/citySaveStore";
+  import { MAP_SIZES, NEW_CITY_DEFAULTS } from "../../scenario/sandbox";
   import CityList from "./CityList.svelte";
 
   interface Props {
@@ -37,6 +39,7 @@
     dateStyle: "medium",
     timeStyle: "short",
   });
+  const newCityHint = `${SANDBOX_TEMPLATE_LABELS[NEW_CITY_DEFAULTS.templateId]} · ${MAP_SIZES[NEW_CITY_DEFAULTS.mapSize].label}`;
 
   // Continue/New City use the same prevented-mousedown contract as a row's
   // Load: it keeps a blur-commit's busy flip from eating the click, so the
@@ -128,7 +131,7 @@
             </svg>
             <span class="city-library-action-body">
               <span class="city-library-action-label">New City</span>
-              <span class="city-library-action-hint">Crossroads · Small</span>
+              <span class="city-library-action-hint">{newCityHint}</span>
             </span>
           </button>
         </div>

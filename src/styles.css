@@ -370,7 +370,7 @@ body {
   color: var(--accent);
 }
 
-.ctrl-pause[aria-pressed="true"] {
+.ctrl-pause[data-paused="true"] {
   background: var(--warning);
   border-color: var(--warning);
   color: var(--surface);
@@ -2419,6 +2419,12 @@ body {
   border-color: var(--accent);
   background: var(--surface-raised);
   box-shadow: 0 0 0 1px var(--accent);
+}
+
+@media (forced-colors: active) {
+  .choice-tile:has(input:checked) {
+    outline: 2px solid Highlight;
+  }
 }
 
 .choice-tile--template {

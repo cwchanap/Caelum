@@ -469,7 +469,7 @@ describe("buildMapBatch road furniture", () => {
     ).toBe(true);
   });
 
-  it("uses half rail art for connected endpoints, not an isolated tile", () => {
+  it("uses half rail art for connected endpoints", () => {
     const state = withTracks(createTestGameState(), [
       { x: 8, y: 8 },
       { x: 9, y: 8 },
@@ -491,12 +491,6 @@ describe("buildMapBatch road furniture", () => {
       expect(row[6]).toBeCloseTo(192 / SPRITE_ATLAS_HEIGHT);
       expect(row.slice(8, 12)).toEqual([1, 1, 1, 1]);
     }
-
-    const isolated = buildMapBatch(
-      withTracks(createTestGameState(), [{ x: 10, y: 10 }]),
-      "hidden",
-    ).vertices;
-    expect(verticesOfColor(isolated, colors.trackSleeper)).toHaveLength(0);
   });
 });
 

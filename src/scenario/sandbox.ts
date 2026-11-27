@@ -1,4 +1,8 @@
-import type { SandboxMapSize } from "../domain/types";
+import type {
+  EconomyPreset,
+  SandboxMapSize,
+  SandboxTemplateId,
+} from "../domain/types";
 
 // Read-only mirror of `SandboxMapSize::dimensions` in
 // `crates/caelum-core/src/model.rs`, for New City labels and test geometry.
@@ -10,4 +14,14 @@ export const MAP_SIZES: Record<
   small: { label: "Small", width: 28, height: 18 },
   medium: { label: "Medium", width: 56, height: 36 },
   large: { label: "Large", width: 84, height: 54 },
+};
+
+export const NEW_CITY_DEFAULTS = {
+  economyPreset: "standard",
+  templateId: "crossroads",
+  mapSize: "small",
+} as const satisfies {
+  economyPreset: EconomyPreset;
+  templateId: SandboxTemplateId;
+  mapSize: SandboxMapSize;
 };

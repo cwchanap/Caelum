@@ -170,9 +170,9 @@ function cursorBadgeText(
 ): CursorBadge | null {
   const cursor = cursorTile(ui);
   if (cursor === null) {
-    // Touch input has no persistent hover. Track still needs its gesture
-    // instruction after a tap/no-op, even when there is no cursor tile to
-    // anchor the normal hover cue to.
+    // Track still needs its gesture instruction when there is no cursor tile:
+    // touch has no persistent hover, and a desktop pointer can leave the board
+    // while the tool remains armed.
     return ui.activeTool === "track" && ui.selectedBuilding === null
       ? trackDragCue()
       : null;
@@ -493,8 +493,8 @@ export function selectMapTextOverlayItems(
   if (badge !== null) {
     items.push({
       kind: "cursorBadge",
-      // A touch-track cue without a hover tile is viewport guidance rather
-      // than cursor feedback. Keep a neutral map anchor for the shared item
+      // A track cue without a hover tile is viewport guidance rather than
+      // cursor feedback. Keep a neutral map anchor for the shared item
       // shape, but give the DOM overlay a viewport anchor so zoom/pan cannot
       // carry the instruction out of the clipped board.
       anchor: cursor ?? { x: (state.map.width - 1) / 2, y: 0 },

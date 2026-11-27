@@ -8,7 +8,10 @@ import {
 import { describe, expect, it, vi } from "vitest";
 import CityList from "../../src/components/city/CityList.svelte";
 import CityLibraryScreen from "../../src/components/city/CityLibraryScreen.svelte";
+import NewCityScreen from "../../src/components/NewCityScreen.svelte";
+import { SANDBOX_TEMPLATE_LABELS } from "../../src/domain/catalog/sandboxTemplates";
 import type { CitySummary } from "../../src/persistence/citySaveStore";
+import { MAP_SIZES, NEW_CITY_DEFAULTS } from "../../src/scenario/sandbox";
 
 const CITIES = [
   {
@@ -580,6 +583,29 @@ describe("CityLibraryScreen", () => {
     expect(screen.getByText("Your cities")).toBeVisible();
     expect(screen.getByText("Your cities")).toHaveTextContent("2");
     expect(screen.getByRole("button", { name: /^New City/ })).toBeVisible();
+  });
+
+  it("uses the same default template and size in the library hint and New City form", () => {
+    renderLibrary(vi.fn(async () => true));
+    render(NewCityScreen, {
+      props: { busy: false, error: null, onCreate: vi.fn() },
+    });
+
+    const template = SANDBOX_TEMPLATE_LABELS[NEW_CITY_DEFAULTS.templateId];
+    const size = MAP_SIZES[NEW_CITY_DEFAULTS.mapSize].label;
+    expect(screen.getByText(`${template} · ${size}`)).toBeVisible();
+    const templateGroup = screen.getByRole("group", { name: "Template" });
+    const sizeGroup = screen.getByRole("group", { name: "Map size" });
+    expect(
+      within(templateGroup).getByRole("radio", {
+        name: new RegExp(`^${template}`),
+      }),
+    ).toBeChecked();
+    expect(
+      within(sizeGroup).getByRole("radio", {
+        name: new RegExp(`^${size}`),
+      }),
+    ).toBeChecked();
   });
 
   it("commits a pending row rename before continuing", async () => {
