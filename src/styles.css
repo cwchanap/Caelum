@@ -2429,7 +2429,7 @@ body {
 
   /* Top-align, not stretch: when a sibling tile's note wraps, the taller
      card stretches this image's grid row and a stretched box would break
-     the 512/331 aspect crop and repaint the baked cream letterbox. */
+     the template crop and repaint the baked cream letterbox. */
   align-items: start;
   align-content: start;
   padding: 8px;
@@ -2439,10 +2439,9 @@ body {
   width: 100%;
   height: auto;
 
-  /* The source WebPs are 512x512 with a baked cream letterbox; the map
-     occupies the inner 512x331 band, so this aspect makes cover crop
-     exactly onto the letterbox (same crop as the large preview). */
-  aspect-ratio: 512 / 331;
+  /* Same slightly inset crop as the large preview: tight enough that
+     fractional raster scaling cannot repaint the baked cream edge. */
+  aspect-ratio: 512 / 324;
   object-fit: cover;
   border-radius: 6px;
   border: 1px solid var(--line-faint);
@@ -2484,16 +2483,16 @@ body {
   min-height: 0;
 }
 
-/* The template WebPs are 512x512 squares whose map sits in the inner
-   512x331 band (measured: y 90..420 in all three assets). Fixing the frame
-   to that aspect-ratio makes object-fit:cover's symmetric crop land exactly
-   on the baked cream letterbox, filling the frame with map content without
-   distortion or new art. */
+/* The template WebPs are 512x512 squares with cream rows through y90 and
+   from y420; the map occupies y91..419 in all three assets. The slightly
+   tighter 512/324 frame trims only edge grass, keeping object-fit:cover's
+   symmetric crop inside the map when fractional raster scaling otherwise
+   repaints the baked cream boundary. */
 .new-city-preview img {
   width: 100%;
   height: auto;
   min-height: 0;
-  aspect-ratio: 512 / 331;
+  aspect-ratio: 512 / 324;
   object-fit: cover;
   object-position: center;
   border: 1px solid var(--line);
