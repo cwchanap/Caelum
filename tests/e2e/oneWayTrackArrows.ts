@@ -12,6 +12,9 @@ import {
 // colors.oneWayArrow #e8eef0, recomputed here so the oracle stays independent
 // of render internals; the rail art under it is brown/tan, never near-white.
 const ONE_WAY_ARROW = [232, 238, 240] as const;
+// The straight rail art's ballast is uniformly #dec6a3 in the tie gap below
+// the shaft, far from both the road fill and the near-white arrow.
+const TRACK_BALLAST = [222, 198, 163] as const;
 const ROAD_Y = 9;
 const ROAD_XS = [11, 12, 13] as const;
 const CENTER_TILE = { x: 12, y: ROAD_Y } as const;
@@ -73,14 +76,17 @@ export async function expectOneWayArrowVisibleThroughTrack(
   // Leave no hover highlight over the measured tile.
   await page.mouse.move(1, 1);
 
-  const probes = [-5, -2, 0, 2, 5].map((dx) => ({
+  const arrowProbes = [-5, -2, 0, 2, 5].map((dx) => ({
     tile: CENTER_TILE,
     dx,
     dy: 0,
   }));
+  // Six world px below the shaft is outside the arrow but inside the opaque
+  // rail sprite, proving the test really overlaps both layers.
+  const probes = [...arrowProbes, { tile: CENTER_TILE, dx: 0, dy: 6 }];
   const samples = await sampleTilePixels(page, probes);
   expect(samples).toHaveLength(probes.length);
-  samples.forEach((sample, index) => {
+  samples.slice(0, arrowProbes.length).forEach((sample, index) => {
     expect(sample, `arrow shaft probe ${index}`).not.toBeNull();
     for (let channel = 0; channel < 3; channel += 1) {
       expect(
@@ -89,4 +95,16 @@ export async function expectOneWayArrowVisibleThroughTrack(
       ).toBeLessThanOrEqual(10);
     }
   });
+
+  const railSample = samples.at(-1);
+  expect(
+    railSample,
+    `rail ballast probe sample ${JSON.stringify(railSample)}`,
+  ).not.toBeNull();
+  for (let channel = 0; channel < 3; channel += 1) {
+    expect(
+      Math.abs(railSample![channel]! - TRACK_BALLAST[channel]!),
+      `rail ballast probe channel ${channel} in ${JSON.stringify(railSample)}`,
+    ).toBeLessThanOrEqual(12);
+  }
 }
