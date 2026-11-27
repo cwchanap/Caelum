@@ -281,7 +281,12 @@ describe("sunny diorama visual foundation", () => {
       styles.match(
         /@media \(forced-colors:\s*active\)\s*{([\s\S]*?)\n}/,
       )?.[1] ?? "";
-    expect(block).toContain(".choice-tile:has(input:focus-visible)");
+    const checkedAt = block.indexOf(".choice-tile:has(input:checked)");
+    const focusAt = block.indexOf(".choice-tile:has(input:focus-visible)");
+    expect(checkedAt).toBeGreaterThanOrEqual(0);
+    // Equal specificity: the focus rule must come after the selection rule
+    // or the solid ring hides the dashed one on a focused checked tile.
+    expect(focusAt).toBeGreaterThan(checkedAt);
     expect(block).toContain("outline: 3px dashed Highlight");
     expect(block).toContain("outline-offset: 2px");
   });
