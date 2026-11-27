@@ -15,15 +15,17 @@ import {
   shapeTriangleCountsOf,
 } from "../../src/render/webgpu/primitives";
 import {
-  BUILDING_SPRITE_LAYERS,
   BUILDING_SPRITE_URLS,
-  SPRITE_LAYER_COUNT,
-  SPRITE_TEXELS_PER_TILE,
   TREE_SPRITE_URLS,
   TRANSIT_SPRITE_URLS,
+} from "../../src/render/webgpu/spriteAtlas";
+import {
+  BUILDING_SPRITE_LAYERS,
+  SPRITE_LAYER_COUNT,
+  SPRITE_TEXELS_PER_TILE,
   TRANSIT_SPRITE_LAYERS,
   type SpriteBuildingType,
-} from "../../src/render/webgpu/spriteAtlas";
+} from "../../src/render/webgpu/spriteLayers";
 
 /* -- Recording 2D context ------------------------------------------------ */
 

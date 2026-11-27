@@ -143,6 +143,7 @@ interface SceneBatch {
   key: string;
   map: GameMap;
   vertices: Float32Array<ArrayBuffer>;
+  directionArrows: Float32Array<ArrayBuffer>;
   sprites: Float32Array<ArrayBuffer>;
 }
 
@@ -588,6 +589,7 @@ export function createGameHostWithRenderer(
           instances: transformSpriteInstances(scene.sprites, 0),
         },
         overSprites: [
+          solidBatch("structural", scene.directionArrows),
           solidBatch("dynamic", overlays.underRoutes),
           solidBatch("route", route.vertices),
         ],

@@ -18,6 +18,7 @@ import {
   expectMixedCorridorCuePixels,
   expectSharedCuePixels,
 } from "./transitCues";
+import { expectOneWayArrowVisibleThroughTrack } from "./oneWayTrackArrows";
 
 // colors.road #5f6d75 — the exact opaque road tile fill (tileFillColor in
 // mapBatch.ts), recomputed here to keep the oracle independent of render
@@ -50,6 +51,14 @@ test("transit art joins rails and colors physical badges on Canvas2D", async ({
   test.setTimeout(180_000);
   await hideWebGpu(page);
   await expectTransitSpriteScene(page, "canvas2d");
+});
+
+test("one-way road arrows stay visible through straight track on Canvas2D", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await hideWebGpu(page);
+  await expectOneWayArrowVisibleThroughTrack(page, "canvas2d");
 });
 
 test("shared transit cue colors stay visible on Canvas2D", async ({ page }) => {

@@ -667,6 +667,43 @@ describe("createWebGpuRenderer", () => {
     expect(bigger.spriteDraws).toBe(1);
   });
 
+  it("uploads structural and marker sprite ranges without concatenating them", () => {
+    const { device, writes } = createFakeDevice();
+    const renderer = createWebGpuRenderer(
+      device,
+      "bgra8unorm",
+      spriteAtlasTexture(device),
+    );
+    renderer.configure(createFakeCanvas().canvas);
+    const structural = spriteInstances(2);
+    const markers = spriteInstances(3);
+
+    renderer.render({
+      solids: [],
+      sprites: { instances: structural },
+      markerSprites: { instances: markers },
+      vehicles: [],
+    });
+
+    const structuralWrite = writes.find((write) => write.data === structural);
+    const markerWrite = writes.find((write) => write.data === markers);
+    expect(structuralWrite).toBeDefined();
+    expect(markerWrite).toBeDefined();
+    expect(structuralWrite!.offset).toBe(0);
+    expect(markerWrite!.offset).toBe(structural.length * 4);
+    expect(structuralWrite!.buffer).toBe(markerWrite!.buffer);
+
+    const writeCount = writes.length;
+    renderer.render({
+      solids: [],
+      markerSprites: { instances: markers },
+      vehicles: [],
+    });
+    expect(writes.length).toBeGreaterThan(writeCount);
+    expect(writes.at(-1)!.data).toBe(markers);
+    expect(writes.at(-1)!.offset).toBe(0);
+  });
+
   it("packs structural and marker sprites before two ordered draws", () => {
     const { device, passes, writes } = createFakeDevice();
     const renderer = createWebGpuRenderer(
@@ -690,12 +727,13 @@ describe("createWebGpuRenderer", () => {
     expect(stats.spriteInstances).toBe(5);
     expect(stats.spriteDraws).toBe(2);
     expect(stats.solidVertices).toBe(9 * SOLID_VERTEX_FLOATS);
-    const spriteWrite = writes.find(
-      (write) => write.data.length === 5 * SPRITE_INSTANCE_FLOATS,
-    )!;
-    expect(spriteWrite.offset).toBe(0);
-    expect(spriteWrite.data[0]).toBe(11);
-    expect(spriteWrite.data[2 * SPRITE_INSTANCE_FLOATS]).toBe(22);
+    const structuralWrite = writes.find((write) => write.data === structural)!;
+    const markerWrite = writes.find((write) => write.data === markers)!;
+    expect(structuralWrite.offset).toBe(0);
+    expect(markerWrite.offset).toBe(structural.length * 4);
+    expect(structuralWrite.buffer).toBe(markerWrite.buffer);
+    expect(structuralWrite.data[0]).toBe(11);
+    expect(markerWrite.data[0]).toBe(22);
     const dynamicWrites = writes.filter(
       (write) =>
         write.data.length === 3 * SOLID_VERTEX_FLOATS ||
@@ -1158,16 +1196,15 @@ describe("createWebGpuRenderer", () => {
       expect(bufferFor(writes, second.structural)).toBe(
         bufferFor(writes, first.structural),
       );
-      const spriteWrites = writes.filter(
-        (write) =>
-          write.data.length ===
-          first.sprites.length + first.route.sprites.length,
+      expect(bufferFor(writes, second.sprites)).toBe(
+        bufferFor(writes, first.sprites),
       );
-      expect(spriteWrites).toHaveLength(2);
-      expect(spriteWrites[1]!.buffer).toBe(spriteWrites[0]!.buffer);
-      expect(
-        Array.from(spriteWrites[1]!.data.slice(0, second.sprites.length)),
-      ).toEqual(Array.from(second.sprites));
+      expect(bufferFor(writes, second.route.sprites)).toBe(
+        bufferFor(writes, first.route.sprites),
+      );
+      expect(bufferFor(writes, second.sprites)).toBe(
+        bufferFor(writes, second.route.sprites),
+      );
       expect(bufferFor(writes, second.route.vertices)).toBe(
         bufferFor(writes, first.route.vertices),
       );

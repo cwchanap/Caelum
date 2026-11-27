@@ -13,15 +13,15 @@ import {
   gridModeForUi,
 } from "../../src/render/webgpu/mapBatch";
 import { SPRITE_INSTANCE_FLOATS } from "../../src/render/gameplayRenderer";
+import { TREE_SPRITE_URLS } from "../../src/render/webgpu/spriteAtlas";
 import {
   BUILDING_SPRITE_LAYERS,
   SPRITE_ATLAS_HEIGHT,
   SPRITE_ATLAS_WIDTH,
   SPRITE_TEXELS_PER_TILE,
   TREE_SPRITE_LAYER_BASE,
-  TREE_SPRITE_URLS,
   TRANSIT_SPRITE_LAYERS,
-} from "../../src/render/webgpu/spriteAtlas";
+} from "../../src/render/webgpu/spriteLayers";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import {
   SOLID_VERTEX_FLOATS,
@@ -805,22 +805,24 @@ describe("buildMapBatch track layer", () => {
 });
 
 describe("buildMapBatch one-way layer", () => {
-  it("draws one-way arrows as a shaft and chevron barbs", () => {
+  it("emits one-way arrows as a separate shaft and chevron range", () => {
     const state = withOneWayRoads(createTestGameState(), [
       { x: 8, y: 8, oneWay: "east" },
     ]);
-    const batch = buildMapBatch(state).vertices;
+    const batch = buildMapBatch(state);
 
+    expect(verticesOfColor(batch.vertices, colors.oneWayArrow)).toHaveLength(0);
+    const arrows = batch.directionArrows;
     const head = 32 / 6;
     // Shaft quad from tail (264,272) to tip (280,272), corners ±1 off axis.
-    expect(hasVertexNear(batch, colors.oneWayArrow, 264, 271)).toBe(true);
-    expect(hasVertexNear(batch, colors.oneWayArrow, 280, 273)).toBe(true);
+    expect(hasVertexNear(arrows, colors.oneWayArrow, 264, 271)).toBe(true);
+    expect(hasVertexNear(arrows, colors.oneWayArrow, 280, 273)).toBe(true);
     // Chevron barbs angle back from the tip symmetrically.
     expect(
-      hasVertexNear(batch, colors.oneWayArrow, 280 - head, 272 + head, 2),
+      hasVertexNear(arrows, colors.oneWayArrow, 280 - head, 272 + head, 2),
     ).toBe(true);
     expect(
-      hasVertexNear(batch, colors.oneWayArrow, 280 - head, 272 - head, 2),
+      hasVertexNear(arrows, colors.oneWayArrow, 280 - head, 272 - head, 2),
     ).toBe(true);
   });
 });

@@ -450,11 +450,25 @@ export function createWebGpuRenderer(
           "sprite batch requires a sprite texture (createWebGpuRenderer third argument)",
         );
       }
-      const combined = new Float32Array(spriteFloats);
-      if (structural) combined.set(structural);
-      if (markers) combined.set(markers, structuralFloats);
       spriteBuffer = acquireBuffer("sprite", spriteFloats);
-      device.queue.writeBuffer(spriteBuffer, 0, combined, 0, combined.length);
+      if (structural !== undefined && structuralFloats > 0) {
+        device.queue.writeBuffer(
+          spriteBuffer,
+          0,
+          structural,
+          0,
+          structural.length,
+        );
+      }
+      if (markers !== undefined && markerFloats > 0) {
+        device.queue.writeBuffer(
+          spriteBuffer,
+          structuralFloats * 4,
+          markers,
+          0,
+          markers.length,
+        );
+      }
     }
     const drawSprites = (count: number, firstInstance: number): void => {
       if (count === 0) return;

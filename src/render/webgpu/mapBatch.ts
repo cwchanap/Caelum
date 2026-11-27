@@ -595,18 +595,21 @@ function drawTrees(
 /**
  * Tessellates the structural map scene — tile fills/grid, vacant-lot
  * perimeters, tree shadows, curbs, roads, automatic junctions, roundabouts,
- * isolated-track indicators, one-way arrows, and building shadows. Trees,
- * buildings and connected rails emit structural sprite rows. Transit-node
- * markers are emitted separately above routes by transitBatch.
+ * isolated-track indicators, and building shadows. Trees, buildings and
+ * connected rails emit structural sprite rows. One-way arrows emit as a
+ * separate solid range so the host can paint them over the opaque rail art;
+ * transit-node markers are emitted separately above routes by transitBatch.
  */
 export function buildMapBatch(
   state: GameState,
   gridMode: GridMode = "normal",
 ): {
   vertices: Float32Array<ArrayBuffer>;
+  directionArrows: Float32Array<ArrayBuffer>;
   sprites: Float32Array<ArrayBuffer>;
 } {
   const g = new SolidGeometry();
+  const arrows = new SolidGeometry();
   const sprites: number[] = [];
   const islandKeys = protectedIslandKeys(state);
   const tileOwners = occupiedTileOwners(state);
@@ -721,7 +724,7 @@ export function buildMapBatch(
 
   for (const tile of state.map.tiles) {
     if (tile.kind === "road" && tile.oneWay !== undefined) {
-      directionArrow(g, tile, tile.oneWay, ONE_WAY_ARROW);
+      directionArrow(arrows, tile, tile.oneWay, ONE_WAY_ARROW);
     }
   }
 
@@ -743,6 +746,7 @@ export function buildMapBatch(
 
   return {
     vertices: g.toFloat32Array(),
+    directionArrows: arrows.toFloat32Array(),
     sprites: new Float32Array(sprites) as Float32Array<ArrayBuffer>,
   };
 }

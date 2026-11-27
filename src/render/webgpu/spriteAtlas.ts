@@ -34,20 +34,6 @@ import {
   TREE_SPRITE_COUNT,
 } from "./spriteLayers";
 
-export {
-  BUILDING_SPRITE_LAYERS,
-  SPRITE_ATLAS_HEIGHT,
-  SPRITE_ATLAS_WIDTH,
-  SPRITE_LAYER_COUNT,
-  SPRITE_MIP_LEVEL_COUNT,
-  SPRITE_TEXELS_PER_TILE,
-  TRANSIT_SPRITE_LAYERS,
-  TREE_SPRITE_LAYER_BASE,
-  spriteLayerFor,
-  treeSpriteLayer,
-  type SpriteBuildingType,
-} from "./spriteLayers";
-
 /** Vite asset URLs; the record keys are type-checked against BuildingType so
  *  adding a sprite-bearing building cannot forget its WebP. */
 export const BUILDING_SPRITE_URLS: Record<SpriteBuildingType, string> = {
