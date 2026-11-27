@@ -7,7 +7,6 @@ export const colors = {
   roadCurb: "#9aa7ad",
   roundaboutIsland: "#71847a",
   track: "#33302b",
-  trackSleeper: "#6e5d48",
   oneWayArrow: "#e8eef0",
   areaResidential: "#e0a18c",
   areaCommercial: "#d8b45f",

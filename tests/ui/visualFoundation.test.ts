@@ -269,6 +269,13 @@ describe("sunny diorama visual foundation", () => {
     expect(block).toContain("color: var(--ink-strong)");
   });
 
+  it("keeps checked choice tiles visible under forced colors", () => {
+    const rule = styles.match(
+      /@media \(forced-colors:\s*active\)\s*{\s*\.choice-tile:has\(input:checked\)\s*{([^}]*)}/,
+    );
+    expect(rule?.[1] ?? "").toContain("outline: 2px solid Highlight");
+  });
+
   it("retires the shell crosshair pseudo-element", () => {
     expect(styles).not.toContain(".shell::before");
   });

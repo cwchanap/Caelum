@@ -8,7 +8,7 @@
     SandboxMapSize,
     SandboxTemplateId,
   } from "../domain/types";
-  import { MAP_SIZES } from "../scenario/sandbox";
+  import { MAP_SIZES, NEW_CITY_DEFAULTS } from "../scenario/sandbox";
   import { SANDBOX_TEMPLATE_LABELS } from "../domain/catalog/sandboxTemplates";
   import type { NewCityRequest } from "../runtime/workingSaveRuntime";
 
@@ -21,9 +21,9 @@
 
   let { busy, error, onCreate, onCancel }: Props = $props();
   let name = $state("Riverside");
-  let economyPreset = $state<EconomyPreset>("standard");
-  let templateId = $state<SandboxTemplateId>("crossroads");
-  let mapSize = $state<SandboxMapSize>("small");
+  let economyPreset = $state<EconomyPreset>(NEW_CITY_DEFAULTS.economyPreset);
+  let templateId = $state<SandboxTemplateId>(NEW_CITY_DEFAULTS.templateId);
+  let mapSize = $state<SandboxMapSize>(NEW_CITY_DEFAULTS.mapSize);
   const mapSizeIds = Object.keys(MAP_SIZES) as SandboxMapSize[];
   // Radio tiles are ordered Blank Grid, Crossroads, Small Town so native
   // arrow keys walk the illustrated choices in the mockup's order.

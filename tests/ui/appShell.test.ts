@@ -1830,7 +1830,7 @@ describe("App command shell", () => {
     const pauseButton = screen.getByRole("button", { name: "Pause" });
     expect(pauseButton).toBeVisible();
     expect(pauseButton).toHaveAttribute("aria-label", "Pause");
-    expect(pauseButton).toHaveAttribute("aria-pressed", "false");
+    expect(pauseButton).not.toHaveAttribute("aria-pressed");
     expect(screen.getByText("Time")).toBeVisible();
     expect(screen.getByRole("button", { name: "1x" })).toBeVisible();
     expect(screen.getByRole("button", { name: "2x" })).toBeVisible();
@@ -1852,6 +1852,15 @@ describe("App command shell", () => {
     ).toBe(false);
     expect(screen.queryByText("Live")).toBeNull();
     expect(screen.queryByText("Hold")).toBeNull();
+  });
+
+  it("keeps the paused action label free of a conflicting pressed state", () => {
+    const { runtime } = createRuntimeHarness();
+    render(App, { props: { runtime } });
+
+    const resumeButton = screen.getByRole("button", { name: "Resume" });
+    expect(resumeButton).toHaveAttribute("data-paused", "true");
+    expect(resumeButton).not.toHaveAttribute("aria-pressed");
   });
 
   it("shares status with CityPanel through dirty, saving and failure states", async () => {

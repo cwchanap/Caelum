@@ -70,7 +70,7 @@
       class="btn ctrl-pause"
       data-action="pause"
       aria-label={paused ? "Resume" : "Pause"}
-      aria-pressed={paused}
+      data-paused={paused}
       onclick={onTogglePause}
     >
       <!-- Inline vector geometry, not a font glyph (U+23F8/U+25B6 render
