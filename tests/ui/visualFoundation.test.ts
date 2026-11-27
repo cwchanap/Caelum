@@ -276,6 +276,16 @@ describe("sunny diorama visual foundation", () => {
     expect(rule?.[1] ?? "").toContain("outline: 2px solid Highlight");
   });
 
+  it("keeps keyboard focus distinct from selection under forced colors", () => {
+    const block =
+      styles.match(
+        /@media \(forced-colors:\s*active\)\s*{([\s\S]*?)\n}/,
+      )?.[1] ?? "";
+    expect(block).toContain(".choice-tile:has(input:focus-visible)");
+    expect(block).toContain("outline: 3px dashed Highlight");
+    expect(block).toContain("outline-offset: 2px");
+  });
+
   it("retires the shell crosshair pseudo-element", () => {
     expect(styles).not.toContain(".shell::before");
   });

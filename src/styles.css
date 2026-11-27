@@ -2425,6 +2425,13 @@ body {
   .choice-tile:has(input:checked) {
     outline: 2px solid Highlight;
   }
+
+  /* A dashed, offset ring keeps keyboard focus distinct from the solid
+     selection ring; both are Highlight in forced colors. */
+  .choice-tile:has(input:focus-visible) {
+    outline: 3px dashed Highlight;
+    outline-offset: 2px;
+  }
 }
 
 .choice-tile--template {
