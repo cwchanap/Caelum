@@ -308,24 +308,33 @@ test("keeps keyboard focus distinct from the selected tile under forced colors",
   await expect(page.getByTestId("new-city-screen")).toBeVisible();
   await page.emulateMedia({ forcedColors: "active" });
 
+  const selected = page.getByRole("radio", { name: "Crossroads" });
+  const outlineOf = (locator: typeof selected) =>
+    locator.evaluate((input) => {
+      const tile = input.closest(".choice-tile");
+      if (!(tile instanceof HTMLElement))
+        throw new Error("missing choice tile");
+      const style = getComputedStyle(tile);
+      return {
+        outlineStyle: style.outlineStyle,
+        outlineWidth: style.outlineWidth,
+        outlineOffset: style.outlineOffset,
+      };
+    });
+
+  // Selection alone is the solid, flush ring.
+  expect(await outlineOf(selected)).toEqual({
+    outlineStyle: "solid",
+    outlineWidth: "2px",
+    outlineOffset: "0px",
+  });
+
   // Tab from the name field lands on the checked template radio, which is
   // the selected tile. Its focus ring must differ from the selection ring.
   await page.getByLabel("City name").focus();
   await page.keyboard.press("Tab");
-  const selected = page.getByRole("radio", { name: "Crossroads" });
   await expect(selected).toBeFocused();
-
-  const ring = await selected.evaluate((input) => {
-    const tile = input.closest(".choice-tile");
-    if (!(tile instanceof HTMLElement)) throw new Error("missing choice tile");
-    const style = getComputedStyle(tile);
-    return {
-      outlineStyle: style.outlineStyle,
-      outlineWidth: style.outlineWidth,
-      outlineOffset: style.outlineOffset,
-    };
-  });
-  expect(ring).toEqual({
+  expect(await outlineOf(selected)).toEqual({
     outlineStyle: "dashed",
     outlineWidth: "3px",
     outlineOffset: "2px",
