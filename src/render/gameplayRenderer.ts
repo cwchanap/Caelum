@@ -48,7 +48,7 @@ export interface RenderFrame {
   solids: readonly SolidBatch[];
   /** One instanced textured draw after the structural solids. */
   sprites?: SpriteBatch;
-  /** Solid batches drawn after structural sprites (underRoutes, routes). */
+  /** Solid batches drawn after structural sprites (one-way arrows, underRoutes, routes). */
   overSprites?: readonly SolidBatch[];
   /** Badge face and rim sprites, after committed routes. */
   markerSprites?: SpriteBatch;

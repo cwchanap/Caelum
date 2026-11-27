@@ -1,6 +1,7 @@
 import { expect, type Locator, type Page } from "@playwright/test";
 import { tileSize } from "../../src/render/boardTransform";
 import {
+  centerAtMaxZoom,
   clickMapTile,
   createDefaultCity,
   dragMapTiles,
@@ -195,30 +196,6 @@ async function clearRouteSelection(page: Page): Promise<void> {
       }
     ).__caelumRuntime.selectRoute(null);
   });
-}
-
-async function centerAtMaxZoom(
-  page: Page,
-  point: { x: number; y: number },
-): Promise<void> {
-  await page.evaluate((center) => {
-    const runtime = (
-      window as unknown as {
-        __caelumRuntime: {
-          adjustCamera(
-            action:
-              | { kind: "zoomIn" }
-              | { kind: "centerOn"; point: { x: number; y: number } },
-          ): unknown;
-        };
-      }
-    ).__caelumRuntime;
-    for (let step = 0; step < 24; step += 1) {
-      runtime.adjustCamera({ kind: "zoomIn" });
-    }
-    runtime.adjustCamera({ kind: "centerOn", point: center });
-  }, point);
-  await settleLayout(page);
 }
 
 function mixedCueBandProbes(

@@ -1,20 +1,22 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
-  BUILDING_SPRITE_LAYERS,
   BUILDING_SPRITE_URLS,
+  TREE_SPRITE_URLS,
+  TRANSIT_SPRITE_URLS,
+  createSpriteAtlasTexture,
+  loadSpriteImages,
+} from "../../src/render/webgpu/spriteAtlas";
+import {
+  BUILDING_SPRITE_LAYERS,
   SPRITE_ATLAS_HEIGHT,
   SPRITE_ATLAS_WIDTH,
   SPRITE_LAYER_COUNT,
   SPRITE_MIP_LEVEL_COUNT,
   SPRITE_TEXELS_PER_TILE,
-  TREE_SPRITE_URLS,
-  TRANSIT_SPRITE_URLS,
   TRANSIT_SPRITE_LAYERS,
-  createSpriteAtlasTexture,
-  loadSpriteImages,
+  TREE_SPRITE_COUNT,
   type SpriteBuildingType,
-} from "../../src/render/webgpu/spriteAtlas";
-import * as spriteLayers from "../../src/render/webgpu/spriteLayers";
+} from "../../src/render/webgpu/spriteLayers";
 import { BUILDING_CATALOG } from "../../src/domain/catalog/buildings";
 import { createFakeDevice } from "../helpers/fakeWebGpu";
 
@@ -125,18 +127,36 @@ function registerShippedDimensions(): void {
 
 const SPRITE_TEXTURE_USAGE = 0x04 | 0x02 | 0x10;
 
+describe("sprite atlas module boundary", () => {
+  it("keeps sprite layer metadata in spriteLayers without atlas aliases", async () => {
+    const spriteAtlasModule =
+      await import("../../src/render/webgpu/spriteAtlas");
+    for (const key of [
+      "BUILDING_SPRITE_LAYERS",
+      "SPRITE_ATLAS_HEIGHT",
+      "SPRITE_ATLAS_WIDTH",
+      "SPRITE_LAYER_COUNT",
+      "SPRITE_MIP_LEVEL_COUNT",
+      "SPRITE_TEXELS_PER_TILE",
+      "TRANSIT_SPRITE_LAYERS",
+      "TREE_SPRITE_LAYER_BASE",
+      "spriteLayerFor",
+      "treeSpriteLayer",
+    ]) {
+      expect(
+        Object.prototype.hasOwnProperty.call(spriteAtlasModule, key),
+        key,
+      ).toBe(false);
+    }
+  });
+});
+
 describe("sprite atlas table", () => {
   it("shares a single asset-free layer contract with atlas uploads", async () => {
     registerShippedDimensions();
 
-    expect(BUILDING_SPRITE_LAYERS).toBe(spriteLayers.BUILDING_SPRITE_LAYERS);
-    expect(TRANSIT_SPRITE_LAYERS).toBe(spriteLayers.TRANSIT_SPRITE_LAYERS);
-    expect(SPRITE_LAYER_COUNT).toBe(spriteLayers.SPRITE_LAYER_COUNT);
-    expect(SPRITE_ATLAS_WIDTH).toBe(spriteLayers.SPRITE_ATLAS_WIDTH);
-    expect(SPRITE_ATLAS_HEIGHT).toBe(spriteLayers.SPRITE_ATLAS_HEIGHT);
-    expect(SPRITE_TEXELS_PER_TILE).toBe(spriteLayers.SPRITE_TEXELS_PER_TILE);
-    expect(spriteLayers.TREE_SPRITE_COUNT).toBe(3);
-    expect(spriteLayers.BUILDING_SPRITE_LAYERS).toEqual({
+    expect(TREE_SPRITE_COUNT).toBe(3);
+    expect(BUILDING_SPRITE_LAYERS).toEqual({
       busTerminal: 3,
       smallHouse: 4,
       largeHouse: 5,
@@ -150,7 +170,7 @@ describe("sprite atlas table", () => {
       school: 13,
       parkPlaza: 14,
     });
-    expect(spriteLayers.TRANSIT_SPRITE_LAYERS).toEqual({
+    expect(TRANSIT_SPRITE_LAYERS).toEqual({
       busStop: 15,
       busStopRing: 16,
       metroStation: 17,
@@ -160,9 +180,10 @@ describe("sprite atlas table", () => {
     });
 
     const images = await loadSpriteImages();
-    for (const [type, layer] of Object.entries(
-      spriteLayers.TRANSIT_SPRITE_LAYERS,
-    ) as [keyof typeof TRANSIT_SPRITE_URLS, number][]) {
+    for (const [type, layer] of Object.entries(TRANSIT_SPRITE_LAYERS) as [
+      keyof typeof TRANSIT_SPRITE_URLS,
+      number,
+    ][]) {
       expect(images[layer]!.src).toBe(TRANSIT_SPRITE_URLS[type]);
     }
   });

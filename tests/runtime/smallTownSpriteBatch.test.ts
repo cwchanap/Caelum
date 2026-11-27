@@ -6,7 +6,7 @@ import {
   SPRITE_ATLAS_HEIGHT,
   SPRITE_ATLAS_WIDTH,
   SPRITE_TEXELS_PER_TILE,
-} from "../../src/render/webgpu/spriteAtlas";
+} from "../../src/render/webgpu/spriteLayers";
 import { createWasmBackend } from "../../src/runtime/backend/wasmBackend";
 import { applyPresentationUpdate } from "../../src/runtime/presentationView";
 import { createPresentationUpdate } from "../fixtures/rustSnapshot";

@@ -19,6 +19,7 @@ import {
   expectMixedCorridorCuePixels,
   expectSharedCuePixels,
 } from "./transitCues";
+import { expectOneWayArrowVisibleThroughTrack } from "./oneWayTrackArrows";
 
 test("all six shipped transit sprites decode to nonempty 192px art and white masks", async ({
   page,
@@ -102,6 +103,13 @@ test("transit art joins rails and colors physical badges on WebGPU", async ({
 }) => {
   test.setTimeout(180_000);
   await expectTransitSpriteScene(page, "webgpu");
+});
+
+test("one-way road arrows stay visible through straight track on WebGPU", async ({
+  page,
+}) => {
+  test.setTimeout(120_000);
+  await expectOneWayArrowVisibleThroughTrack(page, "webgpu");
 });
 
 test("shared transit cue colors stay visible on WebGPU", async ({ page }) => {

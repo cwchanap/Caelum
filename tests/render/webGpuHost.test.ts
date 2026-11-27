@@ -3079,13 +3079,14 @@ describe("createGameHost frame contents", () => {
     fx.fireFrame(16);
 
     const frame = fx.renderer.frames.at(-1)!;
-    // Painter stages: scene solids, one sprite batch, route/draft overlays,
-    // vehicles, then handles.
+    // Painter stages: scene solids, one sprite batch, one-way arrows,
+    // route/draft overlays, vehicles, then handles.
     expect(frame.solids.length).toBe(1);
     expect(frame.solids[0]!.role).toBe("structural");
     expect(frame.sprites).toBeDefined();
     expect(frame.sprites!.instances.length % SPRITE_INSTANCE_FLOATS).toBe(0);
     expect(frame.overSprites!.map((batch) => batch.role)).toEqual([
+      "structural",
       "dynamic",
       "route",
     ]);
@@ -3163,16 +3164,16 @@ describe("createGameHost frame contents", () => {
     const [first, second] = fx.renderer.frames.slice(-2);
     expect(second!.solids[0]!.vertices).toEqual(first!.solids[0]!.vertices);
     expect(second!.sprites!.instances).toEqual(first!.sprites!.instances);
-    expect(second!.overSprites![1]!.vertices).toEqual(
-      first!.overSprites![1]!.vertices,
+    expect(second!.overSprites![2]!.vertices).toEqual(
+      first!.overSprites![2]!.vertices,
     );
 
     // Emphasis change re-tessellates the committed-route range only.
     fx.setUi({ selectedRouteId: "route-001" });
     fx.fireFrame(50);
     const emphasized = fx.renderer.frames.at(-1)!;
-    expect(emphasized.overSprites![1]!.vertices).not.toEqual(
-      second!.overSprites![1]!.vertices,
+    expect(emphasized.overSprites![2]!.vertices).not.toEqual(
+      second!.overSprites![2]!.vertices,
     );
     expect(emphasized.solids[0]!.vertices).toEqual(second!.solids[0]!.vertices);
     expect(emphasized.sprites!.instances).toEqual(second!.sprites!.instances);
